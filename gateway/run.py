@@ -3926,6 +3926,11 @@ class GatewayRunner:
         except Exception:
             pass
         try:
+            from tools.transcription_tools import warmup_stt_backend
+            await asyncio.to_thread(warmup_stt_backend)
+        except Exception as exc:
+            logger.debug("STT warmup failed (non-fatal): %s", exc)
+        try:
             from gateway.status import write_runtime_status
             write_runtime_status(gateway_state="starting", exit_reason=None)
         except Exception:
@@ -14630,7 +14635,15 @@ class GatewayRunner:
                 logger.debug("Transcribing user voice: %s", path)
                 result = await asyncio.to_thread(transcribe_audio, path)
                 if result["success"]:
-                    transcript = result["transcript"]
+                    transcript = result["transcript"].strip()
+                    placeholder = (user_text or "").strip().lower()
+                    if placeholder in {
+                        "[audio received]",
+                        "(the user sent a message with no text content)",
+                    } or not placeholder:
+                        # Inject transcript as the user's words — avoids the
+                        # model claiming it "can't listen" while holding text.
+                        return transcript
                     enriched_parts.append(
                         f'[The user sent a voice message~ '
                         f'Here\'s what they said: "{transcript}"]'

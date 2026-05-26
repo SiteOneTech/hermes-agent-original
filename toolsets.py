@@ -184,6 +184,15 @@ TOOLSETS = {
         "tools": ["cronjob"],
         "includes": []
     },
+
+    "factory": {
+        "description": "SitioUno Software Factory project, lane, task, gate, and status tools",
+        "tools": [
+            "factory_project_create", "factory_lane_create",
+            "factory_task_create", "factory_gate_record", "factory_status",
+        ],
+        "includes": []
+    },
     
     "messaging": {
         "description": "Cross-platform messaging: send messages to Telegram, Discord, Slack, SMS, etc.",
