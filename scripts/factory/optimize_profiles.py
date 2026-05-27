@@ -38,7 +38,7 @@ def run(*args: str, **kwargs) -> subprocess.CompletedProcess:
 
 ProfileSpec = tuple[
     str, str, str, str, str, list[str], list[str],
-    int, int, float, bool, bool,
+    int, int, float, bool, bool, str,
 ]
 
 PROFILES: dict[str, ProfileSpec] = {
@@ -48,7 +48,7 @@ PROFILES: dict[str, ProfileSpec] = {
         "gpt-5.5", "openai-codex",
         ["terminal", "file", "todo", "kanban", "factory", "delegation", "cronjob", "session_search", "skills", "web"],
         ["software-factory-orchestration", "kanban-orchestrator", "programming-delegation-engines"],
-        120, 2200, 0.5, True, False,
+        120, 2200, 0.5, True, "", False,
     ),
     "product-analyst": (
         "Factory Product Analyst",
@@ -56,7 +56,7 @@ PROFILES: dict[str, ProfileSpec] = {
         "gpt-5.5", "openai-codex",
         ["web", "file", "kanban", "factory", "session_search", "skills", "todo", "search"],
         ["writing-plans"],
-        60, 2200, 0.3, True, False,
+        60, 2200, 0.3, True, "", False,
     ),
     "solution-architect": (
         "Factory Solution Architect",
@@ -64,7 +64,7 @@ PROFILES: dict[str, ProfileSpec] = {
         "gpt-5.5", "openai-codex",
         ["web", "file", "terminal", "kanban", "factory", "session_search", "skills", "search"],
         ["writing-plans", "systematic-debugging", "codebase-inspection"],
-        90, 3000, 0.4, True, False,
+        90, 3000, 0.4, True, "", False,
     ),
     "implementation-planner": (
         "Factory Implementation Planner",
@@ -72,7 +72,7 @@ PROFILES: dict[str, ProfileSpec] = {
         "gpt-5.5", "openai-codex",
         ["file", "terminal", "kanban", "factory", "session_search", "skills", "todo"],
         ["writing-plans", "kanban-orchestrator"],
-        60, 2200, 0.3, True, False,
+        60, 2200, 0.3, True, "", False,
     ),
     "claude-builder": (
         "Factory Claude Builder",
@@ -80,15 +80,15 @@ PROFILES: dict[str, ProfileSpec] = {
         "gpt-5.5", "openai-codex",
         ["terminal", "file", "kanban", "factory", "skills", "session_search", "delegation"],
         ["claude-code", "test-driven-development"],
-        90, 1000, 0.6, False, False,
+        90, 1000, 0.6, False, False, "",
     ),
     "codex-builder": (
         "Factory Codex Builder",
-        "Ejecuta fixes acotados, tests unitarios, QA sobre diffs y cambios git-céntricos con Codex CLI. Rápido, preciso, concreto.",
-        "deepseek", "deepseek",
+        "Ejecuta fixes acotados, tests unitarios, QA sobre diffs y cambios git-céntricos con Codex CLI. Rápido, preciso, concreto. Usa deepseek-chat por ser económico y rápido para tareas acotadas.",
+        "deepseek-chat", "deepseek",
         ["terminal", "file", "kanban", "factory", "skills", "session_search"],
         ["codex", "test-driven-development"],
-        60, 500, 0.7, False, False,
+        60, 500, 0.7, False, False, "https://api.deepseek.com/v1",
     ),
     "openhands-lab": (
         "Factory OpenHands Lab",
@@ -96,7 +96,7 @@ PROFILES: dict[str, ProfileSpec] = {
         "gpt-5.5", "openai-codex",
         ["terminal", "file", "kanban", "factory", "skills", "session_search", "delegation"],
         ["openhands-gcp", "spike", "test-driven-development"],
-        120, 500, 0.7, False, False,
+        120, 500, 0.7, False, False, "",
     ),
     "quality-reviewer": (
         "Factory Quality Reviewer",
@@ -104,7 +104,7 @@ PROFILES: dict[str, ProfileSpec] = {
         "deepseek", "deepseek",
         ["terminal", "file", "kanban", "factory", "skills", "session_search", "search"],
         ["requesting-code-review", "systematic-debugging", "github-code-review"],
-        60, 1500, 0.3, True, False,
+        60, 1500, 0.3, True, False, "https://api.deepseek.com/v1",
     ),
     "security-reviewer": (
         "Factory Security Reviewer",
@@ -112,7 +112,7 @@ PROFILES: dict[str, ProfileSpec] = {
         "gpt-5.5", "openai-codex",
         ["terminal", "file", "kanban", "factory", "skills", "session_search", "search"],
         ["requesting-code-review", "systematic-debugging"],
-        90, 2200, 0.4, True, False,
+        90, 2200, 0.4, True, "", False,
     ),
     "qa-verifier": (
         "Factory QA Verifier",
@@ -120,7 +120,7 @@ PROFILES: dict[str, ProfileSpec] = {
         "deepseek", "deepseek",
         ["terminal", "file", "browser", "vision", "kanban", "factory", "skills"],
         ["dogfood", "test-driven-development"],
-        60, 1000, 0.5, True, False,
+        60, 1000, 0.5, True, False, "https://api.deepseek.com/v1",
     ),
     "devops-release": (
         "Factory DevOps Release",
@@ -128,7 +128,7 @@ PROFILES: dict[str, ProfileSpec] = {
         "gpt-5.5", "openai-codex",
         ["terminal", "file", "web", "kanban", "factory", "skills", "session_search", "cronjob"],
         ["github-pr-workflow", "cloud-sql-fleet-registry"],
-        90, 1500, 0.4, True, False,
+        90, 1500, 0.4, True, "", False,
     ),
     "factory-reporter": (
         "Factory Reporter",
@@ -136,7 +136,7 @@ PROFILES: dict[str, ProfileSpec] = {
         "gpt-5.5", "openai-codex",
         ["file", "web", "kanban", "factory", "session_search", "skills", "search"],
         ["software-factory-orchestration", "productivity/notion", "writing-plans"],
-        90, 3000, 0.3, True, True,
+        90, 3000, 0.3, True, True, "",
     ),
 }
 
@@ -272,7 +272,7 @@ PROFILE_RULES: dict[str, str] = {
 
 
 def generate_soul(profile_id: str, spec: ProfileSpec) -> str:
-    display_name, description, model, provider, toolsets, skills, turns, mem_budget, compression, kanban_worker, is_doc_agent = spec
+    display_name, description, model, provider, toolsets, skills, turns, mem_budget, compression, kanban_worker, is_doc_agent, delegation_base_url = spec
     skills_str = ", ".join(skills) if skills else "(none)"
     rules_text = PROFILE_RULES.get(profile_id, "Follow standard factory procedures.")
     return SOUL_TEMPLATE.format(
@@ -284,7 +284,7 @@ def generate_soul(profile_id: str, spec: ProfileSpec) -> str:
 
 
 def build_profile_yaml(profile_id: str, spec: ProfileSpec) -> dict:
-    display_name, description, model, provider, toolsets, skills, turns, mem_budget, compression_threshold, kanban_worker, is_doc_agent = spec
+    display_name, description, model, provider, toolsets, skills, turns, mem_budget, compression_threshold, kanban_worker, is_doc_agent, delegation_base_url = spec
 
     # Model assignment by role
     fallback_providers: list[dict] = [
@@ -319,8 +319,8 @@ def build_profile_yaml(profile_id: str, spec: ProfileSpec) -> dict:
         },
         "delegation": {
             "model": "",
-            "provider": "",
-            "base_url": "",
+            "provider": "deepseek" if delegation_base_url else "",
+            "base_url": delegation_base_url or "",
             "api_key": "",
             "api_mode": "",
             "inherit_mcp_toolsets": True,
