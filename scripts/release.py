@@ -46,6 +46,7 @@ ACP_REGISTRY_MANIFEST = REPO_ROOT / "acp_registry" / "agent.json"
 # Auto-extracted from noreply emails + manual overrides
 AUTHOR_MAP = {
     "9592417+adam91holt@users.noreply.github.com": "adam91holt",
+    "kchuang1015@users.noreply.github.com": "kchuang1015",
     "45688690+fujinice@users.noreply.github.com": "fujinice",
     "276689385+carltonawong@users.noreply.github.com": "carltonawong",
     "195255660+EvilHumphrey@users.noreply.github.com": "EvilHumphrey",
@@ -571,7 +572,7 @@ AUTHOR_MAP = {
     "ruzzgarcn@gmail.com": "Ruzzgar",
     "yukipukikedy@gmail.com": "Yukipukii1",
     "alireza78.crypto@gmail.com": "alireza78a",
-    "brooklyn.bb.nicholson@gmail.com": "brooklynnicholson",
+    "brooklyn.bb.nicholson@gmail.com": "OutThisLife",
     "withapurpose37@gmail.com": "StefanIsMe",
     "4317663+helix4u@users.noreply.github.com": "helix4u",
     "ifkellx@users.noreply.github.com": "Ifkellx",
@@ -1348,6 +1349,22 @@ AUTHOR_MAP = {
     "jpschwartz2@uwalumni.com": "Schwartz10",  # PR #29302 sub-PR (multimodal media in session chat API)
     "JohnC1009@users.noreply.github.com": "JohnC1009",  # PR #32020 salvage (auth: global auth.json fallback in _load_provider_state)
     "biser@bisko.be": "bisko",  # PR #33784 salvage (re-pad reasoning_content on cross-provider fallback to require-side providers)
+    # v0.15.0 additions
+    "glen@workmanfirearms.com": "sgtworkman",
+    "jorge.fuenmayort@gmail.com": "jfuenmayor",
+    "mordred@inaugust.com": "emonty",
+    "rodrigoeq@hotmail.com": "rodrigoeqnit",
+    "soliva.johnpaul@icloud.com": "jonpol01",
+    "2182712990@qq.com": "yu-xin-c",  # PR #32122 (Docker audio bridge notes)
+    "baxter@bitreserve.ai": "BaxBit",  # PR #30200 (Svix webhook signature validation)
+    "chris.eth@qq.com": "duyua9",  # PR #10949 (render object config values structurally)
+    "ethie@nous": "ethernet8023",  # PR #29342 (TUI clipboard copy on linux/wayland)
+    "jiahuigu@sjtu.edu.cn": "Jiahui-Gu",  # PR #29276 (guard pickle.loads in darwinian-evolver)
+    "justinccdev@gmail.com": "justincc",  # PR #28914 (set tool_name on tool-result messages)
+    "kdkcfp@gmail.com": "slowtokki0409",  # PR #29025 (ignore local Hermes runtime files)
+    "peter.yuqin@gmail.com": "WuKongAI-CMU",  # PR #10082 (reject symlinked audio inputs)
+    "sunil.nitie@gmail.com": "Sunil123135",  # PR #31031 (Windows Docker Desktop compose)
+    "weichangyuwcy@gmail.com": "ChyuWei",  # PR #30987 (TUI TTS env var on voice off)
 }
 
 
