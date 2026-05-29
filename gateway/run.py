@@ -14885,9 +14885,11 @@ class GatewayRunner:
                         "[audio received]",
                         "(the user sent a message with no text content)",
                     } or not placeholder:
-                        # Inject transcript as the user's words — avoids the
-                        # model claiming it "can't listen" while holding text.
-                        return transcript
+                        enriched_parts.append(
+                            f'[The user sent a voice message~ '
+                            f'Here\'s what they said: "{transcript}"]'
+                        )
+                        continue
                     enriched_parts.append(
                         f'[The user sent a voice message~ '
                         f'Here\'s what they said: "{transcript}"]'
