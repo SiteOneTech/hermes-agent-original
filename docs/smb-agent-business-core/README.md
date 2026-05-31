@@ -48,6 +48,7 @@ Los módulos internos no reemplazan Odoo, Twenty, Lago, Medusa, Meta, Stripe o p
 - `ADR-002-module-boundaries-and-adapters.md`
 - `ADR-003-operational-vs-fiscal-accounting.md`
 - `ADR-004-marketing-core-and-publishing-adapters.md`
+- `ADR-005-customer-commerce-workspace.md`
 - `SPRINT_PLAN.md`
 - `KANBAN_TASK_GRAPH.md`
 - `QA_GATES.md`

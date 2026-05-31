@@ -226,8 +226,14 @@ TOOLSETS = {
         "tools": [
             "sales_status", "sales_product_upsert", "sales_inventory_adjust",
             "sales_quote_create", "sales_order_create", "sales_invoice_create",
-            "sales_payment_request_create",
+            "sales_payment_request_create", "sales_customer_workspace_create",
         ],
+        "includes": []
+    },
+
+    "notifications": {
+        "description": "Provider-neutral notification adapters for email, marketing, and business notifications",
+        "tools": ["notification_status", "notification_email_send"],
         "includes": []
     },
     

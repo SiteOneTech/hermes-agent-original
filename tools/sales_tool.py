@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 from typing import Any
 
 from hermes_cli import agent_core_sql as sql
@@ -99,6 +100,19 @@ def _quote_totals(items: list[dict[str, Any]]) -> tuple[float, float, float, flo
         tax_amount += amounts["line_tax"]
         total += amounts["line_total"]
     return _money(subtotal), _money(discount_amount), _money(tax_amount), _money(total)
+
+
+def _token() -> str:
+    return secrets.token_urlsafe(24)
+
+
+def _workspace_base_url() -> str:
+    env = sql.runtime_env()
+    return (env.get("COMMERCE_WORKSPACE_BASE_URL") or os.getenv("COMMERCE_WORKSPACE_BASE_URL") or "https://zeus.kidu.app").rstrip("/")
+
+
+def _workspace_url(public_token: str) -> str:
+    return f"{_workspace_base_url()}/w/{public_token}"
 
 
 def _payment_adapter_request(payload: dict[str, Any]) -> dict[str, Any]:
@@ -287,6 +301,46 @@ def _handle_invoice_create(args: dict, **_kwargs) -> str:
         return _err(exc)
 
 
+def _handle_customer_workspace_create(args: dict, **_kwargs) -> str:
+    try:
+        document_type = str(args.get("document_type") or "").strip().lower()
+        document_id = str(args.get("document_id") or "").strip()
+        if document_type not in {"quote", "catalog", "invoice"}:
+            raise ValueError("document_type must be quote, catalog, or invoice")
+        if not document_id:
+            raise ValueError("document_id is required")
+        public_token = args.get("public_token") or _token()
+        public_url = args.get("public_url") or _workspace_url(public_token)
+        workspace_id = args.get("workspace_id") or _slug("workspace", f"{document_type}-{document_id}")
+        row = sql.statement_one(f"""
+          INSERT INTO sales.customer_workspaces (workspace_id, document_type, document_id, customer_email, customer_name, public_token, public_url, status, expires_at, metadata, created_at, updated_at)
+          VALUES ({_q(workspace_id)}, {_q(document_type)}, {_q(document_id)}, {_q(args.get('customer_email'))}, {_q(args.get('customer_name'))}, {_q(public_token)}, {_q(public_url)}, {_q(args.get('status') or 'pending')}, {_q(args.get('expires_at'))}::timestamptz, {_j(args.get('metadata') or {})}, now(), now())
+          ON CONFLICT (workspace_id) DO UPDATE SET document_type=EXCLUDED.document_type, document_id=EXCLUDED.document_id, customer_email=EXCLUDED.customer_email, customer_name=EXCLUDED.customer_name, public_token=EXCLUDED.public_token, public_url=EXCLUDED.public_url, status=EXCLUDED.status, expires_at=EXCLUDED.expires_at, metadata=EXCLUDED.metadata, updated_at=now()
+          RETURNING *
+        """, user=_user())
+        email_result = None
+        if args.get("send_email"):
+            if not args.get("customer_email"):
+                raise ValueError("customer_email is required when send_email=true")
+            from tools import notification_tool
+            label = {"quote": "cotización", "catalog": "catálogo", "invoice": "factura"}[document_type]
+            subject = args.get("email_subject") or f"Tienes una {label} lista para revisar"
+            text = args.get("email_text") or f"Hola {args.get('customer_name') or ''}. Puedes revisar, comentar y aprobar tu {label} aquí: {public_url}".strip()
+            html = args.get("email_html") or f"<p>Hola {args.get('customer_name') or ''}.</p><p>Puedes revisar, comentar y aprobar tu {label} aquí:</p><p><a href=\"{public_url}\">Abrir {label}</a></p>"
+            email_result = notification_tool._email_adapter_send({
+                "to_email": args.get("customer_email"),
+                "to_name": args.get("customer_name"),
+                "subject": subject,
+                "text": text,
+                "html": html,
+                "metadata": {"workspace_id": workspace_id, "document_type": document_type, "document_id": document_id},
+            })
+        return _ok(workspace=row, email=email_result)
+    except Exception as exc:
+        return _err(exc)
+
+
+
 def _handle_payment_request_create(args: dict, **_kwargs) -> str:
     try:
         invoice = sql.one(f"SELECT * FROM sales.invoices WHERE invoice_id={_q(args.get('invoice_id'))}", user=_user()) if args.get("invoice_id") else None
@@ -342,3 +396,4 @@ registry.register(name="sales_quote_create", toolset="sales", schema=_schema("sa
 registry.register(name="sales_order_create", toolset="sales", schema=_schema("sales_order_create", "Create or update an operational order, optionally from a Sales Core quote.", {"order_id": {"type": "string"}, "quote_id": {"type": "string"}, **_COMMON_ENTITY_PROPS, "title": {"type": "string"}, "status": {"type": "string"}, "currency": {"type": "string"}, "items": {"type": "array", "items": {"type": "object"}}, **_meta_props()}), handler=_handle_order_create, check_fn=_check_sales, emoji="🧾")
 registry.register(name="sales_invoice_create", toolset="sales", schema=_schema("sales_invoice_create", "Create or update an operational invoice, optionally from an order. Not fiscal unless an adapter is configured.", {"invoice_id": {"type": "string"}, "order_id": {"type": "string"}, **_COMMON_ENTITY_PROPS, "title": {"type": "string"}, "status": {"type": "string"}, "issue_date": {"type": "string"}, "due_date": {"type": "string"}, "currency": {"type": "string"}, "subtotal": {"type": "number"}, "discount_amount": {"type": "number"}, "tax_amount": {"type": "number"}, "total": {"type": "number"}, **_meta_props()}), handler=_handle_invoice_create, check_fn=_check_sales, emoji="🧾")
 registry.register(name="sales_payment_request_create", toolset="sales", schema=_schema("sales_payment_request_create", "Create a payment request for an invoice. Returns graceful unavailable status if no payment adapter is configured.", {"payment_request_id": {"type": "string"}, "invoice_id": {"type": "string"}, "organization_id": {"type": "string"}, "contact_id": {"type": "string"}, "amount": {"type": "number"}, "currency": {"type": "string"}, "status": {"type": "string"}, **_meta_props()}), handler=_handle_payment_request_create, check_fn=_check_sales, emoji="🧾")
+registry.register(name="sales_customer_workspace_create", toolset="sales", schema=_schema("sales_customer_workspace_create", "Create a customer-facing workspace URL for a quote, catalog, or invoice. Optionally send it by email via the generic notification adapter.", {"workspace_id": {"type": "string"}, "document_type": {"type": "string", "enum": ["quote", "catalog", "invoice"]}, "document_id": {"type": "string"}, "customer_email": {"type": "string"}, "customer_name": {"type": "string"}, "public_url": {"type": "string"}, "public_token": {"type": "string"}, "status": {"type": "string"}, "expires_at": {"type": "string"}, "send_email": {"type": "boolean"}, "email_subject": {"type": "string"}, "email_text": {"type": "string"}, "email_html": {"type": "string"}, **_meta_props()}, ["document_type", "document_id"]), handler=_handle_customer_workspace_create, check_fn=_check_sales, emoji="🧾")

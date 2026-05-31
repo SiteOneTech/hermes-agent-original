@@ -184,3 +184,45 @@ def test_toolset_exports_sales_tools():
     assert "sales_order_create" in sales_tools
     assert "sales_invoice_create" in sales_tools
     assert "sales_payment_request_create" in sales_tools
+    assert "sales_customer_workspace_create" in sales_tools
+
+
+def test_customer_workspace_url_and_email_send(monkeypatch):
+    statements = []
+
+    def fake_statement_one(statement, **_kwargs):
+        statements.append(statement)
+        return {
+            "workspace_id": "workspace-quote-1",
+            "document_type": "quote",
+            "document_id": "quote-1",
+            "public_url": "https://zeus.kidu.app/w/q-token",
+            "status": "pending",
+        }
+
+    sent = {}
+
+    def fake_email(payload):
+        sent.update(payload)
+        return {"ok": True, "adapter": "sendgrid", "status": 202}
+
+    monkeypatch.setattr(sales_tool.sql, "statement_one", fake_statement_one)
+    monkeypatch.setattr(sales_tool, "_token", lambda: "q-token")
+    monkeypatch.setattr(sales_tool.sql, "runtime_env", lambda: {"COMMERCE_WORKSPACE_BASE_URL": "https://zeus.kidu.app"})
+    import tools.notification_tool as notification_tool
+    monkeypatch.setattr(notification_tool, "_email_adapter_send", fake_email)
+
+    payload = json.loads(sales_tool._handle_customer_workspace_create({
+        "document_type": "quote",
+        "document_id": "quote-1",
+        "customer_email": "client@example.com",
+        "customer_name": "Client",
+        "send_email": True,
+    }))
+
+    assert payload["ok"] is True
+    assert payload["workspace"]["public_url"] == "https://zeus.kidu.app/w/q-token"
+    assert payload["email"]["ok"] is True
+    assert sent["to_email"] == "client@example.com"
+    assert "https://zeus.kidu.app/w/q-token" in sent["text"]
+    assert any("INSERT INTO sales.customer_workspaces" in statement for statement in statements)
