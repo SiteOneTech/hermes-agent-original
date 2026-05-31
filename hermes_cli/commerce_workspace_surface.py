@@ -60,6 +60,137 @@ def _get_workspace(public_token: str) -> dict[str, Any]:
     return workspace
 
 
+def render_agent_workspace_placeholder_html(lang: str = "es") -> str:
+    """Render the generic public landing page for inactive agent workspace URLs."""
+    selected = "en" if str(lang).lower().startswith("en") else "es"
+    es_active = " active" if selected == "es" else ""
+    en_active = " active" if selected == "en" else ""
+    return f"""<!doctype html>
+<html lang="{_e(selected)}">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Espacio para agentes personalizados | Personalized agent space</title>
+  <meta name="description" content="Un espacio seguro para revisar cotizaciones, catálogos, facturas, aprobaciones, firmas y pagos." />
+  <style>
+    :root {{
+      color-scheme: light dark;
+      --bg: #f3f7f2;
+      --ink: #111712;
+      --muted: #526255;
+      --line: rgba(17, 23, 18, .14);
+      --panel: rgba(255, 255, 255, .72);
+      --panel-strong: rgba(255, 255, 255, .92);
+      --accent: #1f7a4d;
+      --accent-ink: #ffffff;
+      --field: #dceee2;
+      --shadow: rgba(23, 53, 32, .16);
+    }}
+    @media (prefers-color-scheme: dark) {{
+      :root {{
+        --bg: #0d120f;
+        --ink: #edf7ef;
+        --muted: #a7b9ab;
+        --line: rgba(237, 247, 239, .16);
+        --panel: rgba(18, 28, 21, .70);
+        --panel-strong: rgba(20, 31, 24, .94);
+        --accent: #79d99f;
+        --accent-ink: #07100a;
+        --field: #17271c;
+        --shadow: rgba(0, 0, 0, .42);
+      }}
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{ margin: 0; min-height: 100dvh; background: var(--bg); color: var(--ink); font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }}
+    body::before {{ content: ""; position: fixed; inset: 0; pointer-events: none; background: radial-gradient(circle at 10% 10%, rgba(31, 122, 77, .24), transparent 30%), radial-gradient(circle at 90% 20%, rgba(121, 217, 159, .18), transparent 28%), linear-gradient(135deg, transparent, rgba(31, 122, 77, .10)); }}
+    a {{ color: inherit; }}
+    .shell {{ position: relative; width: min(1180px, calc(100% - 32px)); margin: 0 auto; padding: 28px 0 34px; }}
+    .nav {{ height: 68px; display: flex; align-items: center; justify-content: space-between; gap: 18px; }}
+    .brand {{ display: flex; align-items: center; gap: 12px; font-weight: 800; letter-spacing: -.02em; }}
+    .mark {{ width: 38px; height: 38px; border-radius: 14px; background: var(--ink); color: var(--bg); display: grid; place-items: center; font-weight: 900; box-shadow: 0 12px 30px var(--shadow); }}
+    .lang {{ display: flex; gap: 8px; padding: 5px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); backdrop-filter: blur(16px); }}
+    .lang a {{ text-decoration: none; padding: 8px 13px; border-radius: 999px; color: var(--muted); font-size: 14px; font-weight: 800; }}
+    .lang a.active {{ background: var(--ink); color: var(--bg); }}
+    .hero {{ min-height: calc(100dvh - 130px); display: grid; grid-template-columns: minmax(0, 1.02fr) minmax(320px, .98fr); gap: clamp(28px, 6vw, 70px); align-items: center; padding: 30px 0 54px; }}
+    .content {{ max-width: 650px; }}
+    .kicker {{ display: inline-flex; align-items: center; gap: 10px; color: var(--accent); font-size: 13px; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; }}
+    .kicker::before {{ content: ""; width: 42px; height: 1px; background: var(--accent); }}
+    h1 {{ margin: 16px 0 18px; font-size: clamp(46px, 8vw, 92px); line-height: .92; letter-spacing: -.075em; max-width: 12ch; }}
+    .lead {{ color: var(--muted); font-size: clamp(18px, 2.2vw, 23px); line-height: 1.45; max-width: 31em; margin: 0 0 28px; }}
+    .actions {{ display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 28px; }}
+    .button {{ display: inline-flex; align-items: center; justify-content: center; min-height: 48px; padding: 0 20px; border-radius: 999px; border: 1px solid var(--line); text-decoration: none; font-weight: 900; transition: transform .2s ease, background .2s ease; }}
+    .button:active {{ transform: translateY(1px) scale(.99); }}
+    .button.primary {{ background: var(--accent); color: var(--accent-ink); border-color: transparent; }}
+    .button.secondary {{ background: var(--panel); color: var(--ink); }}
+    .micro {{ color: var(--muted); font-size: 14px; line-height: 1.55; max-width: 45em; }}
+    .micro a {{ font-weight: 900; text-decoration-thickness: 2px; text-underline-offset: 3px; }}
+    .visual {{ position: relative; min-height: 560px; border-radius: 34px; overflow: hidden; border: 1px solid var(--line); background: linear-gradient(145deg, var(--panel-strong), var(--field)); box-shadow: 0 36px 100px var(--shadow); isolation: isolate; }}
+    .visual::before {{ content: ""; position: absolute; inset: -24%; background: conic-gradient(from 180deg, transparent, rgba(31, 122, 77, .24), transparent, rgba(121, 217, 159, .35), transparent); animation: turn 22s linear infinite; }}
+    .visual::after {{ content: ""; position: absolute; inset: 1px; border-radius: 33px; background: radial-gradient(circle at 50% 22%, rgba(255,255,255,.42), transparent 30%), linear-gradient(180deg, transparent, var(--panel-strong)); }}
+    .orbit {{ position: absolute; z-index: 2; inset: 48px; border: 1px solid var(--line); border-radius: 30px; display: grid; grid-template-rows: auto 1fr auto; padding: 28px; background: rgba(255,255,255,.10); backdrop-filter: blur(18px); }}
+    .status {{ display: flex; align-items: center; justify-content: space-between; gap: 16px; color: var(--muted); font-weight: 800; }}
+    .status span:last-child {{ color: var(--accent); }}
+    .node-wrap {{ position: relative; display: grid; place-items: center; }}
+    .node {{ width: 190px; height: 190px; border-radius: 42px; display: grid; place-items: center; text-align: center; padding: 24px; background: var(--ink); color: var(--bg); font-size: 18px; line-height: 1.15; font-weight: 900; box-shadow: 0 30px 80px var(--shadow); }}
+    .ring {{ position: absolute; border: 1px solid var(--line); border-radius: 999px; }}
+    .ring.one {{ width: 340px; height: 340px; }}
+    .ring.two {{ width: 460px; height: 460px; opacity: .55; }}
+    .capabilities {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }}
+    .capabilities span {{ min-height: 52px; border: 1px solid var(--line); border-radius: 18px; display: flex; align-items: center; padding: 0 14px; background: var(--panel); color: var(--muted); font-size: 14px; font-weight: 800; }}
+    .panel {{ display: none; }}
+    .panel.active {{ display: block; }}
+    @keyframes turn {{ to {{ transform: rotate(360deg); }} }}
+    @media (prefers-reduced-motion: reduce) {{ .visual::before {{ animation: none; }} .button {{ transition: none; }} }}
+    @media (max-width: 860px) {{
+      .shell {{ width: min(100% - 24px, 680px); }}
+      .nav {{ height: auto; padding-top: 4px; align-items: flex-start; }}
+      .hero {{ grid-template-columns: 1fr; min-height: auto; padding-top: 28px; }}
+      h1 {{ font-size: clamp(42px, 14vw, 66px); max-width: 11ch; }}
+      .visual {{ min-height: 440px; border-radius: 28px; }}
+      .orbit {{ inset: 22px; padding: 18px; }}
+      .ring.one {{ width: 250px; height: 250px; }}
+      .ring.two {{ width: 330px; height: 330px; }}
+      .node {{ width: 158px; height: 158px; border-radius: 34px; font-size: 16px; }}
+      .capabilities {{ grid-template-columns: 1fr; }}
+    }}
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <nav class="nav" aria-label="{_e('Language selector' if selected == 'en' else 'Selector de idioma')}">
+      <div class="brand"><div class="mark">A</div><span>Agent Space</span></div>
+      <div class="lang"><a class="{'active' if selected == 'es' else ''}" href="?lang=es">ES</a><a class="{'active' if selected == 'en' else ''}" href="?lang=en">EN</a></div>
+    </nav>
+    <section class="hero">
+      <div class="content">
+        <div class="panel{es_active}">
+          <div class="kicker">Enlace inactivo</div>
+          <h1>Espacio para agentes personalizados</h1>
+          <p class="lead">Este enlace todavía no tiene un documento activo. Aquí podrás revisar cotizaciones, catálogos, aprobaciones, firmas y pagos.</p>
+          <div class="actions"><a class="button primary" href="https://ear.app">Más información en ear.app</a><a class="button secondary" href="https://sitiouno.us">sitiouno.us</a></div>
+          <p class="micro">Los agentes personalizados trabajan por WhatsApp, correo electrónico, llamadas o canales web. Pueden gestionar ventas, agenda, inventario, facturas, seguimiento de clientes y automatizaciones conectadas a sistemas como Odoo. Desarrollado por <a href="https://sitiouno.us">sitiouno.us</a>.</p>
+        </div>
+        <div class="panel{en_active}">
+          <div class="kicker">Inactive link</div>
+          <h1>Personalized agent space</h1>
+          <p class="lead">This link is not connected to an active document yet. You’ll be able to review quotes, catalogs, approvals, signatures and payments here.</p>
+          <div class="actions"><a class="button primary" href="https://ear.app">Learn more at ear.app</a><a class="button secondary" href="https://sitiouno.us">sitiouno.us</a></div>
+          <p class="micro">Personalized agents can support customers and teams on WhatsApp, email, voice calls or web channels. They help manage sales, scheduling, inventory, invoicing, customer follow-up and automations connected to systems like Odoo. Developed by <a href="https://sitiouno.us">sitiouno.us</a>.</p>
+        </div>
+      </div>
+      <aside class="visual" aria-label="{_e('Agent space illustration' if selected == 'en' else 'Ilustración del espacio para agentes')}">
+        <div class="orbit">
+          <div class="status"><span>{_e('Space' if selected == 'en' else 'Espacio')}</span><span>{_e('Ready when needed' if selected == 'en' else 'Listo cuando lo necesites')}</span></div>
+          <div class="node-wrap"><div class="ring two"></div><div class="ring one"></div><div class="node">{_e('Guided business tasks' if selected == 'en' else 'Gestiones guiadas para tu negocio')}</div></div>
+          <div class="capabilities"><span>{_e('Quotes and approvals' if selected == 'en' else 'Cotizaciones y aprobaciones')}</span><span>{_e('Catalogs and payments' if selected == 'en' else 'Catálogos y pagos')}</span><span>{_e('Customer follow-up' if selected == 'en' else 'Seguimiento de clientes')}</span><span>{_e('Odoo-connected automations' if selected == 'en' else 'Automatizaciones conectadas a Odoo')}</span></div>
+        </div>
+      </aside>
+    </section>
+  </main>
+</body>
+</html>"""
+
+
 def _workspace_events(workspace_id: str) -> list[dict[str, Any]]:
     return sql.rows(
         f"""
@@ -205,7 +336,7 @@ def render_workspace_html(public_token: str, banner: str | None = None) -> str:
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{_e(document_type_label)} — {_e(title)}</title>
+  <title>{_e(document_type_label)} - {_e(title)}</title>
   <style>
     :root {{ color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; }}
     body {{ margin: 0; background: #f7f4ee; color: #161411; }}
@@ -324,9 +455,24 @@ async def _form_text(request: Request, field: str) -> str | None:
     return str(value).strip() if value is not None and str(value).strip() else None
 
 
+def _request_lang(request: Request) -> str:
+    return request.query_params.get("lang", "es")
+
+
+@router.get("/w", response_class=HTMLResponse)
+@router.get("/w/", response_class=HTMLResponse)
+async def workspace_placeholder(request: Request) -> HTMLResponse:
+    return HTMLResponse(render_agent_workspace_placeholder_html(_request_lang(request)))
+
+
 @router.get("/w/{public_token}", response_class=HTMLResponse)
-async def workspace_page(public_token: str) -> HTMLResponse:
-    return HTMLResponse(render_workspace_html(public_token))
+async def workspace_page(public_token: str, request: Request) -> HTMLResponse:
+    try:
+        return HTMLResponse(render_workspace_html(public_token))
+    except HTTPException as exc:
+        if exc.status_code in {404, 410}:
+            return HTMLResponse(render_agent_workspace_placeholder_html(_request_lang(request)))
+        raise
 
 
 @router.post("/w/{public_token}/comment", response_class=HTMLResponse)

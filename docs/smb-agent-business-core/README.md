@@ -51,6 +51,7 @@ Los módulos internos no reemplazan Odoo, Twenty, Lago, Medusa, Meta, Stripe o p
 - `ADR-005-customer-commerce-workspace.md`
 - `SPRINT_1_1_REPORT.md`
 - `SPRINT_1_2_REPORT.md`
+- `SPRINT_1_3_REPORT.md`
 - `SPRINT_PLAN.md`
 - `KANBAN_TASK_GRAPH.md`
 - `QA_GATES.md`
