@@ -24,11 +24,12 @@ Local service path during prototype:
 
 Deployment baseline:
 
-- Docker Compose.
+- Agent Core PostgreSQL server managed by Hermes runtime.
 - Postgres 16 Alpine.
+- Option A: Calendar/Nettu uses separate database `nettu_calendar` on the same Postgres server as primary agent database `zeus_agent`.
 - Scheduler bound locally by default.
 - External host port 5055 for scheduler API.
-- External host port 55432 for Postgres during local build/development.
+- External host port 55430 for Agent Core Postgres during local build/development.
 
 ## Why not Cal.diy as core v1
 
@@ -38,7 +39,16 @@ Cal.diy is stronger as a booking-page/product UI platform. The SitioUno requirem
 
 Nettu uses SQLx compile-time query checking. During Docker build, Rust compilation requires `DATABASE_URL` to point at a reachable Postgres database with the expected schema applied. A blank database fails compilation with many `relation does not exist` errors.
 
-For the prototype, the canonical workaround is not to bypass SQLx. The build should use a reachable local Postgres instance with Nettu migrations applied. Runtime migration can be disabled with `MIGRATE_ON_START=false` when the DB has already been prepared.
+The current canonical Zeus prototype flow is:
+
+1. Start Agent Core DB (`agent-postgres`).
+2. Ensure primary DB `zeus_agent` and module DB `nettu_calendar` exist.
+3. Apply Hermes module migrations into `zeus_agent`.
+4. Apply Nettu migrations into `nettu_calendar` through the Agent Core migration runner.
+5. Build Nettu with build-time `DATABASE_URL` pointing to `127.0.0.1:55430/nettu_calendar`.
+6. Run Nettu with runtime `DATABASE_URL` pointing to `agent-postgres:5432/nettu_calendar` on Docker network `agent-core`.
+
+Runtime migration remains disabled with `MIGRATE_ON_START=false` because Nettu upstream migrations are not fully idempotent.
 
 ## Consequences
 

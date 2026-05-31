@@ -95,11 +95,14 @@ Prototype compose file in fork:
 
 Important local defaults:
 
+- Agent Core Postgres server: `agent-postgres` on Docker network `agent-core`
+- Agent Core host port: `127.0.0.1:55430`
+- Primary agent database: `zeus_agent`
+- Calendar backend database: `nettu_calendar`
 - Scheduler API: `127.0.0.1:5055`
-- Postgres: `127.0.0.1:55432`
 - Postgres image: `postgres:16-alpine`
 
-Nettu build note: SQLx compile-time checks require a database with migrations applied. For now, prepare the DB schema before building or keep a documented build script that does so. When using the same prepared DB at runtime, set `MIGRATE_ON_START=false` to avoid non-idempotent migration failures.
+Nettu build note: SQLx compile-time checks require a database with migrations applied. The Hermes Agent Core DB migrator prepares `nettu_calendar` before building/running Nettu. Runtime uses `MIGRATE_ON_START=false` because the DB was already prepared and upstream Nettu migrations are not fully idempotent.
 
 ## Future Adapters
 
