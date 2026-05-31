@@ -18,7 +18,7 @@ from typing import Any, Dict, Optional
 
 from tools.registry import registry
 
-DEFAULT_BASE_URL = "http://127.0.0.1:5000/api/v1"
+DEFAULT_BASE_URL = "http://127.0.0.1:5055/api/v1"
 
 
 def _base_url() -> str:
@@ -26,7 +26,11 @@ def _base_url() -> str:
 
 
 def _api_key() -> Optional[str]:
-    return os.getenv("HERMES_CALENDAR_API_KEY") or os.getenv("NETTU_ACCOUNT_API_KEY")
+    return (
+        os.getenv("HERMES_CALENDAR_API_KEY")
+        or os.getenv("NETTU_ACCOUNT_API_KEY")
+        or os.getenv("ACCOUNT_API_KEY")
+    )
 
 
 def _headers() -> Dict[str, str]:

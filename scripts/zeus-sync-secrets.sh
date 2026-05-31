@@ -141,6 +141,13 @@ docker_url('FACTORY_DB_RUNTIME_USER', 'FACTORY_DB_RUNTIME_PASSWORD', 'AGENT_DB_N
 docker_url('CALENDAR_DB_RUNTIME_USER', 'CALENDAR_DB_RUNTIME_PASSWORD', 'AGENT_CALENDAR_DB_NAME', 'CALENDAR_DATABASE_URL_DOCKER')
 docker_url('CRM_DB_RUNTIME_USER', 'CRM_DB_RUNTIME_PASSWORD', 'AGENT_CRM_DB_NAME', 'CRM_DATABASE_URL_DOCKER')
 
+# Agent-facing aliases for the generic calendar toolset. ACCOUNT_API_KEY is
+# the Nettu account key; keep a Hermes-native alias so the tool contract stays
+# scheduler-agnostic, and point local host tools to the published scheduler port.
+set_if_missing('HERMES_CALENDAR_BASE_URL', values.get('CALENDAR_API_BASE_URL') or 'http://127.0.0.1:5055/api/v1')
+set_if_missing('HERMES_CALENDAR_API_KEY', values.get('ACCOUNT_API_KEY'))
+set_if_missing('NETTU_ACCOUNT_API_KEY', values.get('ACCOUNT_API_KEY'))
+
 lines = [line for line in path.read_text().splitlines() if line.startswith('#')]
 seen = set()
 for k in order:
