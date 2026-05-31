@@ -6,6 +6,19 @@ The Calendar Capability is a generic Hermes toolset for conversational schedulin
 
 The user should not need to know whether the backend is Nettu, Cal.diy, Google Calendar, Outlook, or another scheduler. The agent uses canonical tools and maps the owner's intent to metadata, actors, services, calendars, events, and availability checks.
 
+## Canonical Functional Model
+
+Every owner/user starts with one personal calendar. That calendar is created as the default schedule for the user and is enough for immediate personal appointments, reminders, and busy-time blocking.
+
+Additional configuration is owner-driven. The user can later ask the agent to add calendars, services, availability windows, buffers, company-specific agendas, staff/resources, restaurant/medical/service reservations, or external calendar sync according to their own needs. Do not pre-bake company-specific calendars into the reusable capability unless the owner explicitly requests that configuration.
+
+Recommended bootstrap flow:
+
+1. Create or find the user's personal actor/resource.
+2. Create or find that actor's personal calendar.
+3. Use the personal calendar as the default target for scheduling.
+4. Add business/service-specific structures only when requested by the owner/user.
+
 ## Runtime Environment
 
 Required environment variables for the Nettu adapter:

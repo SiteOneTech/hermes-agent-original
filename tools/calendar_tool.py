@@ -41,6 +41,27 @@ def _headers() -> Dict[str, str]:
     return headers
 
 
+def _metadata(metadata: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    """Return Nettu-compatible metadata while keeping agent tools generic.
+
+    The canonical tool contract accepts JSON metadata because future calendar
+    adapters may store structured values. Nettu's API currently expects string
+    values in its metadata map, so stringify non-scalar values at the adapter
+    boundary instead of making agents learn this backend quirk.
+    """
+    normalized: Dict[str, str] = {}
+    for key, value in (metadata or {}).items():
+        if value is None:
+            continue
+        if isinstance(value, str):
+            normalized[str(key)] = value
+        elif isinstance(value, (int, float, bool)):
+            normalized[str(key)] = str(value)
+        else:
+            normalized[str(key)] = json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return normalized
+
+
 def check_calendar_requirements() -> bool:
     """Expose the calendar toolset only when an API key is configured.
 
@@ -109,7 +130,7 @@ def calendar_create_actor(metadata: Optional[Dict[str, Any]] = None) -> Dict[str
     room, restaurant capacity bucket, doctor, service provider, or other bookable
     resource depending on the agent profile.
     """
-    return _request("POST", "/user", {"metadata": metadata or {}})
+    return _request("POST", "/user", {"metadata": _metadata(metadata)})
 
 
 def calendar_find_actor_by_metadata(key: str, value: str, limit: int = 20, skip: int = 0) -> Dict[str, Any]:
@@ -121,7 +142,7 @@ def calendar_create_calendar(actor_id: str, timezone: str = "UTC", week_start: s
     return _request(
         "POST",
         f"/user/{actor_id}/calendar",
-        {"timezone": timezone, "weekStart": week_start, "metadata": metadata or {}},
+        {"timezone": timezone, "weekStart": week_start, "metadata": _metadata(metadata)},
     )
 
 
@@ -131,7 +152,7 @@ def calendar_find_calendar_by_metadata(key: str, value: str, limit: int = 20, sk
 
 def calendar_create_service(metadata: Optional[Dict[str, Any]] = None,
                             multi_person: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    body: Dict[str, Any] = {"metadata": metadata or {}}
+    body: Dict[str, Any] = {"metadata": _metadata(metadata)}
     if multi_person is not None:
         body["multiPerson"] = multi_person
     return _request("POST", "/service", body)
@@ -195,7 +216,7 @@ def calendar_create_event(actor_id: str, calendar_id: str, start_ts: int, durati
         "startTs": start_ts,
         "duration": duration_minutes * 60 * 1000,
         "busy": busy,
-        "metadata": metadata or {},
+        "metadata": _metadata(metadata),
     }
     if service_id:
         body["serviceId"] = service_id
@@ -209,7 +230,7 @@ def calendar_create_event(actor_id: str, calendar_id: str, start_ts: int, durati
 def calendar_block_time(actor_id: str, calendar_id: str, start_ts: int, duration_minutes: int,
                         reason: Optional[str] = None,
                         metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    meta = dict(metadata or {})
+    meta = _metadata(metadata)
     meta.setdefault("kind", "block")
     if reason:
         meta.setdefault("reason", reason)
@@ -219,7 +240,14 @@ def calendar_block_time(actor_id: str, calendar_id: str, start_ts: int, duration
 def calendar_list_events(calendar_id: str, start_ts: int, end_ts: int,
                          actor_scope: bool = False) -> Dict[str, Any]:
     path = f"/user/calendar/{calendar_id}/events" if actor_scope else f"/calendar/{calendar_id}/events"
-    return _request("GET", path, query={"startTs": start_ts, "endTs": end_ts})
+    result = _request("GET", path, query={"startTs": start_ts, "endTs": end_ts})
+    if not actor_scope and result.get("status") in {401, 403}:
+        # The Nettu account API key can create/update user-scoped events but may
+        # reject the account-level calendar endpoint in local deployments. Fall
+        # back to the user-scoped endpoint so the generic agent tool keeps
+        # working without exposing this backend-specific distinction.
+        return _request("GET", f"/user/calendar/{calendar_id}/events", query={"startTs": start_ts, "endTs": end_ts})
+    return result
 
 
 def calendar_update_event(event_id: str, start_ts: Optional[int] = None,
@@ -234,7 +262,7 @@ def calendar_update_event(event_id: str, start_ts: Optional[int] = None,
     if busy is not None:
         body["busy"] = busy
     if metadata is not None:
-        body["metadata"] = metadata
+        body["metadata"] = _metadata(metadata)
     return _request("PUT", f"/user/events/{event_id}", body)
 
 
