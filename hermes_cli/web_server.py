@@ -7598,6 +7598,11 @@ def _mount_plugin_api_routes():
             _log.warning("Failed to load plugin %s API routes: %s", plugin["name"], exc)
 
 
+# Mount customer commerce workspace routes before the SPA catch-all. These are
+# public-token customer surfaces, not dashboard session routes.
+from hermes_cli.commerce_workspace_surface import router as _commerce_workspace_router  # noqa: E402
+app.include_router(_commerce_workspace_router)
+
 # Mount plugin API routes before the SPA catch-all.
 _mount_plugin_api_routes()
 
