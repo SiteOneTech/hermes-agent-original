@@ -1363,6 +1363,7 @@ async def get_sessions(
     offset: int = 0,
     min_messages: int = 0,
     archived: str = "exclude",
+    order: str = "created",
 ):
     """List sessions.
 
@@ -1370,11 +1371,21 @@ async def get_sessions(
     ``exclude`` (default) hides them, ``only`` returns just the archived ones
     (used by the desktop "Archived sessions" settings panel), and ``include``
     returns both.
+
+    ``order`` controls pagination order: ``created`` (default, by original
+    start time) or ``recent`` (by latest activity across the compression
+    chain). ``recent`` keeps a long-running conversation on the first page
+    after it auto-compresses into a fresh continuation id.
     """
     if archived not in ("exclude", "only", "include"):
         raise HTTPException(
             status_code=400,
             detail="archived must be one of: exclude, only, include",
+        )
+    if order not in ("created", "recent"):
+        raise HTTPException(
+            status_code=400,
+            detail="order must be one of: created, recent",
         )
     try:
         from hermes_state import SessionDB
@@ -1389,6 +1400,7 @@ async def get_sessions(
                 min_message_count=min_message_count,
                 include_archived=include_archived,
                 archived_only=archived_only,
+                order_by_last_active=order == "recent",
             )
             total = db.session_count(
                 min_message_count=min_message_count,
@@ -3717,31 +3729,12 @@ def _codex_full_login_worker(session_id: str) -> None:
         if not access_token:
             raise RuntimeError("token exchange did not return access_token")
 
-        # Persist via credential pool — same shape as auth_commands.add_command
-        from agent.credential_pool import (
-            PooledCredential,
-            load_pool,
-            AUTH_TYPE_OAUTH,
-            SOURCE_MANUAL,
-        )
-        import uuid as _uuid
-        pool = load_pool("openai-codex")
-        base_url = (
-            os.getenv("HERMES_CODEX_BASE_URL", "").strip().rstrip("/")
-            or DEFAULT_CODEX_BASE_URL
-        )
-        entry = PooledCredential(
-            provider="openai-codex",
-            id=_uuid.uuid4().hex[:6],
-            label="dashboard device_code",
-            auth_type=AUTH_TYPE_OAUTH,
-            priority=0,
-            source=f"{SOURCE_MANUAL}:dashboard_device_code",
-            access_token=access_token,
-            refresh_token=refresh_token,
-            base_url=base_url,
-        )
-        pool.add_entry(entry)
+        from hermes_cli.auth import _save_codex_tokens
+
+        _save_codex_tokens({
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+        })
         with _oauth_sessions_lock:
             sess["status"] = "approved"
         _log.info("oauth/device: openai-codex login completed (session=%s)", session_id)
@@ -3913,6 +3906,117 @@ def _session_latest_descendant(session_id: str):
     finally:
         db.close()
 
+
+# CRITICAL — every literal-path route below MUST be declared BEFORE the
+# templated ``/api/sessions/{session_id}`` family that follows. FastAPI/
+# Starlette match routes in registration order, and the ``{session_id}``
+# pattern is unconstrained — it would otherwise swallow e.g.
+# ``DELETE /api/sessions/empty``, ``POST /api/sessions/bulk-delete``, or
+# ``GET /api/sessions/stats`` as "operate on the session with id
+# 'empty'" / "'bulk-delete'" / "'stats'", which would 404 (or worse,
+# succeed and delete the wrong row). Same story as the older
+# ``/api/sessions/search`` endpoint up at line ~1191. If you split or
+# reorder this block, move every route in it together.
+class BulkDeleteSessions(BaseModel):
+    ids: List[str]
+
+
+@app.post("/api/sessions/bulk-delete")
+async def bulk_delete_sessions_endpoint(body: BulkDeleteSessions):
+    """Delete every session in ``body.ids`` in a single DB transaction.
+
+    Backs the dashboard's bulk-select-and-delete flow on the sessions
+    page. POST (not DELETE) because most HTTP clients refuse to send a
+    request body on DELETE and a body is the natural shape for a list
+    of IDs — Starlette accepts both, but POSTing a list keeps proxies,
+    curl, and the browser ``fetch`` API consistent.
+
+    Per-row contract matches :meth:`SessionDB.delete_sessions`:
+
+    * Unknown IDs are silently skipped (the response ``deleted`` count
+      reflects what really happened, not the input length). This is
+      deliberate — UI selection state can race against another tab's
+      delete, and we'd rather succeed-on-the-rest than fail-the-whole-
+      batch.
+    * Children of every deleted parent are orphaned, not cascade-
+      deleted.
+    * Active and archived sessions ARE deleted when explicitly
+      selected — unlike ``DELETE /api/sessions/empty``, the user
+      hand-picked the rows so we trust the selection.
+    * Like the other session-delete endpoints, this does NOT pass a
+      ``sessions_dir`` through; on-disk transcript / request-dump
+      cleanup runs at the CLI/agent layer on the next prune pass.
+
+    The response carries the actual deleted count, so the dashboard
+    can surface it in a toast. The IDs that were removed are not
+    echoed back because the client already knows what it asked to
+    delete (unknown IDs are silently skipped — see contract above)
+    and can prune its in-memory list directly from the request.
+    """
+    # Enforce a hard cap so a runaway/typo'd selection can't lock the
+    # DB writer for an extended window. The dashboard pages 20 rows
+    # at a time; 500 covers a "select all on every page in a
+    # reasonable scrollback" worst case without opening the door to
+    # multi-thousand-row transactions.
+    if len(body.ids) > 500:
+        raise HTTPException(
+            status_code=400,
+            detail="ids must contain at most 500 entries",
+        )
+    from hermes_state import SessionDB
+    db = SessionDB()
+    try:
+        deleted = db.delete_sessions(body.ids)
+        return {"ok": True, "deleted": deleted}
+    finally:
+        db.close()
+
+
+@app.get("/api/sessions/empty/count")
+async def count_empty_sessions_endpoint():
+    """Return the number of empty, ended, non-archived sessions.
+
+    Drives the dashboard's "Delete empty (N)" button — when N is 0 the
+    UI hides the affordance so users aren't presented with a button
+    that does nothing. Cheap, single-COUNT query.
+    """
+    from hermes_state import SessionDB
+    db = SessionDB()
+    try:
+        return {"count": db.count_empty_sessions()}
+    finally:
+        db.close()
+
+
+@app.delete("/api/sessions/empty")
+async def delete_empty_sessions_endpoint():
+    """Delete every empty (``message_count == 0``), ended,
+    non-archived session in a single transaction.
+
+    Safety contract mirrors :meth:`SessionDB.delete_empty_sessions`:
+
+    * Active sessions are skipped (``ended_at IS NULL``) so a live
+      agent isn't yanked mid-handshake.
+    * Archived sessions are skipped — the user explicitly chose to
+      keep those rows.
+    * Children of deleted parents are orphaned, not cascade-deleted.
+
+    Like the single-session ``DELETE /api/sessions/{id}`` endpoint
+    below, this doesn't pass a ``sessions_dir`` through — the on-disk
+    transcript / request-dump cleanup is wired at the CLI/agent layer
+    but the web server historically leaves file cleanup to the next
+    prune-on-startup pass. Matching that pre-existing trade-off keeps
+    the two delete endpoints' DB-vs-disk behaviour consistent.
+    """
+    from hermes_state import SessionDB
+    db = SessionDB()
+    try:
+        deleted = db.delete_empty_sessions()
+        return {"ok": True, "deleted": deleted}
+    finally:
+        db.close()
+
+
 @app.get("/api/sessions/stats")
 async def get_session_stats():
     """Session-store statistics for the Sessions page (mirrors `hermes sessions stats`).
@@ -3944,6 +4048,7 @@ async def get_session_stats():
         }
     finally:
         db.close()
+
 
 @app.get("/api/sessions/{session_id}")
 async def get_session_detail(session_id: str):
@@ -5792,6 +5897,7 @@ async def get_toolset_config(name: str):
     from hermes_cli.tools_config import (
         TOOL_CATEGORIES,
         _get_effective_configurable_toolsets,
+        _is_provider_active,
         _visible_providers,
     )
     from hermes_cli.config import get_env_value
@@ -5803,6 +5909,7 @@ async def get_toolset_config(name: str):
     config = load_config()
     cat = TOOL_CATEGORIES.get(name)
     providers = []
+    active_provider = None
     if cat:
         for prov in _visible_providers(cat, config, force_fresh=True):
             env_vars = [
@@ -5815,6 +5922,13 @@ async def get_toolset_config(name: str):
                 }
                 for e in prov.get("env_vars", [])
             ]
+            # Surface the same active-provider determination the CLI picker
+            # uses (``_is_provider_active``) so the GUI highlights the provider
+            # actually written to config (e.g. web.backend), not just the first
+            # keyless one in the list.
+            is_active = _is_provider_active(prov, config, force_fresh=True)
+            if is_active and active_provider is None:
+                active_provider = prov["name"]
             providers.append({
                 "name": prov["name"],
                 "badge": prov.get("badge", ""),
@@ -5822,11 +5936,13 @@ async def get_toolset_config(name: str):
                 "env_vars": env_vars,
                 "post_setup": prov.get("post_setup"),
                 "requires_nous_auth": bool(prov.get("requires_nous_auth")),
+                "is_active": is_active,
             })
     return {
         "name": name,
         "has_category": cat is not None,
         "providers": providers,
+        "active_provider": active_provider,
     }
 
 
@@ -6722,6 +6838,7 @@ def mount_spa(application: FastAPI):
 _BUILTIN_DASHBOARD_THEMES = [
     {"name": "default",       "label": "Hermes Teal",         "description": "Classic dark teal — the canonical Hermes look"},
     {"name": "default-large", "label": "Hermes Teal (Large)", "description": "Hermes Teal with bigger fonts and roomier spacing"},
+    {"name": "nous-blue",     "label": "Nous Blue",           "description": "Light mode — vivid Nous-blue accents on cream canvas"},
     {"name": "midnight",      "label": "Midnight",            "description": "Deep blue-violet with cool accents"},
     {"name": "ember",     "label": "Ember",          "description": "Warm crimson and bronze — forge vibes"},
     {"name": "mono",      "label": "Mono",           "description": "Clean grayscale — minimal and focused"},
