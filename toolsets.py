@@ -37,6 +37,8 @@ _HERMES_CORE_TOOLS = [
     "read_file", "write_file", "patch", "search_files",
     # Vision + image generation
     "vision_analyze", "image_generate",
+    # MiniMax Token Plan CLI (gated on mmx being installed/authenticated)
+    "minimax_cli_status", "minimax_text_chat", "minimax_image_generate",
     # Skills
     "skills_list", "skill_view", "skill_manage",
     # Browser automation
@@ -125,6 +127,12 @@ TOOLSETS = {
     "image_gen": {
         "description": "Creative generation tools (images)",
         "tools": ["image_generate"],
+        "includes": []
+    },
+
+    "minimax_cli": {
+        "description": "Official MiniMax Token Plan CLI tools for text, image generation, and quota checks",
+        "tools": ["minimax_cli_status", "minimax_text_chat", "minimax_image_generate"],
         "includes": []
     },
 
