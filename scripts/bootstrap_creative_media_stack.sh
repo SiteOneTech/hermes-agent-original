@@ -43,14 +43,20 @@ log "installing Python media packages into isolated venv"
 
 log "checking FFmpeg"
 if ! need_cmd ffmpeg || ! need_cmd ffprobe; then
-  cat >&2 <<'MSG'
-FFmpeg/ffprobe are not on PATH.
-Install with your OS package manager or provide a static build, then re-run.
-Example Ubuntu: sudo apt-get update && sudo apt-get install -y ffmpeg
-MSG
-else
-  ffmpeg -version | head -1
+  echo "FFmpeg/ffprobe not found on PATH; installing user-space static build under $ROOT/bin" >&2
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+  curl -L --fail --max-time 180 \
+    -o "$tmp_dir/ffmpeg-static.tar.xz" \
+    https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
+  tar -xf "$tmp_dir/ffmpeg-static.tar.xz" -C "$tmp_dir"
+  ffmpeg_dir="$(find "$tmp_dir" -maxdepth 1 -type d -name 'ffmpeg-*static' | head -1)"
+  cp "$ffmpeg_dir/ffmpeg" "$ffmpeg_dir/ffprobe" "$ROOT/bin/"
+  chmod +x "$ROOT/bin/ffmpeg" "$ROOT/bin/ffprobe"
+  export PATH="$ROOT/bin:$PATH"
 fi
+ffmpeg -version | head -1
+ffprobe -version | head -1
 
 log "checking ImageMagick"
 if need_cmd magick; then
