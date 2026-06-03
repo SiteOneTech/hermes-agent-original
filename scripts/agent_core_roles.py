@@ -27,6 +27,7 @@ DEFAULTS = {
     "FACTORY_DB_RUNTIME_USER": "factory_runtime",
     "CALENDAR_DB_RUNTIME_USER": "calendar_runtime",
     "CRM_DB_RUNTIME_USER": "crm_runtime",
+    "VOICE_DB_RUNTIME_USER": "voice_runtime",
     "SALES_DB_RUNTIME_USER": "sales_runtime",
     "ACCOUNTING_DB_RUNTIME_USER": "accounting_runtime",
     "FITNESS_DB_RUNTIME_USER": "fitness_runtime",
@@ -37,6 +38,7 @@ SECRET_KEYS = [
     "FACTORY_DB_RUNTIME_PASSWORD",
     "CALENDAR_DB_RUNTIME_PASSWORD",
     "CRM_DB_RUNTIME_PASSWORD",
+    "VOICE_DB_RUNTIME_PASSWORD",
     "SALES_DB_RUNTIME_PASSWORD",
     "ACCOUNTING_DB_RUNTIME_PASSWORD",
     "FITNESS_DB_RUNTIME_PASSWORD",
@@ -66,9 +68,10 @@ def save_env_file(values: dict[str, str]) -> None:
         "AGENT_DB_HOST_BIND", "AGENT_DB_HOST_PORT", "AGENT_DB_NAME", "AGENT_CALENDAR_DB_NAME", "AGENT_CRM_DB_NAME",
         "AGENT_DB_RUNTIME_USER", "AGENT_DB_RUNTIME_PASSWORD", "FACTORY_DB_RUNTIME_USER", "FACTORY_DB_RUNTIME_PASSWORD",
         "CALENDAR_DB_RUNTIME_USER", "CALENDAR_DB_RUNTIME_PASSWORD", "CRM_DB_RUNTIME_USER", "CRM_DB_RUNTIME_PASSWORD",
+        "VOICE_DB_RUNTIME_USER", "VOICE_DB_RUNTIME_PASSWORD",
         "SALES_DB_RUNTIME_USER", "SALES_DB_RUNTIME_PASSWORD", "ACCOUNTING_DB_RUNTIME_USER", "ACCOUNTING_DB_RUNTIME_PASSWORD",
         "FITNESS_DB_RUNTIME_USER", "FITNESS_DB_RUNTIME_PASSWORD",
-        "AGENT_DATABASE_URL", "FACTORY_DATABASE_URL", "CALENDAR_DATABASE_URL", "CRM_DATABASE_URL", "SALES_DATABASE_URL", "ACCOUNTING_DATABASE_URL", "FITNESS_DATABASE_URL",
+        "AGENT_DATABASE_URL", "FACTORY_DATABASE_URL", "CALENDAR_DATABASE_URL", "CRM_DATABASE_URL", "VOICE_DATABASE_URL", "SALES_DATABASE_URL", "ACCOUNTING_DATABASE_URL", "FITNESS_DATABASE_URL",
     ]:
         if key in merged:
             lines.append(f"{key}={merged[key]}")
@@ -85,6 +88,7 @@ def _fill_passwords_from_urls(env: dict[str, str]) -> None:
         "FACTORY_DB_RUNTIME_PASSWORD": "FACTORY_DATABASE_URL",
         "CALENDAR_DB_RUNTIME_PASSWORD": "CALENDAR_DATABASE_URL",
         "CRM_DB_RUNTIME_PASSWORD": "CRM_DATABASE_URL",
+        "VOICE_DB_RUNTIME_PASSWORD": "VOICE_DATABASE_URL",
         "SALES_DB_RUNTIME_PASSWORD": "SALES_DATABASE_URL",
         "ACCOUNTING_DB_RUNTIME_PASSWORD": "ACCOUNTING_DATABASE_URL",
         "FITNESS_DB_RUNTIME_PASSWORD": "FITNESS_DATABASE_URL",
@@ -111,6 +115,7 @@ def runtime_env(write_missing: bool = False) -> dict[str, str]:
         ("FACTORY_DB_RUNTIME_USER", "factory_runtime"),
         ("CALENDAR_DB_RUNTIME_USER", "calendar_runtime"),
         ("CRM_DB_RUNTIME_USER", "crm_runtime"),
+        ("VOICE_DB_RUNTIME_USER", "voice_runtime"),
         ("SALES_DB_RUNTIME_USER", "sales_runtime"),
         ("ACCOUNTING_DB_RUNTIME_USER", "accounting_runtime"),
         ("FITNESS_DB_RUNTIME_USER", "fitness_runtime"),
@@ -127,10 +132,11 @@ def runtime_env(write_missing: bool = False) -> dict[str, str]:
         env["FACTORY_DATABASE_URL"] = f"postgresql://{env['FACTORY_DB_RUNTIME_USER']}:{env['FACTORY_DB_RUNTIME_PASSWORD']}@{host}:{port}/{env['AGENT_DB_NAME']}"
         env["CALENDAR_DATABASE_URL"] = f"postgresql://{env['CALENDAR_DB_RUNTIME_USER']}:{env['CALENDAR_DB_RUNTIME_PASSWORD']}@{host}:{port}/{env['AGENT_CALENDAR_DB_NAME']}"
         env["CRM_DATABASE_URL"] = f"postgresql://{env['CRM_DB_RUNTIME_USER']}:***@{host}:{port}/{env.get('AGENT_CRM_DB_NAME', env['AGENT_DB_NAME'])}"
+        env["VOICE_DATABASE_URL"] = f"postgresql://{env['VOICE_DB_RUNTIME_USER']}:***@{host}:{port}/{env['AGENT_DB_NAME']}"
         env["SALES_DATABASE_URL"] = f"postgresql://{env['SALES_DB_RUNTIME_USER']}:***@{host}:{port}/{env['AGENT_DB_NAME']}"
         env["ACCOUNTING_DATABASE_URL"] = f"postgresql://{env['ACCOUNTING_DB_RUNTIME_USER']}:***@{host}:{port}/{env['AGENT_DB_NAME']}"
         env["FITNESS_DATABASE_URL"] = f"postgresql://{env['FITNESS_DB_RUNTIME_USER']}:***@{host}:{port}/{env['AGENT_DB_NAME']}"
-        save_env_file({k: env[k] for k in env if k.startswith(("AGENT_", "FACTORY_", "CALENDAR_", "CRM_", "SALES_", "ACCOUNTING_", "FITNESS_"))})
+        save_env_file({k: env[k] for k in env if k.startswith(("AGENT_", "FACTORY_", "CALENDAR_", "CRM_", "VOICE_", "SALES_", "ACCOUNTING_", "FITNESS_"))})
     missing = [key for key in ["AGENT_DB_ADMIN_PASSWORD", *SECRET_KEYS] if not env.get(key)]
     if missing:
         raise SystemExit(f"Missing required secrets: {', '.join(missing)}. Inject them or run with --write-missing-local-env for local dev.")
@@ -179,6 +185,7 @@ def apply_grants(env: dict[str, str]) -> None:
         ("FACTORY_DB_RUNTIME_USER", "FACTORY_DB_RUNTIME_PASSWORD"),
         ("CALENDAR_DB_RUNTIME_USER", "CALENDAR_DB_RUNTIME_PASSWORD"),
         ("CRM_DB_RUNTIME_USER", "CRM_DB_RUNTIME_PASSWORD"),
+        ("VOICE_DB_RUNTIME_USER", "VOICE_DB_RUNTIME_PASSWORD"),
         ("SALES_DB_RUNTIME_USER", "SALES_DB_RUNTIME_PASSWORD"),
         ("ACCOUNTING_DB_RUNTIME_USER", "ACCOUNTING_DB_RUNTIME_PASSWORD"),
         ("FITNESS_DB_RUNTIME_USER", "FITNESS_DB_RUNTIME_PASSWORD"),
@@ -191,14 +198,15 @@ def apply_grants(env: dict[str, str]) -> None:
     factory_runtime = quote_ident(env["FACTORY_DB_RUNTIME_USER"])
     calendar_runtime = quote_ident(env["CALENDAR_DB_RUNTIME_USER"])
     crm_runtime = quote_ident(env["CRM_DB_RUNTIME_USER"])
+    voice_runtime = quote_ident(env["VOICE_DB_RUNTIME_USER"])
     sales_runtime = quote_ident(env["SALES_DB_RUNTIME_USER"])
     accounting_runtime = quote_ident(env["ACCOUNTING_DB_RUNTIME_USER"])
     fitness_runtime = quote_ident(env["FITNESS_DB_RUNTIME_USER"])
 
     run_psql(env, agent_db, f"""
-GRANT CONNECT ON DATABASE {quote_ident(agent_db)} TO {agent_runtime}, {factory_runtime}, {calendar_runtime}, {crm_runtime}, {sales_runtime}, {accounting_runtime}, {fitness_runtime};
-GRANT USAGE ON SCHEMA agent_core TO {agent_runtime}, {factory_runtime}, {calendar_runtime}, {crm_runtime}, {sales_runtime}, {accounting_runtime}, {fitness_runtime};
-GRANT SELECT ON ALL TABLES IN SCHEMA agent_core TO {agent_runtime}, {factory_runtime}, {calendar_runtime}, {crm_runtime}, {sales_runtime}, {accounting_runtime}, {fitness_runtime};
+GRANT CONNECT ON DATABASE {quote_ident(agent_db)} TO {agent_runtime}, {factory_runtime}, {calendar_runtime}, {crm_runtime}, {voice_runtime}, {sales_runtime}, {accounting_runtime}, {fitness_runtime};
+GRANT USAGE ON SCHEMA agent_core TO {agent_runtime}, {factory_runtime}, {calendar_runtime}, {crm_runtime}, {voice_runtime}, {sales_runtime}, {accounting_runtime}, {fitness_runtime};
+GRANT SELECT ON ALL TABLES IN SCHEMA agent_core TO {agent_runtime}, {factory_runtime}, {calendar_runtime}, {crm_runtime}, {voice_runtime}, {sales_runtime}, {accounting_runtime}, {fitness_runtime};
 GRANT USAGE ON SCHEMA factory TO {agent_runtime}, {factory_runtime};
 GRANT SELECT ON ALL TABLES IN SCHEMA factory TO {agent_runtime};
 GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA factory TO {factory_runtime};
@@ -207,6 +215,10 @@ GRANT USAGE ON SCHEMA crm TO {agent_runtime}, {crm_runtime};
 GRANT SELECT ON ALL TABLES IN SCHEMA crm TO {agent_runtime};
 GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA crm TO {crm_runtime};
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA crm TO {crm_runtime};
+GRANT USAGE ON SCHEMA voice TO {agent_runtime}, {voice_runtime};
+GRANT SELECT ON ALL TABLES IN SCHEMA voice TO {agent_runtime};
+GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA voice TO {voice_runtime};
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA voice TO {voice_runtime};
 GRANT USAGE ON SCHEMA sales TO {agent_runtime}, {sales_runtime};
 GRANT SELECT ON ALL TABLES IN SCHEMA sales TO {agent_runtime};
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA sales TO {sales_runtime};
@@ -236,9 +248,10 @@ def print_infisical(env: dict[str, str]) -> None:
         "AGENT_DB_HOST_BIND", "AGENT_DB_HOST_PORT", "AGENT_DB_NAME", "AGENT_CALENDAR_DB_NAME", "AGENT_CRM_DB_NAME",
         "AGENT_DB_RUNTIME_USER", "AGENT_DB_RUNTIME_PASSWORD", "FACTORY_DB_RUNTIME_USER", "FACTORY_DB_RUNTIME_PASSWORD",
         "CALENDAR_DB_RUNTIME_USER", "CALENDAR_DB_RUNTIME_PASSWORD", "CRM_DB_RUNTIME_USER", "CRM_DB_RUNTIME_PASSWORD",
+        "VOICE_DB_RUNTIME_USER", "VOICE_DB_RUNTIME_PASSWORD",
         "SALES_DB_RUNTIME_USER", "SALES_DB_RUNTIME_PASSWORD", "ACCOUNTING_DB_RUNTIME_USER", "ACCOUNTING_DB_RUNTIME_PASSWORD",
         "FITNESS_DB_RUNTIME_USER", "FITNESS_DB_RUNTIME_PASSWORD",
-        "AGENT_DATABASE_URL", "FACTORY_DATABASE_URL", "CALENDAR_DATABASE_URL", "CRM_DATABASE_URL", "SALES_DATABASE_URL", "ACCOUNTING_DATABASE_URL", "FITNESS_DATABASE_URL",
+        "AGENT_DATABASE_URL", "FACTORY_DATABASE_URL", "CALENDAR_DATABASE_URL", "CRM_DATABASE_URL", "VOICE_DATABASE_URL", "SALES_DATABASE_URL", "ACCOUNTING_DATABASE_URL", "FITNESS_DATABASE_URL",
     ]
     for key in keys:
         if key in env:
@@ -252,7 +265,7 @@ def main() -> None:
     args = parser.parse_args()
     env = runtime_env(write_missing=args.write_missing_local_env)
     apply_grants(env)
-    print("Agent Core runtime roles ready: agent_runtime, factory_runtime, calendar_runtime, crm_runtime, sales_runtime, accounting_runtime, fitness_runtime")
+    print("Agent Core runtime roles ready: agent_runtime, factory_runtime, calendar_runtime, crm_runtime, voice_runtime, sales_runtime, accounting_runtime, fitness_runtime")
     if args.print_infisical:
         print_infisical(env)
 

@@ -229,6 +229,16 @@ TOOLSETS = {
         "includes": []
     },
 
+    "voice": {
+        "description": "Agent-native voice/telephony core backed by the shared Agent Core DB, with Vapi as the first provider adapter",
+        "tools": [
+            "voice_status", "voice_assistant_create", "voice_assistant_list",
+            "voice_phone_number_list", "voice_call_start", "voice_call_get",
+            "voice_call_event_record", "voice_vapi_raw_request",
+        ],
+        "includes": []
+    },
+
     "sales": {
         "description": "Agent-native commercial/sales core: catalog, inventory, quotes, orders, invoices, and payment requests",
         "tools": [
