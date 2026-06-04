@@ -229,6 +229,24 @@ TOOLSETS = {
         "includes": []
     },
 
+    "customer_service": {
+        "description": "Restricted customer-facing ATC toolset for Sophie/front-office agents: no shell, files, memory, cron, delegation, calendar mutation, sales execution, quotes/invoices, raw CRM adapters, or privileged operator tools",
+        "tools": [
+            "web_search", "web_extract", "clarify",
+            "crm_status", "crm_organization_upsert", "crm_contact_upsert",
+            "crm_opportunity_upsert", "crm_interaction_record",
+            "crm_follow_up_create", "crm_customer_timeline", "crm_search",
+            "customer_intent_raise",
+        ],
+        "includes": []
+    },
+
+    "customer_intents": {
+        "description": "Zeus/supervisor tools for processing customer-service escalation intents raised by Sophie",
+        "tools": ["customer_intent_list", "customer_intent_update"],
+        "includes": []
+    },
+
     "voice": {
         "description": "Agent-native voice/telephony core backed by the shared Agent Core DB, with Vapi as the first provider adapter",
         "tools": [

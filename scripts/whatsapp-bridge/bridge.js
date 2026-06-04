@@ -607,6 +607,30 @@ app.post('/edit', async (req, res) => {
   }
 });
 
+// React to an inbound message. Used as an immediate "we are reading this"
+// acknowledgement before the Python agent finishes processing the turn.
+app.post('/react', async (req, res) => {
+  if (!sock || connectionState !== 'connected') {
+    return res.status(503).json({ error: 'Not connected to WhatsApp' });
+  }
+
+  const { chatId, messageId, emoji, senderId } = req.body;
+  if (!chatId || !messageId || !emoji) {
+    return res.status(400).json({ error: 'chatId, messageId, and emoji are required' });
+  }
+
+  try {
+    const key = { id: messageId, fromMe: false, remoteJid: chatId };
+    if (senderId && chatId.endsWith('@g.us')) {
+      key.participant = senderId;
+    }
+    await sendWithTimeout(chatId, { react: { text: emoji, key } });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // MIME type map and media type inference for /send-media
 const MIME_MAP = {
   jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
