@@ -1,7 +1,7 @@
 """Customer intent escalation tools for constrained customer-service channels.
 
 Sophie/front-office agents should use ``customer_intent_raise`` when a customer
-asks for an action the customer-service route must not execute directly. Zeus or
+asks for an action the customer-service route must not execute directly. the owner/supervisor or
 a supervised cron then inspects pending intents, performs the real action with
 privileged tools, verifies delivery, and updates the intent status.
 """
@@ -121,7 +121,7 @@ def _handle_customer_intent_raise(args: dict[str, Any], **_kwargs) -> str:
             {_q(args.get('opportunity_id'))}, {_q(args.get('interaction_id'))},
             {_q(args.get('channel') or 'whatsapp')}, {_q(args.get('conversation_ref'))}, {_q(args.get('source_ref'))},
             {_q(intent_type)}, {_q(raw)}, {_q(summary)}, {_q(args.get('required_action'))},
-            {_q(args.get('priority') or 'normal')}, 'pending', {_q(args.get('assigned_to') or 'zeus')},
+            {_q(args.get('priority') or 'normal')}, 'pending', {_q(args.get('assigned_to') or 'supervisor')},
             {_q(args.get('due_at'))}, {_j(metadata)}
           )
           ON CONFLICT (intent_id) DO UPDATE SET
@@ -144,7 +144,7 @@ def _handle_customer_intent_raise(args: dict[str, Any], **_kwargs) -> str:
             updated_at=now()
           RETURNING *
         """, user=_user())
-        return _ok(intent=row, acknowledgement="Solicitud registrada y escalada para revisión de Zeus/SitioUno.")
+        return _ok(intent=row, acknowledgement="Solicitud registrada y escalada para revisión de owner/supervisor de SitioUno.")
     except Exception as exc:
         return _err(exc)
 
@@ -186,7 +186,7 @@ def _handle_customer_intent_update(args: dict[str, Any], **_kwargs) -> str:
             updates.append(f"status={_q(status)}")
             if status == "processing":
                 updates.append("claimed_at=COALESCE(claimed_at, now())")
-                updates.append(f"claimed_by={_q(args.get('claimed_by') or 'zeus')}")
+                updates.append(f"claimed_by={_q(args.get('claimed_by') or 'supervisor')}")
             if status in {"completed", "blocked", "cancelled"}:
                 updates.append("processed_at=COALESCE(processed_at, now())")
         if args.get("result_summary") is not None:
@@ -238,7 +238,7 @@ registry.register(
     toolset="customer_service",
     schema=_schema(
         "customer_intent_raise",
-        "Raise a structured customer intent/escalation for Zeus/SitioUno to process asynchronously. Use this when Sophie cannot execute the requested action directly.",
+        "Raise a structured customer intent/escalation for owner/supervisor de SitioUno to process asynchronously. Use this when Sophie cannot execute the requested action directly.",
         _common_props,
         ["customer_request_raw", "summary"],
     ),
@@ -252,7 +252,7 @@ registry.register(
     toolset="customer_intents",
     schema=_schema(
         "customer_intent_list",
-        "List pending or status-filtered customer intents for Zeus/supervisor processing.",
+        "List pending or status-filtered customer intents for Owner/supervisor processing.",
         {"status": {"type": "string", "enum": STATUSES}, "contact_id": {"type": "string"}, "conversation_ref": {"type": "string"}, "limit": {"type": "integer"}},
     ),
     handler=_handle_customer_intent_list,
@@ -265,7 +265,7 @@ registry.register(
     toolset="customer_intents",
     schema=_schema(
         "customer_intent_update",
-        "Update a customer intent status/result after Zeus/supervisor has processed it.",
+        "Update a customer intent status/result after Owner/supervisor has processed it.",
         {"intent_id": {"type": "string"}, "status": {"type": "string", "enum": STATUSES}, "claimed_by": {"type": "string"}, "result_summary": {"type": "string"}, **_meta_props()},
         ["intent_id"],
     ),

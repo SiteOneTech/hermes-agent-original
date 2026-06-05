@@ -389,6 +389,23 @@ export const api = {
         body: JSON.stringify({ content }),
       },
     ),
+  updateProfileMetadata: (
+    name: string,
+    metadata: {
+      description?: string;
+      description_auto?: boolean;
+      display_name?: string;
+      avatar_path?: string;
+    },
+  ) =>
+    fetchJSON<{ ok: boolean }>(
+      `/api/profiles/${encodeURIComponent(name)}/metadata`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(metadata),
+      },
+    ),
 
   // Skills & Toolsets
   getSkills: () => fetchJSON<SkillInfo[]>("/api/skills"),
@@ -1187,6 +1204,10 @@ export interface ProfileInfo {
   provider: string | null;
   has_env: boolean;
   skill_count: number;
+  description?: string;
+  description_auto?: boolean;
+  display_name?: string;
+  avatar_path?: string;
 }
 
 export interface ModelsAnalyticsModelEntry {

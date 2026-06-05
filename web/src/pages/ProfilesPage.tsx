@@ -78,9 +78,13 @@ const PROFILE_ROLE_HINTS: Record<string, string> = {
   "qa-verifier": "Verifica pruebas, regresiones y evidencia ejecutable.",
   "devops-release": "Deploy, runtime, infraestructura y release gates.",
   "factory-reporter": "Reportes, snapshots y síntesis de avance.",
+  "sophie-atc": "ATC y ventas consultivas para clientes/prospectos; registra CRM seguro y escala solicitudes a supervisión.",
 };
 
-function profileDisplayName(name: string): string {
+function profileDisplayName(profile: ProfileInfo): string {
+  const name = profile.name;
+  const label = profile.display_name?.trim();
+  if (label) return label;
   if (name === "default") return "Default Hermes";
   return name
     .split(/[-_]/g)
@@ -89,12 +93,14 @@ function profileDisplayName(name: string): string {
     .join(" ");
 }
 
-function profileInitials(name: string): string {
-  const parts = name.split(/[-_]/g).filter(Boolean);
+function profileInitials(profile: ProfileInfo): string {
+  const label = profile.display_name?.trim() || profile.name;
+  const parts = label.split(/[-_\s]/g).filter(Boolean);
   return (parts[0]?.[0] ?? "H") + (parts[1]?.[0] ?? "");
 }
 
 function profileSummary(profile: ProfileInfo): string {
+  if (profile.description?.trim()) return profile.description.trim();
   if (PROFILE_ROLE_HINTS[profile.name]) return PROFILE_ROLE_HINTS[profile.name];
   if (profile.name === "default") return "Perfil base del dashboard y sesión principal.";
   return profile.model
@@ -102,8 +108,8 @@ function profileSummary(profile: ProfileInfo): string {
     : "Perfil Hermes aislado con configuración y memoria propias.";
 }
 
-function profileAvatarUrl(name: string): string {
-  return `/agent-avatars/${encodeURIComponent(name)}.webp`;
+function profileAvatarUrl(profile: ProfileInfo): string {
+  return profile.avatar_path?.trim() || `/agent-avatars/${encodeURIComponent(profile.name)}.webp`;
 }
 
 export default function ProfilesPage() {
@@ -440,10 +446,10 @@ export default function ProfilesPage() {
                     <div className="absolute bottom-3 left-4 flex items-end gap-3">
                       <div className="relative flex h-20 w-20 items-center justify-center overflow-hidden rounded-2xl border border-border bg-background text-lg font-semibold uppercase shadow-lg">
                         <span className="absolute inset-0 flex items-center justify-center bg-primary/10 text-primary">
-                          {profileInitials(p.name)}
+                          {profileInitials(p)}
                         </span>
                         <img
-                          src={profileAvatarUrl(p.name)}
+                          src={profileAvatarUrl(p)}
                           alt=""
                           className="relative h-full w-full object-cover"
                           onError={(event) => {
@@ -481,7 +487,7 @@ export default function ProfilesPage() {
                       ) : (
                         <>
                           <h3 className="truncate text-lg font-semibold tracking-tight">
-                            {profileDisplayName(p.name)}
+                            {profileDisplayName(p)}
                           </h3>
                           <p className="mt-0.5 truncate font-mono text-xs text-muted-foreground">
                             {p.name}

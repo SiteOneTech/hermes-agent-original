@@ -5614,6 +5614,13 @@ class ProfileSoulUpdate(BaseModel):
     content: str
 
 
+class ProfileMetadataUpdate(BaseModel):
+    description: Optional[str] = None
+    description_auto: Optional[bool] = None
+    display_name: Optional[str] = None
+    avatar_path: Optional[str] = None
+
+
 def _profile_attr(info, name: str, default: Any = None) -> Any:
     try:
         return getattr(info, name)
@@ -5630,6 +5637,10 @@ def _profile_to_dict(info) -> Dict[str, Any]:
         "provider": _profile_attr(info, "provider"),
         "has_env": bool(_profile_attr(info, "has_env", False)),
         "skill_count": int(_profile_attr(info, "skill_count", 0) or 0),
+        "description": _profile_attr(info, "description", ""),
+        "description_auto": bool(_profile_attr(info, "description_auto", False)),
+        "display_name": _profile_attr(info, "display_name", ""),
+        "avatar_path": _profile_attr(info, "avatar_path", ""),
     }
 
 
@@ -5644,6 +5655,7 @@ def _fallback_profile_dicts(profiles_mod) -> List[Dict[str, Any]]:
     default_home = profiles_mod._get_default_hermes_home()
     if default_home.is_dir():
         model, provider = _safe(lambda: profiles_mod._read_config_model(default_home), (None, None))
+        meta = _safe(lambda: profiles_mod.read_profile_meta(default_home), {})
         profiles.append({
             "name": "default",
             "path": str(default_home),
@@ -5652,6 +5664,10 @@ def _fallback_profile_dicts(profiles_mod) -> List[Dict[str, Any]]:
             "provider": provider,
             "has_env": (default_home / ".env").exists(),
             "skill_count": _safe(lambda: profiles_mod._count_skills(default_home), 0),
+            "description": meta.get("description", ""),
+            "description_auto": bool(meta.get("description_auto", False)),
+            "display_name": meta.get("display_name", ""),
+            "avatar_path": meta.get("avatar_path", ""),
         })
 
     profiles_root = profiles_mod._get_profiles_root()
@@ -5660,6 +5676,7 @@ def _fallback_profile_dicts(profiles_mod) -> List[Dict[str, Any]]:
             if not entry.is_dir() or not profiles_mod._PROFILE_ID_RE.match(entry.name):
                 continue
             model, provider = _safe(lambda entry=entry: profiles_mod._read_config_model(entry), (None, None))
+            meta = _safe(lambda entry=entry: profiles_mod.read_profile_meta(entry), {})
             profiles.append({
                 "name": entry.name,
                 "path": str(entry),
@@ -5668,6 +5685,10 @@ def _fallback_profile_dicts(profiles_mod) -> List[Dict[str, Any]]:
                 "provider": provider,
                 "has_env": (entry / ".env").exists(),
                 "skill_count": _safe(lambda entry=entry: profiles_mod._count_skills(entry), 0),
+                "description": meta.get("description", ""),
+                "description_auto": bool(meta.get("description_auto", False)),
+                "display_name": meta.get("display_name", ""),
+                "avatar_path": meta.get("avatar_path", ""),
             })
 
     return profiles
@@ -5843,6 +5864,30 @@ async def update_profile_soul(name: str, body: ProfileSoulUpdate):
     except OSError as e:
         _log.exception("PUT /api/profiles/%s/soul failed", name)
         raise HTTPException(status_code=500, detail=f"Could not write SOUL.md: {e}")
+    return {"ok": True}
+
+
+@app.put("/api/profiles/{name}/metadata")
+async def update_profile_metadata(name: str, body: ProfileMetadataUpdate):
+    from hermes_cli import profiles as profiles_mod
+
+    profile_dir = _resolve_profile_dir(name)
+    avatar_path = body.avatar_path
+    if avatar_path is not None:
+        avatar_path = avatar_path.strip()
+        if avatar_path and not avatar_path.startswith("/agent-avatars/"):
+            raise HTTPException(status_code=400, detail="avatar_path must be empty or under /agent-avatars/")
+    try:
+        profiles_mod.write_profile_meta(
+            profile_dir,
+            description=body.description,
+            description_auto=body.description_auto,
+            display_name=body.display_name,
+            avatar_path=avatar_path,
+        )
+    except Exception as e:
+        _log.exception("PUT /api/profiles/%s/metadata failed", name)
+        raise HTTPException(status_code=500, detail=str(e))
     return {"ok": True}
 
 

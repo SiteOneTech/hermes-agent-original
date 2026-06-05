@@ -1,5 +1,5 @@
 -- Customer intent escalation queue for constrained customer-service channels.
--- Sophie/customer-service records intents here; Zeus/supervisors process them asynchronously.
+-- Sophie/customer-service records intents here; Owner/supervisors process them asynchronously.
 CREATE SCHEMA IF NOT EXISTS crm;
 
 CREATE TABLE IF NOT EXISTS crm.customer_intents (
@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS crm.customer_intents (
   required_action text,
   priority text NOT NULL DEFAULT 'normal',
   status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','processing','completed','blocked','cancelled')),
-  assigned_to text NOT NULL DEFAULT 'zeus',
+  assigned_to text NOT NULL DEFAULT 'supervisor',
   due_at timestamptz,
   claimed_at timestamptz,
   claimed_by text,
