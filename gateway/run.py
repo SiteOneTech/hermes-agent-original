@@ -7937,6 +7937,8 @@ class GatewayRunner:
                     return await self._handle_profile_command(event)
                 if _cmd_def_inner.name == "update":
                     return await self._handle_update_command(event)
+                if _cmd_def_inner.name == "version":
+                    return await self._handle_version_command(event)
 
             # Catch-all: any other recognized slash command reached the
             # running-agent guard. Reject gracefully rather than falling
@@ -8292,6 +8294,9 @@ class GatewayRunner:
 
         if canonical == "update":
             return await self._handle_update_command(event)
+
+        if canonical == "version":
+            return await self._handle_version_command(event)
 
         if canonical == "debug":
             return await self._handle_debug_command(event)
@@ -10917,6 +10922,12 @@ class GatewayRunner:
                 return False
         return event.platform_update_id <= recorded_uid
 
+
+    async def _handle_version_command(self, event: MessageEvent) -> str:
+        """Handle /version — show the running Hermes Agent version."""
+        from hermes_cli.banner import format_banner_version_label
+
+        return format_banner_version_label()
 
     async def _handle_help_command(self, event: MessageEvent) -> str:
         """Handle /help command - list available commands."""
