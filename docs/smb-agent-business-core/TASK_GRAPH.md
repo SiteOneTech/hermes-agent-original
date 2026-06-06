@@ -1,4 +1,4 @@
-# Kanban Task Graph — SMB Agent Business Core
+# Factory Task Graph — SMB Agent Business Core
 
 ## Lane
 
@@ -10,7 +10,7 @@
 |---|---|---|---|---|---|---|
 | BC-000 | intake | factory-orchestrator | product-analyst | Intake y PRD | - | PRD-001 |
 | BC-001 | architecture | solution-architect | quality-reviewer | ADRs de core/adapters/accounting/marketing | BC-000 | ADR-001..004 |
-| BC-002 | planning | implementation-planner | quality-reviewer | Sprint plan + task graph + QA gates | BC-001 | SPRINT_PLAN, KANBAN_TASK_GRAPH, QA_GATES |
+| BC-002 | planning | implementation-planner | quality-reviewer | Sprint plan + task graph + QA gates | BC-001 | SPRINT_PLAN, TASK_GRAPH, QA_GATES |
 | BC-003 | architecture | solution-architect | security-reviewer | Repo organization + module boundaries | BC-002 | REPO_ORGANIZATION |
 | BC-101 | implementation | claude-builder | quality-reviewer | Commercial/Sales Core schema | BC-003 | migrations + tests |
 | BC-102 | implementation | claude-builder | quality-reviewer | Commercial/Sales tools | BC-101 | tools + tests |

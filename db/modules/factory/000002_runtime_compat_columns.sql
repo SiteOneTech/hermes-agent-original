@@ -1,4 +1,4 @@
--- Compatibility columns for importing the existing local Factory SQLite progress DB.
+-- Runtime compatibility columns used by the canonical Factory dashboard/tools.
 ALTER TABLE factory.agents ADD COLUMN IF NOT EXISTS display_name text;
 ALTER TABLE factory.agents ADD COLUMN IF NOT EXISTS preferred_engine text;
 

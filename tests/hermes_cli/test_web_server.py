@@ -1173,6 +1173,15 @@ class TestNewEndpoints:
         (named / ".env").write_text("EXAMPLE=1\n", encoding="utf-8")
         (named / "skills" / "demo").mkdir(parents=True)
         (named / "skills" / "demo" / "SKILL.md").write_text("---\nname: demo\n---\n", encoding="utf-8")
+        (named / "profile.yaml").write_text(
+            "description: ATC profile\n"
+            "description_auto: false\n"
+            "display_name: Sophie\n"
+            "avatar_path: /agent-avatars/sophie-atc.webp\n"
+            "engine_label: Customer Service Runtime\n"
+            "engine_model: gpt-5.5\n",
+            encoding="utf-8",
+        )
 
         monkeypatch.setattr(
             profiles_mod,
@@ -1188,6 +1197,12 @@ class TestNewEndpoints:
         assert profiles["default"]["provider"] == "openrouter"
         assert profiles["multi-agent"]["has_env"] is True
         assert profiles["multi-agent"]["skill_count"] == 1
+        assert profiles["multi-agent"]["description"] == "ATC profile"
+        assert profiles["multi-agent"]["description_auto"] is False
+        assert profiles["multi-agent"]["display_name"] == "Sophie"
+        assert profiles["multi-agent"]["avatar_path"] == "/agent-avatars/sophie-atc.webp"
+        assert profiles["multi-agent"]["engine_label"] == "Customer Service Runtime"
+        assert profiles["multi-agent"]["engine_model"] == "gpt-5.5"
 
     def test_profiles_create_rename_delete_round_trip(self, monkeypatch):
         # Stub gateway service teardown so the test doesn't shell out to

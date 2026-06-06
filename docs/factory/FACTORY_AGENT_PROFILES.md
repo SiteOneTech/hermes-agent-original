@@ -9,7 +9,7 @@ A Factory agent is not operational until both exist. The DB tells Zeus who shoul
 
 ## Created executable profiles
 
-All 12 Factory v1 agents now exist as real Hermes profiles and wrapper commands:
+All 14 Factory v1 agents now exist as real Hermes profiles and wrapper commands:
 
 | Profile | Runtime role | Primary outputs |
 | --- | --- | --- |
@@ -17,9 +17,11 @@ All 12 Factory v1 agents now exist as real Hermes profiles and wrapper commands:
 | `product-analyst` | PRD, functional spec, acceptance criteria | `FUNCTIONAL_SPEC.md`, `ACCEPTANCE_CRITERIA.md` |
 | `solution-architect` | technical blueprint, DB/API/security design | `TECHNICAL_BLUEPRINT.md`, ADRs |
 | `implementation-planner` | epics, task graph, dependencies, criteria of done | `IMPLEMENTATION_PLAN.md`, Kanban graph |
-| `claude-builder` | complex implementation/refactor lane | diffs, commands, tests |
+| `claude-builder` | native Anthropic Claude Code / Opus implementation lane | diffs, commands, tests, Claude Code JSON metrics |
+| `claude-deepseek-builder` | Claude Code through DeepSeek Anthropic-compatible adapter | diffs, commands, tests, DeepSeek/Claude Code JSON metrics |
 | `codex-builder` | bounded fixes/tests/reviews lane | diffs, commands, tests |
-| `openhands-lab` | sandbox experiments/heavy validation | sandbox report, evidence |
+| `openhands-builder` | OpenHands VM sandbox with OpenAI Codex Hermes supervisor | sandbox report, runner state, evidence |
+| `openhands-lab` | OpenHands VM sandbox with DeepSeek Hermes supervisor | experiment report, runner state, comparison evidence |
 | `quality-reviewer` | independent quality/spec gate | `QUALITY_REVIEW.md`, block/approve gate |
 | `security-reviewer` | security/PII/payments/auth gate | `SECURITY_REVIEW.md` |
 | `qa-verifier` | smoke/regression/browser verification | `QA_REPORT.md`, evidence |
@@ -33,7 +35,8 @@ Each profile was cloned from `default`, then customized:
 - `SOUL.md` rewritten with role mission, expected outputs and checkpoint format.
 - `config.yaml` `agent.name` set to the role name.
 - `config.yaml` `terminal.cwd` set to `/home/jean/Projects/hermes-agent-original`.
-- `config.yaml` `terminal.env_passthrough` includes `FLEET_REGISTRY_DATABASE_URL`.
+- `config.yaml` `terminal.env_passthrough` includes `FLEET_REGISTRY_DATABASE_URL`; engine-specific profiles add only the specific connector/model env vars they need.
+- `profile.yaml` stores dashboard-facing `engine_label`/`engine_model` so the card shows the measured execution engine (Claude Code/Codex/OpenHands) separately from the Hermes supervisor provider in `config.yaml`.
 - `config.yaml` `toolsets` narrowed per role so the profile has the tools it needs.
 
 ## Factory method lanes
@@ -56,8 +59,8 @@ hermes factory status --json
 
 Expected current state:
 
-- 12 DB agents.
-- 12 executable Hermes profiles.
+- 14 DB agents.
+- 14 executable Hermes profiles.
 - Profile wrappers under `~/.local/bin/<profile>`.
 
 ## Important operational rule

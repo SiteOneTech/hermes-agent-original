@@ -376,6 +376,18 @@ export const api = {
     fetchJSON<{ command: string }>(
       `/api/profiles/${encodeURIComponent(name)}/setup-command`,
     ),
+  updateProfileMetadata: (
+    name: string,
+    body: { display_name?: string; avatar_path?: string; description?: string; description_auto?: boolean },
+  ) =>
+    fetchJSON<{ ok: boolean }>(
+      `/api/profiles/${encodeURIComponent(name)}/metadata`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    ),
   getProfileSoul: (name: string) =>
     fetchJSON<{ content: string; exists: boolean }>(
       `/api/profiles/${encodeURIComponent(name)}/soul`,
@@ -389,23 +401,6 @@ export const api = {
         body: JSON.stringify({ content }),
       },
     ),
-  updateProfileMetadata: (
-    name: string,
-    metadata: {
-      description?: string;
-      description_auto?: boolean;
-      display_name?: string;
-      avatar_path?: string;
-    },
-  ) =>
-    fetchJSON<{ ok: boolean }>(
-      `/api/profiles/${encodeURIComponent(name)}/metadata`,
-      {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(metadata),
-      },
-    ),
 
   // Skills & Toolsets
   getSkills: () => fetchJSON<SkillInfo[]>("/api/skills"),
@@ -416,6 +411,34 @@ export const api = {
       body: JSON.stringify({ name, enabled }),
     }),
   getToolsets: () => fetchJSON<ToolsetInfo[]>("/api/tools/toolsets"),
+
+  // SitioUno Software Factory dashboard
+  getFactoryDashboard: (projectId?: string, options?: { force?: boolean }) => {
+    const params = new URLSearchParams();
+    if (projectId) params.set("project_id", projectId);
+    if (options?.force) params.set("force", "true");
+    const qs = params.toString() ? `?${params.toString()}` : "";
+    return fetchJSON<FactoryDashboardResponse>(`/api/factory/status${qs}`);
+  },
+  getFactoryProjectHandoff: (projectId: string) =>
+    fetchJSON<FactoryProjectHandoffResponse>(
+      `/api/factory/projects/${encodeURIComponent(projectId)}/handoff`,
+    ),
+  createFactoryProjectNotion: (projectId: string) =>
+    fetchJSON<FactoryProjectNotionResponse>(
+      `/api/factory/projects/${encodeURIComponent(projectId)}/notion`,
+      { method: "POST" },
+    ),
+  syncFactoryProjectNotion: (projectId: string) =>
+    fetchJSON<FactoryProjectNotionResponse>(
+      `/api/factory/projects/${encodeURIComponent(projectId)}/notion/sync`,
+      { method: "POST" },
+    ),
+  runFactoryProjectAction: (projectId: string, action: FactoryProjectAction) =>
+    fetchJSON<FactoryProjectActionResponse>(
+      `/api/factory/projects/${encodeURIComponent(projectId)}/actions/${encodeURIComponent(action)}`,
+      { method: "POST" },
+    ),
 
   // Session search (FTS5)
   searchSessions: (q: string) =>
@@ -1204,10 +1227,12 @@ export interface ProfileInfo {
   provider: string | null;
   has_env: boolean;
   skill_count: number;
-  description?: string;
-  description_auto?: boolean;
-  display_name?: string;
-  avatar_path?: string;
+  description: string;
+  description_auto: boolean;
+  display_name: string;
+  avatar_path: string;
+  engine_label: string;
+  engine_model: string;
 }
 
 export interface ModelsAnalyticsModelEntry {
@@ -1267,6 +1292,246 @@ export interface CronJob {
   last_run_at?: string | null;
   next_run_at?: string | null;
   last_error?: string | null;
+}
+
+export interface FactoryFinding {
+  severity: "info" | "warning" | "destructive" | string;
+  code: string;
+  title: string;
+  message: string;
+  count?: number;
+}
+
+export interface FactoryDocumentStatus {
+  name: string;
+  path: string;
+  exists: boolean;
+  size: number;
+}
+
+export interface FactoryProjectDashboard {
+  task_counts: Record<string, number>;
+  gate_counts: Record<string, number>;
+  effective_gate_counts?: Record<string, number>;
+  open_task_count: number;
+  blocked_task_count: number;
+  blocked_tasks?: FactoryTask[];
+  review_task_count: number;
+  missing_evidence_count: number;
+  self_approved_task_count: number;
+  latest_event: FactoryEvent | null;
+  current_task: FactoryTask | null;
+  active_run?: FactoryTaskRun | null;
+  effective_gates?: FactoryGate[];
+  recent_runs?: FactoryTaskRun[];
+  workflow?: FactoryWorkflowState;
+  required_docs: FactoryDocumentStatus[];
+  missing_required_docs: FactoryDocumentStatus[];
+  findings: FactoryFinding[];
+  quick_status: string;
+}
+
+export interface FactoryProject {
+  project_id: string;
+  name: string;
+  repo_path?: string | null;
+  repo_remote?: string | null;
+  base_branch?: string | null;
+  status: string;
+  autonomy_level?: number;
+  methodology: string;
+  risk_level: string;
+  human_owner?: string | null;
+  summary?: string | null;
+  metadata?: Record<string, unknown>;
+  started_at: string;
+  updated_at: string;
+  dashboard?: FactoryProjectDashboard;
+}
+
+export interface FactoryLane {
+  lane_id: string;
+  project_id: string;
+  name: string;
+  methodology: string;
+  execution_surface?: string | null;
+  branch?: string | null;
+  worktree_path?: string | null;
+  status: string;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FactoryTask {
+  task_id: string;
+  project_id: string;
+  lane_id?: string | null;
+  title: string;
+  description?: string | null;
+  phase: string;
+  status: string;
+  owner_agent_id?: string | null;
+  reviewer_agent_id?: string | null;
+  engine: string;
+  priority: number;
+  dependencies?: unknown[];
+  acceptance_criteria?: unknown[];
+  evidence_required?: boolean | number | string;
+  evidence_status: string;
+  risk_level?: string;
+  branch?: string | null;
+  worktree_path?: string | null;
+  result_summary?: string | null;
+  metadata?: Record<string, unknown>;
+  started_at?: string | null;
+  finished_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FactoryGate {
+  gate_id: number;
+  project_id: string;
+  lane_id?: string | null;
+  task_id?: string | null;
+  gate_type: string;
+  status: string;
+  reviewer?: string | null;
+  evidence?: Record<string, unknown>;
+  notes?: string | null;
+  created_at: string;
+}
+
+export interface FactoryEvent {
+  event_id: number;
+  project_id?: string | null;
+  lane_id?: string | null;
+  task_id?: string | null;
+  actor: string;
+  event_type: string;
+  message: string;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface FactoryWorkflowState {
+  operative: boolean;
+  stage: string;
+  worker?: string | null;
+  heartbeat_at?: string | null;
+  current_task_id?: string | null;
+  single_active_increment?: boolean;
+}
+
+export interface FactoryTaskRun {
+  run_id: string;
+  project_id: string;
+  task_id: string;
+  lane_id?: string | null;
+  worker_profile: string;
+  reviewer_profile?: string | null;
+  engine?: string | null;
+  status: string;
+  process_id?: number | null;
+  session_id?: string | null;
+  log_path?: string | null;
+  prompt_path?: string | null;
+  exit_code?: number | null;
+  started_at: string;
+  heartbeat_at: string;
+  finished_at?: string | null;
+  output_summary?: string | null;
+  evidence?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}
+
+export interface FactoryHumanQuestion {
+  question_id: string;
+  project_id: string;
+  task_id?: string | null;
+  severity: string;
+  question: string;
+  options?: unknown[];
+  asked_via?: string | null;
+  status: string;
+  answer?: string | null;
+  created_at: string;
+  answered_at?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface FactoryArtifact {
+  artifact_id: number;
+  project_id: string;
+  lane_id?: string | null;
+  task_id?: string | null;
+  artifact_type: string;
+  path: string;
+  checksum?: string | null;
+  created_by?: string | null;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface FactoryAgent {
+  agent_id: string;
+  display_name: string;
+  role: string;
+  preferred_engine?: string | null;
+  toolsets?: string[];
+  skills?: string[];
+  greenlight_required?: string[];
+  active: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FactoryDashboardResponse {
+  db_backend: string;
+  db_path: string;
+  server_time?: string;
+  force_refresh?: Record<string, unknown> | null;
+  projects: FactoryProject[];
+  lanes: FactoryLane[];
+  tasks: FactoryTask[];
+  gates: FactoryGate[];
+  events: FactoryEvent[];
+  artifacts: FactoryArtifact[];
+  task_runs?: FactoryTaskRun[];
+  human_questions?: FactoryHumanQuestion[];
+  agents: FactoryAgent[];
+  counts: Record<string, number>;
+  findings: FactoryFinding[];
+}
+
+export interface FactoryProjectHandoffResponse {
+  ok: boolean;
+  project_id: string;
+  prompt: string;
+}
+
+export interface FactoryProjectNotionResponse {
+  ok: boolean;
+  created: boolean;
+  synced?: boolean;
+  project_id: string;
+  page_id?: string | null;
+  url?: string | null;
+}
+
+export type FactoryProjectAction = "resume" | "pause" | "tick" | "reconcile" | "unblock";
+
+export interface FactoryProjectActionResponse {
+  ok: boolean;
+  project_id: string;
+  action: FactoryProjectAction | string;
+  status?: string;
+  next_task_id?: string | null;
+  monitor?: Record<string, unknown>;
+  reconciled?: unknown[];
+  claimed?: unknown | null;
+  reopened?: unknown[];
 }
 
 export interface SkillInfo {

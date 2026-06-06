@@ -8,6 +8,8 @@ Accepted
 
 SitioUno agents need to schedule appointments, service reservations, internal blocks, and availability checks from conversational channels. The primary UX is the agent conversation, not a scheduler UI.
 
+Jean later clarified that CRM/follow-up/reminder work must extend this Calendar/Schedule Core compatibly. Calendar events remain the source for time-blocked commitments; follow-ups/reminders that do not block time should live in the Agent Core activity/follow-up layer and link to calendar only when needed. See `docs/followup-reminder-core/FACTORY_SPEC-001-agent-core-followup-reminders.md` and `docs/followup-reminder-core/ADR-002-universal-activity-layer.md`.
+
 A backend scheduler is still necessary for persistence, conflict checks, services, availability, reminders, and future external calendar sync. If agents call backend-specific APIs directly, every future backend replacement would leak into agent behavior and prompts.
 
 ## Decision

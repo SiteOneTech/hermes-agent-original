@@ -1,4 +1,4 @@
-"""Tests for the profile.yaml metadata layer (description + description_auto)
+"""Tests for the profile.yaml metadata layer (visual identity + description)
 and the profile_describer LLM module.
 """
 
@@ -26,7 +26,14 @@ def profile_env(tmp_path, monkeypatch):
 
 def test_read_profile_meta_empty_when_missing(profile_env):
     meta = profiles_mod.read_profile_meta(profile_env)
-    assert meta == {"description": "", "description_auto": False}
+    assert meta == {
+        "description": "",
+        "description_auto": False,
+        "display_name": "",
+        "avatar_path": "",
+        "engine_label": "",
+        "engine_model": "",
+    }
 
 
 def test_write_and_read_profile_meta(profile_env):
@@ -34,24 +41,51 @@ def test_write_and_read_profile_meta(profile_env):
         profile_env,
         description="a useful researcher",
         description_auto=False,
+        display_name="Zeus Principal",
+        avatar_path="/agent-avatars/zeus.webp",
+        engine_label="Claude Code / Claude Max",
+        engine_model="claude-opus-4-8",
     )
     meta = profiles_mod.read_profile_meta(profile_env)
     assert meta["description"] == "a useful researcher"
     assert meta["description_auto"] is False
+    assert meta["display_name"] == "Zeus Principal"
+    assert meta["avatar_path"] == "/agent-avatars/zeus.webp"
+    assert meta["engine_label"] == "Claude Code / Claude Max"
+    assert meta["engine_model"] == "claude-opus-4-8"
 
 
 def test_write_profile_meta_preserves_other_fields(profile_env):
-    # First write sets description_auto=True; second write only updates
-    # description and leaves description_auto unchanged.
+    # First write sets every metadata field; second write only updates
+    # description and leaves description_auto + visual identity unchanged.
     profiles_mod.write_profile_meta(
         profile_env,
         description="auto-gen",
         description_auto=True,
+        display_name="Factory QA",
+        avatar_path="/agent-avatars/qa-verifier.webp",
+        engine_label="QA Runtime",
+        engine_model="gpt-5.5",
     )
     profiles_mod.write_profile_meta(profile_env, description="edited by hand")
     meta = profiles_mod.read_profile_meta(profile_env)
     assert meta["description"] == "edited by hand"
     assert meta["description_auto"] is True
+    assert meta["display_name"] == "Factory QA"
+    assert meta["avatar_path"] == "/agent-avatars/qa-verifier.webp"
+    assert meta["engine_label"] == "QA Runtime"
+    assert meta["engine_model"] == "gpt-5.5"
+
+
+def test_list_profiles_exposes_default_visual_identity(profile_env):
+    profiles_mod.write_profile_meta(
+        profile_env,
+        display_name="Sophie Supervisora",
+        avatar_path="/agent-avatars/zeus.webp",
+    )
+    rows = {profile.name: profile for profile in profiles_mod.list_profiles()}
+    assert rows["default"].display_name == "Sophie Supervisora"
+    assert rows["default"].avatar_path == "/agent-avatars/zeus.webp"
 
 
 def test_write_profile_meta_rejects_missing_dir(tmp_path):
@@ -63,7 +97,14 @@ def test_write_profile_meta_rejects_missing_dir(tmp_path):
 def test_read_profile_meta_tolerates_corrupt_yaml(profile_env):
     (profile_env / "profile.yaml").write_text("not: valid: yaml: [unclosed")
     meta = profiles_mod.read_profile_meta(profile_env)
-    assert meta == {"description": "", "description_auto": False}
+    assert meta == {
+        "description": "",
+        "description_auto": False,
+        "display_name": "",
+        "avatar_path": "",
+        "engine_label": "",
+        "engine_model": "",
+    }
 
 
 # ---------------------------------------------------------------------------

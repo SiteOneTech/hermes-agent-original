@@ -36,6 +36,15 @@ NGINX_CONF = r'''server {
     proxy_set_header X-Forwarded-Proto $scheme;
   }
 
+  location /payments/stripe/ {
+    proxy_pass http://delivery-sandbox-events:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+
   location /api/ {
     proxy_pass http://delivery-sandbox-events:8080;
     proxy_http_version 1.1;
@@ -100,6 +109,7 @@ import os
 import re
 import secrets
 import time
+import traceback
 import uuid
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -740,6 +750,33 @@ def _handle_stripe_webhook(handler: BaseHTTPRequestHandler) -> None:
     _json_response(handler, 200, {"ok": True, "status": "queued", "event_type": event.get("type"), "invoice_id": invoice_id, "payment_request_id": payment_request_id})
 
 
+def _stripe_return_page(handler: BaseHTTPRequestHandler, path: str, query: dict[str, list[str]]) -> None:
+    session_id = (query.get("session_id") or [""])[0]
+    if path.rstrip("/") == "/payments/stripe/success":
+        title = "Pago recibido"
+        note = "Recibimos la confirmación de Stripe. El agente validará el pago y actualizará la factura."
+        if session_id:
+            note = f"Recibimos la confirmación de Stripe para la sesión {html.escape(session_id)}. El agente validará el pago y actualizará la factura."
+    else:
+        title = "Pago pendiente"
+        note = "No se completó el checkout. Puedes volver al enlace de la factura para intentar de nuevo o contactar al agente."
+    _html_response(handler, 200, f"""<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{title}</title>
+  <style>
+    body{{margin:0;min-height:100vh;display:grid;place-items:center;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0c110d;color:#f0f7f0}}
+    main{{width:min(680px,calc(100% - 32px));padding:32px;border:1px solid rgba(255,255,255,.15);border-radius:28px;background:rgba(255,255,255,.06);box-shadow:0 24px 80px rgba(0,0,0,.35)}}
+    h1{{font-size:clamp(34px,7vw,64px);line-height:.95;margin:0 0 14px;letter-spacing:-.04em}}
+    p{{color:#a8b5aa;line-height:1.55;font-size:18px}}
+  </style>
+</head>
+<body><main><h1>{title}</h1><p>{note}</p></main></body>
+</html>""")
+
+
 def _read_json_body(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     payload = json.loads(_read_body(handler).decode("utf-8"))
     if not isinstance(payload, dict):
@@ -1074,6 +1111,9 @@ class Handler(BaseHTTPRequestHandler):
         if path in {"/healthz", "/api/healthz"}:
             _json_response(self, 200, {"ok": True, "service": f"{AGENT_ID}-delivery-sandbox-events"})
             return
+        if path.rstrip("/") in {"/payments/stripe/success", "/payments/stripe/cancel"}:
+            _stripe_return_page(self, path, query)
+            return
         if path in {"/api/user/session/check", "/user/session/check"}:
             if _session_from_request(self):
                 self.send_response(204)
@@ -1095,6 +1135,7 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as exc:
                 _json_response(self, 413, {"ok": False, "error": str(exc)})
             except Exception:
+                traceback.print_exc()
                 _json_response(self, 500, {"ok": False, "error": "stripe_webhook_failed"})
             return
         if path in {"/api/voice/vapi/tools", "/voice/vapi/tools"}:

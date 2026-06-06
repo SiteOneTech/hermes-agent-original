@@ -10679,7 +10679,17 @@ def cmd_profile(args):
         profiles = list_profiles()
         for p in profiles:
             if p.name == profile_name or (profile_name == "default" and p.is_default):
-                if p.model:
+                if p.engine_label or p.engine_model:
+                    print(
+                        f"Engine:         {p.engine_model or '—'}"
+                        + (f" ({p.engine_label})" if p.engine_label else "")
+                    )
+                    if p.model:
+                        print(
+                            f"Supervisor:     {p.model}"
+                            + (f" ({p.provider})" if p.provider else "")
+                        )
+                elif p.model:
                     print(
                         f"Model:          {p.model}"
                         + (f" ({p.provider})" if p.provider else "")
@@ -10704,7 +10714,7 @@ def cmd_profile(args):
 
         # Header
         print(
-            f"\n {'Profile':<16} {'Model':<28} {'Gateway':<12} "
+            f"\n {'Profile':<16} {'Model/Engine':<28} {'Gateway':<12} "
             f"{'Alias':<12} {'Distribution'}"
         )
         print(
@@ -10719,7 +10729,7 @@ def cmd_profile(args):
                 else "  "
             )
             name = p.name
-            model = (p.model or "—")[:26]
+            model = (p.engine_model or p.model or "—")[:26]
             gw = "running" if p.gateway_running else "stopped"
             alias = p.name if p.alias_path else "—"
             if p.is_default:

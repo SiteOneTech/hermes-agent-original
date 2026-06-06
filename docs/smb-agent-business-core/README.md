@@ -53,7 +53,7 @@ Los módulos internos no reemplazan Odoo, Twenty, Lago, Medusa, Meta, Stripe o p
 - `SPRINT_1_2_REPORT.md`
 - `SPRINT_1_3_REPORT.md`
 - `SPRINT_PLAN.md`
-- `KANBAN_TASK_GRAPH.md`
+- `TASK_GRAPH.md`
 - `QA_GATES.md`
 - `IMPLEMENTATION_PLAN.md`
 - `REPO_ORGANIZATION.md`

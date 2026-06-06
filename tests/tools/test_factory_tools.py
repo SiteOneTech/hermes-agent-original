@@ -1,4 +1,5 @@
 import json
+import uuid
 
 import model_tools
 
@@ -20,25 +21,26 @@ def test_factory_toolset_exposes_factory_tools():
 
 def test_factory_tools_create_project_status_and_gate(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+    project_id = f"tool-factory-test-{uuid.uuid4().hex[:8]}"
 
     created = _payload(
         model_tools.handle_function_call(
             "factory_project_create",
-            {"name": "Tool Factory", "project_id": "tool-factory"},
+            {"name": "Tool Factory Test", "project_id": project_id},
         )
     )
     assert created["ok"] is True
     assert {lane["lane_id"] for lane in created["lanes"]} == {
-        "tool-factory-zeus",
-        "tool-factory-bmad",
+        f"{project_id}-zeus",
+        f"{project_id}-bmad",
     }
 
     task = _payload(
         model_tools.handle_function_call(
             "factory_task_create",
             {
-                "project_id": "tool-factory",
-                "lane_id": "tool-factory-zeus",
+                "project_id": project_id,
+                "lane_id": f"{project_id}-zeus",
                 "title": "Prepare implementation plan",
                 "owner_agent_id": "implementation-planner",
                 "reviewer_agent_id": "quality-reviewer",
@@ -47,13 +49,13 @@ def test_factory_tools_create_project_status_and_gate(tmp_path, monkeypatch):
         )
     )
     assert task["ok"] is True
-    assert task["task_id"].startswith("tool-factory-prepare-implementation-plan")
+    assert task["task_id"].startswith(f"{project_id}-prepare-implementation-plan")
 
     gate = _payload(
         model_tools.handle_function_call(
             "factory_gate_record",
             {
-                "project_id": "tool-factory",
+                "project_id": project_id,
                 "task_id": task["task_id"],
                 "gate_type": "planning",
                 "status": "passed",
@@ -65,7 +67,7 @@ def test_factory_tools_create_project_status_and_gate(tmp_path, monkeypatch):
     assert gate["ok"] is True
     assert gate["status"] == "passed"
 
-    status = _payload(model_tools.handle_function_call("factory_status", {"project_id": "tool-factory"}))
+    status = _payload(model_tools.handle_function_call("factory_status", {"project_id": project_id}))
     assert status["ok"] is True
-    assert [project["project_id"] for project in status["projects"]] == ["tool-factory"]
+    assert [project["project_id"] for project in status["projects"]] == [project_id]
     assert [item["status"] for item in status["gates"]] == ["passed"]

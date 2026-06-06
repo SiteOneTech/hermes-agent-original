@@ -3,8 +3,11 @@ from pathlib import Path
 from gateway.config import Platform, PlatformConfig
 from gateway.session import SessionSource
 from gateway.run import (
+    _customer_service_profile_home,
+    _customer_service_profile_name,
     _customer_service_prompt,
     _customer_service_route,
+    _customer_service_skills,
     _customer_service_skills_prompt,
     _customer_service_toolsets,
     _source_matches_customer_service_owner,
@@ -22,23 +25,97 @@ def _external_whatsapp_source() -> SessionSource:
     )
 
 
-def test_customer_service_routes_non_owner_whatsapp_to_sophie_toolset(monkeypatch):
+def test_customer_service_routes_non_owner_whatsapp_to_sophie_toolset(monkeypatch, tmp_path):
+    monkeypatch.delenv("HERMES_HOME", raising=False)
     monkeypatch.delenv("WHATSAPP_ALLOWED_USERS", raising=False)
     cfg = {
         "customer_service": {
             "enabled": True,
             "channels": ["whatsapp", "email"],
-            "owner_users": {"whatsapp": ["15550000001"]},
+            "owner_users": {"whatsapp": ["13059274821"]},
+            "profile": "sophie-atc",
+            "skills": ["sophie-atc"],
         }
     }
-    source = _external_whatsapp_source()
+    profile_home = tmp_path / ".hermes" / "profiles" / "sophie-atc"
+    profile_home.mkdir(parents=True)
+    (profile_home / "SOUL.md").write_text("# Sophie", encoding="utf-8")
+    skill_dir = profile_home / "skills" / "customer-service" / "sophie-atc"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: sophie-atc\ndescription: ATC\n---\n\n# Sophie ATC\nUse customer_intent_raise for action requests.",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    source = SessionSource(
+        platform=Platform.WHATSAPP,
+        chat_id="13059274824@s.whatsapp.net",
+        user_id="13059274824@s.whatsapp.net",
+    )
 
     assert _source_should_use_customer_service(source, cfg) is True
     assert _customer_service_toolsets(cfg) == ["customer_service"]
+    assert _customer_service_skills(cfg) == ["sophie-atc"]
+    assert _customer_service_profile_name(cfg) == "sophie-atc"
+    assert _customer_service_profile_home(cfg) == profile_home
+    route = _customer_service_route(source, cfg)
+    assert route.enabled is True
+    assert route.profile_name == "sophie-atc"
+    assert route.profile_home == profile_home
+    assert route.toolsets == ["customer_service"]
+    assert route.skills == ["sophie-atc"]
+    skill_prompt = _customer_service_skills_prompt(route)
+    assert 'The "sophie-atc" customer-service skill is auto-loaded' in skill_prompt
+    assert "# Sophie ATC" in skill_prompt
+    assert "customer_intent_raise" in skill_prompt
+    assert "name: sophie-atc" not in skill_prompt
     prompt = _customer_service_prompt(cfg)
     assert "Sophie de SitioUno" in prompt
     assert "customer_intent_raise" in prompt
     assert "Perfecto, ya tomé nota de tu solicitud" in prompt
+    assert "Treat every external interaction or real-world side effect as high risk" in prompt
+    assert "one or two lightweight capability demonstrations" in prompt
+    assert "guide the customer toward a concrete next step or close" in prompt
+
+
+def test_customer_service_route_fails_closed_when_profile_missing(monkeypatch, tmp_path):
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    cfg = {
+        "customer_service": {
+            "enabled": True,
+            "channels": ["whatsapp"],
+            "owner_users": {"whatsapp": ["13059274821"]},
+            "profile": "sophie-atc",
+        }
+    }
+    source = SessionSource(
+        platform=Platform.WHATSAPP,
+        chat_id="13059274824@s.whatsapp.net",
+        user_id="13059274824@s.whatsapp.net",
+    )
+
+    route = _customer_service_route(source, cfg)
+
+    assert route.enabled is False
+    assert route.profile_name == "sophie-atc"
+    assert route.profile_home is None
+    assert "missing customer-service profile" in route.error
+
+
+def test_customer_service_toolsets_drop_unsafe_business_actions():
+    cfg = {"customer_service": {"toolsets": ["customer_service", "crm", "sales", "terminal"]}}
+
+    toolsets = _customer_service_toolsets(cfg)
+    resolved = {tool for toolset in toolsets for tool in resolve_toolset(toolset)}
+
+    assert toolsets == ["customer_service"]
+    assert "customer_intent_raise" in resolved
+    assert "crm_contact_upsert" in resolved
+    assert "crm_quote_create" not in resolved
+    assert "crm_invoice_create" not in resolved
+    assert "sales_quote_create" not in resolved
+    assert "terminal" not in resolved
 
 
 def test_customer_service_ignores_unsafe_configured_toolsets(caplog):
@@ -57,6 +134,7 @@ def test_customer_service_toolset_is_restricted_to_safe_crm_and_intent_raise():
     assert "crm_follow_up_create" in resolved
     assert "crm_customer_timeline" in resolved
     assert "crm_search" in resolved
+    assert "crm_status" not in resolved
     assert "crm_organization_upsert" not in resolved
     assert "crm_opportunity_upsert" not in resolved
     assert "sales_quote_create" not in resolved

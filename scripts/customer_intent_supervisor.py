@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic customer-intent supervisor for owner/supervisor de SitioUno.
+"""Deterministic customer-intent supervisor for the SitioUno owner/supervisor.
 
 Sophie/front-office agents write restricted customer requests into
 ``crm.customer_intents``. This script is intentionally deterministic and safe:
@@ -141,7 +141,7 @@ def build_payload(
             "This deterministic supervisor only alerts; it does not execute customer actions.",
             "Zeus/owner must review CRM context before acting.",
             "Do not mark completed until the requested action is actually executed and evidence is verified.",
-            "If action is ambiguous or unsafe, mark blocked with a concise reason and notify the owner if appropriate.",
+            "If action is ambiguous or unsafe, mark blocked with a concise reason and notify the owner/supervisor if appropriate.",
             "After processing, update the intent via customer_intent_update and record CRM interaction evidence.",
         ],
         "intents": intents,
@@ -220,7 +220,7 @@ def format_alert(payload: dict[str, Any]) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Deterministic customer-intent supervisor for owner/supervisor de SitioUno.")
+    parser = argparse.ArgumentParser(description="Deterministic customer-intent supervisor for the SitioUno owner/supervisor.")
     parser.add_argument("--limit", type=int, default=10)
     parser.add_argument("--renotify-minutes", type=int, default=60)
     parser.add_argument("--all-pending", action="store_true", help="Ignore notification idempotency filter.")

@@ -6,6 +6,10 @@ Give Zeus and future single-tenant SitioUno agents a canonical CRM capability op
 
 The capability must mirror the Calendar/Nettu pattern: Hermes exposes stable, generic CRM tools; a replaceable backend adapter handles vendor-specific APIs. Twenty is the first CRM adapter because it is open source, Postgres-backed, self-hostable, and schema/API friendly.
 
+## 2026-06 scope correction
+
+Jean corrected the target architecture for CRM/follow-up/reminders: the system is an **agentic Core**, not a human-first CRM/task platform. CRM Core and Calendar/Schedule Core must be extended compatibly through Agent Core DB migrations and Hermes tools. Do not create complex user-facing filter UIs or separate reminder apps. The full follow-up/reminder scope is tracked in `docs/followup-reminder-core/FACTORY_SPEC-001-agent-core-followup-reminders.md` and `docs/followup-reminder-core/ADR-002-universal-activity-layer.md`. The `Scope v0` section below describes the historical baseline already present, not a limit on the Factory project.
+
 ## Users
 
 - Owner/user: Jean or future business owner served by an independent agent instance.

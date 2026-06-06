@@ -7,15 +7,10 @@ from typing import Any
 from tools.registry import registry, tool_error
 
 
-def _factory_db():
-    try:
-        from hermes_cli import factory_pg
-        if factory_pg.available():
-            return factory_pg
-    except Exception:
-        pass
-    from hermes_cli import factory_db
-    return factory_db
+def _factory_backend():
+    from hermes_cli import factory_backend
+
+    return factory_backend.get_backend()
 
 
 def _ok(**fields: Any) -> str:
@@ -30,7 +25,7 @@ def _check_factory_mode() -> bool:
 
 def _handle_factory_project_create(args: dict, **_kwargs) -> str:
     try:
-        db = _factory_db()
+        db = _factory_backend()
         result = db.create_project(
             str(args.get("name") or "").strip(),
             project_id=args.get("project_id") or None,
@@ -51,13 +46,12 @@ def _handle_factory_project_create(args: dict, **_kwargs) -> str:
 
 def _handle_factory_lane_create(args: dict, **_kwargs) -> str:
     try:
-        db = _factory_db()
+        db = _factory_backend()
         result = db.create_lane(
             str(args.get("project_id") or "").strip(),
             str(args.get("name") or "").strip(),
             str(args.get("methodology") or "").strip(),
             lane_id=args.get("lane_id") or None,
-            kanban_board=args.get("kanban_board") or None,
             branch=args.get("branch") or None,
             worktree_path=args.get("worktree_path") or None,
         )
@@ -68,7 +62,7 @@ def _handle_factory_lane_create(args: dict, **_kwargs) -> str:
 
 def _handle_factory_task_create(args: dict, **_kwargs) -> str:
     try:
-        db = _factory_db()
+        db = _factory_backend()
         result = db.create_task(
             str(args.get("project_id") or "").strip(),
             str(args.get("title") or "").strip(),
@@ -89,7 +83,7 @@ def _handle_factory_task_create(args: dict, **_kwargs) -> str:
 
 def _handle_factory_gate_record(args: dict, **_kwargs) -> str:
     try:
-        db = _factory_db()
+        db = _factory_backend()
         result = db.record_gate(
             str(args.get("project_id") or "").strip(),
             str(args.get("gate_type") or "").strip(),
@@ -107,7 +101,7 @@ def _handle_factory_gate_record(args: dict, **_kwargs) -> str:
 
 def _handle_factory_status(args: dict, **_kwargs) -> str:
     try:
-        db = _factory_db()
+        db = _factory_backend()
         return _ok(**db.status(args.get("project_id") or None))
     except Exception as exc:
         return tool_error(str(exc))
@@ -141,7 +135,7 @@ _LANE_CREATE_SCHEMA = {
     "type": "function",
     "function": {
         "name": "factory_lane_create",
-        "description": "Create or update a factory method lane (zeus_native, bmad_hybrid, hybrid, dual_lane).",
+        "description": "Create or update a factory method lane (hybrid by default unless Jean explicitly requests zeus_native, bmad_hybrid, or dual_lane). Factory lanes do not create Kanban boards/cards.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -149,7 +143,6 @@ _LANE_CREATE_SCHEMA = {
                 "name": {"type": "string"},
                 "methodology": {"type": "string", "enum": ["zeus_native", "bmad_hybrid", "hybrid", "dual_lane"]},
                 "lane_id": {"type": "string"},
-                "kanban_board": {"type": "string"},
                 "branch": {"type": "string"},
                 "worktree_path": {"type": "string"},
             },
@@ -191,7 +184,7 @@ _GATE_RECORD_SCHEMA = {
             "type": "object",
             "properties": {
                 "project_id": {"type": "string"},
-                "gate_type": {"type": "string", "enum": ["intake", "functional", "architecture", "planning", "implementation", "spec", "quality", "test", "security", "delivery"]},
+                "gate_type": {"type": "string", "enum": ["intake", "functional", "architecture", "planning", "implementation", "spec", "quality", "test", "security", "delivery", "critical_readiness"]},
                 "status": {"type": "string", "enum": ["pending", "passed", "failed", "waived"]},
                 "lane_id": {"type": "string"},
                 "task_id": {"type": "string"},

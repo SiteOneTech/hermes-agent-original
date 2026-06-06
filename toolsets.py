@@ -220,6 +220,7 @@ TOOLSETS = {
         "description": "Agent-native CRM backed by the shared Agent Core DB",
         "tools": [
             "crm_status", "crm_organization_upsert", "crm_contact_upsert",
+            "crm_contact_social_upsert",
             "crm_opportunity_upsert", "crm_product_upsert", "crm_quote_create",
             "crm_invoice_create", "crm_relationship_upsert",
             "crm_interaction_record", "crm_follow_up_create",
@@ -258,6 +259,20 @@ TOOLSETS = {
             "voice_status", "voice_assistant_create", "voice_assistant_list",
             "voice_phone_number_list", "voice_call_start", "voice_call_get",
             "voice_call_event_record", "voice_vapi_raw_request",
+        ],
+        "includes": []
+    },
+
+    "activity": {
+        "description": "Agent-native Activity/Follow-up Core: create/upsert, link, due/upcoming/overdue lists, complete, snooze, reschedule, cancel, timeline, plans, next-actions, and detection. Explicit opt-in; not part of unrelated default core toolsets.",
+        "tools": [
+            "activity_status", "activity_upsert", "activity_list",
+            "activity_complete", "activity_snooze", "activity_reschedule",
+            "activity_cancel", "activity_link", "activity_unlink",
+            "activity_timeline", "activity_to_calendar_event", "activity_dispatcher_scan",
+            "activity_plan_create", "activity_plan_apply",
+            "activity_next_actions", "activity_complete_with_next_actions",
+            "activity_detect", "activity_detect_from_text", "activity_recurrence_expand",
         ],
         "includes": []
     },

@@ -52,6 +52,17 @@ function buildWsUrl(
   return `${proto}//${window.location.host}${HERMES_BASE_PATH}/api/pty?${qs.toString()}`;
 }
 
+function sendPastedPrompt(ws: WebSocket, prompt: string): void {
+  const text = prompt.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+  if (!text) return;
+  // Bracketed paste keeps multi-line handoff content inside the composer;
+  // the trailing Return submits it once the paste has landed.
+  ws.send(`\x1b[200~${text}\x1b[201~`);
+  setTimeout(() => {
+    if (ws.readyState === WebSocket.OPEN) ws.send("\r");
+  }, 120);
+}
+
 // Channel id ties this chat tab's PTY child (publisher) to its sidebar
 // (subscriber).  Generated once per mount so a tab refresh starts a fresh
 // channel — the previous PTY child terminates with the old WS, and its
@@ -114,6 +125,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const handoffSentRef = useRef<string | null>(null);
   // Exposed to the main metrics-sync effect so it can refit the terminal
   // the moment `isActive` flips back to true (display:none → display:flex
   // collapses the host's box, so ResizeObserver never fires on return).
@@ -173,7 +185,12 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
   // treat the current resume target as part of the PTY identity and rebuild the
   // terminal session when it changes.
   const resumeParam = searchParams.get("resume");
-  const channel = useMemo(() => generateChannelId(), [resumeParam]);
+  const factoryProjectParam = searchParams.get("factory_project");
+  const factoryHandoffParam = searchParams.get("handoff");
+  const factoryHandoffKey = factoryProjectParam
+    ? `${factoryProjectParam}:${factoryHandoffParam ?? "manual"}`
+    : "";
+  const channel = useMemo(() => generateChannelId(), [resumeParam, factoryHandoffKey]);
 
   useEffect(() => {
     if (!resumeParam) return;
@@ -588,6 +605,37 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
       // follow up with the authoritative measurement — at worst Ink
       // reflows once after the PTY boots, which is imperceptible.
       ws.send(`\x1b[RESIZE:${term.cols};${term.rows}]`);
+
+      if (factoryProjectParam && factoryHandoffKey && handoffSentRef.current !== factoryHandoffKey) {
+        const storageKey = `hermes.factoryHandoffSent.${factoryHandoffKey}`;
+        let alreadySent = false;
+        try {
+          alreadySent = sessionStorage.getItem(storageKey) === "1";
+        } catch {
+          alreadySent = false;
+        }
+        if (!alreadySent) {
+          handoffSentRef.current = factoryHandoffKey;
+          try {
+            sessionStorage.setItem(storageKey, "1");
+          } catch {
+            /* best effort */
+          }
+          void api
+            .getFactoryProjectHandoff(factoryProjectParam)
+            .then(({ prompt }) => {
+              setTimeout(() => {
+                if (ws.readyState === WebSocket.OPEN) sendPastedPrompt(ws, prompt);
+              }, 900);
+            })
+            .catch((error) => {
+              const fallback = `Retomar proyecto Factory ${factoryProjectParam}. Verifica Factory DB en vivo, resume estado, anomalías y Notion, y pregunta a Jean cómo quiere continuar. Error cargando handoff dashboard: ${error}`;
+              setTimeout(() => {
+                if (ws.readyState === WebSocket.OPEN) sendPastedPrompt(ws, fallback);
+              }, 900);
+            });
+        }
+      }
     };
 
     ws.onmessage = (ev) => {
@@ -683,7 +731,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
         copyResetRef.current = null;
       }
     };
-  }, [channel, resumeParam]);
+  }, [channel, factoryHandoffKey, factoryProjectParam, resumeParam, terminalTheme]);
 
   // When the user returns to the chat tab (isActive: false → true), the
   // terminal host just transitioned from display:none to display:flex.

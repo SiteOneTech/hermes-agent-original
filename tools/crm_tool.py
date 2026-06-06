@@ -7,6 +7,7 @@ conversation logic directly to vendor object models.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import urllib.error
@@ -21,6 +22,13 @@ from tools.registry import registry, tool_error
 CRM_METADATA_DESCRIPTION = (
     "Optional JSON metadata. Keep it generic and tenant-neutral: business_id, "
     "owner_id, source_channel, external_ref, labels, notes."
+)
+
+SOCIAL_PROFILE_DESCRIPTION = (
+    "Structured social/contact-channel profiles for this contact. Each item may "
+    "include platform, handle, external_id/user_id, profile_url, display_name, "
+    "is_primary, status, and metadata. Store personal social identities here; "
+    "do not bury them only in metadata."
 )
 
 
@@ -58,6 +66,12 @@ def _j(v: Any) -> str:
     return sql.quote_jsonb(v)
 
 
+def _stable_id(prefix: str, *parts: Any) -> str:
+    material = "|".join(str(p or "") for p in parts)
+    digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
+    return f"{prefix}_{digest}"
+
+
 def _slug(prefix: str, value: str) -> str:
     return f"{prefix}-{sql.slugify(value)}"
 
@@ -79,6 +93,36 @@ def _limit(v: Any, default: int = 20, maximum: int = 100) -> int:
     except Exception:
         n = default
     return max(1, min(maximum, n))
+
+
+def _bool_sql(v: Any, default: bool = False) -> str:
+    if v is None or v == "":
+        return "TRUE" if default else "FALSE"
+    if isinstance(v, str):
+        value = v.strip().lower()
+        if value in {"1", "true", "yes", "y", "on"}:
+            return "TRUE"
+        if value in {"0", "false", "no", "n", "off"}:
+            return "FALSE"
+    return "TRUE" if bool(v) else "FALSE"
+
+
+def _normalize_platform(value: Any) -> str:
+    return str(value or "").strip().lower().lstrip("@")
+
+
+def _normalize_handle(value: Any) -> str | None:
+    raw = str(value or "").strip()
+    return raw or None
+
+
+def _social_profile_id(args: dict[str, Any]) -> str:
+    return args.get("social_profile_id") or _stable_id(
+        "social",
+        args.get("contact_id"),
+        _normalize_platform(args.get("platform")),
+        args.get("external_id") or args.get("handle") or args.get("profile_url"),
+    )
 
 
 def _status_clause(status: str | None, alias: str = "") -> str:
@@ -227,6 +271,54 @@ def _handle_org_upsert(args: dict, **_kwargs) -> str:
         return _err(exc)
 
 
+def _handle_contact_social_upsert(args: dict, **_kwargs) -> str:
+    try:
+        contact_id = str(args.get("contact_id") or "").strip()
+        platform = _normalize_platform(args.get("platform"))
+        if not contact_id or not platform:
+            raise ValueError("contact_id and platform are required")
+        handle = _normalize_handle(args.get("handle"))
+        external_id = str(args.get("external_id") or "").strip() or None
+        profile_url = str(args.get("profile_url") or "").strip() or None
+        if not any([handle, external_id, profile_url]):
+            raise ValueError("handle, external_id, or profile_url is required")
+        payload = {**args, "contact_id": contact_id, "platform": platform, "handle": handle, "external_id": external_id, "profile_url": profile_url}
+        sid = _social_profile_id(payload)
+        row = sql.statement_one(f"""
+          INSERT INTO crm.contact_social_profiles (social_profile_id, contact_id, platform, handle, external_id, profile_url, display_name, status, is_primary, metadata, created_at, updated_at)
+          VALUES ({_q(sid)}, {_q(contact_id)}, {_q(platform)}, {_q(handle)}, {_q(external_id)}, {_q(profile_url)}, {_q(args.get('display_name'))}, {_q(args.get('status') or 'active')}, {_bool_sql(args.get('is_primary'))}, {_j(args.get('metadata') or {})}, now(), now())
+          ON CONFLICT (social_profile_id) DO UPDATE SET contact_id=EXCLUDED.contact_id, platform=EXCLUDED.platform, handle=EXCLUDED.handle, external_id=EXCLUDED.external_id, profile_url=EXCLUDED.profile_url, display_name=EXCLUDED.display_name, status=EXCLUDED.status, is_primary=EXCLUDED.is_primary, metadata=EXCLUDED.metadata, updated_at=now()
+          RETURNING *
+        """, user=_user())
+        if args.get("is_primary"):
+            social_profile_id = (row or {}).get("social_profile_id")
+            sql.psql(f"""
+              UPDATE crm.contact_social_profiles
+              SET is_primary = FALSE, updated_at = now()
+              WHERE contact_id={_q(contact_id)} AND platform={_q(platform)} AND social_profile_id <> {_q(social_profile_id)}
+            """, user=_user())
+        return _ok(social_profile=row)
+    except Exception as exc:
+        return _err(exc)
+
+
+def _upsert_contact_social_profiles(contact_id: str, profiles: Any) -> list[dict[str, Any]]:
+    if profiles in (None, ""):
+        return []
+    if not isinstance(profiles, list):
+        raise ValueError("social_profiles must be a list")
+    rows = []
+    for profile in profiles:
+        if not isinstance(profile, dict):
+            raise ValueError("each social profile must be an object")
+        payload = {**profile, "contact_id": profile.get("contact_id") or contact_id}
+        result = json.loads(_handle_contact_social_upsert(payload))
+        if not result.get("ok"):
+            raise ValueError(result.get("error") or "failed to upsert social profile")
+        rows.append(result["social_profile"])
+    return rows
+
+
 def _handle_contact_upsert(args: dict, **_kwargs) -> str:
     try:
         full_name = str(args.get("full_name") or "").strip()
@@ -239,6 +331,7 @@ def _handle_contact_upsert(args: dict, **_kwargs) -> str:
           ON CONFLICT (contact_id) DO UPDATE SET organization_id=EXCLUDED.organization_id, full_name=EXCLUDED.full_name, email=EXCLUDED.email, phone=EXCLUDED.phone, title=EXCLUDED.title, status=EXCLUDED.status, source=EXCLUDED.source, metadata=EXCLUDED.metadata, updated_at=now()
           RETURNING *
         """, user=_user())
+        social_profiles = _upsert_contact_social_profiles(cid, args.get("social_profiles"))
         sync = None
         if args.get("sync_twenty"):
             first, _, last = full_name.partition(" ")
@@ -248,7 +341,7 @@ def _handle_contact_upsert(args: dict, **_kwargs) -> str:
                 "phones": {"primaryPhoneNumber": args.get("phone")} if args.get("phone") else None,
                 "jobTitle": args.get("title"),
             })
-        return _ok(contact=row, twenty=sync)
+        return _ok(contact=row, social_profiles=social_profiles, twenty=sync)
     except Exception as exc:
         return _err(exc)
 
@@ -409,27 +502,193 @@ def _handle_interaction_record(args: dict, **_kwargs) -> str:
           RETURNING *
         """, user=_user())
         follow_up = None
+        follow_up_operation = None
         if args.get("follow_up_at") and args.get("follow_up_summary"):
-            follow_up = sql.statement_one(f"""
-              INSERT INTO crm.follow_ups (organization_id, contact_id, opportunity_id, due_at, summary, priority, assignee, metadata)
-              VALUES ({_q(args.get('organization_id'))}, {_q(args.get('contact_id'))}, {_q(args.get('opportunity_id'))}, {_q(args.get('follow_up_at'))}::timestamptz, {_q(args.get('follow_up_summary'))}, {_q(args.get('follow_up_priority') or 'normal')}, {_q(args.get('actor'))}, {_j({'source_interaction_id': row.get('interaction_id') if row else None})})
-              RETURNING *
+            dedupe_key = _follow_up_dedupe_key({
+                "organization_id": args.get("organization_id"),
+                "contact_id": args.get("contact_id"),
+                "opportunity_id": args.get("opportunity_id"),
+                "summary": args.get("follow_up_summary"),
+                "due_at": args.get("follow_up_at"),
+            })
+            fu_args = {
+                "organization_id": args.get("organization_id"),
+                "contact_id": args.get("contact_id"),
+                "opportunity_id": args.get("opportunity_id"),
+                "due_at": args.get("follow_up_at"),
+                "summary": args.get("follow_up_summary"),
+                "priority": args.get("follow_up_priority") or "normal",
+                "assignee": args.get("actor"),
+                "metadata": {"source_interaction_id": row.get("interaction_id") if row else None, "dedupe_key": dedupe_key},
+            }
+            existing = sql.one(f"""
+              SELECT * FROM crm.follow_ups
+              WHERE metadata @> {_j({"dedupe_key": dedupe_key})}::jsonb
+              LIMIT 1
             """, user=_user())
-        return _ok(interaction=row, follow_up=follow_up)
+            if existing:
+                follow_up = existing
+                follow_up_operation = "exists"
+            else:
+                fu_row = sql.statement_one(f"""
+                  INSERT INTO crm.follow_ups (organization_id, contact_id, opportunity_id, due_at, summary, priority, assignee, metadata)
+                  VALUES ({_q(args.get('organization_id'))}, {_q(args.get('contact_id'))}, {_q(args.get('opportunity_id'))}, {_q(args.get('follow_up_at'))}::timestamptz, {_q(args.get('follow_up_summary'))}, {_q(args.get('follow_up_priority') or 'normal')}, {_q(args.get('actor'))}, {_j({"source_interaction_id": row.get("interaction_id") if row else None, "dedupe_key": dedupe_key})})
+                  RETURNING *
+                """, user=_user())
+                follow_up = fu_row
+                follow_up_operation = "created"
+        return _ok(interaction=row, follow_up=follow_up, follow_up_operation=follow_up_operation)
     except Exception as exc:
         return _err(exc)
+
+
+def _follow_up_dedupe_key(args: dict) -> str:
+    dedupe_parts = [args.get(k) for k in ("organization_id", "contact_id", "opportunity_id")]
+    dedupe_parts.append(args.get("summary", ""))
+    dedupe_parts.append(args.get("due_at", ""))
+    return _stable_id("crm_fu", *dedupe_parts)
+
+
+def _upsert_follow_up_by_dedupe(args: dict, dedupe_key: str, extra_metadata: dict | None = None) -> dict | None:
+    """Look up an existing CRM follow-up by dedupe_key in metadata, or INSERT.
+
+    Returns the row dict, or None on no-op.
+    """
+    existing = sql.one(f"""
+      SELECT * FROM crm.follow_ups
+      WHERE metadata @> {_j({"dedupe_key": dedupe_key})}::jsonb
+      LIMIT 1
+    """, user=_user())
+    if existing:
+        return existing
+
+    metadata = dict(args.get("metadata") or {})
+    metadata["dedupe_key"] = dedupe_key
+    if extra_metadata:
+        metadata.update(extra_metadata)
+
+    return sql.statement_one(f"""
+      INSERT INTO crm.follow_ups (organization_id, contact_id, opportunity_id, due_at, summary, status, priority, assignee, metadata, created_at, updated_at)
+      VALUES ({_q(args.get('organization_id'))}, {_q(args.get('contact_id'))}, {_q(args.get('opportunity_id'))}, {_q(args.get('due_at'))}::timestamptz, {_q(args.get('summary'))}, {_q(args.get('status') or 'open')}, {_q(args.get('priority') or 'normal')}, {_q(args.get('assignee'))}, {_j(metadata)}, now(), now())
+      RETURNING *
+    """, user=_user())
+
+
+def _find_activity_by_dedupe(dedupe_key: str) -> str | None:
+    """Look up an activity in activity.activities by dedupe_key.
+
+    Returns the activity_id or None if not found.
+    """
+    try:
+        from tools import activity_tool
+        result = json.loads(activity_tool._handle_activity_list({"dedupe_key": dedupe_key, "limit": 1}))
+        if result.get("ok") and result.get("activities"):
+            return result["activities"][0].get("activity_id")
+    except Exception:
+        pass
+    return None
 
 
 def _handle_follow_up_create(args: dict, **_kwargs) -> str:
     try:
         if not args.get("due_at") or not args.get("summary"):
             raise ValueError("due_at and summary are required")
+        # Build a stable dedupe_key from CRM identifiers so repeated calls
+        # with the same from-IDs + summary produce one row.
+        dedupe_key = _follow_up_dedupe_key(args)
+
+        existing = sql.one(f"""
+          SELECT * FROM crm.follow_ups
+          WHERE metadata @> {_j({"dedupe_key": dedupe_key})}::jsonb
+          LIMIT 1
+        """, user=_user())
+        if existing:
+            # Look up the activity that was created during the first call.
+            # We stored dedupe_key in the activity's dedupe_key column, so
+            # we can find it via activity_tool._handle_activity_list.
+            existing_activity_id = _find_activity_by_dedupe(dedupe_key)
+            return _ok(
+                follow_up=existing,
+                activity_id=existing_activity_id,
+                operation="exists",
+                dedupe_key=dedupe_key,
+            )
+
+        metadata = dict(args.get("metadata") or {})
+        metadata["dedupe_key"] = dedupe_key
+
         row = sql.statement_one(f"""
           INSERT INTO crm.follow_ups (organization_id, contact_id, opportunity_id, due_at, summary, status, priority, assignee, metadata, created_at, updated_at)
-          VALUES ({_q(args.get('organization_id'))}, {_q(args.get('contact_id'))}, {_q(args.get('opportunity_id'))}, {_q(args.get('due_at'))}::timestamptz, {_q(args.get('summary'))}, {_q(args.get('status') or 'open')}, {_q(args.get('priority') or 'normal')}, {_q(args.get('assignee'))}, {_j(args.get('metadata') or {})}, now(), now())
+          VALUES ({_q(args.get('organization_id'))}, {_q(args.get('contact_id'))}, {_q(args.get('opportunity_id'))}, {_q(args.get('due_at'))}::timestamptz, {_q(args.get('summary'))}, {_q(args.get('status') or 'open')}, {_q(args.get('priority') or 'normal')}, {_q(args.get('assignee'))}, {_j(metadata)}, now(), now())
           RETURNING *
         """, user=_user())
-        return _ok(follow_up=row)
+
+        backref = {"crm_follow_up_id": row.get("follow_up_id"), "crm_table": "crm.follow_ups"}
+        activity_metadata = {
+            **backref,
+            **(args.get("metadata") or {}),
+        }
+        link_metadata = {
+            "crm_follow_up_id": row.get("follow_up_id"),
+            "crm_table": "crm.follow_ups",
+            "source": "crm_follow_up_create",
+        }
+
+        # Bridge to universal Activity Layer: create an activity + link it back to
+        # the CRM follow-up as a legacy_follow_up reference.
+        # Import lazily so module-level circular deps don't block loading.
+        from tools import activity_tool
+
+        act_payload = json.loads(activity_tool._handle_activity_upsert({
+            "activity_type": "follow_up",
+            "title": args.get("summary"),
+            "description": args.get("summary"),
+            "status": args.get("status") or "open",
+            "priority": args.get("priority") or "normal",
+            "due_at": args.get("due_at"),
+            "assignee_id": args.get("assignee"),
+            "owner_id": args.get("assignee") or args.get("actor", "zeus"),
+            "source": "crm",
+            "source_ref": f"crm.follow_ups/{row.get('follow_up_id')}",
+            "dedupe_key": dedupe_key,
+            "metadata": activity_metadata,
+            "evidence": {"crm_bridge": "crm_follow_up_create", "crm_follow_up_id": row.get("follow_up_id")},
+        }))
+        if act_payload.get("ok"):
+            activity_id = act_payload.get("activity_id")
+            link_payload = {
+                "activity_id": activity_id,
+                "target_type": "custom",
+                "target_id": f"crm.follow_ups/{row.get('follow_up_id')}",
+                "relationship_type": "legacy_follow_up",
+                "target_schema": "crm",
+                "target_table": "follow_ups",
+                "metadata": link_metadata,
+            }
+            activity_tool._handle_activity_link(link_payload)
+            # Also link the activity to each CRM entity present so that
+            # crm_customer_timeline (which queries activity_timeline by
+            # target_type="contact"/"organization"/"opportunity") can find it.
+            for entity_type, entity_id in [
+                ("contact", args.get("contact_id")),
+                ("organization", args.get("organization_id")),
+                ("opportunity", args.get("opportunity_id")),
+            ]:
+                if entity_id:
+                    activity_tool._handle_activity_link({
+                        "activity_id": activity_id,
+                        "target_type": entity_type,
+                        "target_id": entity_id,
+                        "relationship_type": "context",
+                        "metadata": {"crm_bridge": "crm_follow_up_create", "crm_follow_up_id": row.get("follow_up_id")},
+                    })
+
+        return _ok(
+            follow_up=row,
+            activity_id=(act_payload or {}).get("activity_id"),
+            operation="created",
+            dedupe_key=dedupe_key,
+        )
     except Exception as exc:
         return _err(exc)
 
@@ -439,7 +698,20 @@ def _handle_crm_search(args: dict, **_kwargs) -> str:
         query = str(args.get("query") or "").strip()
         limit = _limit(args.get("limit"))
         pattern = f"%{query}%"
-        contacts = sql.rows(f"SELECT * FROM crm.contacts WHERE ({_q(query)} = '' OR full_name ILIKE {_q(pattern)} OR email ILIKE {_q(pattern)} OR phone ILIKE {_q(pattern)}) ORDER BY updated_at DESC LIMIT {limit}", user=_user())
+        contacts = sql.rows(f"""
+          SELECT DISTINCT c.*
+          FROM crm.contacts c
+          LEFT JOIN crm.contact_social_profiles sp ON sp.contact_id = c.contact_id
+          WHERE ({_q(query)} = ''
+             OR c.full_name ILIKE {_q(pattern)}
+             OR c.email ILIKE {_q(pattern)}
+             OR c.phone ILIKE {_q(pattern)}
+             OR sp.handle ILIKE {_q(pattern)}
+             OR sp.external_id ILIKE {_q(pattern)}
+             OR sp.platform ILIKE {_q(pattern)})
+          ORDER BY c.updated_at DESC
+          LIMIT {limit}
+        """, user=_user())
         orgs = sql.rows(f"SELECT * FROM crm.organizations WHERE ({_q(query)} = '' OR name ILIKE {_q(pattern)} OR domain ILIKE {_q(pattern)} OR email ILIKE {_q(pattern)}) ORDER BY updated_at DESC LIMIT {limit}", user=_user())
         opportunities = sql.rows(f"SELECT * FROM crm.opportunities WHERE ({_q(query)} = '' OR title ILIKE {_q(pattern)}) ORDER BY updated_at DESC LIMIT {limit}", user=_user())
         products = sql.rows(f"SELECT * FROM crm.products WHERE ({_q(query)} = '' OR name ILIKE {_q(pattern)} OR sku ILIKE {_q(pattern)}) ORDER BY updated_at DESC LIMIT {limit}", user=_user())
@@ -470,7 +742,23 @@ def _handle_customer_timeline(args: dict, **_kwargs) -> str:
         invoices = sql.rows(f"SELECT * FROM crm.invoices WHERE ({' OR '.join([w for w in where if 'opportunity_id' not in w]) or 'FALSE'}) ORDER BY updated_at DESC LIMIT {limit}", user=_user())
         follow_ups = sql.rows(f"SELECT * FROM crm.follow_ups WHERE {condition} ORDER BY due_at ASC LIMIT {limit}", user=_user())
         relationships = sql.rows(f"SELECT * FROM crm.relationships WHERE (source_id IN ({_q(org)}, {_q(contact)}, {_q(opportunity)}) OR target_id IN ({_q(org)}, {_q(contact)}, {_q(opportunity)})) ORDER BY updated_at DESC LIMIT {limit}", user=_user())
-        return _ok(interactions=interactions, opportunities=opportunities, quotes=quotes, invoices=invoices, follow_ups=follow_ups, relationships=relationships)
+        social_profiles = []
+        if contact:
+            social_profiles = sql.rows(f"SELECT * FROM crm.contact_social_profiles WHERE contact_id={_q(contact)} ORDER BY is_primary DESC, updated_at DESC LIMIT {limit}", user=_user())
+        # Also pull activity-layer activities linked to the same CRM entities.
+        # Use the activity_timeline helper for consistency.
+        from tools import activity_tool
+        timeline_candidates = []
+        for entity_type, entity_id in [("contact", contact), ("organization", org), ("opportunity", opportunity)]:
+            if entity_id:
+                try:
+                    tl = json.loads(activity_tool._handle_activity_timeline({"target_type": entity_type, "target_id": entity_id, "limit": limit}))
+                    if tl.get("ok"):
+                        timeline_candidates.extend(tl.get("activities", []))
+                except Exception:
+                    pass
+        activities = sorted(timeline_candidates, key=lambda a: a.get("due_at") or a.get("updated_at") or "", reverse=True)[:limit]
+        return _ok(interactions=interactions, opportunities=opportunities, quotes=quotes, invoices=invoices, follow_ups=follow_ups, relationships=relationships, social_profiles=social_profiles, activities=activities)
     except Exception as exc:
         return _err(exc)
 
@@ -481,6 +769,7 @@ def _handle_crm_status(args: dict, **_kwargs) -> str:
           SELECT
             (SELECT count(*) FROM crm.organizations) AS organizations,
             (SELECT count(*) FROM crm.contacts) AS contacts,
+            (SELECT count(*) FROM crm.contact_social_profiles) AS contact_social_profiles,
             (SELECT count(*) FROM crm.opportunities) AS opportunities,
             (SELECT count(*) FROM crm.interactions) AS interactions,
             (SELECT count(*) FROM crm.relationships) AS relationships,
@@ -536,9 +825,25 @@ def _meta_props() -> dict[str, Any]:
     return {"metadata": {"type": "object", "description": CRM_METADATA_DESCRIPTION}}
 
 
+def _social_profile_props() -> dict[str, Any]:
+    return {
+        "social_profile_id": {"type": "string"},
+        "contact_id": {"type": "string"},
+        "platform": {"type": "string", "description": "Social platform/channel, e.g. telegram, whatsapp, x, linkedin, instagram."},
+        "handle": {"type": "string"},
+        "external_id": {"type": "string", "description": "Platform user_id/chat_id or other stable external identifier."},
+        "profile_url": {"type": "string"},
+        "display_name": {"type": "string"},
+        "status": {"type": "string"},
+        "is_primary": {"type": "boolean"},
+        **_meta_props(),
+    }
+
+
 registry.register(name="crm_status", toolset="crm", schema=_schema("crm_status", "Return CRM Core row counts, DB backend, and adapter configuration status.", {}), handler=_handle_crm_status, check_fn=_check_crm, emoji="👥")
 registry.register(name="crm_organization_upsert", toolset="crm", schema=_schema("crm_organization_upsert", "Create or update a CRM organization/company in Agent Core DB. Optionally sync to Twenty.", {"organization_id": {"type": "string"}, "name": {"type": "string"}, "domain": {"type": "string"}, "phone": {"type": "string"}, "email": {"type": "string"}, "website": {"type": "string"}, "status": {"type": "string"}, "sync_twenty": {"type": "boolean"}, **_meta_props()}, ["name"]), handler=_handle_org_upsert, check_fn=_check_crm, emoji="👥")
-registry.register(name="crm_contact_upsert", toolset="crm", schema=_schema("crm_contact_upsert", "Create or update a CRM contact/person. Use organization_id to attach it to a company. Optionally sync to Twenty.", {"contact_id": {"type": "string"}, "organization_id": {"type": "string"}, "full_name": {"type": "string"}, "email": {"type": "string"}, "phone": {"type": "string"}, "title": {"type": "string"}, "status": {"type": "string"}, "source": {"type": "string"}, "sync_twenty": {"type": "boolean"}, **_meta_props()}, ["full_name"]), handler=_handle_contact_upsert, check_fn=_check_crm, emoji="👥")
+registry.register(name="crm_contact_social_upsert", toolset="crm", schema=_schema("crm_contact_social_upsert", "Create or update a structured social/contact-channel profile for a CRM contact.", _social_profile_props(), ["contact_id", "platform"]), handler=_handle_contact_social_upsert, check_fn=_check_crm, emoji="👥")
+registry.register(name="crm_contact_upsert", toolset="crm", schema=_schema("crm_contact_upsert", "Create or update a CRM contact/person. Use organization_id to attach it to a company. Optionally sync to Twenty.", {"contact_id": {"type": "string"}, "organization_id": {"type": "string"}, "full_name": {"type": "string"}, "email": {"type": "string"}, "phone": {"type": "string"}, "title": {"type": "string"}, "status": {"type": "string"}, "source": {"type": "string"}, "social_profiles": {"type": "array", "description": SOCIAL_PROFILE_DESCRIPTION, "items": {"type": "object", "properties": _social_profile_props()}}, "sync_twenty": {"type": "boolean"}, **_meta_props()}, ["full_name"]), handler=_handle_contact_upsert, check_fn=_check_crm, emoji="👥")
 registry.register(name="crm_opportunity_upsert", toolset="crm", schema=_schema("crm_opportunity_upsert", "Create or update a sales opportunity/pipeline record.", {"opportunity_id": {"type": "string"}, "organization_id": {"type": "string"}, "contact_id": {"type": "string"}, "title": {"type": "string"}, "stage": {"type": "string"}, "value_amount": {"type": "number"}, "currency": {"type": "string"}, "expected_close_date": {"type": "string", "description": "YYYY-MM-DD"}, "status": {"type": "string"}, "sync_twenty": {"type": "boolean"}, **_meta_props()}, ["title"]), handler=_handle_opportunity_upsert, check_fn=_check_crm, emoji="👥")
 registry.register(name="crm_product_upsert", toolset="crm", schema=_schema("crm_product_upsert", "Create or update a product/service catalog item for quotes and invoices.", {"product_id": {"type": "string"}, "sku": {"type": "string"}, "name": {"type": "string"}, "description": {"type": "string"}, "unit_price": {"type": "number"}, "currency": {"type": "string"}, "status": {"type": "string"}, **_meta_props()}, ["name"]), handler=_handle_product_upsert, check_fn=_check_crm, emoji="👥")
 registry.register(name="crm_quote_create", toolset="crm", schema=_schema("crm_quote_create", "Create or replace a quote with line items. Totals are computed from items.", {"quote_id": {"type": "string"}, "organization_id": {"type": "string"}, "contact_id": {"type": "string"}, "opportunity_id": {"type": "string"}, "title": {"type": "string"}, "status": {"type": "string"}, "valid_until": {"type": "string", "description": "YYYY-MM-DD"}, "currency": {"type": "string"}, "items": {"type": "array", "items": {"type": "object"}}, **_meta_props()}, ["title"]), handler=_handle_quote_create, check_fn=_check_crm, emoji="👥")

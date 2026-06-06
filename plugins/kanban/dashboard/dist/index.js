@@ -1478,6 +1478,25 @@
   // auto-generate). Backed by /orchestration + /profiles endpoints.
   // ---------------------------------------------------------------------
 
+  function isFactoryProfile(p) {
+    const name = String((p && p.name) || "");
+    return name.startsWith("factory-") || [
+      "product-analyst",
+      "solution-architect",
+      "implementation-planner",
+      "claude-builder",
+      "claude-deepseek-builder",
+      "codex-builder",
+      "openhands-builder",
+      "openhands-lab",
+      "quality-reviewer",
+      "security-reviewer",
+      "qa-verifier",
+      "devops-release",
+      "factory-reporter",
+    ].indexOf(name) >= 0;
+  }
+
   function OrchestrationPanel() {
     const [expanded, setExpanded] = useState(false);
     const [settings, setSettings] = useState(null);
@@ -1610,7 +1629,8 @@
 
     const profileOptions = profiles.map(function (p) {
       const tag = p.is_default ? " (default)" : "";
-      return h(SelectOption, { key: p.name, value: p.name }, p.name + tag);
+      const scope = isFactoryProfile(p) ? " · factory worker" : "";
+      return h(SelectOption, { key: p.name, value: p.name }, p.name + tag + scope);
     });
 
     return h(Card, { className: "p-3" },
@@ -1627,6 +1647,8 @@
         msg ? h("div", {
           className: msg.ok ? "hermes-kanban-msg-ok" : "hermes-kanban-msg-err",
         }, msg.text) : null,
+        h("div", { className: "text-[10px] leading-4 text-muted-foreground" },
+          "Este panel configura solo el flujo Kanban. Los perfiles con nombre de Factory son workers Hermes reutilizables; seleccionarlos aquí no replica proyectos ni tareas del Factory en Kanban."),
 
         settings ? h("div", { className: "grid gap-3 sm:grid-cols-3" },
           h("div", { className: "flex flex-col gap-1" },
@@ -1719,6 +1741,9 @@
       style: { borderColor: p.description ? "#888" : "#cc6" } },
       h("div", { className: "flex items-center gap-2 text-xs" },
         h("span", { className: "font-medium" }, p.name),
+        isFactoryProfile(p)
+          ? h("span", { className: "text-[10px] text-muted-foreground" }, "shared Factory worker")
+          : null,
         p.is_default ? h("span", { className: "text-[10px] text-muted-foreground" }, "(default)") : null,
         p.description_auto && p.description
           ? h("span", { className: "text-[10px] text-yellow-600" }, "auto — review")

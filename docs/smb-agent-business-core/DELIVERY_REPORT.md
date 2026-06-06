@@ -13,7 +13,7 @@ SMB Agent Business Core — planning and Factory registration cycle.
 - PRD for SMB agent business-core product.
 - ADRs for local cores, adapters, fiscal boundary, marketing/publishing.
 - Sprint plan with five implementation sprints.
-- Kanban task graph with owners, reviewers, gates and evidence requirements.
+- Factory task graph with owners, reviewers, gates and evidence requirements.
 - QA gates per module.
 - Repo organization proposal for inheritable modules.
 - Implementation plan for future execution.
