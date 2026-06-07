@@ -134,6 +134,96 @@ def test_factory_reconciliation_honors_required_docs_waiver(tmp_path: Path):
     assert "missing_required_docs" not in codes
 
 
+def _write_complete_factory_doc_pack(project_dir: Path, *, omit_from_index: set[str] | None = None) -> None:
+    from hermes_cli import factory_pg
+
+    omit_from_index = omit_from_index or set()
+    project_dir.mkdir(parents=True, exist_ok=True)
+    for name in factory_pg.FACTORY_REQUIRED_DOCS:
+        (project_dir / name).write_text(f"# {name}\n\nRequired Factory artifact.\n", encoding="utf-8")
+    indexed = [name for name in factory_pg.FACTORY_REQUIRED_DOCS if name not in omit_from_index]
+    (project_dir / "DOCUMENTATION_INDEX.md").write_text(
+        "# Documentation Index\n\n" + "\n".join(f"- `{name}`" for name in indexed) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _repo_first_ready_project(repo: Path) -> dict:
+    return {
+        "project_id": "demo",
+        "name": "Demo",
+        "repo_path": str(repo),
+        "status": "active",
+        "risk_level": "high",
+        "metadata": {
+            "artifact_dir": "factory/projects/demo",
+            "notion_tracker_url": "https://notion.example/demo",
+        },
+    }
+
+
+def test_factory_reconciliation_detects_docs_missing_from_documentation_index(tmp_path: Path):
+    from hermes_cli import factory_pg
+
+    repo = tmp_path / "repo"
+    project_dir = repo / "factory" / "projects" / "demo"
+    _write_complete_factory_doc_pack(project_dir, omit_from_index={"SECURITY_REVIEW.md"})
+    project = _repo_first_ready_project(repo)
+    tasks = [{"task_id": "demo-f0", "status": "todo", "title": "F0", "phase": "planning"}]
+    gates = [{"gate_type": "delivery", "status": "passed"}]
+
+    findings = factory_pg.reconciliation_findings(project, tasks, [], gates)
+    by_code = {finding["code"]: finding for finding in findings}
+
+    assert "missing_required_docs" not in by_code
+    assert by_code["docs_not_indexed"]["metadata"]["missing_from_index"] == ["SECURITY_REVIEW.md"]
+
+
+def test_factory_reconciliation_detects_uncommitted_project_artifacts(monkeypatch, tmp_path: Path):
+    from hermes_cli import factory_pg
+
+    repo = tmp_path / "repo"
+    project_dir = repo / "factory" / "projects" / "demo"
+    _write_complete_factory_doc_pack(project_dir)
+    project = _repo_first_ready_project(repo)
+    tasks = [{"task_id": "demo-f0", "status": "todo", "title": "F0", "phase": "planning"}]
+    gates = [{"gate_type": "delivery", "status": "passed"}]
+    monkeypatch.setattr(
+        factory_pg,
+        "_uncommitted_project_artifacts",
+        lambda repo_path, artifact_dir: [" M factory/projects/demo/PRD.md"],
+        raising=False,
+    )
+
+    findings = factory_pg.reconciliation_findings(project, tasks, [], gates)
+    by_code = {finding["code"]: finding for finding in findings}
+
+    assert by_code["uncommitted_project_artifacts"]["metadata"]["uncommitted_paths"] == [" M factory/projects/demo/PRD.md"]
+
+
+def test_factory_critical_readiness_requires_index_and_commit_checkpoint(monkeypatch, tmp_path: Path):
+    from hermes_cli import factory_pg
+
+    repo = tmp_path / "repo"
+    project_dir = repo / "factory" / "projects" / "demo"
+    _write_complete_factory_doc_pack(project_dir, omit_from_index={"TASK_GRAPH.md"})
+    project = _repo_first_ready_project(repo)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_user", lambda: "factory_runtime")
+    monkeypatch.setattr(factory_pg.sql, "rows", lambda query, *, user: [])
+    monkeypatch.setattr(
+        factory_pg,
+        "_uncommitted_project_artifacts",
+        lambda repo_path, artifact_dir: ["?? factory/projects/demo/TASK_GRAPH.md"],
+        raising=False,
+    )
+
+    findings = factory_pg.critical_readiness_findings("demo")
+
+    assert "documentation index missing required docs: TASK_GRAPH.md" in findings
+    assert "uncommitted project-local factory artifacts: ?? factory/projects/demo/TASK_GRAPH.md" in findings
+
+
 def test_factory_critical_readiness_honors_tracker_and_docs_waivers(monkeypatch, tmp_path: Path):
     from hermes_cli import factory_pg
 

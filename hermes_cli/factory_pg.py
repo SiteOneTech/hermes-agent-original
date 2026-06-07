@@ -6,6 +6,7 @@ route production Factory work to SQLite.
 from __future__ import annotations
 
 import os
+import subprocess
 import time
 import uuid
 from datetime import datetime, timezone
@@ -67,6 +68,32 @@ RECONCILIATION_TASK_SPECS: dict[str, dict[str, Any]] = {
         "acceptance": [
             "Required project-local Factory docs exist or each missing document has an explicit waiver with reason.",
             "PRD, ADRs, sprint plan, task graph, QA/security gates, tracker, and delivery report are reconciled against Factory DB.",
+        ],
+    },
+    "docs_not_indexed": {
+        "title": "R2b — Reconciliation: update DOCUMENTATION_INDEX.md",
+        "phase": "documentation",
+        "owner": "factory-reporter",
+        "reviewer": "factory-orchestrator",
+        "engine": "zeus",
+        "priority": 35,
+        "acceptance": [
+            "DOCUMENTATION_INDEX.md lists every required project-local Factory artifact path.",
+            "The documentation index is generated from real artifact files, not only filename guesses.",
+            "Builder context points at DOCUMENTATION_INDEX.md before implementation starts.",
+        ],
+    },
+    "uncommitted_project_artifacts": {
+        "title": "R2c — Reconciliation: commit project-local Factory artifacts",
+        "phase": "documentation",
+        "owner": "factory-reporter",
+        "reviewer": "factory-orchestrator",
+        "engine": "zeus",
+        "priority": 37,
+        "acceptance": [
+            "Project-local Factory artifacts have a git commit checkpoint, unless Jean explicitly authorized a project-specific exception.",
+            "Factory DB metadata or gate evidence records the commit SHA used as the source-of-truth checkpoint.",
+            "Untracked or modified methodology docs are not treated as completed delivery evidence.",
         ],
     },
     "missing_task_graph": {
@@ -357,6 +384,66 @@ def _project_artifact_dir(project: dict[str, Any]) -> tuple[Path | None, str]:
     return Path(repo_path).expanduser() / artifact_dir, artifact_dir
 
 
+def _docs_missing_from_documentation_index(factory_dir: Path, required_docs: tuple[str, ...] = FACTORY_REQUIRED_DOCS) -> list[str]:
+    """Return required docs not referenced by the project documentation index.
+
+    The repo-first Factory contract treats ``DOCUMENTATION_INDEX.md`` as the
+    builder entry point. A file existing on disk is not enough; builders and
+    reviewers need the index to enumerate every canonical artifact path.
+    """
+
+    index_path = factory_dir / "DOCUMENTATION_INDEX.md"
+    try:
+        index_text = index_path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return list(required_docs)
+    return [name for name in required_docs if name not in index_text]
+
+
+def _repo_commit_waived(metadata: dict[str, Any]) -> bool:
+    return bool(
+        metadata.get("repo_commit_waived")
+        or metadata.get("commit_checkpoint_waived")
+        or metadata.get("uncommitted_artifacts_waived")
+    )
+
+
+def _uncommitted_project_artifacts(repo_path: Path, artifact_dir: str) -> list[str]:
+    """Return git porcelain rows for uncommitted project-local artifacts.
+
+    If the repo is unavailable or not a git worktree, return an empty list so the
+    reconciler does not turn filesystem errors into false blockers. Git-backed
+    Factory repos, however, must leave no modified/untracked project artifacts
+    before critical readiness/delivery closure.
+    """
+
+    repo = Path(repo_path).expanduser()
+    if not repo.exists():
+        return []
+    try:
+        probe = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "--is-inside-work-tree"],
+            text=True,
+            capture_output=True,
+            timeout=5,
+            check=False,
+        )
+        if probe.returncode != 0 or probe.stdout.strip() != "true":
+            return []
+        status = subprocess.run(
+            ["git", "-C", str(repo), "status", "--porcelain", "--", artifact_dir],
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+    except Exception:
+        return []
+    if status.returncode != 0:
+        return []
+    return [line for line in status.stdout.splitlines() if line.strip()]
+
+
 def _is_reconciliation_task(task: dict[str, Any]) -> bool:
     metadata = _metadata(task)
     if metadata.get("factory_reconciliation_task") or metadata.get("reconciliation_anomaly"):
@@ -378,6 +465,10 @@ def _task_covers_reconciliation_anomaly(task: dict[str, Any], code: str) -> bool
         return "artifact" in text or "documentation" in text or "documentación" in text
     if code == "missing_required_docs":
         return any(term in text for term in ("documentation", "documentación", "docs", "tracker", "delivery report"))
+    if code == "docs_not_indexed":
+        return "documentation_index" in text or "documentation index" in text or "índice" in text or "indexed" in text
+    if code == "uncommitted_project_artifacts":
+        return "commit" in text or "uncommitted" in text or "git" in text or "checkpoint" in text
     if code == "missing_task_graph":
         return "task graph" in text or "task-graph" in text or "canonical task" in text or "task graph recovery" in text
     if code == "pending_effective_gates":
@@ -428,6 +519,26 @@ def reconciliation_findings(project: dict[str, Any], tasks: list[dict[str, Any]]
         missing_docs = [name for name in FACTORY_REQUIRED_DOCS if not (factory_dir / name).is_file()]
     if missing_docs and not (metadata.get("required_docs_waived") or metadata.get("required_doc_waivers")):
         add("missing_required_docs", "Missing required Factory methodology documents", missing_docs=missing_docs, artifact_dir=artifact_dir)
+    elif factory_dir is not None and factory_dir.is_dir():
+        missing_from_index = _docs_missing_from_documentation_index(factory_dir)
+        if missing_from_index and not (metadata.get("required_docs_waived") or metadata.get("required_doc_waivers")):
+            add(
+                "docs_not_indexed",
+                "Required Factory methodology documents are missing from DOCUMENTATION_INDEX.md",
+                missing_from_index=missing_from_index,
+                artifact_dir=artifact_dir,
+            )
+
+    repo_path = str(project.get("repo_path") or "").strip()
+    if repo_path and factory_dir is not None and factory_dir.is_dir() and not _repo_commit_waived(metadata):
+        uncommitted_paths = _uncommitted_project_artifacts(Path(repo_path), artifact_dir)
+        if uncommitted_paths:
+            add(
+                "uncommitted_project_artifacts",
+                "Project-local Factory artifacts have uncommitted git changes",
+                uncommitted_paths=uncommitted_paths,
+                artifact_dir=artifact_dir,
+            )
 
     non_reconciliation_tasks = [task for task in tasks if not _is_reconciliation_task(task)]
     if not non_reconciliation_tasks:
@@ -534,6 +645,14 @@ def critical_readiness_findings(project_id: str) -> list[str]:
         missing_docs = [name for name in FACTORY_REQUIRED_DOCS if not (factory_dir / name).is_file()]
         if missing_docs and not (metadata.get("required_docs_waived") or metadata.get("required_doc_waivers")):
             findings.append("missing minimum docs: " + ", ".join(missing_docs))
+        elif not (metadata.get("required_docs_waived") or metadata.get("required_doc_waivers")):
+            missing_from_index = _docs_missing_from_documentation_index(factory_dir)
+            if missing_from_index:
+                findings.append("documentation index missing required docs: " + ", ".join(missing_from_index))
+        if repo_path and not _repo_commit_waived(metadata):
+            uncommitted_paths = _uncommitted_project_artifacts(Path(repo_path), str(artifact_dir))
+            if uncommitted_paths:
+                findings.append("uncommitted project-local factory artifacts: " + ", ".join(uncommitted_paths))
 
     self_approved = sql.rows(
         f"""
