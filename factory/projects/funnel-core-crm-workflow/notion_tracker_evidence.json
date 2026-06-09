@@ -1,0 +1,31 @@
+{
+  "project_id": "funnel-core-crm-workflow",
+  "notion_tracker": {
+    "page_id": "37a37b39-cad6-8146-b9f2-e1fdf0bdf727",
+    "page_url": "https://app.notion.com/p/Funnel-Core-CRM-Sales-Workflow-Factory-PM-37a37b39cad68146b9f2e1fdf0bdf727",
+    "page_title": "Funnel Core / CRM Sales Workflow — Factory PM",
+    "parent_page_id": "36d37b39-cad6-81c6-8b83-db65c4bf6e95",
+    "parent_page_title": "🏭 Software Factory — Reportes Ejecutivos",
+    "created_via": "Notion REST API v2025-09-03"
+  },
+  "factory_db": {
+    "project_id": "funnel-core-crm-workflow",
+    "status": "active",
+    "risk": "high",
+    "engine": "zeus",
+    "notion_tracker_page_id": "37a37b39-cad6-8146-b9f2-e1fdf0bdf727",
+    "notion_tracker_url": "https://app.notion.com/p/Funnel-Core-CRM-Sales-Workflow-Factory-PM-37a37b39cad68146b9f2e1fdf0bdf727"
+  },
+  "reconciliation": {
+    "task": "funnel-core-crm-workflow-reconcile-missing-notion-project",
+    "task_type": "R0 — Reconciliation",
+    "run": "run-1781040216-161d96d2",
+    "created_notion_page": true,
+    "created_artifact_dir": true
+  },
+  "evidence": {
+    "notion_api_response": "/tmp/notion_create_result.json",
+    "notion_api_payload": "/tmp/notion_create_payload.json"
+  },
+  "timestamp": "2026-06-09T17:35:00Z"
+}
