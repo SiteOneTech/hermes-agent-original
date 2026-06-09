@@ -19,13 +19,30 @@
   "reconciliation": {
     "task": "funnel-core-crm-workflow-reconcile-missing-notion-project",
     "task_type": "R0 — Reconciliation",
-    "run": "run-1781040216-161d96d2",
-    "created_notion_page": true,
-    "created_artifact_dir": true
+    "run": "run-1781041604-cd0b2924",
+    "previous_runs": [
+      {
+        "run": "run-1781040216-161d96d2",
+        "created_notion_page": true,
+        "created_artifact_dir": true,
+        "status": "completed"
+      }
+    ],
+    "current_run_verification": {
+      "run": "run-1781041604-cd0b2924",
+      "phase": "verification",
+      "notion_api_response_confirmed": true,
+      "notion_api_response_path": "/tmp/notion_create_result.json",
+      "artifact_confirmed": true,
+      "factory_db_sync_confirmed": true,
+      "anomaly_resolved": true,
+      "note": "Notion page confirmed created 2026-06-09T21:26:00Z with exact page_id and URL matching artifact. reconciler reopen was false positive — page existed at time of creation."
+    }
   },
   "evidence": {
     "notion_api_response": "/tmp/notion_create_result.json",
     "notion_api_payload": "/tmp/notion_create_payload.json"
   },
-  "timestamp": "2026-06-09T17:35:00Z"
+  "timestamp": "2026-06-09T17:35:00Z",
+  "verification_timestamp": "2026-06-09T17:50:00Z"
 }
