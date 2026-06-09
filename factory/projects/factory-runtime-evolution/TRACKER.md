@@ -29,10 +29,11 @@
 | INC-0006 Unified resolve-state action | done | Zeus/factory-orchestrator | TDD + UI/API smoke | `hermes factory project resolve-state`, single dashboard `Resolver estado`, resume preflight blocks true holds |
 | INC-0007 Single-writer/manual takeover lease | done | Zeus/factory-orchestrator | TDD + CLI/API smoke | `hermes factory project takeover/release-takeover`, metadata lease guard, dispatch claim predicates block autonomous workers during manual takeover |
 | INC-0008 Cron/control-plane restoration | in review | Zeus/factory-orchestrator | focused tests + live cron smokes | repo-backed `scripts/factory/*`, restored `factory_backend`/contracts/expanded `factory_pg`, runtime wrappers kept in `sitiouno-agent-runtime`, idle watchdog silence rule |
+| INC-0009 Documentation-first + Notion control-plane refactor | requested/ready | factory-orchestrator / implementation owner TBD by Factory | independent reviewer required | `INC_0009_FACTORY_DOCS_NOTION_CONTROL_PLANE_REFACTOR.md`; freezes CRM/Funnel Core review until Factory runtime GREEN |
 
 ## Open methodology debt
 
-(none — all resolved)
+- INC-0009: Funnel Core incident showed the Factory allowed implementation before canonical kickoff docs/Notion metadata were structurally enforced. CRM/Funnel Core review remains frozen until this remediation is GREEN.
 
 ## R0 Closure evidence
 

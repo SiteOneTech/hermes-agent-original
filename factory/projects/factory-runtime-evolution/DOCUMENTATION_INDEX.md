@@ -31,7 +31,8 @@
 | `FACTORY_RUNTIME_EVOLUTION_PLAN.md` | Concrete step-by-step plan to reconcile the canonical Factory Runtime Evolution project and fix the current delivery_hold absorbing-state class structurally | INC-0001 execution in progress |
 | `RETROSPECTIVE_INC_0001.md` | Retrospective and reference-pattern evidence for the delivery_hold autoresolvable blocker fix | complete |
 | `RETROSPECTIVE_INC_0008.md` | Retrospective, cron ownership audit, and acceptance evidence for canonical cron/control-plane restoration | in progress |
-| `TRACKER.md` / `DELIVERY_REPORT.md` / `QA_REPORT.md` | Increment ledger, delivery evidence, and QA evidence including INC-0007 single-writer/manual takeover guard and INC-0008 cron/control-plane restoration | updated for INC-0008 |
+| `INC_0009_FACTORY_DOCS_NOTION_CONTROL_PLANE_REFACTOR.md` | Jean-requested remediation scope for documentation-first enforcement, canonical Notion metadata linking, active-run terminal-state repair, and CRM review freeze | kickoff scope created; implementation pending |
+| `TRACKER.md` / `DELIVERY_REPORT.md` / `QA_REPORT.md` | Increment ledger, delivery evidence, and QA evidence including INC-0007 single-writer/manual takeover guard, INC-0008 cron/control-plane restoration, and INC-0009 docs/Notion/runtime refactor | update required for INC-0009 |
 
 ## Source-of-truth hierarchy
 
