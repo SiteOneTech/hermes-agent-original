@@ -7,15 +7,10 @@ from typing import Any
 from tools.registry import registry, tool_error
 
 
-def _factory_db():
-    try:
-        from hermes_cli import factory_pg
-        if factory_pg.available():
-            return factory_pg
-    except Exception:
-        pass
-    from hermes_cli import factory_db
-    return factory_db
+def _factory_backend():
+    from hermes_cli import factory_backend
+
+    return factory_backend.get_backend()
 
 
 def _ok(**fields: Any) -> str:
@@ -30,7 +25,7 @@ def _check_factory_mode() -> bool:
 
 def _handle_factory_project_create(args: dict, **_kwargs) -> str:
     try:
-        db = _factory_db()
+        db = _factory_backend()
         result = db.create_project(
             str(args.get("name") or "").strip(),
             project_id=args.get("project_id") or None,
@@ -42,6 +37,8 @@ def _handle_factory_project_create(args: dict, **_kwargs) -> str:
             risk_level=args.get("risk_level") or "medium",
             autonomy_level=int(args.get("autonomy_level") or 3),
             create_default_lanes=bool(args.get("create_default_lanes", True)),
+            repo_scope=args.get("repo_scope") or None,
+            work_intent=args.get("work_intent") or None,
             metadata={"source": "factory_project_create tool"},
         )
         return _ok(**result)
@@ -51,13 +48,12 @@ def _handle_factory_project_create(args: dict, **_kwargs) -> str:
 
 def _handle_factory_lane_create(args: dict, **_kwargs) -> str:
     try:
-        db = _factory_db()
+        db = _factory_backend()
         result = db.create_lane(
             str(args.get("project_id") or "").strip(),
             str(args.get("name") or "").strip(),
             str(args.get("methodology") or "").strip(),
             lane_id=args.get("lane_id") or None,
-            kanban_board=args.get("kanban_board") or None,
             branch=args.get("branch") or None,
             worktree_path=args.get("worktree_path") or None,
         )
@@ -68,7 +64,7 @@ def _handle_factory_lane_create(args: dict, **_kwargs) -> str:
 
 def _handle_factory_task_create(args: dict, **_kwargs) -> str:
     try:
-        db = _factory_db()
+        db = _factory_backend()
         result = db.create_task(
             str(args.get("project_id") or "").strip(),
             str(args.get("title") or "").strip(),
@@ -80,6 +76,8 @@ def _handle_factory_task_create(args: dict, **_kwargs) -> str:
             engine=args.get("engine") or "zeus",
             priority=int(args.get("priority") or 100),
             acceptance_criteria=args.get("acceptance_criteria") or [],
+            branch=args.get("branch") or None,
+            worktree_path=args.get("worktree_path") or None,
             metadata={"source": "factory_task_create tool"},
         )
         return _ok(**result)
@@ -89,7 +87,7 @@ def _handle_factory_task_create(args: dict, **_kwargs) -> str:
 
 def _handle_factory_gate_record(args: dict, **_kwargs) -> str:
     try:
-        db = _factory_db()
+        db = _factory_backend()
         result = db.record_gate(
             str(args.get("project_id") or "").strip(),
             str(args.get("gate_type") or "").strip(),
@@ -107,7 +105,7 @@ def _handle_factory_gate_record(args: dict, **_kwargs) -> str:
 
 def _handle_factory_status(args: dict, **_kwargs) -> str:
     try:
-        db = _factory_db()
+        db = _factory_backend()
         return _ok(**db.status(args.get("project_id") or None))
     except Exception as exc:
         return tool_error(str(exc))
@@ -130,6 +128,8 @@ _PROJECT_CREATE_SCHEMA = {
                 "summary": {"type": "string"},
                 "risk_level": {"type": "string", "enum": ["low", "medium", "high", "critical"]},
                 "autonomy_level": {"type": "integer"},
+                "repo_scope": {"type": "string", "enum": ["zeus_only", "zeus_then_runtime", "runtime_only", "existing_project_change", "new_product_repo", "docs_or_research_only"], "description": "Canonical G0 routing. Use zeus_only for Zeus-only improvements, zeus_then_runtime for features inherited by runtime agents, existing_project_change to modify an existing product repo, new_product_repo only when Jean asked for a new project/repo."},
+                "work_intent": {"type": "string", "enum": ["create_new_project", "add_functionality", "modify_existing_project", "maintain_existing_project", "docs_research"]},
                 "create_default_lanes": {"type": "boolean"},
             },
             "required": ["name"],
@@ -141,7 +141,7 @@ _LANE_CREATE_SCHEMA = {
     "type": "function",
     "function": {
         "name": "factory_lane_create",
-        "description": "Create or update a factory method lane (zeus_native, bmad_hybrid, hybrid, dual_lane).",
+        "description": "Create or update a factory method lane (hybrid by default unless Jean explicitly requests zeus_native, bmad_hybrid, or dual_lane). Factory lanes do not create Kanban boards/cards.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -149,7 +149,6 @@ _LANE_CREATE_SCHEMA = {
                 "name": {"type": "string"},
                 "methodology": {"type": "string", "enum": ["zeus_native", "bmad_hybrid", "hybrid", "dual_lane"]},
                 "lane_id": {"type": "string"},
-                "kanban_board": {"type": "string"},
                 "branch": {"type": "string"},
                 "worktree_path": {"type": "string"},
             },
@@ -175,6 +174,8 @@ _TASK_CREATE_SCHEMA = {
                 "reviewer_agent_id": {"type": "string"},
                 "engine": {"type": "string"},
                 "priority": {"type": "integer"},
+                "branch": {"type": "string", "description": "Override derived per-deliverable branch. Normally omit so Factory derives from G0 repo_strategy."},
+                "worktree_path": {"type": "string", "description": "Override derived isolated per-deliverable worktree. Normally omit so Factory derives from G0 repo_strategy."},
                 "acceptance_criteria": {"type": "array", "items": {"type": "string"}},
             },
             "required": ["project_id", "title"],
@@ -191,7 +192,7 @@ _GATE_RECORD_SCHEMA = {
             "type": "object",
             "properties": {
                 "project_id": {"type": "string"},
-                "gate_type": {"type": "string", "enum": ["intake", "functional", "architecture", "planning", "implementation", "spec", "quality", "test", "security", "delivery"]},
+                "gate_type": {"type": "string", "enum": ["intake", "functional", "architecture", "planning", "implementation", "spec", "quality", "test", "security", "delivery", "critical_readiness"]},
                 "status": {"type": "string", "enum": ["pending", "passed", "failed", "waived"]},
                 "lane_id": {"type": "string"},
                 "task_id": {"type": "string"},
