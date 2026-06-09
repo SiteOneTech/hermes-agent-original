@@ -36,6 +36,15 @@ NGINX_CONF = r'''server {
     proxy_set_header X-Forwarded-Proto $scheme;
   }
 
+  location /payments/stripe/ {
+    proxy_pass http://delivery-sandbox-events:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+
   location /api/ {
     proxy_pass http://delivery-sandbox-events:8080;
     proxy_http_version 1.1;
@@ -73,7 +82,8 @@ NGINX_CONF = r'''server {
 DOCKERFILE = r"""FROM python:3.12-alpine
 WORKDIR /app
 COPY server.py /app/server.py
-RUN chmod 0644 /app/server.py
+COPY delivery_document_actions.py /app/delivery_document_actions.py
+RUN chmod 0644 /app/server.py /app/delivery_document_actions.py
 ENV PYTHONUNBUFFERED=1
 EXPOSE 8080
 CMD ["python", "/app/server.py"]
@@ -99,12 +109,21 @@ import os
 import re
 import secrets
 import time
+import traceback
 import uuid
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse
+
+from delivery_document_actions import (
+    OTP_REQUIRED_DOCUMENT_EVENT_TYPES,
+    build_document_event,
+    document_action_allows_direct_post,
+    document_action_requires_otp,
+    normalize_document_action,
+)
 
 EVENT_DIR = Path(os.environ.get("EVENT_DIR", "/data/events"))
 PUBLIC_DIR = Path(os.environ.get("PUBLIC_DIR", "/data/public"))
@@ -113,6 +132,7 @@ MAX_BODY_BYTES = int(os.environ.get("MAX_BODY_BYTES", "65536"))
 SESSION_TTL_SECONDS = int(os.environ.get("USER_SESSION_TTL_SECONDS", str(12 * 3600)))
 OTP_TTL_SECONDS = int(os.environ.get("USER_OTP_TTL_SECONDS", "600"))
 OTP_RATE_LIMIT_SECONDS = int(os.environ.get("USER_OTP_RATE_LIMIT_SECONDS", "45"))
+DOCUMENT_ACTION_SESSION_TTL_SECONDS = int(os.environ.get("DOCUMENT_ACTION_SESSION_TTL_SECONDS", str(12 * 3600)))
 AGENT_ID = os.environ.get("AGENT_ID", "commercial-agent")
 AGENT_NAME = os.environ.get("AGENT_NAME", AGENT_ID.replace("-", " ").title())
 SESSION_COOKIE_NAME = os.environ.get("USER_SESSION_COOKIE_NAME", f"{AGENT_ID.replace('-', '_')}_user_session")
@@ -125,10 +145,13 @@ ALLOWED_HOSTS = {
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
 OTP_RE = re.compile(r"^\d{6}$")
 VAPI_SERVER_AUTH_TOKEN = os.environ.get("VAPI_SERVER_AUTH_TOKEN", "")
+STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+STRIPE_SIGNATURE_TOLERANCE_SECONDS = int(os.environ.get("STRIPE_SIGNATURE_TOLERANCE_SECONDS", "300"))
 VAPI_ALLOWED_TOOL_NAMES = {
     "capture_voice_lead",
     "schedule_followup",
-    "escalate_to_jean",
+    "escalate_to_zeus",
+    "get_customer_context",
     "send_call_summary",
 }
 
@@ -207,16 +230,17 @@ def _hash(value: str) -> str:
 def _load_state() -> dict[str, Any]:
     path = _state_path()
     if not path.exists():
-        return {"challenges": {}, "sessions": {}}
+        return {"challenges": {}, "sessions": {}, "document_action_sessions": {}}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
-            return {"challenges": {}, "sessions": {}}
+            return {"challenges": {}, "sessions": {}, "document_action_sessions": {}}
         data.setdefault("challenges", {})
         data.setdefault("sessions", {})
+        data.setdefault("document_action_sessions", {})
         return data
     except Exception:
-        return {"challenges": {}, "sessions": {}}
+        return {"challenges": {}, "sessions": {}, "document_action_sessions": {}}
 
 
 def _save_state(state: dict[str, Any]) -> None:
@@ -224,6 +248,10 @@ def _save_state(state: dict[str, Any]) -> None:
     tmp = _state_path().with_suffix(".tmp")
     tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
     try:
+        # Contains OTP hashes, challenge targets, and pending action payloads.
+        # Keep owner-only; trusted dispatchers should run as the same runtime
+        # user or receive minimal outbox rows rather than reading this file as
+        # world-readable state.
         tmp.chmod(0o600)
     except OSError:
         pass
@@ -238,6 +266,10 @@ def _cleanup_state(state: dict[str, Any]) -> dict[str, Any]:
     }
     state["sessions"] = {
         key: val for key, val in state.get("sessions", {}).items()
+        if int(val.get("expires_at", 0)) > now
+    }
+    state["document_action_sessions"] = {
+        key: val for key, val in state.get("document_action_sessions", {}).items()
         if int(val.get("expires_at", 0)) > now
     }
     return state
@@ -329,21 +361,44 @@ def _valid_request_origin(handler: BaseHTTPRequestHandler) -> bool:
     return True
 
 
-def _workspace_matches_token(token: str, deliverable_id: str, metadata: dict[str, Any]) -> bool:
-    """Bind each event to its opaque workspace token and deliverable id."""
+def _workspace_manifest(token: str) -> dict[str, Any] | None:
     if not TOKEN_RE.fullmatch(token):
-        return False
+        return None
     workspace = PUBLIC_DIR / "w" / token
     if not workspace.is_dir():
-        return False
+        return None
     manifest = workspace / "workspace.json"
-    if manifest.exists():
+    if not manifest.exists():
+        return {}
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _recipient_manifest(token: str) -> dict[str, Any] | None:
+    if not TOKEN_RE.fullmatch(token):
+        return None
+    private_manifest = USER_DATA_DIR / "workspace-recipients" / f"{token}.json"
+    if private_manifest.exists():
         try:
-            data = json.loads(manifest.read_text(encoding="utf-8"))
+            data = json.loads(private_manifest.read_text(encoding="utf-8"))
         except Exception:
-            return False
-        expected = str(data.get("deliverable_id") or data.get("receipt_id") or data.get("source_id") or "")
-        if expected != deliverable_id:
+            return None
+        return data if isinstance(data, dict) else None
+    return _workspace_manifest(token)
+
+
+def _workspace_matches_token(token: str, deliverable_id: str, metadata: dict[str, Any]) -> bool:
+    """Bind each event to its opaque workspace token and deliverable id."""
+    manifest_data = _workspace_manifest(token)
+    if manifest_data is None:
+        return False
+    workspace = PUBLIC_DIR / "w" / token
+    if manifest_data:
+        expected = str(manifest_data.get("deliverable_id") or manifest_data.get("receipt_id") or manifest_data.get("source_id") or "")
+        if expected and expected != deliverable_id:
             return False
     else:
         index = workspace / "index.html"
@@ -359,6 +414,57 @@ def _workspace_matches_token(token: str, deliverable_id: str, metadata: dict[str
         if value and str(value) != deliverable_id:
             return False
     return True
+
+
+def _document_action_recipient(token: str) -> dict[str, str] | None:
+    manifest = _recipient_manifest(token)
+    if not isinstance(manifest, dict):
+        return None
+    recipient = manifest.get("recipient") if isinstance(manifest.get("recipient"), dict) else {}
+    channel_id = recipient.get("channel_id") or manifest.get("recipient_channel_id") or manifest.get("channel_id")
+    target = recipient.get("target") or manifest.get("recipient_target") or manifest.get("customer_phone") or manifest.get("customer_email")
+    label = recipient.get("label") or manifest.get("recipient_label") or channel_id
+    if not channel_id or not target:
+        return None
+    return {"channel_id": str(channel_id), "target": str(target), "label": str(label or channel_id)}
+
+
+def _workspace_requires_action_unlock(token: str) -> bool:
+    manifest = _workspace_manifest(token)
+    if not isinstance(manifest, dict):
+        return False
+    metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
+    return str(manifest.get("action_policy") or metadata.get("action_policy") or "").strip().lower() == "otp_unlock"
+
+
+def _create_document_action_session(*, token: str, deliverable_id: str, recipient: dict[str, str]) -> str:
+    action_token = secrets.token_urlsafe(32)
+    now = _now()
+    state = _cleanup_state(_load_state())
+    state.setdefault("document_action_sessions", {})[_hash(action_token)] = {
+        "token_ref": _document_event_token_ref(token),
+        "deliverable_id": deliverable_id,
+        "target_hash": _hash(str(recipient.get("target") or "")),
+        "channel_id": recipient.get("channel_id"),
+        "created_at": now,
+        "expires_at": now + DOCUMENT_ACTION_SESSION_TTL_SECONDS,
+    }
+    _save_state(state)
+    return action_token
+
+
+def _valid_document_action_session(action_token: str, *, token: str, deliverable_id: str) -> dict[str, Any] | None:
+    if not action_token:
+        return None
+    state = _cleanup_state(_load_state())
+    session = state.get("document_action_sessions", {}).get(_hash(action_token))
+    if not isinstance(session, dict):
+        return None
+    if session.get("token_ref") != _document_event_token_ref(token):
+        return None
+    if str(session.get("deliverable_id") or "") != deliverable_id:
+        return None
+    return session
 
 
 def _parse_cookies(header: str | None) -> dict[str, str]:
@@ -436,8 +542,11 @@ def _queue_otp(challenge: dict[str, Any], otp: str) -> None:
         "user_id": challenge["user_id"],
         "channel_id": challenge["channel_id"],
         "target": challenge["target"],
-        "message": f"Tu código {AGENT_NAME} para entrar al dashboard es: {otp}. Expira en 10 minutos.",
+        "message": challenge.get("message") or f"Tu código de {AGENT_NAME} para entrar al dashboard es: {otp}. Expira en 10 minutos.",
     }
+    for key in ("purpose", "event_type", "deliverable_id", "token_ref"):
+        if challenge.get(key):
+            payload[key] = challenge[key]
     with _outbox_path().open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
 
@@ -455,13 +564,13 @@ def _layout(title: str, body: str) -> str:
 function setupOtp(){{
   const form=document.querySelector('[data-otp-form]'); if(!form) return;
   const hidden=form.querySelector('input[name="otp"]'); const boxes=[...form.querySelectorAll('.otp-digit')];
-  const sync=()=>{{hidden.value=boxes.map(b=>b.value.replace(/\D/g,'').slice(0,1)).join('');}};
+  const sync=()=>{{hidden.value=boxes.map(b=>b.value.replace(/\\D/g,'').slice(0,1)).join('');}};
   boxes.forEach((box,i)=>{{
-    box.addEventListener('input',()=>{{box.value=box.value.replace(/\D/g,'').slice(0,1); sync(); if(box.value && boxes[i+1]) boxes[i+1].focus();}});
+    box.addEventListener('input',()=>{{box.value=box.value.replace(/\\D/g,'').slice(0,1); sync(); if(box.value && boxes[i+1]) boxes[i+1].focus();}});
     box.addEventListener('keydown',(e)=>{{if(e.key==='Backspace'&&!box.value&&boxes[i-1]) boxes[i-1].focus();}});
-    box.addEventListener('paste',(e)=>{{const text=(e.clipboardData||window.clipboardData).getData('text').replace(/\D/g,'').slice(0,6); if(text){{e.preventDefault(); boxes.forEach((b,j)=>b.value=text[j]||''); sync(); (boxes[Math.min(text.length,6)-1]||box).focus();}}}});
+    box.addEventListener('paste',(e)=>{{const text=(e.clipboardData||window.clipboardData).getData('text').replace(/\\D/g,'').slice(0,6); if(text){{e.preventDefault(); boxes.forEach((b,j)=>b.value=text[j]||''); sync(); (boxes[Math.min(text.length,6)-1]||box).focus();}}}});
   }});
-  form.addEventListener('submit',(e)=>{{sync(); if(!/^\d{{6}}$/.test(hidden.value)){{e.preventDefault(); boxes.find(b=>!b.value)?.focus();}}}});
+  form.addEventListener('submit',(e)=>{{sync(); if(!/^\\d{{6}}$/.test(hidden.value)){{e.preventDefault(); boxes.find(b=>!b.value)?.focus();}}}});
 }}
 document.addEventListener('DOMContentLoaded', setupOtp);
 </script></head><body><main class="shell"><div class="top"><a class="brand" href="/user/">{_e(AGENT_NAME)} <span>User</span></a><span class="pill">🔐 Sesión temporal + OTP</span></div>{body}</main></body></html>"""
@@ -614,11 +723,348 @@ def _vapi_authorized(handler: BaseHTTPRequestHandler) -> bool:
     return hmac.compare_digest(_bearer_token(handler), VAPI_SERVER_AUTH_TOKEN)
 
 
+def _parse_stripe_signature(signature_header: str) -> dict[str, list[str]]:
+    parts: dict[str, list[str]] = {}
+    for item in signature_header.split(","):
+        if "=" not in item:
+            continue
+        key, value = item.split("=", 1)
+        parts.setdefault(key.strip(), []).append(value.strip())
+    return parts
+
+
+def _stripe_signature_valid(raw_body: bytes, signature_header: str) -> bool:
+    if not STRIPE_WEBHOOK_SECRET or not signature_header:
+        return False
+    parts = _parse_stripe_signature(signature_header)
+    try:
+        timestamp = int((parts.get("t") or [""])[0])
+    except ValueError:
+        return False
+    if STRIPE_SIGNATURE_TOLERANCE_SECONDS and abs(_now() - timestamp) > STRIPE_SIGNATURE_TOLERANCE_SECONDS:
+        return False
+    signed_payload = str(timestamp).encode("utf-8") + b"." + raw_body
+    expected = hmac.new(STRIPE_WEBHOOK_SECRET.encode("utf-8"), signed_payload, hashlib.sha256).hexdigest()
+    return any(hmac.compare_digest(expected, candidate) for candidate in parts.get("v1", []))
+
+
+def _stripe_event_identity(event: dict[str, Any]) -> tuple[str, str, str]:
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    obj = data.get("object") if isinstance(data.get("object"), dict) else {}
+    metadata = obj.get("metadata") if isinstance(obj.get("metadata"), dict) else {}
+    payment_intent = obj.get("payment_intent") if isinstance(obj.get("payment_intent"), dict) else {}
+    pi_metadata = payment_intent.get("metadata") if isinstance(payment_intent.get("metadata"), dict) else {}
+    merged_metadata = {**pi_metadata, **metadata}
+    invoice_id = str(merged_metadata.get("invoice_id") or "").strip()
+    payment_request_id = str(merged_metadata.get("payment_request_id") or obj.get("client_reference_id") or "").strip()
+    session_id = str(obj.get("id") or "").strip() if obj.get("object") == "checkout.session" else ""
+    return invoice_id, payment_request_id, session_id
+
+
+def _stripe_event_for_ingest(event: dict[str, Any]) -> dict[str, Any]:
+    """Keep only reconciliation-safe Stripe fields in the public audit queue."""
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    obj = data.get("object") if isinstance(data.get("object"), dict) else {}
+    metadata = obj.get("metadata") if isinstance(obj.get("metadata"), dict) else {}
+    payment_intent = obj.get("payment_intent") if isinstance(obj.get("payment_intent"), dict) else {}
+    pi_metadata = payment_intent.get("metadata") if isinstance(payment_intent.get("metadata"), dict) else {}
+    safe_object = {
+        "id": obj.get("id"),
+        "object": obj.get("object"),
+        "client_reference_id": obj.get("client_reference_id"),
+        "metadata": metadata,
+        "payment_status": obj.get("payment_status"),
+    }
+    if payment_intent:
+        safe_object["payment_intent"] = {
+            "id": payment_intent.get("id"),
+            "object": payment_intent.get("object"),
+            "metadata": pi_metadata,
+        }
+    return {
+        "id": event.get("id"),
+        "type": event.get("type"),
+        "created": event.get("created"),
+        "data": {"object": safe_object},
+    }
+
+
+def _handle_stripe_webhook(handler: BaseHTTPRequestHandler) -> None:
+    if not STRIPE_WEBHOOK_SECRET:
+        _json_response(handler, 503, {"ok": False, "error": "stripe_webhook_secret_missing"})
+        return
+    raw_body = _read_body(handler)
+    if not _stripe_signature_valid(raw_body, handler.headers.get("Stripe-Signature", "")):
+        _json_response(handler, 400, {"ok": False, "error": "invalid_stripe_signature"})
+        return
+    try:
+        event = json.loads(raw_body.decode("utf-8"))
+    except Exception:
+        _json_response(handler, 400, {"ok": False, "error": "invalid_json"})
+        return
+    if not isinstance(event, dict):
+        _json_response(handler, 400, {"ok": False, "error": "invalid_event"})
+        return
+    invoice_id, payment_request_id, session_id = _stripe_event_identity(event)
+    _audit({
+        "event_type": "stripe_webhook",
+        "deliverable_id": invoice_id or payment_request_id or session_id or str(event.get("id") or "stripe_event"),
+        "actor_type": "adapter",
+        "actor_ref": event.get("id"),
+        "ip_address": handler.client_address[0] if handler.client_address else None,
+        "user_agent": handler.headers.get("User-Agent"),
+        "metadata": {
+            "invoice_id": invoice_id,
+            "payment_request_id": payment_request_id,
+            "checkout_session_id": session_id,
+            "stripe_event_id": event.get("id"),
+            "stripe_event_type": event.get("type"),
+            "stripe_event": _stripe_event_for_ingest(event),
+        },
+        "status": "pending_agent_ingest",
+    })
+    _json_response(handler, 200, {"ok": True, "status": "queued", "event_type": event.get("type"), "invoice_id": invoice_id, "payment_request_id": payment_request_id})
+
+
+def _stripe_return_page(handler: BaseHTTPRequestHandler, path: str, query: dict[str, list[str]]) -> None:
+    session_id = (query.get("session_id") or [""])[0]
+    if path.rstrip("/") == "/payments/stripe/success":
+        title = "Pago recibido"
+        note = "Recibimos la confirmación de Stripe. El agente validará el pago y actualizará la factura."
+        if session_id:
+            note = f"Recibimos la confirmación de Stripe para la sesión {html.escape(session_id)}. El agente validará el pago y actualizará la factura."
+    else:
+        title = "Pago pendiente"
+        note = "No se completó el checkout. Puedes volver al enlace de la factura para intentar de nuevo o contactar al agente."
+    _html_response(handler, 200, f"""<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{title}</title>
+  <style>
+    body{{margin:0;min-height:100vh;display:grid;place-items:center;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0c110d;color:#f0f7f0}}
+    main{{width:min(680px,calc(100% - 32px));padding:32px;border:1px solid rgba(255,255,255,.15);border-radius:28px;background:rgba(255,255,255,.06);box-shadow:0 24px 80px rgba(0,0,0,.35)}}
+    h1{{font-size:clamp(34px,7vw,64px);line-height:.95;margin:0 0 14px;letter-spacing:-.04em}}
+    p{{color:#a8b5aa;line-height:1.55;font-size:18px}}
+  </style>
+</head>
+<body><main><h1>{title}</h1><p>{note}</p></main></body>
+</html>""")
+
+
 def _read_json_body(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     payload = json.loads(_read_body(handler).decode("utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("invalid_json_object")
     return payload
+
+
+def _document_event_token_ref(token: str) -> str:
+    return token[:10] + "..." if len(token) > 10 else token
+
+
+def _validate_document_action_payload(payload: dict[str, Any]) -> tuple[str, str, str, dict[str, Any]] | None:
+    event_type = normalize_document_action(payload.get("event_type") or payload.get("action"))
+    deliverable_id = str(payload.get("deliverable_id", "")).strip()
+    token = str(payload.get("token", "")).strip()
+    metadata = payload.get("metadata") or {}
+    if not event_type:
+        return None
+    if not deliverable_id or not token or not isinstance(metadata, dict):
+        return None
+    if not _workspace_matches_token(token, deliverable_id, metadata):
+        return None
+    return event_type, deliverable_id, token, metadata
+
+
+def _create_document_action_challenge(payload: dict[str, Any], recipient: dict[str, str]) -> str:
+    event_type = normalize_document_action(payload.get("event_type") or payload.get("action"))
+    deliverable_id = str(payload.get("deliverable_id") or "").strip()
+    token = str(payload.get("token") or "").strip()
+    otp = f"{secrets.randbelow(1000000):06d}"
+    challenge_id = secrets.token_urlsafe(18)
+    now = _now()
+    action_label = {
+        "unlock": "validar identidad",
+        "approved": "aceptar la cotización",
+        "rejected": "rechazar la cotización",
+        "signed": "firmar el documento",
+    }.get(event_type, str(event_type or "documento"))
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    document_label = metadata.get("public_document_number") or metadata.get("quote_number") or metadata.get("invoice_number") or deliverable_id
+    challenge = {
+        "challenge_id": challenge_id,
+        "purpose": "document_action",
+        "user_id": recipient["target"],
+        "channel_id": recipient["channel_id"],
+        "target": recipient["target"],
+        "event_type": event_type,
+        "deliverable_id": deliverable_id,
+        "token_ref": _document_event_token_ref(token),
+        "pending_payload": payload,
+        "otp_hash": _hash(f"{challenge_id}:{otp}"),
+        "created_at": now,
+        "expires_at": now + OTP_TTL_SECONDS,
+        "attempts": 0,
+        "message": f"Tu código de {AGENT_NAME} para {action_label} en el documento {document_label} es: {otp}. Expira en 10 minutos.",
+    }
+    state = _cleanup_state(_load_state())
+    challenges = state.setdefault("challenges", {})
+    for old_id, old in list(challenges.items()):
+        if (
+            isinstance(old, dict)
+            and old.get("purpose") == "document_action"
+            and old.get("target") == recipient["target"]
+            and old.get("event_type") == event_type
+            and old.get("deliverable_id") == deliverable_id
+            and old.get("token_ref") == challenge["token_ref"]
+        ):
+            challenges.pop(old_id, None)
+    challenges[challenge_id] = challenge
+    _save_state(state)
+    _queue_otp(challenge, otp)
+    return challenge_id
+
+
+def _handle_document_action_request_otp(handler: BaseHTTPRequestHandler) -> None:
+    if not _valid_request_origin(handler):
+        _json_response(handler, 403, {"ok": False, "error": "invalid_origin"})
+        return
+    payload = _read_json_body(handler)
+    validation = _validate_document_action_payload(payload)
+    if not validation:
+        _json_response(handler, 422, {"ok": False, "error": "invalid_document_action"})
+        return
+    event_type, deliverable_id, token, _metadata = validation
+    if not document_action_requires_otp(event_type):
+        _json_response(handler, 422, {"ok": False, "error": "otp_not_required"})
+        return
+    recipient = _document_action_recipient(token)
+    if not recipient:
+        _json_response(handler, 422, {"ok": False, "error": "missing_recipient_channel"})
+        return
+    state = _cleanup_state(_load_state())
+    now = _now()
+    recent = [
+        c for c in state.get("challenges", {}).values()
+        if c.get("purpose") == "document_action"
+        and c.get("target") == recipient["target"]
+        and c.get("event_type") == event_type
+        and c.get("deliverable_id") == deliverable_id
+        and now - int(c.get("created_at", 0)) < OTP_RATE_LIMIT_SECONDS
+    ]
+    if recent:
+        current = sorted(recent, key=lambda c: int(c.get("created_at", 0)), reverse=True)[0]
+        _json_response(handler, 429, {"ok": False, "error": "otp_recently_requested", "challenge_id": current.get("challenge_id")})
+        return
+    challenge_id = _create_document_action_challenge(payload, recipient)
+    _audit({
+        "event_type": "document_action_otp_requested",
+        "deliverable_id": deliverable_id,
+        "actor_type": "customer",
+        "actor_ref": recipient["channel_id"],
+        "metadata": {"document_event_type": event_type, "token_ref": _document_event_token_ref(token)},
+        "status": "pending_otp_dispatch",
+    })
+    _json_response(handler, 202, {"ok": True, "challenge_id": challenge_id, "status": "otp_sent"})
+
+
+def _handle_document_action_verify_otp(handler: BaseHTTPRequestHandler) -> None:
+    if not _valid_request_origin(handler):
+        _json_response(handler, 403, {"ok": False, "error": "invalid_origin"})
+        return
+    form = _read_form(handler)
+    challenge_id = form.get("challenge_id", "").strip()
+    otp = form.get("otp", "").strip()
+    state = _cleanup_state(_load_state())
+    challenge = state.get("challenges", {}).get(challenge_id)
+    if not challenge or challenge.get("purpose") != "document_action" or not OTP_RE.fullmatch(otp):
+        _json_response(handler, 401, {"ok": False, "error": "invalid_or_expired_otp"})
+        return
+    challenge["attempts"] = int(challenge.get("attempts", 0)) + 1
+    if not hmac.compare_digest(challenge.get("otp_hash", ""), _hash(f"{challenge_id}:{otp}")):
+        state["challenges"][challenge_id] = challenge
+        _save_state(state)
+        _json_response(handler, 401, {"ok": False, "error": "incorrect_otp"})
+        return
+    pending_payload = challenge.get("pending_payload") if isinstance(challenge.get("pending_payload"), dict) else {}
+    validation = _validate_document_action_payload(pending_payload)
+    if not validation:
+        _json_response(handler, 422, {"ok": False, "error": "invalid_document_action"})
+        return
+    event_type, deliverable_id, token, _metadata = validation
+    recipient = _document_action_recipient(token) or {"target": challenge.get("target"), "channel_id": challenge.get("channel_id")}
+    if event_type == "unlock":
+        state.get("challenges", {}).pop(challenge_id, None)
+        _save_state(state)
+        action_token = _create_document_action_session(token=token, deliverable_id=deliverable_id, recipient=recipient)
+        _audit({
+            "event_type": "document_action_unlocked",
+            "deliverable_id": deliverable_id,
+            "actor_type": "customer",
+            "actor_ref": challenge.get("channel_id"),
+            "metadata": {"token_ref": _document_event_token_ref(token), "otp_challenge_id": challenge_id},
+            "status": "active",
+        })
+        _json_response(handler, 202, {"ok": True, "status": "unlocked", "action_token": action_token, "expires_in": DOCUMENT_ACTION_SESSION_TTL_SECONDS})
+        return
+    event = build_document_event(
+        pending_payload,
+        token_ref=_document_event_token_ref(token),
+        ip_address=handler.client_address[0] if handler.client_address else None,
+        user_agent=handler.headers.get("User-Agent"),
+    )
+    event["metadata"].update({
+        "otp_verified": True,
+        "otp_challenge_id": challenge_id,
+        "otp_channel_id": challenge.get("channel_id"),
+        "otp_target_hash": _hash(str(challenge.get("target") or "")),
+    })
+    state.get("challenges", {}).pop(challenge_id, None)
+    _save_state(state)
+    _audit(event)
+    _json_response(handler, 202, {"ok": True, "event_id": "queued", "status": event["status"], "event_type": event_type})
+
+
+def _handle_document_action(handler: BaseHTTPRequestHandler) -> None:
+    if not _valid_request_origin(handler):
+        _json_response(handler, 403, {"ok": False, "error": "invalid_origin"})
+        return
+    payload = _read_json_body(handler)
+    validation = _validate_document_action_payload(payload)
+    if not validation:
+        _json_response(handler, 422, {"ok": False, "error": "invalid_document_action"})
+        return
+    event_type, deliverable_id, token, _metadata = validation
+    action_session = None
+    if _workspace_requires_action_unlock(token):
+        action_token = str(payload.get("action_token") or payload.get("metadata", {}).get("action_token") or "")
+        action_session = _valid_document_action_session(action_token, token=token, deliverable_id=deliverable_id)
+        if not action_session:
+            _json_response(handler, 401, {"ok": False, "error": "action_unlock_required", "request_otp": "/api/document-actions/request-otp", "verify_otp": "/api/document-actions/verify-otp"})
+            return
+    elif document_action_requires_otp(event_type):
+        _json_response(handler, 401, {"ok": False, "error": "otp_required", "request_otp": "/api/document-actions/request-otp", "verify_otp": "/api/document-actions/verify-otp"})
+        return
+    if event_type == "unlock" or (not document_action_allows_direct_post(event_type) and not action_session):
+        _json_response(handler, 422, {"ok": False, "error": "unsupported_document_action"})
+        return
+    event = build_document_event(
+        payload,
+        token_ref=_document_event_token_ref(token),
+        ip_address=handler.client_address[0] if handler.client_address else None,
+        user_agent=handler.headers.get("User-Agent"),
+    )
+    if action_session:
+        event["metadata"].update({
+            "otp_verified": True,
+            "action_session_verified": True,
+            "otp_channel_id": action_session.get("channel_id"),
+            "otp_target_hash": action_session.get("target_hash"),
+        })
+    _audit(event)
+    _json_response(handler, 202, {"ok": True, "event_id": "queued", "status": event["status"], "event_type": event_type})
 
 
 def _vapi_message(payload: dict[str, Any]) -> dict[str, Any]:
@@ -661,6 +1107,54 @@ def _tool_arguments(call: dict[str, Any]) -> dict[str, Any]:
     return raw if isinstance(raw, dict) else {}
 
 
+def _digits(value: Any) -> str:
+    return re.sub(r"\D+", "", str(value or ""))
+
+
+def _customer_context_path() -> Path:
+    return Path(os.environ.get("VAPI_CUSTOMER_CONTEXT_FILE", str(EVENT_DIR / "customer-context.json")))
+
+
+def _lookup_customer_context(args: dict[str, Any], call_context: dict[str, Any]) -> str:
+    """Return a sanitized caller context snapshot for Sophie.
+
+    The public callback service must not hold broad CRM credentials. A trusted
+    Zeus-side worker can publish a narrow, sanitized JSON cache keyed by phone,
+    email, name, or company. Sophie gets just enough context to continue a
+    returning conversation while Zeus keeps the canonical CRM as source of truth.
+    """
+    path = _customer_context_path()
+    if not path.exists():
+        return "No encontré contexto previo publicado para este contacto. Continúa como lead nuevo y captura los datos mínimos para Zeus."
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return "No pude leer el contexto previo. Continúa como lead nuevo y registra el resumen para Zeus."
+    records = data.get("records") if isinstance(data, dict) else data
+    if not isinstance(records, list):
+        return "El contexto publicado no tiene formato válido. Continúa como lead nuevo y registra el resumen para Zeus."
+    customer = call_context.get("customer") if isinstance(call_context.get("customer"), dict) else {}
+    needles = {
+        "phone": _digits(args.get("phone") or customer.get("number")),
+        "email": str(args.get("email") or "").strip().lower(),
+        "name": str(args.get("name") or "").strip().lower(),
+        "company": str(args.get("company") or "").strip().lower(),
+    }
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        phones = [_digits(x) for x in ([rec.get("phone")] + list(rec.get("phones") or []))]
+        emails = [str(x).strip().lower() for x in ([rec.get("email")] + list(rec.get("emails") or [])) if x]
+        names = [str(x).strip().lower() for x in [rec.get("name"), rec.get("contact_name")] if x]
+        companies = [str(x).strip().lower() for x in [rec.get("company"), rec.get("organization")] if x]
+        matched = (needles["phone"] and needles["phone"] in phones) or (needles["email"] and needles["email"] in emails) or (needles["name"] and needles["name"] in names) or (needles["company"] and needles["company"] in companies)
+        if matched:
+            summary = str(rec.get("summary") or rec.get("context") or "Hay contexto previo registrado.").strip()
+            next_step = str(rec.get("next_step") or rec.get("pending_action") or "Confirmar el próximo paso con el cliente.").strip()
+            return f"Contexto encontrado: {summary} Próximo paso pendiente: {next_step}"
+    return "No encontré contexto previo para este identificador. Continúa como lead nuevo y captura los datos mínimos para Zeus."
+
+
 def _handle_vapi_tools(handler: BaseHTTPRequestHandler) -> None:
     if not _vapi_authorized(handler):
         _json_response(handler, 401, {"ok": False, "error": "unauthorized"})
@@ -690,11 +1184,13 @@ def _handle_vapi_tools(handler: BaseHTTPRequestHandler) -> None:
         if status == "unknown_tool":
             results.append({"toolCallId": tool_call_id, "name": name, "error": f"Tool no soportada: {name}"})
         else:
-            result = "Listo. Registré la información para que el equipo de SitioUno le dé seguimiento."
-            if name == "schedule_followup":
-                result = "Listo. Registré la solicitud de agendar seguimiento; el equipo confirmará la disponibilidad."
-            elif name == "escalate_to_jean":
-                result = "Listo. Escalé el caso para revisión prioritaria."
+            result = "Listo. Registré la información para que Zeus le dé seguimiento."
+            if name == "get_customer_context":
+                result = _lookup_customer_context(args, call_context)
+            elif name == "schedule_followup":
+                result = "Listo. Registré la solicitud de seguimiento para que Zeus la procese."
+            elif name == "escalate_to_zeus":
+                result = "Listo. Escalé el caso a Zeus para decisión y acción posterior."
             results.append({"toolCallId": tool_call_id, "name": name, "result": result})
     _json_response(handler, 200, {"results": results})
 
@@ -739,6 +1235,9 @@ class Handler(BaseHTTPRequestHandler):
         if path in {"/healthz", "/api/healthz"}:
             _json_response(self, 200, {"ok": True, "service": f"{AGENT_ID}-delivery-sandbox-events"})
             return
+        if path.rstrip("/") in {"/payments/stripe/success", "/payments/stripe/cancel"}:
+            _stripe_return_page(self, path, query)
+            return
         if path in {"/api/user/session/check", "/user/session/check"}:
             if _session_from_request(self):
                 self.send_response(204)
@@ -754,6 +1253,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
+        if path in {"/api/payments/stripe/webhook", "/payments/stripe/webhook", "/stripe/webhook"}:
+            try:
+                _handle_stripe_webhook(self)
+            except ValueError as exc:
+                _json_response(self, 413, {"ok": False, "error": str(exc)})
+            except Exception:
+                traceback.print_exc()
+                _json_response(self, 500, {"ok": False, "error": "stripe_webhook_failed"})
+            return
         if path in {"/api/voice/vapi/tools", "/voice/vapi/tools"}:
             try:
                 _handle_vapi_tools(self)
@@ -769,6 +1277,30 @@ class Handler(BaseHTTPRequestHandler):
                 _json_response(self, 413, {"ok": False, "error": str(exc)})
             except Exception:
                 _json_response(self, 500, {"ok": False, "error": "vapi_webhook_failed"})
+            return
+        if path in {"/api/document-actions/request-otp", "/document-actions/request-otp"}:
+            try:
+                _handle_document_action_request_otp(self)
+            except ValueError as exc:
+                _json_response(self, 413, {"ok": False, "error": str(exc)})
+            except Exception:
+                _json_response(self, 500, {"ok": False, "error": "document_action_otp_request_failed"})
+            return
+        if path in {"/api/document-actions/verify-otp", "/document-actions/verify-otp"}:
+            try:
+                _handle_document_action_verify_otp(self)
+            except ValueError as exc:
+                _json_response(self, 413, {"ok": False, "error": str(exc)})
+            except Exception:
+                _json_response(self, 500, {"ok": False, "error": "document_action_otp_verify_failed"})
+            return
+        if path in {"/api/document-actions", "/document-actions"}:
+            try:
+                _handle_document_action(self)
+            except ValueError as exc:
+                _json_response(self, 413, {"ok": False, "error": str(exc)})
+            except Exception:
+                _json_response(self, 500, {"ok": False, "error": "document_action_failed"})
             return
         if path in {"/user/request-otp", "/api/user/request-otp"}:
             try:
@@ -825,6 +1357,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not _workspace_matches_token(token, deliverable_id, metadata):
             _json_response(self, 403, {"ok": False, "error": "invalid_token_scope"})
+            return
+        if event_type in OTP_REQUIRED_DOCUMENT_EVENT_TYPES:
+            _json_response(self, 401, {"ok": False, "error": "otp_required", "request_otp": "/api/document-actions/request-otp", "verify_otp": "/api/document-actions/verify-otp"})
             return
 
         event = {
@@ -893,6 +1428,8 @@ def compose(agent_id: str, agent_name: str, bind_ip: str, public_port: int, even
     env_file:
       - path: ./vapi-public.env
         required: false
+      - path: ./stripe-public.env
+        required: false
     ports:
       - "{bind_ip}:{event_port}:8080"
     volumes:
@@ -940,6 +1477,7 @@ def main() -> int:
     write(target / "public/index.html", public_index(agent_name))
     write(target / "event-server/Dockerfile", DOCKERFILE)
     write(target / "event-server/server.py", SERVER_PY)
+    write(target / "event-server/delivery_document_actions.py", Path(__file__).with_name("delivery_document_actions.py").read_text(encoding="utf-8"))
     (target / "events").mkdir(parents=True, exist_ok=True)
     (target / "user-data").mkdir(parents=True, exist_ok=True)
     if not (target / "vapi-public.env").exists():

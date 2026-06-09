@@ -7,9 +7,13 @@ remains usable without them.
 """
 from __future__ import annotations
 
+import html
 import json
 import os
 import secrets
+import urllib.error
+import urllib.parse
+import urllib.request
 from typing import Any
 
 from hermes_cli import agent_core_sql as sql
@@ -108,11 +112,225 @@ def _token() -> str:
 
 def _workspace_base_url() -> str:
     env = sql.runtime_env()
-    return (env.get("COMMERCE_WORKSPACE_BASE_URL") or os.getenv("COMMERCE_WORKSPACE_BASE_URL") or "https://zeus.kidu.app").rstrip("/")
+    return (env.get("COMMERCE_WORKSPACE_BASE_URL") or os.getenv("COMMERCE_WORKSPACE_BASE_URL") or "https://zeus-sandbox.kidu.app").rstrip("/")
 
 
 def _workspace_url(public_token: str) -> str:
     return f"{_workspace_base_url()}/w/{public_token}"
+
+
+_CUSTOMER_COPY_BLOCKLIST = (
+    "Sales Core",
+    "validar el flujo",
+    "No sustituye factura fiscal",
+    "Factura operativa",
+    "Documento operativo",
+    "Agente Hermes",
+    "Hermes",
+)
+
+
+def _customer_document_title(document_type: str) -> str:
+    """Return customer-facing document titles; never expose internal module names."""
+    labels = {
+        "quote": "Cotización comercial",
+        "invoice": "Factura comercial",
+        "receipt": "Comprobante de pago recibido",
+        "catalog": "Catálogo comercial",
+    }
+    return labels.get(str(document_type or "").strip().lower(), "Documento comercial")
+
+
+def _customer_document_note(document_type: str, *, issuer_name: str = "SitioUno Inc.") -> str:
+    """Return safe customer-facing footer/body notes for generated commerce docs."""
+    issuer = issuer_name or "SitioUno Inc."
+    doc_type = str(document_type or "").strip().lower()
+    if doc_type == "quote":
+        note = f"Cotización comercial emitida por {issuer}. Puedes revisarla, comentar, rechazarla o aceptarla con firma en el enlace seguro."
+    elif doc_type == "invoice":
+        note = f"Factura comercial emitida por {issuer} correspondiente al servicio descrito y el monto indicado."
+    elif doc_type == "receipt":
+        note = f"Comprobante de pago emitido por {issuer}. Confirma la recepción del pago asociado al documento indicado."
+    else:
+        note = f"Documento comercial emitido por {issuer} para el servicio descrito y el monto indicado."
+    for blocked in _CUSTOMER_COPY_BLOCKLIST:
+        if blocked and blocked in note:
+            raise ValueError(f"customer-facing copy contains internal term: {blocked}")
+    return note
+
+
+def _quote_cycle_email_content(
+    *,
+    customer_name: str,
+    public_url: str,
+    title: str,
+    total: Any,
+    currency: str,
+    business_name: str = "SitioUno",
+) -> tuple[str, str, str]:
+    """Build the canonical secure quote invitation copy."""
+    recipient = customer_name or "cliente"
+    total_line = f"{currency} {float(total or 0):,.2f}"
+    subject = f"Cotización segura — {title}"
+    text = (
+        f"Hola {recipient},\n\n"
+        f"Tu cotización segura de {business_name} está lista.\n\n"
+        f"Servicio: {title}\n"
+        f"Total: {total_line}\n\n"
+        "Abre el enlace seguro y valida tu identidad con el código enviado a este mismo email. "
+        "Después podrás revisar la cotización, comentar, rechazar o aceptar con firma en pantalla.\n\n"
+        f"Enlace seguro: {public_url}\n\n"
+        f"Gracias,\n{business_name}\n"
+    )
+    safe_name = html.escape(recipient)
+    safe_business = html.escape(business_name)
+    safe_title = html.escape(title)
+    safe_total = html.escape(total_line)
+    safe_url = html.escape(public_url)
+    html_body = (
+        f"<p>Hola {safe_name},</p>"
+        f"<p>Tu cotización segura de {safe_business} está lista.</p>"
+        f"<ul><li><strong>Servicio:</strong> {safe_title}</li><li><strong>Total:</strong> {safe_total}</li></ul>"
+        "<p>Por seguridad, primero validaremos tu identidad con un código enviado a este mismo email. "
+        "Después podrás revisar la cotización, comentar, rechazar o aceptar con firma en pantalla.</p>"
+        f"<p><a style=\"display:inline-block;background:#0f6fb8;color:#ffffff;text-decoration:none;font-weight:800;padding:12px 18px;border-radius:12px\" href=\"{safe_url}\">Abrir cotización segura</a></p>"
+        "<p style=\"color:#64748b;font-size:13px\">Las descargas y acciones se muestran únicamente después de validar el código.</p>"
+        f"<p>Gracias,<br/>{safe_business}</p>"
+    )
+    for blocked in _CUSTOMER_COPY_BLOCKLIST:
+        if blocked and (blocked in text or blocked in html_body or blocked in subject):
+            raise ValueError(f"quote email contains internal term: {blocked}")
+    return subject, text, html_body
+
+
+def _tool_payload(raw: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(raw)
+    except Exception as exc:  # pragma: no cover - defensive path
+        raise RuntimeError(f"tool returned invalid JSON: {raw[:500]}") from exc
+    if not payload.get("ok"):
+        raise RuntimeError(payload.get("error") or json.dumps(payload, ensure_ascii=False)[:1000])
+    return payload
+
+
+def _minor_units(amount: Any, currency: str) -> int:
+    """Return Stripe minor units for an amount/currency pair."""
+    zero_decimal = {
+        "bif", "clp", "djf", "gnf", "jpy", "kmf", "krw", "mga",
+        "pyg", "rwf", "ugx", "vnd", "vuv", "xaf", "xof", "xpf",
+    }
+    value = float(amount or 0)
+    if value <= 0:
+        raise ValueError("Stripe payment amount must be greater than zero")
+    multiplier = 1 if str(currency or "").lower() in zero_decimal else 100
+    return int(round(value * multiplier))
+
+
+def _stripe_env() -> dict[str, str]:
+    env = sql.runtime_env()
+    return {
+        "secret_key": env.get("STRIPE_SECRET_KEY") or os.getenv("STRIPE_SECRET_KEY") or "",
+        "success_url": env.get("STRIPE_SUCCESS_URL") or os.getenv("STRIPE_SUCCESS_URL") or "",
+        "cancel_url": env.get("STRIPE_CANCEL_URL") or os.getenv("STRIPE_CANCEL_URL") or "",
+        "api_version": env.get("STRIPE_API_VERSION") or os.getenv("STRIPE_API_VERSION") or "",
+    }
+
+
+def _stripe_checkout_request(payload: dict[str, Any]) -> dict[str, Any]:
+    """Create a Stripe-hosted Checkout Session for an invoice payment."""
+    cfg = _stripe_env()
+    secret_key = cfg["secret_key"].strip()
+    if not secret_key:
+        return {
+            "ok": False,
+            "configured": False,
+            "status": "unavailable",
+            "adapter": "stripe_checkout",
+            "error": "Stripe Checkout is selected but STRIPE_SECRET_KEY is missing from Infisical/runtime env.",
+        }
+
+    invoice_id = str(payload.get("invoice_id") or "").strip()
+    request_id = str(payload.get("payment_request_id") or "").strip()
+    currency = str(payload.get("currency") or "USD").lower()
+    description = str(payload.get("description") or f"Factura {invoice_id or request_id or 'SitioUno'}").strip()
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    workspace_url = str(metadata.get("workspace_url") or payload.get("workspace_url") or "").strip()
+    success_url = str(payload.get("success_url") or cfg["success_url"] or "").strip()
+    cancel_url = str(payload.get("cancel_url") or cfg["cancel_url"] or workspace_url or "").strip()
+    if not success_url:
+        success_url = f"{_workspace_base_url()}/payments/stripe/success?session_id={{CHECKOUT_SESSION_ID}}"
+    if not cancel_url:
+        cancel_url = _workspace_base_url()
+
+    stripe_metadata = {
+        "payment_request_id": request_id,
+        "invoice_id": invoice_id,
+        "source": "sitiouno_sales_core",
+    }
+    for key, value in metadata.items():
+        if value is None or isinstance(value, (dict, list)):
+            continue
+        key_s = str(key)[:40]
+        stripe_metadata.setdefault(key_s, str(value)[:500])
+
+    form: dict[str, Any] = {
+        "mode": "payment",
+        "success_url": success_url,
+        "cancel_url": cancel_url,
+        "client_reference_id": request_id or invoice_id,
+        "line_items[0][quantity]": "1",
+        "line_items[0][price_data][currency]": currency,
+        "line_items[0][price_data][unit_amount]": str(_minor_units(payload.get("amount"), currency)),
+        "line_items[0][price_data][product_data][name]": description[:250],
+        "payment_intent_data[metadata][payment_request_id]": request_id,
+        "payment_intent_data[metadata][invoice_id]": invoice_id,
+    }
+    customer_email = str(payload.get("customer_email") or "").strip()
+    if customer_email:
+        form["customer_email"] = customer_email
+    for key, value in stripe_metadata.items():
+        if value:
+            form[f"metadata[{key}]"] = value
+
+    request = urllib.request.Request(
+        "https://api.stripe.com/v1/checkout/sessions",
+        data=urllib.parse.urlencode(form).encode("utf-8"),
+        headers={
+            "Authorization": "Bearer " + secret_key,
+            "Content-Type": "application/x-www-form-urlencoded",
+            "User-Agent": "sitiouno-sales-core-stripe/1.0",
+        },
+        method="POST",
+    )
+    if cfg["api_version"].strip():
+        request.add_header("Stripe-Version", cfg["api_version"].strip())
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            session = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")[:2000]
+        return {
+            "ok": False,
+            "configured": True,
+            "status": "error",
+            "adapter": "stripe_checkout",
+            "http_status": exc.code,
+            "error": body,
+        }
+
+    return {
+        "ok": True,
+        "configured": True,
+        "status": "pending",
+        "adapter": "stripe_checkout",
+        "checkout_session_id": session.get("id"),
+        "payment_url": session.get("url"),
+        "stripe_status": session.get("status"),
+        "payment_status": session.get("payment_status"),
+        "amount_total": session.get("amount_total"),
+        "currency": session.get("currency"),
+        "expires_at": session.get("expires_at"),
+    }
 
 
 def _payment_adapter_request(payload: dict[str, Any]) -> dict[str, Any]:
@@ -131,12 +349,14 @@ def _payment_adapter_request(payload: dict[str, Any]) -> dict[str, Any]:
             "status": "unavailable",
             "error": "Payment adapter is not configured. Set PAYMENT_ADAPTER or SALES_PAYMENT_ADAPTER via Infisical/runtime env.",
         }
+    if adapter.lower() in {"stripe", "stripe_checkout", "stripe-checkout", "checkout"}:
+        return _stripe_checkout_request(payload)
     return {
         "ok": False,
         "configured": True,
         "status": "unsupported",
         "adapter": adapter,
-        "error": f"Payment adapter {adapter!r} is declared but not implemented in Sales Core Sprint 1.",
+        "error": f"Payment adapter {adapter!r} is declared but not implemented. Supported adapter: stripe_checkout.",
         "request": payload,
     }
 
@@ -327,13 +547,23 @@ def _handle_customer_workspace_create(args: dict, **_kwargs) -> str:
             subject = args.get("email_subject") or f"Tienes una {label} lista para revisar"
             text = args.get("email_text") or f"Hola {args.get('customer_name') or ''}. Puedes revisar, comentar y aprobar tu {label} aquí: {public_url}".strip()
             html = args.get("email_html") or f"<p>Hola {args.get('customer_name') or ''}.</p><p>Puedes revisar, comentar y aprobar tu {label} aquí:</p><p><a href=\"{public_url}\">Abrir {label}</a></p>"
+            email_metadata = {
+                "workspace_id": workspace_id,
+                "document_type": document_type,
+                "document_id": document_id,
+                **(args.get("email_metadata") or {}),
+            }
+            raw_workspace_metadata = args.get("metadata")
+            workspace_metadata: dict[str, Any] = raw_workspace_metadata if isinstance(raw_workspace_metadata, dict) else {}
+            if workspace_metadata.get("business_id"):
+                email_metadata.setdefault("business_id", workspace_metadata.get("business_id"))
             email_result = notification_tool._email_adapter_send({
                 "to_email": args.get("customer_email"),
                 "to_name": args.get("customer_name"),
                 "subject": subject,
                 "text": text,
                 "html": html,
-                "metadata": {"workspace_id": workspace_id, "document_type": document_type, "document_id": document_id},
+                "metadata": email_metadata,
             })
             sql.statement_one(f"""
               INSERT INTO sales.customer_workspace_events (workspace_id, event_type, actor_type, actor_ref, comment, metadata, occurred_at)
@@ -345,6 +575,133 @@ def _handle_customer_workspace_create(args: dict, **_kwargs) -> str:
         return _err(exc)
 
 
+def _handle_quote_cycle_create(args: dict, **_kwargs) -> str:
+    """Create/send a secure quote workspace as the canonical Sales Core entrypoint."""
+    try:
+        title = str(args.get("title") or "").strip()
+        customer_email = str(args.get("customer_email") or "").strip()
+        customer_name = str(args.get("customer_name") or "").strip()
+        if not title:
+            raise ValueError("title is required")
+        if not customer_email:
+            raise ValueError("customer_email is required")
+        items = args.get("items") or []
+        if not isinstance(items, list) or not items:
+            raise ValueError("items must be a non-empty list")
+
+        raw_metadata = args.get("metadata")
+        base_metadata: dict[str, Any] = raw_metadata if isinstance(raw_metadata, dict) else {}
+        raw_labels = base_metadata.get("labels") or []
+        if isinstance(raw_labels, str):
+            labels = [raw_labels]
+        elif isinstance(raw_labels, list):
+            labels = raw_labels
+        else:
+            labels = []
+        business_id = str(args.get("business_id") or base_metadata.get("business_id") or "").strip()
+        business_name = str(args.get("business_name") or base_metadata.get("business_name") or "SitioUno").strip()
+        currency = str(args.get("currency") or "USD").upper()
+        quote_metadata = {
+            **base_metadata,
+            "business_id": business_id or base_metadata.get("business_id"),
+            "source": "sales_quote_cycle_create",
+            "customer_name": customer_name,
+            "customer_email": customer_email,
+            "action_policy": "otp_unlock",
+            "labels": list(dict.fromkeys([*labels, "sales-quote-cycle"])),
+        }
+        quote_payload = _tool_payload(_handle_quote_create({
+            "quote_id": args.get("quote_id"),
+            "organization_id": args.get("organization_id"),
+            "contact_id": args.get("contact_id"),
+            "opportunity_id": args.get("opportunity_id"),
+            "title": title,
+            "status": args.get("quote_status") or "sent",
+            "valid_until": args.get("valid_until"),
+            "currency": currency,
+            "items": items,
+            "metadata": quote_metadata,
+        }))
+        quote = quote_payload.get("quote") or {}
+        quote_id = quote.get("quote_id") or args.get("quote_id")
+        total = quote.get("total")
+        public_token = args.get("public_token") or _token()
+        public_url = args.get("public_url") or _workspace_url(public_token)
+        public_number = args.get("quote_number") or quote.get("quote_number") or quote_id
+        subject, text, html_body = _quote_cycle_email_content(
+            customer_name=customer_name,
+            public_url=public_url,
+            title=title,
+            total=total,
+            currency=currency,
+            business_name=business_name,
+        )
+        workspace_metadata = {
+            **quote_metadata,
+            "public_document_number": public_number,
+            "action_policy": "otp_unlock",
+            "quote_id": quote_id,
+            "customer_email": customer_email,
+            "customer_name": customer_name,
+        }
+        workspace_payload = _tool_payload(_handle_customer_workspace_create({
+            "workspace_id": args.get("workspace_id"),
+            "document_type": "quote",
+            "document_id": quote_id,
+            "customer_email": customer_email,
+            "customer_name": customer_name,
+            "public_token": public_token,
+            "public_url": public_url,
+            "status": args.get("workspace_status") or "pending",
+            "expires_at": args.get("expires_at"),
+            "send_email": args.get("send_email", True),
+            "email_subject": args.get("email_subject") or subject,
+            "email_text": args.get("email_text") or text,
+            "email_html": args.get("email_html") or html_body,
+            "email_metadata": {
+                "business_id": business_id,
+                "source": "sales_quote_cycle_create",
+                "quote_id": quote_id,
+                "quote_number": public_number,
+            },
+            "metadata": workspace_metadata,
+        }))
+        return _ok(
+            quote=quote,
+            items=quote_payload.get("items") or [],
+            workspace=workspace_payload.get("workspace"),
+            email=workspace_payload.get("email"),
+            workflow={
+                "next": "customer_otp_unlock_then_signature_acceptance",
+                "on_approval": ["sales_order_create", "sales_invoice_create", "sales_payment_request_create"],
+                "on_payment": ["accounting_receipt_create", "accounting_journal_entry_create", "customer_payment_confirmation"],
+            },
+        )
+    except Exception as exc:
+        return _err(exc)
+
+
+
+def _send_payment_link_whatsapp(args: dict[str, Any], payment_url: str, invoice: dict[str, Any] | None, amount: Any, currency: str) -> dict[str, Any] | None:
+    if not args.get("send_whatsapp"):
+        return None
+    target = str(args.get("whatsapp_target") or "").strip()
+    if not target:
+        raise ValueError("whatsapp_target is required when send_whatsapp=true")
+    if not target.startswith("whatsapp"):
+        target = f"whatsapp:{target}"
+    message = args.get("whatsapp_message") or (
+        f"Hola {args.get('customer_name') or ''}. "
+        f"Tu link de pago para la factura {args.get('invoice_id') or (invoice or {}).get('invoice_id') or ''} "
+        f"por {currency} {float(amount or 0):,.2f} está listo: {payment_url}"
+    ).strip()
+    from tools.send_message_tool import send_message_tool
+    raw = send_message_tool({"action": "send", "target": target, "message": message})
+    try:
+        return json.loads(raw)
+    except Exception:
+        return {"raw": raw}
+
 
 def _handle_payment_request_create(args: dict, **_kwargs) -> str:
     try:
@@ -352,15 +709,32 @@ def _handle_payment_request_create(args: dict, **_kwargs) -> str:
         amount = args.get("amount", (invoice or {}).get("total", 0))
         currency = args.get("currency") or (invoice or {}).get("currency") or "USD"
         request_id = args.get("payment_request_id") or _slug("sales-pay", f"{args.get('invoice_id') or args.get('organization_id') or ''}-{amount}-{currency}")
-        adapter_result = _payment_adapter_request({"invoice_id": args.get("invoice_id"), "amount": amount, "currency": currency, "metadata": args.get("metadata") or {}})
+        metadata = args.get("metadata") or {}
+        adapter_result = _payment_adapter_request({
+            "payment_request_id": request_id,
+            "invoice_id": args.get("invoice_id"),
+            "amount": amount,
+            "currency": currency,
+            "description": args.get("payment_description") or (invoice or {}).get("title"),
+            "customer_email": args.get("customer_email"),
+            "success_url": args.get("success_url"),
+            "cancel_url": args.get("cancel_url"),
+            "workspace_url": args.get("workspace_url"),
+            "metadata": metadata,
+        })
         status = "pending" if adapter_result.get("ok") else "unavailable"
+        whatsapp_result = None
+        if adapter_result.get("payment_url"):
+            whatsapp_result = _send_payment_link_whatsapp(args, adapter_result["payment_url"], invoice, amount, currency)
+            if whatsapp_result is not None:
+                adapter_result = {**adapter_result, "whatsapp": whatsapp_result}
         row = sql.statement_one(f"""
           INSERT INTO sales.payment_requests (payment_request_id, invoice_id, organization_id, contact_id, amount, currency, status, adapter, payment_url, adapter_response, metadata, created_at, updated_at)
-          VALUES ({_q(request_id)}, {_q(args.get('invoice_id'))}, {_q(args.get('organization_id') or (invoice or {}).get('organization_id'))}, {_q(args.get('contact_id') or (invoice or {}).get('contact_id'))}, {_num(amount, '0')}, {_q(currency)}, {_q(args.get('status') or status)}, {_q(adapter_result.get('adapter'))}, {_q(adapter_result.get('payment_url'))}, {_j(adapter_result)}, {_j(args.get('metadata') or {})}, now(), now())
+          VALUES ({_q(request_id)}, {_q(args.get('invoice_id'))}, {_q(args.get('organization_id') or (invoice or {}).get('organization_id'))}, {_q(args.get('contact_id') or (invoice or {}).get('contact_id'))}, {_num(amount, '0')}, {_q(currency)}, {_q(args.get('status') or status)}, {_q(adapter_result.get('adapter'))}, {_q(adapter_result.get('payment_url'))}, {_j(adapter_result)}, {_j(metadata)}, now(), now())
           ON CONFLICT (payment_request_id) DO UPDATE SET invoice_id=EXCLUDED.invoice_id, organization_id=EXCLUDED.organization_id, contact_id=EXCLUDED.contact_id, amount=EXCLUDED.amount, currency=EXCLUDED.currency, status=EXCLUDED.status, adapter=EXCLUDED.adapter, payment_url=EXCLUDED.payment_url, adapter_response=EXCLUDED.adapter_response, metadata=EXCLUDED.metadata, updated_at=now()
           RETURNING *
         """, user=_user())
-        return _ok(payment_request=row, adapter_result=adapter_result)
+        return _ok(payment_request=row, adapter_result=adapter_result, whatsapp=whatsapp_result)
     except Exception as exc:
         return _err(exc)
 
@@ -400,5 +774,6 @@ registry.register(name="sales_inventory_adjust", toolset="sales", schema=_schema
 registry.register(name="sales_quote_create", toolset="sales", schema=_schema("sales_quote_create", "Create or replace an operational quote with line items and computed totals.", {"quote_id": {"type": "string"}, **_COMMON_ENTITY_PROPS, "title": {"type": "string"}, "status": {"type": "string"}, "valid_until": {"type": "string"}, "currency": {"type": "string"}, "items": {"type": "array", "items": {"type": "object"}}, **_meta_props()}, ["title"]), handler=_handle_quote_create, check_fn=_check_sales, emoji="🧾")
 registry.register(name="sales_order_create", toolset="sales", schema=_schema("sales_order_create", "Create or update an operational order, optionally from a Sales Core quote.", {"order_id": {"type": "string"}, "quote_id": {"type": "string"}, **_COMMON_ENTITY_PROPS, "title": {"type": "string"}, "status": {"type": "string"}, "currency": {"type": "string"}, "items": {"type": "array", "items": {"type": "object"}}, **_meta_props()}), handler=_handle_order_create, check_fn=_check_sales, emoji="🧾")
 registry.register(name="sales_invoice_create", toolset="sales", schema=_schema("sales_invoice_create", "Create or update an operational invoice, optionally from an order. Not fiscal unless an adapter is configured.", {"invoice_id": {"type": "string"}, "order_id": {"type": "string"}, **_COMMON_ENTITY_PROPS, "title": {"type": "string"}, "status": {"type": "string"}, "issue_date": {"type": "string"}, "due_date": {"type": "string"}, "currency": {"type": "string"}, "subtotal": {"type": "number"}, "discount_amount": {"type": "number"}, "tax_amount": {"type": "number"}, "total": {"type": "number"}, **_meta_props()}), handler=_handle_invoice_create, check_fn=_check_sales, emoji="🧾")
-registry.register(name="sales_payment_request_create", toolset="sales", schema=_schema("sales_payment_request_create", "Create a payment request for an invoice. Returns graceful unavailable status if no payment adapter is configured.", {"payment_request_id": {"type": "string"}, "invoice_id": {"type": "string"}, "organization_id": {"type": "string"}, "contact_id": {"type": "string"}, "amount": {"type": "number"}, "currency": {"type": "string"}, "status": {"type": "string"}, **_meta_props()}), handler=_handle_payment_request_create, check_fn=_check_sales, emoji="🧾")
-registry.register(name="sales_customer_workspace_create", toolset="sales", schema=_schema("sales_customer_workspace_create", "Create a customer-facing workspace URL for a quote, catalog, or invoice. Optionally send it by email via the generic notification adapter.", {"workspace_id": {"type": "string"}, "document_type": {"type": "string", "enum": ["quote", "catalog", "invoice"]}, "document_id": {"type": "string"}, "customer_email": {"type": "string"}, "customer_name": {"type": "string"}, "public_url": {"type": "string"}, "public_token": {"type": "string"}, "status": {"type": "string"}, "expires_at": {"type": "string"}, "send_email": {"type": "boolean"}, "email_subject": {"type": "string"}, "email_text": {"type": "string"}, "email_html": {"type": "string"}, **_meta_props()}, ["document_type", "document_id"]), handler=_handle_customer_workspace_create, check_fn=_check_sales, emoji="🧾")
+registry.register(name="sales_payment_request_create", toolset="sales", schema=_schema("sales_payment_request_create", "Create a payment request for an invoice. With SALES_PAYMENT_ADAPTER=stripe_checkout it creates a Stripe Checkout URL and can send it by WhatsApp.", {"payment_request_id": {"type": "string"}, "invoice_id": {"type": "string"}, "organization_id": {"type": "string"}, "contact_id": {"type": "string"}, "amount": {"type": "number"}, "currency": {"type": "string"}, "status": {"type": "string"}, "customer_email": {"type": "string"}, "customer_name": {"type": "string"}, "payment_description": {"type": "string"}, "workspace_url": {"type": "string"}, "success_url": {"type": "string"}, "cancel_url": {"type": "string"}, "send_whatsapp": {"type": "boolean"}, "whatsapp_target": {"type": "string", "description": "WhatsApp target, e.g. whatsapp:+130****1212 or +130****1212"}, "whatsapp_message": {"type": "string"}, **_meta_props()}), handler=_handle_payment_request_create, check_fn=_check_sales, emoji="🧾")
+registry.register(name="sales_customer_workspace_create", toolset="sales", schema=_schema("sales_customer_workspace_create", "Create a customer-facing workspace URL for a quote, catalog, or invoice. Optionally send it by email via the generic notification adapter.", {"workspace_id": {"type": "string"}, "document_type": {"type": "string", "enum": ["quote", "catalog", "invoice"]}, "document_id": {"type": "string"}, "customer_email": {"type": "string"}, "customer_name": {"type": "string"}, "public_url": {"type": "string"}, "public_token": {"type": "string"}, "status": {"type": "string"}, "expires_at": {"type": "string"}, "send_email": {"type": "boolean"}, "email_subject": {"type": "string"}, "email_text": {"type": "string"}, "email_html": {"type": "string"}, "email_metadata": {"type": "object"}, **_meta_props()}, ["document_type", "document_id"]), handler=_handle_customer_workspace_create, check_fn=_check_sales, emoji="🧾")
+registry.register(name="sales_quote_cycle_create", toolset="sales", schema=_schema("sales_quote_cycle_create", "Create and send a secure quote workflow: quote row, OTP-gated customer workspace, SitioUno-safe email template, and explicit next-cycle instructions for approval/invoice/payment/accounting.", {"quote_id": {"type": "string"}, "workspace_id": {"type": "string"}, "business_id": {"type": "string"}, "business_name": {"type": "string"}, **_COMMON_ENTITY_PROPS, "customer_email": {"type": "string"}, "customer_name": {"type": "string"}, "title": {"type": "string"}, "valid_until": {"type": "string"}, "currency": {"type": "string"}, "items": {"type": "array", "items": {"type": "object"}}, "public_url": {"type": "string"}, "public_token": {"type": "string"}, "send_email": {"type": "boolean"}, "email_subject": {"type": "string"}, "email_text": {"type": "string"}, "email_html": {"type": "string"}, **_meta_props()}, ["customer_email", "title", "items"]), handler=_handle_quote_cycle_create, check_fn=_check_sales, emoji="🧾")

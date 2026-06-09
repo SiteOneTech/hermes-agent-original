@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS sales.customer_workspaces (
 CREATE TABLE IF NOT EXISTS sales.customer_workspace_events (
   workspace_event_id bigserial PRIMARY KEY,
   workspace_id text NOT NULL REFERENCES sales.customer_workspaces(workspace_id) ON DELETE CASCADE,
-  event_type text NOT NULL CHECK (event_type IN ('created', 'sent', 'opened', 'commented', 'approved', 'rejected', 'signed', 'payment_started', 'paid', 'expired', 'cancelled')),
+  event_type text NOT NULL CHECK (event_type IN ('created', 'sent', 'opened', 'otp_requested', 'unlocked', 'commented', 'approved', 'rejected', 'signed', 'payment_started', 'paid', 'payment_failed', 'expired', 'cancelled')),
   actor_type text NOT NULL DEFAULT 'customer' CHECK (actor_type IN ('agent', 'owner', 'customer', 'system', 'adapter')),
   actor_ref text,
   comment text,

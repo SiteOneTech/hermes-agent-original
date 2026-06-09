@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS accounting.receipts (
 CREATE TABLE IF NOT EXISTS accounting.receipt_events (
   receipt_event_id bigserial PRIMARY KEY,
   receipt_id text NOT NULL REFERENCES accounting.receipts(receipt_id) ON DELETE CASCADE,
-  event_type text NOT NULL CHECK (event_type IN ('created','sent','opened','commented','approved','rejected','signed','pdf_generated','agent_note','exported')),
+  event_type text NOT NULL CHECK (event_type IN ('created','sent','opened','otp_requested','unlocked','commented','approved','rejected','signed','pdf_generated','agent_note','exported')),
   actor_type text NOT NULL DEFAULT 'agent' CHECK (actor_type IN ('customer','counterparty','owner','agent','system','adapter')),
   actor_ref text,
   comment text,
