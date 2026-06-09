@@ -6,6 +6,7 @@ route production Factory work to SQLite.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import time
 import uuid
@@ -929,6 +930,94 @@ def update_project_metadata(project_id: str, metadata: dict[str, Any]) -> None:
     )
 
 
+_NOTION_PAGE_ID_RE = re.compile(r"^[0-9a-fA-F]{32}$|^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+
+def _normalize_notion_page_id(page_id: str) -> str:
+    compact = page_id.replace("-", "").lower()
+    return f"{compact[:8]}-{compact[8:12]}-{compact[12:16]}-{compact[16:20]}-{compact[20:]}"
+
+
+def _validate_notion_tracker_metadata(*, page_id: str | None, url: str | None, page_title: str | None = None) -> dict[str, Any]:
+    """Validate canonical project-specific Notion tracker metadata.
+
+    Factory DB is the source of truth; this validates the DB metadata written by
+    the Notion side-effect path and returns the exact fields used by reconciler
+    readback. A shared template URL is not enough: at least one project-specific
+    page identifier or URL is required.
+    """
+
+    clean_page_id = str(page_id or "").strip()
+    clean_url = str(url or "").strip()
+    if not clean_page_id and not clean_url:
+        raise ValueError("notion tracker page_id or url is required")
+    if clean_page_id and not _NOTION_PAGE_ID_RE.match(clean_page_id):
+        raise ValueError("notion tracker page_id must be a 32-char or UUID hex Notion page id")
+    if clean_url and not (clean_url.startswith("https://") or clean_url.startswith("http://")):
+        raise ValueError("notion tracker url must be http(s)")
+    metadata: dict[str, Any] = {
+        "notion_tracker_linked_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "notion_tracker_source": "hermes factory project link-notion",
+    }
+    if clean_page_id:
+        metadata["notion_tracker_page_id"] = _normalize_notion_page_id(clean_page_id)
+    if clean_url:
+        metadata["notion_tracker_url"] = clean_url
+    if page_title and str(page_title).strip():
+        metadata["notion_tracker_title"] = str(page_title).strip()
+    return metadata
+
+
+def link_notion_tracker(
+    project_id: str,
+    *,
+    page_id: str | None = None,
+    url: str | None = None,
+    page_title: str | None = None,
+    actor: str = "factory-reporter",
+) -> dict[str, Any]:
+    """Canonical Factory DB write/readback path for a project Notion PM tracker."""
+
+    ensure_runtime_schema()
+    pid = str(project_id or "").strip()
+    if not pid:
+        raise ValueError("project_id is required")
+    if not _project(pid):
+        raise ValueError(f"Factory project not found: {pid}")
+    actor_name = str(actor or "factory-reporter").strip() or "factory-reporter"
+    metadata = _validate_notion_tracker_metadata(page_id=page_id, url=url, page_title=page_title)
+    metadata["notion_tracker_linked_by"] = actor_name
+    sql.psql(
+        f"""
+        UPDATE factory.projects
+        SET metadata = metadata || {_j(metadata)}, updated_at=now()
+        WHERE project_id={_q(pid)};
+        INSERT INTO factory.events(project_id, actor, event_type, message, metadata)
+        VALUES ({_q(pid)}, {_q(actor_name)}, 'notion_tracker_linked', 'Project-specific Notion PM tracker linked and readback requested', {_j(metadata)});
+        """,
+        user=_user(),
+    )
+    readback_row = sql.one(f"SELECT metadata FROM factory.projects WHERE project_id={_q(pid)}", user=_user()) or {}
+    readback = readback_row.get("metadata") if isinstance(readback_row, dict) and isinstance(readback_row.get("metadata"), dict) else {}
+    expected_page = metadata.get("notion_tracker_page_id")
+    expected_url = metadata.get("notion_tracker_url")
+    if expected_page and readback.get("notion_tracker_page_id") != expected_page:
+        raise ValueError("notion tracker metadata readback mismatch: page_id not persisted")
+    if expected_url and readback.get("notion_tracker_url") != expected_url:
+        raise ValueError("notion tracker metadata readback mismatch: url not persisted")
+    reconcile = reconcile_project(pid)
+    return {
+        "action": "link-notion",
+        "project_id": pid,
+        "readback": {
+            "notion_tracker_page_id": readback.get("notion_tracker_page_id"),
+            "notion_tracker_url": readback.get("notion_tracker_url"),
+            "notion_tracker_title": readback.get("notion_tracker_title"),
+        },
+        "reconcile": reconcile,
+    }
+
+
 def close_task(
     task_id: str,
     *,
@@ -1049,6 +1138,16 @@ def close_project(
     if superseded_by_project_id:
         closure_metadata["superseded_by_project_id"] = superseded_by_project_id
         closure_metadata["absorbed_into_project_id"] = superseded_by_project_id
+    active_runs = sql.rows(
+        f"SELECT run_id FROM factory.task_runs WHERE project_id={_q(pid)} AND status IN ('queued','running') ORDER BY started_at",
+        user=_user(),
+    )
+    monitor_evidence = {
+        "monitor_evidence": "project_closure_finalized_active_runs",
+        "stale_task_runs_cancelled": [str(row.get("run_id")) for row in active_runs],
+        "active_run_count_before_close": len(active_runs),
+    }
+    closure_metadata["monitor_evidence"] = monitor_evidence
     terminal_tasks = ",".join(_q(status) for status in TERMINAL_TASK_STATUSES)
     event_payload = dict(closure_metadata)
     gate_row = sql.statement_one(
@@ -1070,6 +1169,15 @@ def close_project(
             updated_at=now()
         WHERE project_id={_q(pid)}
           AND status NOT IN ({terminal_tasks});
+
+        UPDATE factory.task_runs
+        SET status='cancelled',
+            finished_at=now(),
+            heartbeat_at=now(),
+            output_summary={_q('Cancelled by canonical project closure: ' + reason_text)},
+            metadata = metadata || {_j({'closed_by': actor, 'closure_source': 'factory_project_close', **monitor_evidence})}
+        WHERE project_id={_q(pid)}
+          AND status IN ('queued','running');
 
         UPDATE factory.lanes
         SET status='completed', updated_at=now()
@@ -2129,6 +2237,79 @@ def claim_next_rework(project_id: Optional[str] = None, *, worker: str = "factor
     return {"run_id": run_id, "task": normalized, "worker_profile": worker_profile, "run_type": "rework"}
 
 
+def _dispatch_docs_first_waived(metadata: dict[str, Any]) -> bool:
+    """Return True only for an explicit Jean-authorized docs/Notion dispatch waiver."""
+
+    if not metadata.get("docs_first_dispatch_waived"):
+        return False
+    authorizer = str(metadata.get("docs_first_dispatch_waived_authorized_by") or "").strip().lower()
+    reason = str(metadata.get("docs_first_dispatch_waived_reason") or "").strip()
+    return authorizer in {"jean", "jean garcía", "jean garcia"} and bool(reason)
+
+
+def _is_runtime_bootstrap_repair_task(task: dict[str, Any]) -> bool:
+    metadata = _metadata(task)
+    if metadata.get("control_plane_bootstrap") or metadata.get("runtime_bootstrap_repair"):
+        return True
+    text = "\n".join(str(task.get(key) or "") for key in ("task_id", "title", "description", "phase")).lower()
+    return (
+        "control-plane" in text
+        or "control plane" in text
+        or "docs/notion" in text
+        or "notion control" in text
+        or "link-notion" in text
+    )
+
+
+def _is_implementation_dispatch_task(task: dict[str, Any]) -> bool:
+    phase = str(task.get("phase") or "").lower()
+    text = "\n".join(str(task.get(key) or "") for key in ("task_id", "title", "description", "engine")).lower()
+    return phase == "implementation" or any(term in text for term in ("implementation", "implement", "builder", "claude-code"))
+
+
+def _dispatch_preflight_blockers(
+    task: dict[str, Any],
+    *,
+    docs_ready: bool,
+    notion_ready: bool,
+    docs_first_waived: bool = False,
+) -> list[str]:
+    """Return docs-first blockers for a candidate implementation dispatch."""
+
+    if not _is_implementation_dispatch_task(task):
+        return []
+    if _is_reconciliation_task(task) or _is_runtime_bootstrap_repair_task(task) or docs_first_waived:
+        return []
+    blockers: list[str] = []
+    if not docs_ready:
+        blockers.append("missing_or_unindexed_docs")
+    if not notion_ready:
+        blockers.append("missing_notion_tracker")
+    return blockers
+
+
+def _project_docs_notion_preflight(project: dict[str, Any], tasks: list[dict[str, Any]], pending_gates: list[dict[str, Any]], gates: list[dict[str, Any]]) -> tuple[bool, bool, bool]:
+    metadata = _metadata(project)
+    findings = reconciliation_findings(project, tasks, pending_gates, gates)
+    codes = {str(finding.get("code") or "") for finding in findings}
+    docs_blockers = {"missing_project_artifact_dir", "missing_required_docs", "docs_not_indexed", "uncommitted_project_artifacts"}
+    docs_ready = not bool(codes & docs_blockers)
+    notion_ready = "missing_notion_project" not in codes
+    return docs_ready, notion_ready, _dispatch_docs_first_waived(metadata)
+
+
+def _record_dispatch_preflight_denied(project_id: str, task: dict[str, Any], blockers: list[str], *, worker: str) -> None:
+    sql.psql(
+        f"""
+        INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
+        VALUES ({_q(project_id)}, {_q(task.get('lane_id'))}, {_q(task.get('task_id'))}, {_q(worker)}, 'dispatch_preflight_denied',
+                'Implementation dispatch denied until Factory docs/index/Notion gates are ready',
+                {_j({'blockers': blockers, 'runtime_contract': 'docs_first_factory_dispatch'})});
+        """,
+        user=_user(),
+    )
+
+
 def claim_next_task(project_id: Optional[str] = None, *, worker: str = "factory-dispatcher") -> dict[str, Any] | None:
     ensure_runtime_schema()
     cleanup_stale_manual_takeover_leases(project_id)
@@ -2153,6 +2334,28 @@ def claim_next_task(project_id: Optional[str] = None, *, worker: str = "factory-
             continue
         task = _next_runnable_task(pid)
         if not task:
+            reconcile_project(pid)
+            continue
+        full_project = _project(pid) or {"project_id": pid, "metadata": {}}
+        docs_ready, notion_ready, docs_first_waived = _project_docs_notion_preflight(
+            full_project,
+            tasks,
+            _active_pending_gates(pid),
+            _latest_gate_rows(pid),
+        )
+        preflight_blockers = _dispatch_preflight_blockers(
+            task,
+            docs_ready=docs_ready,
+            notion_ready=notion_ready,
+            docs_first_waived=docs_first_waived,
+        )
+        if preflight_blockers:
+            ensure_reconciliation_tasks(
+                full_project,
+                reconciliation_findings(full_project, tasks, _active_pending_gates(pid), _latest_gate_rows(pid)),
+                tasks,
+            )
+            _record_dispatch_preflight_denied(pid, task, preflight_blockers, worker=worker)
             reconcile_project(pid)
             continue
         run_id = f"run-{int(time.time())}-{uuid.uuid4().hex[:8]}"
@@ -2198,18 +2401,20 @@ def mark_run_spawned(run_id: str, *, process_id: int, log_path: str, prompt_path
 
 _SEMANTIC_DONE_MARKERS = ("STATE: DONE", "STATE:DONE")
 _SEMANTIC_BLOCKED_MARKERS = ("STATE: BLOCKED", "STATE:BLOCKED")
-_SEMANTIC_MARKERS = _SEMANTIC_DONE_MARKERS + _SEMANTIC_BLOCKED_MARKERS
+_SEMANTIC_IN_PROGRESS_MARKERS = ("STATE: IN_PROGRESS", "STATE:IN_PROGRESS")
+_SEMANTIC_MARKERS = _SEMANTIC_DONE_MARKERS + _SEMANTIC_BLOCKED_MARKERS + _SEMANTIC_IN_PROGRESS_MARKERS
 
 
 def _final_semantic_state(text: str) -> Optional[str]:
-    # Returns 'done', 'blocked', or None for the LAST semantic marker in `text`.
-    # Historical STATE markers embedded in the prompt or in a prior
-    # result_summary must never override the final assistant marker.
+    # Returns 'done', 'blocked', 'in_progress', or None for the LAST semantic
+    # marker in `text`. Historical STATE markers embedded in the prompt or in a
+    # prior result_summary must never override the final assistant marker.
     last_done = max(text.rfind(marker) for marker in _SEMANTIC_DONE_MARKERS)
     last_blocked = max(text.rfind(marker) for marker in _SEMANTIC_BLOCKED_MARKERS)
-    if last_done == -1 and last_blocked == -1:
-        return None
-    return "blocked" if last_blocked > last_done else "done"
+    last_in_progress = max(text.rfind(marker) for marker in _SEMANTIC_IN_PROGRESS_MARKERS)
+    candidates = [(last_done, "done"), (last_blocked, "blocked"), (last_in_progress, "in_progress")]
+    index, state = max(candidates, key=lambda item: item[0])
+    return None if index == -1 else state
 
 
 def _read_worker_output_summary(log_path: str | Path, *, tail_chars: int = 4000) -> str:
@@ -2237,6 +2442,8 @@ def _effective_exit_code(exit_code: int, output_summary: str) -> int:
     # previous result_summary echoes) must not be allowed to mask it.
     state = _final_semantic_state(output_summary)
     if state == "blocked":
+        return exit_code if exit_code != 0 else 1
+    if state == "in_progress":
         return exit_code if exit_code != 0 else 1
     if state == "done":
         return 0

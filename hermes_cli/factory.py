@@ -169,6 +169,26 @@ def cmd_project_close(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_project_link_notion(args: argparse.Namespace) -> int:
+    backend = _backend(args)
+    result = backend.link_notion_tracker(
+        args.project_id,
+        page_id=args.page_id,
+        url=args.url,
+        page_title=getattr(args, "page_title", None),
+        actor=args.actor,
+    )
+    if args.json:
+        return _print_json(result)
+    readback = result.get("readback") if isinstance(result.get("readback"), dict) else {}
+    print(f"✓ Project {args.project_id}: Notion tracker linked")
+    if readback.get("notion_tracker_page_id"):
+        print(f"  page_id={readback.get('notion_tracker_page_id')}")
+    if readback.get("notion_tracker_url"):
+        print(f"  url={readback.get('notion_tracker_url')}")
+    return 0
+
+
 def cmd_project_takeover(args: argparse.Namespace) -> int:
     backend = _backend(args)
     result = backend.acquire_manual_takeover_lease(
@@ -280,6 +300,8 @@ def factory_command(args: argparse.Namespace) -> int:
             return cmd_project_create(args)
         if sub == "close":
             return cmd_project_close(args)
+        if sub == "link-notion":
+            return cmd_project_link_notion(args)
         if sub == "takeover":
             return cmd_project_takeover(args)
         if sub == "release-takeover":
@@ -351,6 +373,15 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
     project_close.add_argument("--actor", default="factory-orchestrator")
     project_close.add_argument("--json", action="store_true")
     project_close.set_defaults(func=factory_command)
+
+    project_link_notion = project_sub.add_parser("link-notion", help="Write/readback canonical project-specific Notion PM tracker metadata")
+    project_link_notion.add_argument("project_id")
+    project_link_notion.add_argument("--page-id", help="Notion page UUID or 32-char page id")
+    project_link_notion.add_argument("--url", help="Notion tracker URL")
+    project_link_notion.add_argument("--page-title", help="Human-readable Notion page title")
+    project_link_notion.add_argument("--actor", default="factory-reporter")
+    project_link_notion.add_argument("--json", action="store_true")
+    project_link_notion.set_defaults(func=factory_command)
 
     project_takeover = project_sub.add_parser("takeover", help="Acquire a manual/operator single-writer lease that blocks autonomous dispatch")
     project_takeover.add_argument("project_id")
