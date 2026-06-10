@@ -16,7 +16,7 @@ Status: HOTFIX OPEN — previous delivery is HOLD under Jean's corrected documen
 | H2: Correct dispatch/readiness semantics for Notion | done | claude-builder | commit 9f81c75e3; reconciler auto-cancelled after succeeded run |
 | H3: Add regression tests and live smoke | done | qa-verifier | gate test=passed gate_id=342; 35 tests passed in 1.34s |
 | H4: Reconcile current project artifacts and reports | done | factory-reporter | commit 673a6b058; TASK_GRAPH/TRACKER/QUALITY_REVIEW/DELIVERY_REPORT reconciled |
-| H5: Delivery review and Jean GO/NO-GO | pending_jean_go | factory-reporter/Jean | gate delivery=passed gate_id=344; HOTFIX_0001_H5_DELIVERY_REVIEW.md written |
+| H5: Delivery review and Jean GO/NO-GO | done | factory-reporter/Jean | gate delivery=passed gate_id=345 reviewer=factory-reporter; pytest 35/35 PASS 1.38s; resolve-state active 0 anomalies; TRACKER updated |
 | CRM review/refactor | blocked | Jean GO required | Wait for HOTFIX-0001 GREEN + explicit Jean approval |
 
 ## Current decision
