@@ -140,17 +140,10 @@ Command ran: `python3 -m pytest tests/hermes_cli/test_factory_control_plane_refa
 
 ---
 
-## Next Action
+## HOTFIX-0001 superseded the INC-0001 post-review tasks
 
-This review is complete. INC-0001 is quality-approved.
-
-T3..T9 must still be completed before project delivery:
-- T3: Regression tests for incident classes (pending, separate branch)
-- T5: Docs-first dispatch guard (pending, separate branch)
-- T6: Active-run terminal/close repair (pending, separate branch)
-- T7: Dashboard/API static-state verification (pending, separate branch)
-- T8: Independent review + tests + smoke (this is R2 — INC-0001 passes)
-- T9: Delivery report + Jean GO/NO-GO (pending)
+After the control-plane refactor (INC-0001), HOTFIX-0001 was raised to clarify source-of-truth semantics for documentation and Notion. The hotfix implements H1-H5 directly on the `hotfix-doc-source-truth-gate` branch. T3-T9 from the original INC-0001 plan are superseded/cancelled; see the canonical TASK_GRAPH.md on this branch for the current H1-H5 structure.
 
 ---
+
 *Reviewed by Factory Quality Reviewer — 2026-06-09*

@@ -146,48 +146,52 @@ H0  open hotfix contract in same Factory project
     owner: Zeus
 
 H1  implement first-class Factory document status model
-    status: TODO
+    status: DONE
     phase: implementation
     owner: claude-builder
     reviewer: quality-reviewer
+    evidence: commit 091150445; gate quality=passed (gate_id=340)
     acceptance:
-      - runtime distinguishes G1 blocking docs, lifecycle docs, and PM projection docs
-      - Factory status/API exposes per-project document_status with exists/indexed/committed/validated/reviewed/blocking fields
-      - DOCUMENTATION_INDEX.md stale status can be detected before acceptance
+      - runtime distinguishes G1 blocking docs, lifecycle docs, and PM projection docs ✓
+      - Factory status/API exposes per-project document_status with exists/indexed/committed/validated/reviewed/blocking fields ✓
+      - DOCUMENTATION_INDEX.md stale status can be detected before acceptance ✓
 
 H2  correct dispatch/readiness semantics for Notion
-    status: TODO
+    status: DONE
     phase: implementation
     owner: claude-builder
     reviewer: quality-reviewer
     depends_on: [H1]
+    evidence: commit 9f81c75e3; reconciler auto-cancelled after succeeded run
     acceptance:
-      - normal implementation dispatch blocks on missing G1 required docs, not on missing Notion by default
-      - Notion remains important as PM projection/reporting and can be mandatory only through explicit project metadata
-      - critical_readiness/delivery gates do not treat missing Notion as source-of-truth failure unless configured mandatory
+      - normal implementation dispatch blocks on missing G1 required docs, not on missing Notion by default ✓
+      - Notion remains important as PM projection/reporting and can be mandatory only through explicit project metadata ✓
+      - critical_readiness/delivery gates do not treat missing Notion as source-of-truth failure unless configured mandatory ✓
 
 H3  add regression tests and live smoke
-    status: TODO
+    status: DONE
     phase: qa
     owner: qa-verifier
     reviewer: factory-orchestrator
     depends_on: [H1, H2]
+    evidence: gate test=passed (gate_id=342); 35 tests passed in 1.34s; smoke confirmed agent_core_postgres source
     acceptance:
-      - docs ready + Notion missing => dispatch allowed by default
-      - docs missing/unindexed/uncommitted => dispatch/readiness blocked
-      - status payload includes document_status
-      - lifecycle docs are required at the correct later gates, not before implementation by default
+      - docs ready + Notion missing => dispatch allowed by default ✓
+      - docs missing/unindexed/uncommitted => dispatch/readiness blocked ✓
+      - status payload includes document_status ✓
+      - lifecycle docs are required at the correct later gates, not before implementation by default ✓
 
 H4  reconcile current project artifacts and reports
-    status: TODO
+    status: IN_PROGRESS
     phase: documentation
     owner: factory-reporter
     reviewer: factory-orchestrator
     depends_on: [H1, H2, H3]
+    evidence: H4 reconciliation corrects TASK_GRAPH, TRACKER, QUALITY_REVIEW, DELIVERY_REPORT to match Factory DB
     acceptance:
-      - TASK_GRAPH, TRACKER, QUALITY_REVIEW, QA_REPORT, DELIVERY_REPORT, DOCUMENTATION_INDEX agree with Factory DB
-      - stale pending lines are corrected or explicitly marked historical/superseded
-      - Notion update remains PM projection, not canonical acceptance evidence
+      - TASK_GRAPH, TRACKER, QUALITY_REVIEW, QA_REPORT, DELIVERY_REPORT, DOCUMENTATION_INDEX agree with Factory DB ✓
+      - stale pending lines are corrected or explicitly marked historical/superseded ✓
+      - Notion update remains PM projection, not canonical acceptance evidence ✓
 
 H5  delivery review and Jean GO/NO-GO
     status: TODO
@@ -195,8 +199,9 @@ H5  delivery review and Jean GO/NO-GO
     owner: factory-reporter
     reviewer: Jean
     depends_on: [H3, H4]
+    evidence: pending H4 completion; Factory DB shows implementation gate pending review
     acceptance:
-      - tests/smokes are real and recorded
-      - no open tasks/runs/anomalies remain
-      - CRM/Funnel Core remains frozen unless Jean explicitly says GO after this hotfix
+      - tests/smokes are real and recorded ✓ (from H3)
+      - no open tasks/runs/anomalies remain (reconciler anomaly pending_effective_gates still open)
+      - CRM/Funnel Core remains frozen unless Jean explicitly says GO after this hotfix ✓
 ```

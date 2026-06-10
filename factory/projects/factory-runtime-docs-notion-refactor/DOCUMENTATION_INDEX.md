@@ -16,16 +16,14 @@ PM projection: Notion is important for human/directive visibility, but it is not
 | `METHODOLOGY_PLAN.md` | Hybrid methodology and gate order | complete |
 | `TECHNICAL_BLUEPRINT.md` | Runtime components and contracts | complete |
 | `SPRINT_PLAN.md` | Sprint/story plan | complete |
-| `TASK_GRAPH.md` | Task dependencies | complete, but marked for hotfix reconciliation |
-| `TRACKER.md` | Human-readable task tracker | complete, but marked for hotfix reconciliation |
-| `QA_GATES.md` | QA gates | complete |
-| `SECURITY_GATES.md` | Security gates | complete |
-| `QA_REPORT.md` | QA evidence | complete |
-| `SECURITY_REVIEW.md` | Security evidence | complete |
-| `DELIVERY_REPORT.md` | Delivery/GO report | complete, but acceptance is HOLD pending HOTFIX-0001 |
-| `QUALITY_REVIEW.md` | Independent quality review | complete, but contains stale pre-hotfix notes to reconcile |
+| `TASK_GRAPH.md` | Task dependencies | complete; reconciled by H4 to match Factory DB |
+| `TRACKER.md` | Human-readable task tracker | complete; reconciled by H4 — H1/H2/H3 marked done, H4 in_progress |
+| `QA_REPORT.md` | QA evidence | complete; R3/R4/R5 done |
+| `SECURITY_REVIEW.md` | Security evidence | complete — GREEN, no blocking findings |
+| `DELIVERY_REPORT.md` | Delivery/GO report | superseded; marked historical — HOTFIX-0001 H5 owns active delivery gate |
+| `QUALITY_REVIEW.md` | Independent quality review | complete; stale INC-0001 next-action items removed by H4 |
 | `NOTION_UPDATE.md` | Notion PM projection/update evidence | complete as human PM projection; not canonical truth |
-| `HOTFIX_0001_DOCUMENTARY_SOURCE_OF_TRUTH_GATE.md` | Hotfix contract for G1 document readiness gate and Notion projection semantics | open |
+| `HOTFIX_0001_DOCUMENTARY_SOURCE_OF_TRUTH_GATE.md` | Hotfix contract for G1 document readiness gate and Notion projection semantics | open; H4 reconciliation in progress |
 
 ## G1 blocking documents for future non-trivial Factory projects
 

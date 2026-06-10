@@ -1,4 +1,9 @@
-# Delivery Report — INC-0001
+# Delivery Report — INC-0001 (SUPERSEDED — HISTORICAL)
+
+> **SUPERSEDED by HOTFIX-0001** (`factory/runtime-docs-notion-refactor/hotfix-doc-source-truth-gate`).
+> The INC-0001 delivery report is kept as historical record only.
+> HOTFIX-0001 H5 is the active delivery gate for this project.
+> See `HOTFIX_0001_DOCUMENTARY_SOURCE_OF_TRUTH_GATE.md` for the active contract.
 
 Project: `factory-runtime-docs-notion-refactor`
 Increment: `INC-0001` — Factory docs/Notion control-plane refactor

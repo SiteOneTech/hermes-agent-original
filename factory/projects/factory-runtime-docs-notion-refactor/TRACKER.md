@@ -12,11 +12,11 @@ Status: HOTFIX OPEN — previous delivery is HOLD under Jean's corrected documen
 | INC-0001: Notion metadata CLI/API fix | done | Zeus | `link_notion_tracker` in hermes_cli/factory_pg.py; branch inc-0001 |
 | Jean methodology correction: docs + Factory DB are source of truth, Notion is PM projection | done | Jean/Zeus | `HOTFIX_0001_DOCUMENTARY_SOURCE_OF_TRUTH_GATE.md` |
 | H0: Open hotfix contract in same Factory project | done | Zeus | hotfix branch/worktree + Documentation Index + Task Graph updated |
-| H1: Implement first-class Factory document status model | implemented, pending independent gate | claude-builder | `hermes_cli/factory_pg.py` exposes `project_document_status`; `status()` payload includes per-project `document_status`; focused pytest suite passes |
-| H2: Correct dispatch/readiness semantics for Notion | todo | Factory worker | Missing Notion is PM projection warning unless `notion_required=true`; G1 docs block implementation |
-| H3: Add regression tests and live smoke | todo | QA verifier | Tests prove docs missing/unindexed/uncommitted block; docs ready + missing Notion dispatches by default |
-| H4: Reconcile current project artifacts and reports | todo | Factory reporter | TASK_GRAPH/TRACKER/QA/Delivery/Index agree with Factory DB and corrected rule |
-| H5: Delivery review + Jean GO/NO-GO | todo | Factory reporter/Jean | Tests/smokes recorded, no open anomalies/runs; CRM stays frozen until explicit GO |
+| H1: Implement first-class Factory document status model | done | claude-builder | commit 091150445; gate quality=passed gate_id=340 |
+| H2: Correct dispatch/readiness semantics for Notion | done | claude-builder | commit 9f81c75e3; reconciler auto-cancelled after succeeded run |
+| H3: Add regression tests and live smoke | done | qa-verifier | gate test=passed gate_id=342; 35 tests passed in 1.34s |
+| H4: Reconcile current project artifacts and reports | in_progress | factory-reporter | H4 task running; TASK_GRAPH, TRACKER, QUALITY_REVIEW being corrected |
+| H5: Delivery review and Jean GO/NO-GO | todo | factory-reporter/Jean | blocked by H4; CRM stays frozen until explicit Jean GO |
 | CRM review/refactor | blocked | Jean GO required | Wait for HOTFIX-0001 GREEN + explicit Jean approval |
 
 ## Current decision
