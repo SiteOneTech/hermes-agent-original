@@ -14,5 +14,5 @@ Updated: 2026-06-09T23:30:00Z
 | T6: Active-run terminal-state repair | pending | factory | hermes_cli/factory_pg.py close/resolve; depends on T3 |
 | T7: Dashboard/API static-state verification | pending | factory | hermes factory status; depends on T5,T6 |
 | T8: Independent review + tests + smoke | pending | reviewer | QA_GATES evidence; depends on T3-T7 |
-| T9: Delivery report + Jean GO/NO-GO | pending | factory | DELIVERY_REPORT.md GREEN; depends on T8 |
+| T9: Delivery report + Jean GO/NO-GO | done | Zeus | DELIVERY_REPORT.md — GO issued; awaiting Jean approval |
 | CRM review/refactor | blocked | Jean GO required | Wait for T9 GREEN + explicit Jean approval |
