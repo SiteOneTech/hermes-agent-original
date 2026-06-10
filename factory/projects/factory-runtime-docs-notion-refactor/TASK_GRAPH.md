@@ -133,3 +133,70 @@ Derived from:
 - INC-0001 commit `df09e3885` evidence: `link_notion_tracker` + tests implemented
 
 INC-0001 scope: T2 (project create) + T4 (Notion metadata write path). Not T3/T5/T6/T7/T8/T9.
+
+## HOTFIX-0001 task graph — Documentary Source-of-Truth Gate
+
+This hotfix supersedes the previous stale “Notion as gate” delivery claim until corrected. It does not authorize CRM/Funnel Core work.
+
+```
+H0  open hotfix contract in same Factory project
+    status: DONE
+    branch: factory/runtime-docs-notion-refactor/hotfix-doc-source-truth-gate
+    evidence: HOTFIX_0001_DOCUMENTARY_SOURCE_OF_TRUTH_GATE.md + DOCUMENTATION_INDEX.md updated
+    owner: Zeus
+
+H1  implement first-class Factory document status model
+    status: TODO
+    phase: implementation
+    owner: claude-builder
+    reviewer: quality-reviewer
+    acceptance:
+      - runtime distinguishes G1 blocking docs, lifecycle docs, and PM projection docs
+      - Factory status/API exposes per-project document_status with exists/indexed/committed/validated/reviewed/blocking fields
+      - DOCUMENTATION_INDEX.md stale status can be detected before acceptance
+
+H2  correct dispatch/readiness semantics for Notion
+    status: TODO
+    phase: implementation
+    owner: claude-builder
+    reviewer: quality-reviewer
+    depends_on: [H1]
+    acceptance:
+      - normal implementation dispatch blocks on missing G1 required docs, not on missing Notion by default
+      - Notion remains important as PM projection/reporting and can be mandatory only through explicit project metadata
+      - critical_readiness/delivery gates do not treat missing Notion as source-of-truth failure unless configured mandatory
+
+H3  add regression tests and live smoke
+    status: TODO
+    phase: qa
+    owner: qa-verifier
+    reviewer: factory-orchestrator
+    depends_on: [H1, H2]
+    acceptance:
+      - docs ready + Notion missing => dispatch allowed by default
+      - docs missing/unindexed/uncommitted => dispatch/readiness blocked
+      - status payload includes document_status
+      - lifecycle docs are required at the correct later gates, not before implementation by default
+
+H4  reconcile current project artifacts and reports
+    status: TODO
+    phase: documentation
+    owner: factory-reporter
+    reviewer: factory-orchestrator
+    depends_on: [H1, H2, H3]
+    acceptance:
+      - TASK_GRAPH, TRACKER, QUALITY_REVIEW, QA_REPORT, DELIVERY_REPORT, DOCUMENTATION_INDEX agree with Factory DB
+      - stale pending lines are corrected or explicitly marked historical/superseded
+      - Notion update remains PM projection, not canonical acceptance evidence
+
+H5  delivery review and Jean GO/NO-GO
+    status: TODO
+    phase: delivery
+    owner: factory-reporter
+    reviewer: Jean
+    depends_on: [H3, H4]
+    acceptance:
+      - tests/smokes are real and recorded
+      - no open tasks/runs/anomalies remain
+      - CRM/Funnel Core remains frozen unless Jean explicitly says GO after this hotfix
+```
