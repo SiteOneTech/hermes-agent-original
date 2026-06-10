@@ -1,6 +1,4 @@
-"""Tests for the profile.yaml metadata layer (description + description_auto)
-and the profile_describer LLM module.
-"""
+"""Tests for the profile.yaml metadata layer and profile_describer LLM module."""
 
 from __future__ import annotations
 
@@ -12,6 +10,16 @@ import pytest
 
 from hermes_cli import profiles as profiles_mod
 from hermes_cli import profile_describer as describer
+
+
+PROFILE_META_EMPTY = {
+    "description": "",
+    "description_auto": False,
+    "display_name": "",
+    "avatar_path": "",
+    "engine_label": "",
+    "engine_model": "",
+}
 
 
 @pytest.fixture
@@ -26,7 +34,7 @@ def profile_env(tmp_path, monkeypatch):
 
 def test_read_profile_meta_empty_when_missing(profile_env):
     meta = profiles_mod.read_profile_meta(profile_env)
-    assert meta == {"description": "", "description_auto": False}
+    assert meta == PROFILE_META_EMPTY
 
 
 def test_write_and_read_profile_meta(profile_env):
@@ -63,7 +71,7 @@ def test_write_profile_meta_rejects_missing_dir(tmp_path):
 def test_read_profile_meta_tolerates_corrupt_yaml(profile_env):
     (profile_env / "profile.yaml").write_text("not: valid: yaml: [unclosed")
     meta = profiles_mod.read_profile_meta(profile_env)
-    assert meta == {"description": "", "description_auto": False}
+    assert meta == PROFILE_META_EMPTY
 
 
 # ---------------------------------------------------------------------------
