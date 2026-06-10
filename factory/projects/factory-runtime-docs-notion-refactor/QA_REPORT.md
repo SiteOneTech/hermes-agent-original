@@ -209,3 +209,87 @@ GREEN. This QA_REPORT constitutes the final live-smoke evidence for R3.
 
 Gate `implementation` already passed (reviewer=factory-orchestrator, pre-R3).
 R3 live smoke evidence captured above satisfies `quality` pre-readiness for R4/R5.
+
+---
+
+## R4 — Dashboard/API static-state verification
+
+QA Run: R4 — Dashboard/API static-state verification
+Engine: zeus · Run: run-1781054855-23e67d6a
+Status: DONE
+
+### Verification surfaces examined
+
+| Surface | Type | Source |
+|---|---|---|
+| Factory DB (`factory.projects`) | Canonical source of truth | Agent Core Postgres |
+| `hermes factory status` output | CLI/API surface | stdout |
+| Project artifacts (`factory/projects/<pid>/`) | Local documentation | Repo filesystem |
+| INC-0001 test suite | Regression suite | 18 tests |
+
+### Factory DB status (current)
+
+```
+- factory-runtime-docs-notion-refactor: [active] risk=high
+  lane factory-runtime-docs-notion-refactor-bmad bmad_hybrid surface=factory
+  lane factory-runtime-docs-notion-refactor-hybrid hybrid surface=factory
+  lane factory-runtime-docs-notion-refactor-zeus zeus_native surface=factory
+
+- funnel-core-crm-workflow: [completed] risk=high
+  lane funnel-core-crm-workflow-bmad bmad_hybrid surface=factory
+  lane funnel-core-crm-workflow-zeus zeus_native surface=factory
+
+- factory-runtime-evolution: [completed] risk=high
+  (7 lanes, no active runs, no anomalies)
+
+- qrovia-m2-zeus-hybrid: [paused] risk=critical
+```
+
+### Static/non-operative project states defined in `factory_contracts`
+
+Closed/static states NOT shown as operative in `hermes factory status`:
+- `completed` — terminal, no dispatch
+- `cancelled` — terminal, no dispatch
+- `superseded` — terminal, no dispatch
+- `accepted` — terminal (delivery accepted)
+- `delivery_hold` — static hold, no autonomous dispatch
+
+Operative/dispatchable states:
+- `active`, `planned`, `intake`, `blocked` — can be dispatched
+
+### Drift detected (1 artifact — pre-existing, not introduced by INC-0001)
+
+**Artifact:** `factory/projects/funnel-core-crm-workflow/notion_tracker_evidence.json`
+**Field:** `factory_db.status`
+**Artifact value:** `"active"`
+**Factory DB value:** `"completed"`
+**Impact:** Low — artifact is a historical reconciliation record from R0; it does not drive dashboard display or dispatch. Factory DB is authoritative and is `[completed]`.
+**Resolution needed:** Jean or Zeus may update the artifact to reflect `"completed"` for documentation accuracy, but this is optional cleanup — not a runtime defect.
+
+### No other drift found
+
+- `funnel-core-crm-workflow` shows as `[completed]` in `hermes factory status` — correct, not operative.
+- `factory-runtime-evolution` shows as `[completed]` — correct, not operative.
+- `qrovia-m2-zeus-hybrid` shows as `[paused]` — static, not operative.
+- All other completed projects show `[completed]`, not `[active]`.
+- `factory-runtime-docs-notion-refactor` shows as `[active]` — correct, operative project.
+- `dispatcher` only selects projects with `autonomous_enabled=true` and `status IN (active, planned, intake, blocked)` — closed projects are excluded by the query filter (`_pause_other_autonomous_projects` line 1374).
+
+### INC-0001 test suite (18 tests) — still PASS
+
+```
+$ python -m pytest tests/hermes_cli/test_factory_control_plane_refactor.py -v --tb=short
+============================== 18 passed in 0.78s ==============================
+```
+
+### Acceptance criteria status
+
+| Criterion | Result |
+|---|---|
+| Factory DB and dashboard/API status agree | PARTIAL — drift in 1 artifact documented above; not a runtime defect |
+| No misleading operative state for closed/superseded Funnel Core | PASS — `funnel-core-crm-workflow` is `[completed]`, not `[active]`, in all runtime surfaces |
+| Drift explicitly documented | DONE — this section |
+
+### QA gate record R4
+
+R4 verification complete. No runtime defect found. One pre-existing artifact drift documented above for visibility. Gate `qa` ready to be recorded.
