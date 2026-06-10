@@ -81,6 +81,7 @@ import PairingPage from "@/pages/PairingPage";
 import ChannelsPage from "@/pages/ChannelsPage";
 import WebhooksPage from "@/pages/WebhooksPage";
 import SystemPage from "@/pages/SystemPage";
+import FactoryPage from "@/pages/FactoryPage";
 import ChatPage from "@/pages/ChatPage";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
@@ -128,6 +129,7 @@ const BUILTIN_ROUTES_CORE: Record<string, ComponentType> = {
   "/models": ModelsPage,
   "/logs": LogsPage,
   "/cron": CronPage,
+  "/factory": FactoryPage,
   "/skills": SkillsPage,
   "/plugins": PluginsPage,
   "/mcp": McpPage,
@@ -148,6 +150,12 @@ const BUILTIN_ROUTES_CORE: Record<string, ComponentType> = {
 function ChatRouteSink() {
   return null;
 }
+
+const FACTORY_NAV_ITEM: NavItem = {
+  path: "/factory",
+  label: "Factory",
+  icon: Code,
+};
 
 const BUILTIN_NAV_REST: NavItem[] = [
   {
@@ -256,6 +264,7 @@ function buildNavItems(
 function partitionSidebarNav(
   builtIn: NavItem[],
   manifests: PluginManifest[],
+  builtInPluginItems: NavItem[] = [],
 ): { coreItems: NavItem[]; pluginItems: NavItem[] } {
   const merged = buildNavItems(builtIn, manifests);
   const builtinPaths = new Set(builtIn.map((i) => i.path));
@@ -265,7 +274,14 @@ function partitionSidebarNav(
     if (builtinPaths.has(item.path)) coreItems.push(item);
     else pluginItems.push(item);
   }
-  return { coreItems, pluginItems };
+  const pluginPaths = new Set(pluginItems.map((item) => item.path));
+  return {
+    coreItems,
+    pluginItems: [
+      ...builtInPluginItems.filter((item) => !pluginPaths.has(item.path)),
+      ...pluginItems,
+    ],
+  };
 }
 
 function buildRoutes(
@@ -423,7 +439,7 @@ export default function App() {
   }, [embeddedChat, showTokenAnalytics]);
 
   const sidebarNav = useMemo(
-    () => partitionSidebarNav(builtinNav, manifests),
+    () => partitionSidebarNav(builtinNav, manifests, [FACTORY_NAV_ITEM]),
     [builtinNav, manifests],
   );
   const routes = useMemo(
@@ -562,7 +578,7 @@ export default function App() {
                   className="font-bold text-[1.125rem] leading-[0.95] tracking-[0.0525rem] text-midground uppercase"
                   style={{ mixBlendMode: "plus-lighter" }}
                 >
-                  Hermes
+                  Zeus
                   <br />
                   Agent
                 </Typography>

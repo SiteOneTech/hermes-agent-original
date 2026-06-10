@@ -501,6 +501,13 @@ class ProfileInfo:
     # surfaces a "review" badge in this case so the user can edit or
     # accept.
     description_auto: bool = False
+    # Dashboard-facing visual metadata for profile cards. This is intentionally
+    # profile metadata, not config.yaml: changing the visible name/avatar must
+    # not rename the profile id or affect runtime model/provider settings.
+    display_name: str = ""
+    avatar_path: str = ""
+    engine_label: str = ""
+    engine_model: str = ""
 
 
 def _read_distribution_meta(profile_dir: Path) -> tuple:
@@ -590,25 +597,29 @@ def _profile_yaml_path(profile_dir: Path) -> Path:
 def read_profile_meta(profile_dir: Path) -> dict:
     """Read ``<profile_dir>/profile.yaml`` and return a dict.
 
-    Returns ``{"description": "", "description_auto": False}`` when the
+    Returns empty metadata defaults when the
     file is missing or unreadable. Never raises — a corrupt
     profile.yaml on an unrelated profile must not break
     ``hermes profile list``.
     """
     path = _profile_yaml_path(profile_dir)
     if not path.is_file():
-        return {"description": "", "description_auto": False}
+        return {"description": "", "description_auto": False, "display_name": "", "avatar_path": "", "engine_label": "", "engine_model": ""}
     try:
         import yaml
         with open(path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
     except Exception:
-        return {"description": "", "description_auto": False}
+        return {"description": "", "description_auto": False, "display_name": "", "avatar_path": "", "engine_label": "", "engine_model": ""}
     if not isinstance(data, dict):
-        return {"description": "", "description_auto": False}
+        return {"description": "", "description_auto": False, "display_name": "", "avatar_path": "", "engine_label": "", "engine_model": ""}
     return {
         "description": str(data.get("description") or "").strip(),
         "description_auto": bool(data.get("description_auto", False)),
+        "display_name": str(data.get("display_name") or "").strip(),
+        "avatar_path": str(data.get("avatar_path") or "").strip(),
+        "engine_label": str(data.get("engine_label") or "").strip(),
+        "engine_model": str(data.get("engine_model") or "").strip(),
     }
 
 
@@ -617,6 +628,10 @@ def write_profile_meta(
     *,
     description: Optional[str] = None,
     description_auto: Optional[bool] = None,
+    display_name: Optional[str] = None,
+    avatar_path: Optional[str] = None,
+    engine_label: Optional[str] = None,
+    engine_model: Optional[str] = None,
 ) -> None:
     """Update ``<profile_dir>/profile.yaml`` in place.
 
@@ -641,6 +656,14 @@ def write_profile_meta(
         existing["description"] = description.strip()
     if description_auto is not None:
         existing["description_auto"] = bool(description_auto)
+    if display_name is not None:
+        existing["display_name"] = display_name.strip()
+    if avatar_path is not None:
+        existing["avatar_path"] = avatar_path.strip()
+    if engine_label is not None:
+        existing["engine_label"] = engine_label.strip()
+    if engine_model is not None:
+        existing["engine_model"] = engine_model.strip()
     with open(path, "w", encoding="utf-8") as f:
         yaml.safe_dump(existing, f, sort_keys=False, default_flow_style=False)
 
@@ -674,6 +697,10 @@ def list_profiles() -> List[ProfileInfo]:
             distribution_source=dist_source,
             description=meta.get("description", ""),
             description_auto=meta.get("description_auto", False),
+            display_name=meta.get("display_name", ""),
+            avatar_path=meta.get("avatar_path", ""),
+            engine_label=meta.get("engine_label", ""),
+            engine_model=meta.get("engine_model", ""),
         ))
 
     # Named profiles
@@ -710,6 +737,10 @@ def list_profiles() -> List[ProfileInfo]:
                 distribution_source=dist_source,
                 description=meta.get("description", ""),
                 description_auto=meta.get("description_auto", False),
+                display_name=meta.get("display_name", ""),
+                avatar_path=meta.get("avatar_path", ""),
+                engine_label=meta.get("engine_label", ""),
+                engine_model=meta.get("engine_model", ""),
             ))
 
     return profiles

@@ -11,6 +11,7 @@ import {
   Check,
   ChevronDown,
   Cpu,
+  Image as ImageIcon,
   MoreVertical,
   Pencil,
   Package,
@@ -76,6 +77,106 @@ function ProfilesLoadingSpinner() {
   );
 }
 
+const PROFILE_ROLE_HINTS: Record<string, string> = {
+  "factory-orchestrator": "Coordina goals, lanes y gates del Factory.",
+  "product-analyst": "Convierte objetivos en PRD, alcance y criterios.",
+  "solution-architect": "Diseña arquitectura, ADRs y decisiones técnicas.",
+  "implementation-planner": "Baja la solución a historias, incrementos y plan ejecutable.",
+  "claude-builder": "Implementador con Claude Code nativo/Claude Max para cambios multi-archivo y refactors.",
+  "claude-deepseek-builder": "Implementador con Claude Code usando DeepSeek como backend LLM.",
+  "codex-builder": "Implementador/reviewer rápido con Codex CLI para fixes acotados y QA.",
+  "openhands-builder": "OpenHands VM para sandbox, builds pesados y validación independiente.",
+  "openhands-lab": "OpenHands VM para experimentos comparativos y spikes sandbox.",
+  "quality-reviewer": "Revisión de calidad, mantenibilidad y deuda técnica.",
+  "security-reviewer": "Revisión de seguridad, secretos y riesgos operativos.",
+  "qa-verifier": "Verifica pruebas, regresiones y evidencia ejecutable.",
+  "devops-release": "Deploy, runtime, infraestructura y release gates.",
+  "factory-reporter": "Reportes, snapshots y síntesis de avance.",
+  "sophie-atc": "ATC y ventas consultivas para clientes/prospectos; registra CRM seguro y escala solicitudes a supervisión.",
+};
+
+const AGENT_AVATAR_OPTIONS = [
+  "zeus",
+  "sophie-atc",
+  "factory-orchestrator",
+  "product-analyst",
+  "solution-architect",
+  "implementation-planner",
+  "claude-builder",
+  "claude-deepseek-builder",
+  "codex-builder",
+  "openhands-builder",
+  "openhands-lab",
+  "quality-reviewer",
+  "security-reviewer",
+  "qa-verifier",
+  "devops-release",
+  "factory-reporter",
+  "orchestrator",
+  "builder",
+  "researcher",
+  "reviewer",
+  "qa",
+  "maintainer",
+  "strategist",
+  "ops-watch",
+  "inbox-triage",
+  "km-agent",
+].map((name) => ({
+  name,
+  label: name
+    .split(/[-_]/g)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" "),
+  path: `/agent-avatars/${name}.webp`,
+}));
+
+function profileDisplayNameFallback(name: string): string {
+  if (name === "default") return "Zeus Principal";
+  return name
+    .split(/[-_]/g)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function bundledAvatarPathForProfile(name: string): string {
+  return AGENT_AVATAR_OPTIONS.some((option) => option.name === name)
+    ? `/agent-avatars/${name}.webp`
+    : "/agent-avatars/zeus.webp";
+}
+
+function profileDisplayName(profile: ProfileInfo): string {
+  return profile.display_name?.trim() || profileDisplayNameFallback(profile.name);
+}
+
+function profileInitials(label: string): string {
+  const parts = label.split(/[\s-_]+/g).filter(Boolean);
+  return (parts[0]?.[0] ?? "Z") + (parts[1]?.[0] ?? "");
+}
+
+function profileSummary(profile: ProfileInfo): string {
+  if (profile.description?.trim()) return profile.description.trim();
+  if (PROFILE_ROLE_HINTS[profile.name]) return PROFILE_ROLE_HINTS[profile.name];
+  if (profile.name === "default") return "Perfil base del dashboard y sesión principal de Zeus.";
+  return profile.model
+    ? `Perfil aislado con ${profile.model}${profile.provider ? ` vía ${profile.provider}` : ""}.`
+    : "Perfil aislado con configuración y memoria propias.";
+}
+
+function profileAvatarUrl(profile: ProfileInfo): string {
+  return profile.avatar_path?.trim() || bundledAvatarPathForProfile(profile.name);
+}
+
+function profileEngineLabel(profile: ProfileInfo): string {
+  return profile.engine_label?.trim() || profile.provider || "—";
+}
+
+function profileModelLabel(profile: ProfileInfo): string | null {
+  return profile.engine_model?.trim() || profile.model || null;
+}
+
 /**
  * Per-card "⋯" actions menu. Holds every action for the profile (set active,
  * model, description, SOUL, copy command, rename, delete) so the card row stays
@@ -88,6 +189,7 @@ function ProfileActionsMenu({
   isEditingDesc,
   isEditingModel,
   isEditingSoul,
+  isEditingVisual,
   labels,
   settingActive,
   onCopyCommand,
@@ -95,6 +197,7 @@ function ProfileActionsMenu({
   onEditDescription,
   onEditModel,
   onEditSoul,
+  onEditVisual,
   onRename,
   onSetActive,
 }: ProfileActionsMenuProps) {
@@ -155,6 +258,20 @@ function ProfileActionsMenu({
               {labels.setActive}
             </button>
           )}
+
+          <button
+            type="button"
+            role="menuitem"
+            className={itemClass}
+            onClick={run(onEditVisual)}
+          >
+            {isEditingVisual ? (
+              <ChevronDown className="h-4 w-4" />
+            ) : (
+              <ImageIcon className="h-4 w-4" />
+            )}
+            {labels.editVisual}
+          </button>
 
           <button
             type="button"
@@ -289,6 +406,7 @@ export default function ProfilesPage() {
       modelSaved: p.modelSaved ?? "Model updated",
       modelSelect: p.modelSelect ?? "Select a model",
       actions: p.actions ?? "Actions",
+      editVisual: "Foto / nombre",
     };
   }, [t.profiles]);
 
@@ -316,6 +434,12 @@ export default function ProfilesPage() {
   // Inline rename state
   const [renamingFrom, setRenamingFrom] = useState<string | null>(null);
   const [renameTo, setRenameTo] = useState("");
+
+  // Dashboard-facing visual metadata editor state
+  const [editingVisualFor, setEditingVisualFor] = useState<string | null>(null);
+  const [visualDisplayName, setVisualDisplayName] = useState("");
+  const [visualAvatarPath, setVisualAvatarPath] = useState("");
+  const [visualSaving, setVisualSaving] = useState(false);
 
   // Inline SOUL editor state
   const [editingSoulFor, setEditingSoulFor] = useState<string | null>(null);
@@ -489,13 +613,59 @@ export default function ProfilesPage() {
     }
   };
 
-  // Closes whichever editor dialog is open (model / description / SOUL).
+  const openVisualEditor = useCallback(
+    (p: ProfileInfo) => {
+      if (editingVisualFor === p.name) {
+        activeSoulRequest.current = null;
+        activeDescRequest.current = null;
+        setEditingVisualFor(null);
+        return;
+      }
+      activeSoulRequest.current = null;
+      activeDescRequest.current = null;
+      setEditingSoulFor(null);
+      setEditingDescFor(null);
+      setEditingModelFor(null);
+      setEditingVisualFor(p.name);
+      setVisualDisplayName(profileDisplayName(p));
+      setVisualAvatarPath(profileAvatarUrl(p));
+    },
+    [editingVisualFor],
+  );
+
+  const handleSaveProfileVisuals = async (name: string) => {
+    const displayName = visualDisplayName.trim();
+    const avatarPath = visualAvatarPath.trim();
+    setVisualSaving(true);
+    try {
+      await api.updateProfileMetadata(name, {
+        display_name: displayName,
+        avatar_path: avatarPath,
+      });
+      setProfiles((prev) =>
+        prev.map((p) =>
+          p.name === name
+            ? { ...p, display_name: displayName, avatar_path: avatarPath }
+            : p,
+        ),
+      );
+      showToast(`Perfil visual guardado: ${name}`, "success");
+      setEditingVisualFor(null);
+    } catch (e) {
+      showToast(`${t.status.error}: ${e}`, "error");
+    } finally {
+      setVisualSaving(false);
+    }
+  };
+
+  // Closes whichever editor dialog is open (visual / model / description / SOUL).
   const closeEditor = useCallback(() => {
     activeSoulRequest.current = null;
     activeDescRequest.current = null;
     setEditingModelFor(null);
     setEditingDescFor(null);
     setEditingSoulFor(null);
+    setEditingVisualFor(null);
   }, []);
 
   const openSoulEditor = useCallback(
@@ -508,6 +678,7 @@ export default function ProfilesPage() {
       }
       setEditingDescFor(null);
       setEditingModelFor(null);
+      setEditingVisualFor(null);
       setEditingSoulFor(name);
       setSoulText("");
       activeSoulRequest.current = name;
@@ -548,6 +719,7 @@ export default function ProfilesPage() {
       activeDescRequest.current = p.name;
       setEditingSoulFor(null);
       setEditingModelFor(null);
+      setEditingVisualFor(null);
       setEditingDescFor(p.name);
       setDescText(p.description ?? "");
     },
@@ -629,6 +801,7 @@ export default function ProfilesPage() {
       }
       setEditingSoulFor(null);
       setEditingDescFor(null);
+      setEditingVisualFor(null);
       setEditingModelFor(p.name);
       setModelEditChoice(modelKey(p.provider, p.model));
       loadModelChoices();
@@ -664,14 +837,17 @@ export default function ProfilesPage() {
 
   // Exactly one editor is open at a time; derive which profile + kind so a
   // single dialog can render the right body.
-  const editorName = editingModelFor ?? editingDescFor ?? editingSoulFor;
-  const editorKind: "model" | "desc" | "soul" | null = editingModelFor
-    ? "model"
-    : editingDescFor
-      ? "desc"
-      : editingSoulFor
-        ? "soul"
-        : null;
+  const editorName =
+    editingVisualFor ?? editingModelFor ?? editingDescFor ?? editingSoulFor;
+  const editorKind: "visual" | "model" | "desc" | "soul" | null = editingVisualFor
+    ? "visual"
+    : editingModelFor
+      ? "model"
+      : editingDescFor
+        ? "desc"
+        : editingSoulFor
+          ? "soul"
+          : null;
   const editorModalRef = useModalBehavior({
     open: editorName != null,
     onClose: closeEditor,
@@ -991,9 +1167,33 @@ export default function ProfilesPage() {
             const isEditingSoul = editingSoulFor === p.name;
             const isEditingDesc = editingDescFor === p.name;
             const isEditingModel = editingModelFor === p.name;
+            const isEditingVisual = editingVisualFor === p.name;
             const active = isActive(p);
+            const displayName = profileDisplayName(p);
+            const avatarUrl = profileAvatarUrl(p);
+            const modelLabel = profileModelLabel(p);
+            const engineLabel = profileEngineLabel(p);
             return (
-              <Card key={p.name} className="h-full">
+              <Card key={p.name} className="h-full overflow-hidden">
+                <div className="relative h-28 overflow-hidden border-b border-border bg-gradient-to-br from-primary/20 via-muted/30 to-background">
+                  <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(255,255,255,0.22),transparent_32%),radial-gradient(circle_at_80%_0%,rgba(255,255,255,0.12),transparent_28%)]" />
+                  <div className="absolute bottom-3 left-4 flex items-end gap-3">
+                    <div className="relative flex h-20 w-20 items-center justify-center overflow-hidden rounded-2xl border border-border bg-background text-lg font-semibold uppercase shadow-lg">
+                      <span className="absolute inset-0 flex items-center justify-center bg-primary/10 text-primary">
+                        {profileInitials(displayName)}
+                      </span>
+                      <img
+                        key={avatarUrl}
+                        src={avatarUrl}
+                        alt=""
+                        className="relative h-full w-full object-cover"
+                        onError={(event) => {
+                          event.currentTarget.style.display = "none";
+                        }}
+                      />
+                    </div>
+                  </div>
+                </div>
                 <CardContent className="flex h-full flex-col gap-2 py-4">
                   {isRenaming ? (
                     <div className="flex flex-col gap-2">
@@ -1053,8 +1253,14 @@ export default function ProfilesPage() {
                       <div className="flex items-start gap-2">
                         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
                           <span className="font-medium text-sm truncate">
-                            {p.name}
+                            {displayName}
                           </span>
+
+                          {displayName !== p.name && (
+                            <span className="font-mono text-xs text-muted-foreground truncate">
+                              {p.name}
+                            </span>
+                          )}
 
                           {active && (
                             <Badge tone="success">{L.activeBadge}</Badge>
@@ -1091,10 +1297,12 @@ export default function ProfilesPage() {
                           isEditingDesc={isEditingDesc}
                           isEditingModel={isEditingModel}
                           isEditingSoul={isEditingSoul}
+                          isEditingVisual={isEditingVisual}
                           settingActive={settingActive === p.name}
                           labels={{
                             actions: L.actions,
                             setActive: L.setActive,
+                            editVisual: L.editVisual,
                             editModel: L.editModel,
                             editDescription: L.editDescription,
                             editSoul: t.profiles.editSoul,
@@ -1109,6 +1317,7 @@ export default function ProfilesPage() {
                           onEditDescription={() => openDescEditor(p)}
                           onEditModel={() => openModelEditor(p)}
                           onEditSoul={() => openSoulEditor(p.name)}
+                          onEditVisual={() => openVisualEditor(p)}
                           onRename={() => {
                             setRenamingFrom(p.name);
                             setRenameTo(p.name);
@@ -1149,7 +1358,7 @@ export default function ProfilesPage() {
                               : "text-muted-foreground/60 italic",
                           )}
                         >
-                          {p.description || L.noDescription}
+                          {profileSummary(p) || L.noDescription}
                         </span>
 
                         {p.description && p.description_auto && (
@@ -1160,10 +1369,10 @@ export default function ProfilesPage() {
                       </div>
 
                       <div className="mt-auto flex flex-col gap-0.5 pt-1 text-xs text-muted-foreground">
-                        {p.model && (
+                        {modelLabel && (
                           <span className="truncate">
-                            {t.profiles.model}: {p.model}
-                            {p.provider ? ` (${p.provider})` : ""}
+                            {t.profiles.model}: {modelLabel}
+                            {engineLabel !== "—" ? ` (${engineLabel})` : ""}
                           </span>
                         )}
 
@@ -1182,7 +1391,7 @@ export default function ProfilesPage() {
         </div>
       </div>
 
-      {/* Editor dialog — model / description / SOUL for the selected profile */}
+      {/* Editor dialog — visual metadata / model / description / SOUL for the selected profile */}
       {editorName && (
         <div
           ref={editorModalRef}
@@ -1213,16 +1422,106 @@ export default function ProfilesPage() {
                 id="profile-editor-title"
                 className="font-mondwest text-display text-base tracking-wider"
               >
-                {editorKind === "model"
-                  ? L.editModel
-                  : editorKind === "desc"
-                    ? L.description
-                    : t.profiles.soulSection}
+                {editorKind === "visual"
+                  ? L.editVisual
+                  : editorKind === "model"
+                    ? L.editModel
+                    : editorKind === "desc"
+                      ? L.description
+                      : t.profiles.soulSection}
                 <span className="text-muted-foreground"> · {editorName}</span>
               </h2>
             </header>
 
             <div className="p-5 grid gap-4">
+              {editorKind === "visual" && (
+                <>
+                  <div className="grid gap-3 sm:grid-cols-[96px_1fr] sm:items-start">
+                    <div className="relative h-24 w-24 overflow-hidden rounded-2xl border border-border bg-background shadow-sm">
+                      <span className="absolute inset-0 flex items-center justify-center bg-primary/10 text-lg font-semibold uppercase text-primary">
+                        {profileInitials(visualDisplayName || editorName)}
+                      </span>
+                      <img
+                        key={visualAvatarPath}
+                        src={visualAvatarPath}
+                        alt=""
+                        className="relative h-full w-full object-cover"
+                        onError={(event) => {
+                          event.currentTarget.style.display = "none";
+                        }}
+                      />
+                    </div>
+
+                    <div className="grid gap-3">
+                      <div className="grid gap-2">
+                        <Label htmlFor="profile-display-name-editor">
+                          Nombre visible
+                        </Label>
+                        <Input
+                          id="profile-display-name-editor"
+                          placeholder="Ej. Sophie de SitioUno"
+                          value={visualDisplayName}
+                          onChange={(event) =>
+                            setVisualDisplayName(event.target.value)
+                          }
+                        />
+                      </div>
+
+                      <div className="grid gap-2">
+                        <Label htmlFor="profile-avatar-select-editor">
+                          Foto asignada
+                        </Label>
+                        <select
+                          id="profile-avatar-select-editor"
+                          className="flex h-9 w-full border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                          value={visualAvatarPath}
+                          onChange={(event) =>
+                            setVisualAvatarPath(event.target.value)
+                          }
+                        >
+                          {visualAvatarPath &&
+                            !AGENT_AVATAR_OPTIONS.some(
+                              (avatar) => avatar.path === visualAvatarPath,
+                            ) && (
+                              <option value={visualAvatarPath}>
+                                Avatar custom actual
+                              </option>
+                            )}
+                          {AGENT_AVATAR_OPTIONS.map((avatar) => (
+                            <option key={avatar.path} value={avatar.path}>
+                              {avatar.label}
+                            </option>
+                          ))}
+                        </select>
+                        <Input
+                          id="profile-avatar-custom-editor"
+                          placeholder="/agent-avatars/sophie-atc.webp"
+                          value={visualAvatarPath}
+                          onChange={(event) =>
+                            setVisualAvatarPath(event.target.value)
+                          }
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Puedes elegir un preset o pegar una ruta local bajo
+                          /agent-avatars/ para una foto nueva ya cargada.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end">
+                    <Button
+                      size="sm"
+                      className="uppercase"
+                      onClick={() => handleSaveProfileVisuals(editorName)}
+                      disabled={visualSaving}
+                    >
+                      {visualSaving ? t.common.saving : t.common.save}
+                    </Button>
+                  </div>
+                </>
+              )}
+
               {editorKind === "model" &&
                 (modelChoices !== null && modelChoices.length === 0 ? (
                   <p className="text-xs text-muted-foreground">{L.modelNone}</p>
@@ -1352,12 +1651,14 @@ interface ProfileActionsMenuProps {
   isEditingDesc: boolean;
   isEditingModel: boolean;
   isEditingSoul: boolean;
+  isEditingVisual: boolean;
   labels: {
     actions: string;
     delete: string;
     editDescription: string;
     editModel: string;
     editSoul: string;
+    editVisual: string;
     openInTerminal: string;
     rename: string;
     setActive: string;
@@ -1368,6 +1669,7 @@ interface ProfileActionsMenuProps {
   onEditDescription: () => void;
   onEditModel: () => void;
   onEditSoul: () => void;
+  onEditVisual: () => void;
   onRename: () => void;
   onSetActive: () => void;
 }
