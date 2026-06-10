@@ -1,8 +1,8 @@
 # Tracker
 
 Project: `factory-runtime-docs-notion-refactor`
-Updated: 2026-06-10T18:00:00Z
-Status: H6 CANONICAL LANDING IN PROGRESS — hotfix logic is being landed on the live runtime branch and agent skills are being assigned.
+Updated: 2026-06-10T17:29:32Z
+Status: H6 GREEN — hotfix logic is landed on the live runtime branch, G1 has zero blockers, and all Factory agents have the common operating skill assigned.
 
 | Item | Status | Owner | Evidence |
 |---|---|---|---|
@@ -17,7 +17,7 @@ Status: H6 CANONICAL LANDING IN PROGRESS — hotfix logic is being landed on the
 | H3: Add regression tests and live smoke | done | qa-verifier | gate test=passed gate_id=342; 35 tests passed in 1.34s |
 | H4: Reconcile current project artifacts and reports | done | factory-reporter | commit 673a6b058; TASK_GRAPH/TRACKER/QUALITY_REVIEW/DELIVERY_REPORT reconciled |
 | H5: Delivery review and Jean GO/NO-GO | done | factory-reporter/Jean | gate delivery=passed gate_id=345 reviewer=factory-reporter; pytest 35/35 PASS 1.38s; resolve-state active 0 anomalies; TRACKER updated |
-| H6: Canonical landing + common Factory agent skill | in_progress | Zeus | h6-canonical-landing branch; G1 docs completed; worker prompt/API/dashboard/profile assignment being verified |
+| H6: Canonical landing + common Factory agent skill | done | Zeus | main HEAD includes G1 hotfix + H6 commit; `document_status` reports 22 docs and 0 G1 blockers; 14/14 Factory agents have `factory-agent-operating-canon`; pytest 49/49 PASS; web build PASS |
 | CRM review/refactor | blocked | Jean GO required | Wait for H6 GREEN + explicit Jean approval |
 
 ## Current decision

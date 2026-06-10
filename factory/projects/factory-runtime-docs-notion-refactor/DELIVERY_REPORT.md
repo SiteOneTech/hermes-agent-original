@@ -1,8 +1,50 @@
+# Delivery Report — INC-0001 + HOTFIX-0001 + H6 Canonical Landing
+
+Project: `factory-runtime-docs-notion-refactor`
+Final delivery timestamp: 2026-06-10T17:29:32Z
+Status: **H6 GREEN — Factory documentation/gate process is closed on the live runtime branch.**
+
+## Final H6 closure
+
+H6 was opened because HOTFIX-0001 was correct conceptually but not fully closed operationally: the logic lived in a hotfix worktree, the live runtime branch did not yet enforce G1, missing G1 analysis documents still needed to exist/validate/review, worker prompts did not force the canonical reading order, and all Factory agent profiles needed a shared operating canon.
+
+H6 is now closed with the following evidence:
+
+| Area | Result | Evidence |
+|---|---|---|
+| Live runtime branch | GREEN | `/home/jean/Projects/hermes-agent-original` is fast-forwarded to H6; main HEAD includes the HOTFIX-0001 and H6 commits. |
+| G1 documentary readiness | GREEN | `./hermes factory status factory-runtime-docs-notion-refactor --json` reports 22 documents and 0 G1 blockers. |
+| Required G1 docs | GREEN | `REQUIREMENTS_ANALYSIS.md`, `PATTERN_ANALYSIS.md`, and `ASSUMPTIONS_AND_OPEN_QUESTIONS.md` were added; all 14 G1 docs are indexed, committed, validated, and reviewed. |
+| Factory agent canon | GREEN | `skills/software-development/factory-agent-operating-canon/SKILL.md` was created and installed/assigned to all 14 active Factory profiles. |
+| Runtime dispatch context | GREEN | `scripts/factory/factory_orchestrator_tick.py` injects the common skill, `DOCUMENTATION_INDEX.md`, and current G1 `document_status` into worker prompts. |
+| Gate evidence | GREEN | `hermes_cli/factory_pg.py` records `document_status_snapshot` on delivery/critical-readiness gates. |
+| API/dashboard | GREEN | `hermes_cli/web_server.py`, `web/src/lib/api.ts`, and `web/src/pages/FactoryPage.tsx` expose G1 readiness, per-file flags, and blocking docs. |
+| Tests | GREEN | `python3 -m pytest tests/hermes_cli/test_factory.py tests/hermes_cli/test_factory_control_plane_refactor.py tests/hermes_cli/test_factory_cron_control_plane.py tests/tools/test_factory_tools.py -q` => 49 passed, 1 warning. |
+| Web build | GREEN | `npm run build --workspace web` => TypeScript + Vite production build passed. |
+| Working tree | GREEN | `git status --short --branch` clean except branch ahead of origin before push. |
+
+## Final GO / NO-GO
+
+```
+GO: H6 canonical landing is complete for Factory documentation/gate enforcement.
+NO-GO conditions: none for the Factory process closure.
+CRM/Funnel Core review/refactor remains BLOCKED until Jean gives explicit GO for that separate project.
+```
+
+## Source-of-truth decision
+
+Factory DB + versioned repo Markdown are canonical. Notion is PM/human projection unless Jean explicitly marks it mandatory through project metadata. The live dispatcher now has G1 enforcement and the workers receive the canonical doc entry point in their prompts.
+
+## Historical INC-0001 record
+
+The original INC-0001 delivery report below is kept as historical evidence. It was superseded by HOTFIX-0001 and finally closed by H6.
+
+---
+
 # Delivery Report — INC-0001 (SUPERSEDED — HISTORICAL)
 
-> **SUPERSEDED by HOTFIX-0001** (`factory/runtime-docs-notion-refactor/hotfix-doc-source-truth-gate`).
+> **SUPERSEDED by HOTFIX-0001** (`factory/runtime-docs-notion-refactor/hotfix-doc-source-truth-gate`) and closed by H6 canonical landing on `main`.
 > The INC-0001 delivery report is kept as historical record only.
-> HOTFIX-0001 H5 is the active delivery gate for this project.
 > See `HOTFIX_0001_DOCUMENTARY_SOURCE_OF_TRUTH_GATE.md` for the active contract.
 
 Project: `factory-runtime-docs-notion-refactor`

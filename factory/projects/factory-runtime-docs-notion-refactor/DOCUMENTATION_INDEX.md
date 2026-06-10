@@ -2,7 +2,7 @@
 
 Project: `factory-runtime-docs-notion-refactor`
 Created: 2026-06-09T23:05:00Z
-Updated: 2026-06-10T18:00:00Z
+Updated: 2026-06-10T17:29:32Z
 Source of truth: Agent Core Postgres `factory.*` + versioned repo Markdown artifacts.
 PM projection: Notion is important for human/directive visibility, but it is not the source of truth unless Jean explicitly marks it mandatory for a specific project.
 
@@ -36,7 +36,7 @@ Lifecycle artifacts are created/updated during execution and become required for
 | `QA_REPORT.md` | QA evidence | lifecycle | complete; R3/R4/R5 done |
 | `SECURITY_REVIEW.md` | Security evidence | lifecycle | complete — GREEN, no blocking findings |
 | `QUALITY_REVIEW.md` | Independent quality review | lifecycle | complete; stale INC-0001 next-action items removed by H4 |
-| `DELIVERY_REPORT.md` | Historical delivery/GO report for INC-0001 | lifecycle | superseded by HOTFIX-0001/H6 |
+| `DELIVERY_REPORT.md` | Final delivery record for INC-0001/HOTFIX/H6 | lifecycle | complete; H6 GREEN |
 | `NOTION_UPDATE.md` | Notion PM projection/update evidence | PM projection | complete as human PM projection; not canonical truth |
 | `HOTFIX_0001_DOCUMENTARY_SOURCE_OF_TRUTH_GATE.md` | Hotfix contract for G1 document readiness gate and Notion projection semantics | lifecycle/reference | complete |
 | `HOTFIX_0001_H5_DELIVERY_REVIEW.md` | H5 delivery review and Jean GO/NO-GO | lifecycle/reference | superseded by H6 canonical landing |
