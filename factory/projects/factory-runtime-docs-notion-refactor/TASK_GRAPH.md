@@ -182,26 +182,26 @@ H3  add regression tests and live smoke
       - lifecycle docs are required at the correct later gates, not before implementation by default ✓
 
 H4  reconcile current project artifacts and reports
-    status: IN_PROGRESS
+    status: DONE
     phase: documentation
     owner: factory-reporter
     reviewer: factory-orchestrator
     depends_on: [H1, H2, H3]
-    evidence: H4 reconciliation corrects TASK_GRAPH, TRACKER, QUALITY_REVIEW, DELIVERY_REPORT to match Factory DB
+    evidence: commit 673a6b058; TASK_GRAPH, TRACKER, QUALITY_REVIEW, DELIVERY_REPORT, DOCUMENTATION_INDEX reconciled to match Factory DB
     acceptance:
       - TASK_GRAPH, TRACKER, QUALITY_REVIEW, QA_REPORT, DELIVERY_REPORT, DOCUMENTATION_INDEX agree with Factory DB ✓
       - stale pending lines are corrected or explicitly marked historical/superseded ✓
       - Notion update remains PM projection, not canonical acceptance evidence ✓
 
 H5  delivery review and Jean GO/NO-GO
-    status: PENDING_JEAN_GO
+    status: DONE — AWAITING JEAN GO/NO-GO
     phase: delivery
     owner: factory-reporter
     reviewer: Jean
     depends_on: [H3, H4]
-    evidence: gate delivery=passed (gate_id=344); HOTFIX_0001_H5_DELIVERY_REVIEW.md written; awaiting Jean explicit GO
+    evidence: gate delivery=passed (gate_id=344); HOTFIX_0001_H5_DELIVERY_REVIEW.md written; this artifact
     acceptance:
-      - tests/smokes are real and recorded ✓ (from H3)
-      - no open tasks/runs/anomalies remain ✓ (resolve-state clean)
+      - tests/smokes are real and recorded ✓ (35/35 pytest passed in 1.52s; QA_REPORT.md R3 live smoke)
+      - no open tasks/runs/anomalies remain ✓ (hermes factory project resolve-state -> active, no anomalies)
       - CRM/Funnel Core remains frozen unless Jean explicitly says GO after this hotfix ✓
 ```
