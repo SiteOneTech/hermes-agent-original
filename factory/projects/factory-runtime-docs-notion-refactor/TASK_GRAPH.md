@@ -194,14 +194,14 @@ H4  reconcile current project artifacts and reports
       - Notion update remains PM projection, not canonical acceptance evidence ✓
 
 H5  delivery review and Jean GO/NO-GO
-    status: TODO
+    status: PENDING_JEAN_GO
     phase: delivery
     owner: factory-reporter
     reviewer: Jean
     depends_on: [H3, H4]
-    evidence: pending H4 completion; Factory DB shows implementation gate pending review
+    evidence: gate delivery=passed (gate_id=344); HOTFIX_0001_H5_DELIVERY_REVIEW.md written; awaiting Jean explicit GO
     acceptance:
       - tests/smokes are real and recorded ✓ (from H3)
-      - no open tasks/runs/anomalies remain (reconciler anomaly pending_effective_gates still open)
+      - no open tasks/runs/anomalies remain ✓ (resolve-state clean)
       - CRM/Funnel Core remains frozen unless Jean explicitly says GO after this hotfix ✓
 ```

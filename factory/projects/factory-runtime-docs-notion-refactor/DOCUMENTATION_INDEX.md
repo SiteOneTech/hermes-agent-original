@@ -23,7 +23,8 @@ PM projection: Notion is important for human/directive visibility, but it is not
 | `DELIVERY_REPORT.md` | Delivery/GO report | superseded; marked historical — HOTFIX-0001 H5 owns active delivery gate |
 | `QUALITY_REVIEW.md` | Independent quality review | complete; stale INC-0001 next-action items removed by H4 |
 | `NOTION_UPDATE.md` | Notion PM projection/update evidence | complete as human PM projection; not canonical truth |
-| `HOTFIX_0001_DOCUMENTARY_SOURCE_OF_TRUTH_GATE.md` | Hotfix contract for G1 document readiness gate and Notion projection semantics | open; H4 reconciliation in progress |
+| `HOTFIX_0001_DOCUMENTARY_SOURCE_OF_TRUTH_GATE.md` | Hotfix contract for G1 document readiness gate and Notion projection semantics | complete |
+| `HOTFIX_0001_H5_DELIVERY_REVIEW.md` | H5 delivery review and Jean GO/NO-GO | open — awaiting Jean GO |
 
 ## G1 blocking documents for future non-trivial Factory projects
 
