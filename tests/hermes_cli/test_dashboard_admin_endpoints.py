@@ -701,6 +701,37 @@ class TestUpdateCheckEndpoint:
         assert body["update_available"] is False
         assert body["message"]
 
+    def test_git_behind_includes_commits(self, monkeypatch):
+        import hermes_cli.web_server as ws
+        import hermes_cli.banner as banner
+
+        monkeypatch.setattr(ws, "detect_install_method", lambda *a, **k: "git")
+        monkeypatch.setattr(banner, "check_for_updates", lambda: 3)
+        monkeypatch.setattr(
+            ws,
+            "_recent_upstream_commits",
+            lambda n=20: [
+                {"sha": "abc1234", "summary": "feat: x", "author": "a", "at": 1},
+            ],
+        )
+
+        body = self.client.get("/api/hermes/update/check").json()
+        # The desktop overlay renders this as the "what's changed" list.
+        assert isinstance(body["commits"], list)
+        assert body["commits"][0]["sha"] == "abc1234"
+        assert body["commits"][0]["summary"] == "feat: x"
+
+    def test_up_to_date_omits_commits(self, monkeypatch):
+        import hermes_cli.web_server as ws
+        import hermes_cli.banner as banner
+
+        monkeypatch.setattr(ws, "detect_install_method", lambda *a, **k: "git")
+        monkeypatch.setattr(banner, "check_for_updates", lambda: 0)
+
+        body = self.client.get("/api/hermes/update/check").json()
+        # No commits list when there's nothing to show (additive, non-breaking).
+        assert body.get("commits", []) == []
+
 
 class TestDebugShareEndpoint:
     """POST /api/ops/debug-share returns the paste URLs synchronously so the
@@ -793,4 +824,133 @@ class TestDebugShareEndpoint:
             headers={self.header: "wrong-token"},
         )
         assert r.status_code == 401
+
+
+class TestToolsConfigEndpoints:
+    """Provider selection, API-key save, and post-setup spawn for toolsets —
+    the dashboard surface that replicates the `hermes tools` configurator."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, _isolate_hermes_home):
+        self.client, self.header = _client()
+
+    def test_list_toolsets_shape(self):
+        r = self.client.get("/api/tools/toolsets")
+        assert r.status_code == 200
+        rows = r.json()
+        assert isinstance(rows, list) and rows
+        row = rows[0]
+        for k in ("name", "label", "enabled", "configured", "tools"):
+            assert k in row
+
+    def test_toolset_config_provider_matrix(self):
+        # `web` has a TOOL_CATEGORIES entry → providers list populated.
+        r = self.client.get("/api/tools/toolsets/web/config")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["has_category"] is True
+        assert isinstance(body["providers"], list)
+
+    def test_unknown_toolset_config_400(self):
+        r = self.client.get("/api/tools/toolsets/not_a_toolset/config")
+        assert r.status_code == 400
+
+    def test_save_env_writes_key_and_validates_allowlist(self):
+        from hermes_cli.config import get_env_value
+
+        cfg = self.client.get("/api/tools/toolsets/web/config").json()
+        # Find a real env-var key from the visible provider matrix.
+        key = None
+        for prov in cfg["providers"]:
+            for e in prov.get("env_vars", []):
+                key = e["key"]
+                break
+            if key:
+                break
+        if not key:
+            pytest.skip("no env-var-bearing web provider in this build")
+
+        r = self.client.put(
+            "/api/tools/toolsets/web/env", json={"env": {key: "test-secret-123"}}
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert key in body["saved"]
+        assert body["is_set"][key] is True
+        # CLI-config parity: the key landed in the .env store the CLI reads.
+        assert get_env_value(key) == "test-secret-123"
+
+    def test_save_env_rejects_unknown_key(self):
+        r = self.client.put(
+            "/api/tools/toolsets/web/env",
+            json={"env": {"TOTALLY_BOGUS_KEY": "x"}},
+        )
+        assert r.status_code == 400
+
+    def test_save_env_blank_value_skipped(self):
+        cfg = self.client.get("/api/tools/toolsets/web/config").json()
+        key = None
+        for prov in cfg["providers"]:
+            for e in prov.get("env_vars", []):
+                key = e["key"]
+                break
+            if key:
+                break
+        if not key:
+            pytest.skip("no env-var-bearing web provider in this build")
+        r = self.client.put(
+            "/api/tools/toolsets/web/env", json={"env": {key: "   "}}
+        )
+        assert r.status_code == 200
+        assert key in r.json()["skipped"]
+
+    def test_post_setup_unknown_key_400(self):
+        r = self.client.post(
+            "/api/tools/toolsets/browser/post-setup", json={"key": "bogus"}
+        )
+        assert r.status_code == 400
+
+    def test_post_setup_unknown_toolset_400(self):
+        r = self.client.post(
+            "/api/tools/toolsets/not_a_toolset/post-setup",
+            json={"key": "agent_browser"},
+        )
+        assert r.status_code == 400
+
+    def test_post_setup_spawns_action(self, monkeypatch):
+        import hermes_cli.web_server as ws
+
+        spawned = {}
+
+        class _FakeProc:
+            pid = 4321
+
+        def _fake_spawn(subcommand, name):
+            spawned["subcommand"] = subcommand
+            spawned["name"] = name
+            return _FakeProc()
+
+        monkeypatch.setattr(ws, "_spawn_hermes_action", _fake_spawn)
+        r = self.client.post(
+            "/api/tools/toolsets/browser/post-setup",
+            json={"key": "agent_browser"},
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["name"] == "tools-post-setup"
+        assert body["pid"] == 4321
+        assert spawned["subcommand"] == ["tools", "post-setup", "agent_browser"]
+
+    def test_endpoints_require_session_token(self):
+        for method, path, payload in [
+            ("get", "/api/tools/toolsets/web/config", None),
+            ("put", "/api/tools/toolsets/web/env", {"env": {}}),
+            ("post", "/api/tools/toolsets/web/post-setup", {"key": "ddgs"}),
+        ]:
+            fn = getattr(self.client, method)
+            kwargs = {"headers": {self.header: "wrong-token"}}
+            if payload is not None:
+                kwargs["json"] = payload
+            r = fn(path, **kwargs)
+            assert r.status_code == 401, f"{method} {path} not gated"
 

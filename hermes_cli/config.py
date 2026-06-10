@@ -13,6 +13,7 @@ This module provides:
 """
 
 import copy
+import json
 import logging
 import os
 import platform
@@ -813,6 +814,9 @@ DEFAULT_CONFIG = {
         "crm_db_name": "zeus_agent",
         "modules_enabled": ["factory", "calendar", "crm"],
     },
+    # Global active chat session cap across CLI, TUI/dashboard, and messaging.
+    # None/0 = unbounded.
+    "max_concurrent_sessions": None,
     "agent": {
         "max_turns": 90,
         # Inactivity timeout for gateway agent execution (seconds).
@@ -1147,6 +1151,16 @@ DEFAULT_CONFIG = {
                                       # Default False matches historical behavior; set to
                                       # True if you'd rather pause than silently lose
                                       # context turns when your aux model is flaky.
+        "codex_gpt55_autoraise": True,  # When True, gpt-5.5 on the ChatGPT Codex OAuth
+                                      # route raises its compaction trigger to 85% (vs the
+                                      # global `threshold` above). Codex hard-caps gpt-5.5
+                                      # at a 272K window, so the default 50% would compact
+                                      # at ~136K and waste half the usable context. Set to
+                                      # False to opt back down to the global threshold
+                                      # (e.g. 0.50) for Codex gpt-5.5 sessions. Only this
+                                      # exact route is affected — gpt-5.5 on OpenAI's
+                                      # direct API, OpenRouter, and Copilot keep the
+                                      # global threshold regardless.
     },
 
     # Anthropic prompt caching (Claude via OpenRouter or native Anthropic API).
@@ -1647,6 +1661,18 @@ DEFAULT_CONFIG = {
     "memory": {
         "memory_enabled": True,
         "user_profile_enabled": True,
+        # Write gate for the memory tool (add/replace/remove), applied to BOTH
+        # foreground agent turns and the background self-improvement review fork
+        # (the source of unprompted "wrong assumption" saves users reported):
+        #   on      — write freely (default, current behaviour)
+        #   off     — never write; the memory tool returns a clean disabled result
+        #   approve — foreground writes block on an inline approve/deny prompt
+        #             (entries are small enough to review in a chat bubble);
+        #             background-review writes are staged for review instead of
+        #             committed (a daemon thread cannot block on a prompt).
+        #             Pending entries: /memory pending, /memory approve <id>,
+        #             /memory reject <id>.
+        "write_mode": "on",
         "memory_char_limit": 2200,   # ~800 tokens at 2.75 chars/token
         "user_char_limit": 1375,     # ~500 tokens at 2.75 chars/token
         # External memory provider plugin (empty = built-in only).
@@ -1751,6 +1777,17 @@ DEFAULT_CONFIG = {
         # External hub installs (trusted/community sources) are always
         # scanned regardless of this setting.
         "guard_agent_created": False,
+        # Write gate for skill_manage (create/edit/patch/write_file/delete/
+        # remove_file), applied to BOTH foreground agent turns and the
+        # background self-improvement review fork:
+        #   on      — write freely (default, current behaviour)
+        #   off     — never write; skill_manage returns a clean disabled result
+        #   approve — stage the write for review instead of committing.
+        #             Pending skills are listed with /skills pending, reviewed
+        #             with /skills diff <id> (full diff — CLI/dashboard/file,
+        #             never crammed into a chat bubble), and applied with
+        #             /skills approve <id> or dropped with /skills reject <id>.
+        "write_mode": "on",
     },
 
     # Curator — background skill maintenance.
@@ -2024,11 +2061,11 @@ DEFAULT_CONFIG = {
         # raise these to keep more early failure evidence.
         "worker_log_rotate_bytes": 2 * 1024 * 1024,
         "worker_log_backup_count": 1,
-        # Profile that decomposes tasks in the Triage column. When unset,
-        # falls back to the default profile (the one `hermes` launches with
-        # no -p flag). Set this to a dedicated 'orchestrator' profile if you
-        # want decomposition to use a different model/skills from your main
-        # working profile.
+        # Profile assigned to the root/orchestration task after Triage
+        # decomposition. When unset, falls back to the default profile (the
+        # one `hermes` launches with no -p flag). This does not control the
+        # decomposer prompt, model, or skills; configure that LLM path under
+        # auxiliary.kanban_decomposer.
         "orchestrator_profile": "",
         # Where a child task lands if the orchestrator can't match an
         # assignee to any installed profile. When unset, falls back to the
@@ -2266,6 +2303,12 @@ DEFAULT_CONFIG = {
     # never fires again.  Users can wipe the section to re-see all hints.
     "onboarding": {
         "seen": {},
+        # Structured profile-build path offered on the very first gateway
+        # message ever. "ask" (default) -> offer to build a user profile
+        # (opt-in, consent-gated; the agent asks before any lookup and never
+        # reads connected accounts silently). "off" -> plain intro only.
+        # The offer fires at most once (latched under onboarding.seen).
+        "profile_build": "ask",
     },
 
     # ``hermes update`` behaviour.
@@ -2428,7 +2471,7 @@ DEFAULT_CONFIG = {
 
 
     # Config schema version - bump this when adding new required fields
-    "_config_version": 27,
+    "_config_version": 28,
 }
 
 # =============================================================================
@@ -3801,6 +3844,42 @@ def _normalize_custom_provider_entry(
     return normalized
 
 
+def _custom_provider_entry_to_provider_config(
+    entry: Any,
+    *,
+    provider_key: str = "",
+) -> Optional[Dict[str, Any]]:
+    """Translate a legacy custom provider entry to the v12 providers shape."""
+    normalized = _normalize_custom_provider_entry(
+        dict(entry) if isinstance(entry, dict) else entry,
+        provider_key=provider_key,
+    )
+    if normalized is None:
+        return None
+
+    provider_entry: Dict[str, Any] = {"api": normalized["base_url"]}
+
+    for field in (
+        "name",
+        "api_key",
+        "key_env",
+        "models",
+        "context_length",
+        "rate_limit_delay",
+        "discover_models",
+        "extra_body",
+    ):
+        if field in normalized:
+            provider_entry[field] = normalized[field]
+
+    if "model" in normalized:
+        provider_entry["default_model"] = normalized["model"]
+    if "api_mode" in normalized:
+        provider_entry["transport"] = normalized["api_mode"]
+
+    return provider_entry
+
+
 def providers_dict_to_custom_providers(providers_dict: Any) -> List[Dict[str, Any]]:
     """Normalize ``providers`` config entries into the legacy custom-provider shape."""
     if not isinstance(providers_dict, dict):
@@ -4307,8 +4386,7 @@ def migrate_config(interactive: bool = True, quiet: bool = False) -> Dict[str, A
                 if not isinstance(entry, dict):
                     continue
                 old_name = entry.get("name", "")
-                old_url = entry.get("base_url", "") or entry.get("url", "") or ""
-                old_key = entry.get("api_key", "")
+                old_url = entry.get("base_url", "") or entry.get("url", "") or entry.get("api", "") or ""
                 if not old_url:
                     continue  # skip entries with no URL
 
@@ -4328,20 +4406,22 @@ def migrate_config(interactive: bool = True, quiet: bool = False) -> Dict[str, A
                         key = f"endpoint-{migrated_count}"
 
                 # Don't overwrite existing entries
-                if key in providers_dict:
-                    key = f"{key}-{migrated_count}"
+                base_key = key
+                suffix = migrated_count
+                while key in providers_dict:
+                    key = f"{base_key}-{suffix}"
+                    suffix += 1
 
-                new_entry = {"api": old_url}
-                if old_name:
-                    new_entry["name"] = old_name
-                if old_key and old_key not in {"no-key", "no-key-required", ""}:
-                    new_entry["api_key"] = old_key
-
-                # Carry over model and api_mode if present
-                if entry.get("model"):
-                    new_entry["default_model"] = entry["model"]
-                if entry.get("api_mode"):
-                    new_entry["transport"] = entry["api_mode"]
+                new_entry = _custom_provider_entry_to_provider_config(
+                    entry,
+                    provider_key=key,
+                )
+                if new_entry is None:
+                    continue
+                if not old_name:
+                    new_entry.pop("name", None)
+                if new_entry.get("api_key") in {"no-key", "no-key-required", ""}:
+                    new_entry.pop("api_key", None)
 
                 providers_dict[key] = new_entry
                 migrated_count += 1
@@ -5102,6 +5182,94 @@ def load_config_readonly() -> Dict[str, Any]:
     safety guarantee is purely documented, not enforced — be careful.
     """
     return _load_config_impl(want_deepcopy=False)
+
+
+TERMINAL_CONFIG_ENV_MAP = {
+    "backend": "TERMINAL_ENV",
+    "modal_mode": "TERMINAL_MODAL_MODE",
+    "cwd": "TERMINAL_CWD",
+    "timeout": "TERMINAL_TIMEOUT",
+    "lifetime_seconds": "TERMINAL_LIFETIME_SECONDS",
+    "docker_image": "TERMINAL_DOCKER_IMAGE",
+    "docker_forward_env": "TERMINAL_DOCKER_FORWARD_ENV",
+    "singularity_image": "TERMINAL_SINGULARITY_IMAGE",
+    "modal_image": "TERMINAL_MODAL_IMAGE",
+    "daytona_image": "TERMINAL_DAYTONA_IMAGE",
+    "ssh_host": "TERMINAL_SSH_HOST",
+    "ssh_user": "TERMINAL_SSH_USER",
+    "ssh_port": "TERMINAL_SSH_PORT",
+    "ssh_key": "TERMINAL_SSH_KEY",
+    "container_cpu": "TERMINAL_CONTAINER_CPU",
+    "container_memory": "TERMINAL_CONTAINER_MEMORY",
+    "container_disk": "TERMINAL_CONTAINER_DISK",
+    "container_persistent": "TERMINAL_CONTAINER_PERSISTENT",
+    "docker_volumes": "TERMINAL_DOCKER_VOLUMES",
+    "docker_env": "TERMINAL_DOCKER_ENV",
+    "docker_mount_cwd_to_workspace": "TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE",
+    "docker_extra_args": "TERMINAL_DOCKER_EXTRA_ARGS",
+    "docker_run_as_host_user": "TERMINAL_DOCKER_RUN_AS_HOST_USER",
+    "docker_persist_across_processes": "TERMINAL_DOCKER_PERSIST_ACROSS_PROCESSES",
+    "docker_orphan_reaper": "TERMINAL_DOCKER_ORPHAN_REAPER",
+    "sandbox_dir": "TERMINAL_SANDBOX_DIR",
+    "persistent_shell": "TERMINAL_PERSISTENT_SHELL",
+}
+
+
+def _terminal_env_value(value: Any) -> str:
+    if isinstance(value, (list, dict)):
+        return json.dumps(value)
+    return str(value)
+
+
+def terminal_config_env_var_for_key(key: str) -> Optional[str]:
+    """Return the env var mirrored by a ``terminal.*`` config key."""
+    prefix = "terminal."
+    if not key.startswith(prefix):
+        return None
+    return TERMINAL_CONFIG_ENV_MAP.get(key[len(prefix):])
+
+
+def apply_terminal_config_to_env(
+    *,
+    env: Optional[Dict[str, str]] = None,
+    config: Optional[Dict[str, Any]] = None,
+    override: Optional[bool] = None,
+) -> Dict[str, str]:
+    """Bridge ``terminal.*`` config into the env vars terminal tools read.
+
+    ``tools.terminal_tool`` is intentionally environment-driven because it also
+    runs in child processes (TUI, dashboard PTY, gateway workers).  This helper
+    gives those child-process launch paths the same config bridge as classic
+    CLI without importing ``cli.py`` and paying for its startup side effects.
+
+    When the user config contains a ``terminal`` section, config.yaml is
+    authoritative and overrides existing env values.  Otherwise defaults only
+    backfill missing env vars so exported/.env values keep working.
+    """
+    target = os.environ if env is None else env
+
+    raw_config = read_raw_config()
+    file_has_terminal_config = isinstance(raw_config.get("terminal"), dict)
+    should_override = file_has_terminal_config if override is None else override
+
+    cfg = config if config is not None else load_config_readonly()
+    terminal_cfg = cfg.get("terminal", {}) if isinstance(cfg, dict) else {}
+    if not isinstance(terminal_cfg, dict):
+        return target
+
+    for cfg_key, env_var in TERMINAL_CONFIG_ENV_MAP.items():
+        if cfg_key not in terminal_cfg:
+            continue
+        value = terminal_cfg[cfg_key]
+        if cfg_key == "cwd":
+            raw_cwd = str(value or "").strip()
+            if raw_cwd in {".", "auto", "cwd"}:
+                continue
+            if isinstance(value, str):
+                value = os.path.expanduser(value)
+        if should_override or env_var not in target:
+            target[env_var] = _terminal_env_value(value)
+    return target
 
 
 def _load_config_impl(*, want_deepcopy: bool) -> Dict[str, Any]:
@@ -5992,36 +6160,9 @@ def set_config_value(key: str, value: str):
     
     # Keep .env in sync for keys that terminal_tool reads directly from env vars.
     # config.yaml is authoritative, but terminal_tool only reads TERMINAL_ENV etc.
-    _config_to_env_sync = {
-        "terminal.backend": "TERMINAL_ENV",
-        "terminal.modal_mode": "TERMINAL_MODAL_MODE",
-        "terminal.docker_image": "TERMINAL_DOCKER_IMAGE",
-        "terminal.singularity_image": "TERMINAL_SINGULARITY_IMAGE",
-        "terminal.modal_image": "TERMINAL_MODAL_IMAGE",
-        "terminal.daytona_image": "TERMINAL_DAYTONA_IMAGE",
-        "terminal.docker_mount_cwd_to_workspace": "TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE",
-        "terminal.docker_run_as_host_user": "TERMINAL_DOCKER_RUN_AS_HOST_USER",
-        "terminal.docker_persist_across_processes": "TERMINAL_DOCKER_PERSIST_ACROSS_PROCESSES",
-        "terminal.docker_orphan_reaper": "TERMINAL_DOCKER_ORPHAN_REAPER",
-        "terminal.docker_env": "TERMINAL_DOCKER_ENV",
-        # JSON-valued keys (terminal_tool parses these via json.loads). The user
-        # passes JSON on the CLI, so str(value) below already yields valid JSON —
-        # same as terminal.docker_env. cli.py and gateway/run.py bridge these too.
-        "terminal.docker_volumes": "TERMINAL_DOCKER_VOLUMES",
-        "terminal.docker_forward_env": "TERMINAL_DOCKER_FORWARD_ENV",
-        # terminal.cwd intentionally excluded — CLI resolves at runtime,
-        # gateway bridges it in gateway/run.py. Persisting to .env causes
-        # stale values to poison child processes.
-        "terminal.timeout": "TERMINAL_TIMEOUT",
-        "terminal.sandbox_dir": "TERMINAL_SANDBOX_DIR",
-        "terminal.persistent_shell": "TERMINAL_PERSISTENT_SHELL",
-        "terminal.container_cpu": "TERMINAL_CONTAINER_CPU",
-        "terminal.container_memory": "TERMINAL_CONTAINER_MEMORY",
-        "terminal.container_disk": "TERMINAL_CONTAINER_DISK",
-        "terminal.container_persistent": "TERMINAL_CONTAINER_PERSISTENT",
-    }
-    if key in _config_to_env_sync:
-        save_env_value(_config_to_env_sync[key], str(value))
+    env_var = terminal_config_env_var_for_key(key)
+    if env_var and key != "terminal.cwd":
+        save_env_value(env_var, _terminal_env_value(value))
 
     print(f"✓ Set {key} = {value} in {config_path}")
 
