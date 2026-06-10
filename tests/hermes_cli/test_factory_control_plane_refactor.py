@@ -107,12 +107,95 @@ def test_link_notion_tracker_raises_on_readback_mismatch(fake_sql):
         factory_pg.link_notion_tracker("demo", page_id="37a37b39cad68146b9f2e1fdf0bdf727", url=None)
 
 
-def test_linked_notion_metadata_satisfies_reconciler_for_funnel_core(monkeypatch):
+def test_missing_notion_is_pm_projection_warning_by_default(monkeypatch):
     monkeypatch.setattr(factory_pg, "_project_artifact_dir", lambda project: (None, "factory/projects/funnel-core-crm-workflow"))
     project_missing = {"project_id": "funnel-core-crm-workflow", "status": "active", "metadata": {}}
     findings = factory_pg.reconciliation_findings(project_missing, tasks=[{"task_id": "t1", "status": "todo"}], pending_gates=[])
-    assert any(f["code"] == "missing_notion_project" for f in findings)
+    codes = {f["code"] for f in findings}
+    assert "notion_pm_projection_warning" in codes
+    assert "missing_notion_project" not in codes
 
+
+def test_missing_notion_is_source_of_truth_blocker_when_required(monkeypatch):
+    monkeypatch.setattr(factory_pg, "_project_artifact_dir", lambda project: (None, "factory/projects/funnel-core-crm-workflow"))
+    project_missing = {"project_id": "funnel-core-crm-workflow", "status": "active", "metadata": {"notion_required": True}}
+    findings = factory_pg.reconciliation_findings(project_missing, tasks=[{"task_id": "t1", "status": "todo"}], pending_gates=[])
+    codes = {f["code"] for f in findings}
+    assert "missing_notion_project" in codes
+    assert "notion_pm_projection_warning" not in codes
+
+
+def test_notion_required_string_false_does_not_make_notion_mandatory(monkeypatch):
+    monkeypatch.setattr(factory_pg, "_project_artifact_dir", lambda project: (None, "factory/projects/funnel-core-crm-workflow"))
+    project_missing = {"project_id": "funnel-core-crm-workflow", "status": "active", "metadata": {"notion_required": "false"}}
+    findings = factory_pg.reconciliation_findings(project_missing, tasks=[{"task_id": "t1", "status": "todo"}], pending_gates=[])
+    codes = {f["code"] for f in findings}
+    assert "notion_pm_projection_warning" in codes
+    assert "missing_notion_project" not in codes
+
+
+def test_stale_notion_string_false_is_not_treated_as_stale(monkeypatch):
+    monkeypatch.setattr(factory_pg, "_project_artifact_dir", lambda project: (None, "factory/projects/funnel-core-crm-workflow"))
+    project_linked = {
+        "project_id": "funnel-core-crm-workflow",
+        "status": "active",
+        "metadata": {
+            "notion_tracker_page_id": "37a37b39-cad6-8146-b9f2-e1fdf0bdf727",
+            "notion_projection_stale": "false",
+        },
+    }
+    findings = factory_pg.reconciliation_findings(project_linked, tasks=[{"task_id": "t1", "status": "todo"}], pending_gates=[])
+    assert not any(f["code"] in {"missing_notion_project", "notion_pm_projection_warning"} for f in findings)
+
+
+def test_legacy_required_notion_blocker_resolves_when_notion_not_required():
+    project = {"project_id": "demo", "status": "active", "metadata": {}}
+    task = {
+        "task_id": "demo-missing-notion",
+        "status": "blocked",
+        "metadata": {"reconciliation_anomaly": "missing_notion_project"},
+    }
+    assert factory_pg._resolved_reconciliation_anomaly(project, task) == ("missing_notion_project", "structured_reconciliation_metadata")
+
+
+def test_projection_warning_resolves_when_notion_becomes_mandatory():
+    project = {"project_id": "demo", "status": "active", "metadata": {"notion_required": True}}
+    task = {
+        "task_id": "demo-notion-warning",
+        "status": "blocked",
+        "metadata": {"reconciliation_anomaly": "notion_pm_projection_warning"},
+    }
+    assert factory_pg._resolved_reconciliation_anomaly(project, task) == ("notion_pm_projection_warning", "structured_reconciliation_metadata")
+
+
+def test_notion_projection_warning_task_does_not_cover_required_notion_blocker():
+    task = {
+        "task_id": "demo-reconcile-notion-pm-projection-warning",
+        "title": "PM — Projection warning: update Factory Notion reporting surface",
+        "description": "Missing or stale Notion PM projection is reported for executive visibility.",
+        "phase": "reporting",
+        "status": "todo",
+    }
+    assert factory_pg._task_covers_reconciliation_anomaly(task, "notion_pm_projection_warning") is True
+    assert factory_pg._task_covers_reconciliation_anomaly(task, "missing_notion_project") is False
+
+
+def test_stale_notion_is_pm_projection_warning_by_default(monkeypatch):
+    monkeypatch.setattr(factory_pg, "_project_artifact_dir", lambda project: (None, "factory/projects/funnel-core-crm-workflow"))
+    project_stale = {
+        "project_id": "funnel-core-crm-workflow",
+        "status": "active",
+        "metadata": {
+            "notion_tracker_page_id": "37a37b39-cad6-8146-b9f2-e1fdf0bdf727",
+            "notion_projection_stale": True,
+        },
+    }
+    findings = factory_pg.reconciliation_findings(project_stale, tasks=[{"task_id": "t1", "status": "todo"}], pending_gates=[])
+    assert any(f["code"] == "notion_pm_projection_warning" and f["metadata"].get("notion_issue") == "stale" for f in findings)
+
+
+def test_linked_notion_metadata_satisfies_reconciler_for_funnel_core(monkeypatch):
+    monkeypatch.setattr(factory_pg, "_project_artifact_dir", lambda project: (None, "factory/projects/funnel-core-crm-workflow"))
     project_linked = {
         "project_id": "funnel-core-crm-workflow",
         "status": "active",
@@ -122,7 +205,64 @@ def test_linked_notion_metadata_satisfies_reconciler_for_funnel_core(monkeypatch
         },
     }
     findings_linked = factory_pg.reconciliation_findings(project_linked, tasks=[{"task_id": "t1", "status": "todo"}], pending_gates=[])
-    assert not any(f["code"] == "missing_notion_project" for f in findings_linked)
+    assert not any(f["code"] in {"missing_notion_project", "notion_pm_projection_warning"} for f in findings_linked)
+
+
+def test_critical_readiness_ignores_missing_notion_unless_required(fake_sql, monkeypatch, tmp_path):
+    factory_dir = tmp_path / "factory" / "projects" / "demo"
+    factory_dir.mkdir(parents=True)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: {
+        "project_id": project_id,
+        "repo_path": str(tmp_path),
+        "risk_level": "high",
+        "metadata": {
+            "artifact_dir": "factory/projects/demo",
+            "repo_strategy": {
+                "repo_scope": "zeus_only",
+                "work_intent": "maintain_existing_project",
+                "primary_repo": "/repo",
+                "base_branch": "main",
+                "branch_prefix": "factory/demo",
+            },
+            "required_docs_waived": True,
+            "required_docs_waived_authorized_by": "Jean",
+            "required_docs_waived_reason": "unit test isolates Notion gate semantics",
+            "repo_commit_waived": True,
+            "repo_commit_waived_authorized_by": "Jean",
+            "repo_commit_waived_reason": "unit test isolates Notion gate semantics",
+        },
+    })
+    fake_sql.rows_results = [[]]
+    assert not any("Notion" in finding for finding in factory_pg.critical_readiness_findings("demo"))
+
+
+def test_critical_readiness_blocks_missing_notion_when_required(fake_sql, monkeypatch, tmp_path):
+    factory_dir = tmp_path / "factory" / "projects" / "demo"
+    factory_dir.mkdir(parents=True)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: {
+        "project_id": project_id,
+        "repo_path": str(tmp_path),
+        "risk_level": "high",
+        "metadata": {
+            "artifact_dir": "factory/projects/demo",
+            "notion_required": True,
+            "repo_strategy": {
+                "repo_scope": "zeus_only",
+                "work_intent": "maintain_existing_project",
+                "primary_repo": "/repo",
+                "base_branch": "main",
+                "branch_prefix": "factory/demo",
+            },
+            "required_docs_waived": True,
+            "required_docs_waived_authorized_by": "Jean",
+            "required_docs_waived_reason": "unit test isolates Notion gate semantics",
+            "repo_commit_waived": True,
+            "repo_commit_waived_authorized_by": "Jean",
+            "repo_commit_waived_reason": "unit test isolates Notion gate semantics",
+        },
+    })
+    fake_sql.rows_results = [[]]
+    assert any("required Notion PM tracker is missing" in finding for finding in factory_pg.critical_readiness_findings("demo"))
 
 
 def _commit_factory_docs(repo):
@@ -165,9 +305,10 @@ def test_dispatch_preflight_blocks_implementation_without_docs_or_notion():
     assert "missing_notion_tracker" not in blockers
 
 
-def test_dispatch_preflight_allows_docs_ready_when_notion_missing_by_default():
+def test_dispatch_preflight_blocks_notion_only_when_project_requires_it():
     task = {"task_id": "demo-impl", "phase": "implementation", "status": "todo", "metadata": {}}
-    assert factory_pg._dispatch_preflight_blockers(task, docs_ready=True, notion_ready=False) == []
+    assert factory_pg._dispatch_preflight_blockers(task, docs_ready=True, notion_ready=False, notion_required=False) == []
+    assert factory_pg._dispatch_preflight_blockers(task, docs_ready=True, notion_ready=False, notion_required=True) == ["missing_notion_tracker"]
 
 
 def test_dispatch_preflight_allows_when_docs_and_notion_ready():

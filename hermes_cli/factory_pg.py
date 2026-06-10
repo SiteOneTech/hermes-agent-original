@@ -81,6 +81,19 @@ RECONCILIATION_TASK_SPECS: dict[str, dict[str, Any]] = {
             "Notion remains human reporting only; Factory DB stays the source of truth.",
         ],
     },
+    "notion_pm_projection_warning": {
+        "title": "PM — Projection warning: update Factory Notion reporting surface",
+        "phase": "reporting",
+        "owner": "factory-reporter",
+        "reviewer": "factory-orchestrator",
+        "engine": "zeus",
+        "priority": 900,
+        "acceptance": [
+            "Missing or stale Notion PM projection is reported for executive visibility.",
+            "Factory DB and repo artifacts remain the canonical source of truth.",
+            "This task does not block normal implementation dispatch unless project metadata sets notion_required=true.",
+        ],
+    },
     "missing_project_artifact_dir": {
         "title": "R1 — Reconciliation: restore project-local Factory artifact directory",
         "phase": "documentation",
@@ -441,6 +454,15 @@ def _metadata(row: dict[str, Any]) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _metadata_bool(metadata: dict[str, Any], key: str) -> bool:
+    value = metadata.get(key)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "required", "mandatory"}
+    return bool(value)
+
+
 def _waiver_explicitly_authorized(metadata: dict[str, Any], waiver_key: str) -> bool:
     """Return True only for a project-specific waiver Jean authorized.
 
@@ -754,7 +776,9 @@ def _task_covers_reconciliation_anomaly(task: dict[str, Any], code: str) -> bool
     if code == "missing_repository_strategy":
         return "repository strategy" in text or "repo strategy" in text or "g0" in text or "branch" in text or "worktree" in text
     if code == "missing_notion_project":
-        return "notion" in text or "pm tracker" in text or "tracker" in text
+        return "pm tracker" in text or "tracker metadata" in text or "notion_required" in text or "required notion" in text
+    if code == "notion_pm_projection_warning":
+        return "pm projection" in text or "executive visibility" in text or "reporting surface" in text
     if code == "missing_project_artifact_dir":
         return "artifact" in text or "documentation" in text or "documentación" in text
     if code == "missing_required_docs":
@@ -779,6 +803,19 @@ def _latest_gate_statuses(gates: list[dict[str, Any]]) -> dict[str, str]:
         if gate_type and gate_type not in statuses:
             statuses[gate_type] = str(gate.get("status") or "").strip()
     return statuses
+
+
+def _notion_projection_issue(metadata: dict[str, Any]) -> str | None:
+    tracker_ok = bool(
+        metadata.get("notion_tracker_url")
+        or metadata.get("notion_tracker_page_id")
+        or _any_explicit_waiver(metadata, "notion_waived", "tracker_waived")
+    )
+    if not tracker_ok:
+        return "missing"
+    if any(_metadata_bool(metadata, key) for key in ("notion_projection_stale", "notion_tracker_stale", "notion_stale")):
+        return "stale"
+    return None
 
 
 def reconciliation_findings(project: dict[str, Any], tasks: list[dict[str, Any]], pending_gates: list[dict[str, Any]], gates: Optional[list[dict[str, Any]]] = None) -> list[dict[str, Any]]:
@@ -815,12 +852,20 @@ def reconciliation_findings(project: dict[str, Any], tasks: list[dict[str, Any]]
             missing_fields=strategy.get("missing_fields") or ["repo_scope"],
             repo_strategy=strategy,
         )
-    if not (
-        metadata.get("notion_tracker_url")
-        or metadata.get("notion_tracker_page_id")
-        or _any_explicit_waiver(metadata, "notion_waived", "tracker_waived")
-    ):
-        add("missing_notion_project", "Missing project-specific Notion PM tracker metadata")
+    notion_issue = _notion_projection_issue(metadata)
+    if notion_issue:
+        if _metadata_bool(metadata, "notion_required"):
+            add(
+                "missing_notion_project",
+                f"Notion PM tracker is required but {notion_issue}",
+                notion_issue=notion_issue,
+            )
+        else:
+            add(
+                "notion_pm_projection_warning",
+                f"Notion PM projection is {notion_issue}; Factory DB remains canonical source of truth",
+                notion_issue=notion_issue,
+            )
 
     if factory_dir is None or not factory_dir.is_dir():
         add("missing_project_artifact_dir", f"Missing project-local Factory artifact directory: {artifact_dir}", artifact_dir=artifact_dir)
@@ -1000,17 +1045,13 @@ def critical_readiness_findings(project_id: str) -> list[str]:
     artifact_dir = metadata.get("artifact_dir") or f"factory/projects/{project_id}"
     factory_dir = Path(repo_path).expanduser() / str(artifact_dir) if repo_path else None
 
-    tracker_ok = bool(
-        metadata.get("notion_tracker_url")
-        or metadata.get("notion_tracker_page_id")
-        or _any_explicit_waiver(metadata, "notion_waived", "tracker_waived")
-    )
+    notion_issue = _notion_projection_issue(metadata)
     strategy = _repository_strategy(project)
     if not factory_contracts.repository_strategy_is_complete(strategy):
         missing = ", ".join(strategy.get("missing_fields") or ["repo_scope"])
         findings.append(f"missing G0 repository strategy metadata: {missing}")
-    if metadata.get("notion_required") and not tracker_ok:
-        findings.append("missing project-specific Notion PM tracker metadata")
+    if _metadata_bool(metadata, "notion_required") and notion_issue:
+        findings.append(f"required Notion PM tracker is {notion_issue}")
 
     if not factory_dir or not factory_dir.is_dir():
         findings.append(f"missing project-local factory documentation directory: {artifact_dir}")
@@ -2145,13 +2186,9 @@ def _resolved_reconciliation_anomaly(project: dict[str, Any] | None, task: dict[
     if code == "missing_repository_strategy":
         return (code, source) if _repository_strategy_complete(project) else None
     if code == "missing_notion_project":
-        if (
-            project_metadata.get("notion_tracker_url")
-            or project_metadata.get("notion_tracker_page_id")
-            or _any_explicit_waiver(project_metadata, "notion_waived", "tracker_waived")
-        ):
-            return code, source
-        return None
+        return (code, source) if not _metadata_bool(project_metadata, "notion_required") or _notion_projection_issue(project_metadata) is None else None
+    if code == "notion_pm_projection_warning":
+        return (code, source) if _metadata_bool(project_metadata, "notion_required") or _notion_projection_issue(project_metadata) is None else None
 
     factory_dir, artifact_dir = _project_artifact_dir(project)
     if code == "missing_project_artifact_dir":
@@ -2428,6 +2465,7 @@ def _dispatch_preflight_blockers(
     *,
     docs_ready: bool,
     notion_ready: bool,
+    notion_required: bool = False,
     docs_first_waived: bool = False,
 ) -> list[str]:
     """Return docs-first blockers for a candidate implementation dispatch."""
@@ -2439,18 +2477,18 @@ def _dispatch_preflight_blockers(
     blockers: list[str] = []
     if not docs_ready:
         blockers.append("missing_or_unindexed_docs")
-    if not notion_ready and _metadata(task).get("notion_required"):
+    if not notion_ready and (notion_required or _metadata_bool(_metadata(task), "notion_required")):
         blockers.append("missing_notion_tracker")
     return blockers
 
 
-def _project_docs_notion_preflight(project: dict[str, Any], tasks: list[dict[str, Any]], pending_gates: list[dict[str, Any]], gates: list[dict[str, Any]]) -> tuple[bool, bool, bool]:
+def _project_docs_notion_preflight(project: dict[str, Any], tasks: list[dict[str, Any]], pending_gates: list[dict[str, Any]], gates: list[dict[str, Any]]) -> tuple[bool, bool, bool, bool]:
     metadata = _metadata(project)
     findings = reconciliation_findings(project, tasks, pending_gates, gates)
     codes = {str(finding.get("code") or "") for finding in findings}
     docs_ready = not bool(_g1_document_blockers(project)) and "missing_project_artifact_dir" not in codes
-    notion_ready = "missing_notion_project" not in codes
-    return docs_ready, notion_ready, _dispatch_docs_first_waived(metadata)
+    notion_ready = _notion_projection_issue(metadata) is None
+    return docs_ready, notion_ready, _metadata_bool(metadata, "notion_required"), _dispatch_docs_first_waived(metadata)
 
 
 def _record_dispatch_preflight_denied(project_id: str, task: dict[str, Any], blockers: list[str], *, worker: str) -> None:
@@ -2492,7 +2530,7 @@ def claim_next_task(project_id: Optional[str] = None, *, worker: str = "factory-
             reconcile_project(pid)
             continue
         full_project = _project(pid) or {"project_id": pid, "metadata": {}}
-        docs_ready, notion_ready, docs_first_waived = _project_docs_notion_preflight(
+        docs_ready, notion_ready, notion_required, docs_first_waived = _project_docs_notion_preflight(
             full_project,
             tasks,
             _active_pending_gates(pid),
@@ -2502,6 +2540,7 @@ def claim_next_task(project_id: Optional[str] = None, *, worker: str = "factory-
             task,
             docs_ready=docs_ready,
             notion_ready=notion_ready,
+            notion_required=notion_required,
             docs_first_waived=docs_first_waived,
         )
         if preflight_blockers:
