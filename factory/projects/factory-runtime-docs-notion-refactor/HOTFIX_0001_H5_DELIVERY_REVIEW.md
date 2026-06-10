@@ -5,8 +5,25 @@ Branch: `factory/runtime-docs-notion-refactor/hotfix-doc-source-truth-gate`
 Worktree: `/home/jean/Projects/.worktrees/factory-runtime-docs-notion-refactor/hotfix-doc-source-truth-gate`
 Run: `run-1781064541-b0109a7b`
 Engine: zeus
-Date: 2026-06-10T04:00:00Z
-Status: **AWAITING JEAN GO/NO-GO**
+Date: 2026-06-10T05:00:00Z
+Status: **AWAITING JEAN GO/NO-GO — ALL EVIDENCE VERIFIED GREEN**
+
+---
+
+## Pre-delivery Verification (2026-06-10T05:00:00Z)
+
+| Check | Result | Evidence |
+|---|---|---|
+| Pytest suite (35 tests) | **PASS** | 35/35 passed in 1.39s (live run) |
+| Live smoke outputs | **PASS** | QA_REPORT.md R3 confirmed |
+| Factory DB no anomalies | **PASS** | `resolve-state` → active, no anomalies |
+| Factory DB no stale active runs | **PASS** | `resolve-state` → active, no stale rows |
+| CRM/Funnel Core frozen | **PASS** | `funnel-core-crm-workflow` [completed] |
+| Git working tree | **CLEAN** | `git status` — nothing to commit |
+
+Delivery gate recorded: `gate_id=344`, reviewer=factory-orchestrator.
+
+---
 
 ---
 
