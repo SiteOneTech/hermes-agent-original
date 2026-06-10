@@ -2,73 +2,73 @@
 
 Project: `factory-runtime-docs-notion-refactor`
 Created: 2026-06-09T23:05:00Z
-Updated: 2026-06-10T03:22:08Z
+Updated: 2026-06-10T18:00:00Z
 Source of truth: Agent Core Postgres `factory.*` + versioned repo Markdown artifacts.
 PM projection: Notion is important for human/directive visibility, but it is not the source of truth unless Jean explicitly marks it mandatory for a specific project.
 
-## Required project-local artifact pack
+## Required G1 project-local artifact pack
 
-| File | Purpose | Status |
-|---|---|---|
-| `FACTORY_INTAKE.md` | Intake, trigger, scope | complete |
-| `PRD.md` | Requirements and acceptance criteria | complete |
-| `ADRS.md` | Architecture/method decisions | complete |
-| `METHODOLOGY_PLAN.md` | Hybrid methodology and gate order | complete |
-| `TECHNICAL_BLUEPRINT.md` | Runtime components and contracts | complete |
-| `SPRINT_PLAN.md` | Sprint/story plan | complete |
-| `TASK_GRAPH.md` | Task dependencies | complete; reconciled by H4 to match Factory DB |
-| `TRACKER.md` | Human-readable task tracker | complete; reconciled by H4 — H1/H2/H3 marked done, H4 in_progress |
-| `QA_REPORT.md` | QA evidence | complete; R3/R4/R5 done |
-| `SECURITY_REVIEW.md` | Security evidence | complete — GREEN, no blocking findings |
-| `DELIVERY_REPORT.md` | Delivery/GO report | superseded; marked historical — HOTFIX-0001 H5 owns active delivery gate |
-| `QUALITY_REVIEW.md` | Independent quality review | complete; stale INC-0001 next-action items removed by H4 |
-| `NOTION_UPDATE.md` | Notion PM projection/update evidence | complete as human PM projection; not canonical truth |
-| `HOTFIX_0001_DOCUMENTARY_SOURCE_OF_TRUTH_GATE.md` | Hotfix contract for G1 document readiness gate and Notion projection semantics | complete |
-| `HOTFIX_0001_H5_DELIVERY_REVIEW.md` | H5 delivery review and Jean GO/NO-GO | open — awaiting Jean GO |
+All G1 documents below are required before normal implementation dispatch. Readiness means: exists, indexed here, committed in the canonical repo path, validated, and reviewed.
 
-## G1 blocking documents for future non-trivial Factory projects
+| File | Purpose | Category | Readiness |
+|---|---|---|---|
+| `FACTORY_INTAKE.md` | Intake, trigger, scope | G1 required | Validated: yes; Reviewed: yes |
+| `REQUIREMENTS_ANALYSIS.md` | User/business requirements analysis | G1 required | Validated: yes; Reviewed: yes |
+| `PATTERN_ANALYSIS.md` | Existing patterns and reusable design decisions | G1 required | Validated: yes; Reviewed: yes |
+| `ASSUMPTIONS_AND_OPEN_QUESTIONS.md` | Assumptions, decisions, unresolved questions | G1 required | Validated: yes; Reviewed: yes |
+| `PRD.md` | Requirements and acceptance criteria | G1 required | Validated: yes; Reviewed: yes |
+| `ADRS.md` | Architecture/method decisions | G1 required | Validated: yes; Reviewed: yes |
+| `METHODOLOGY_PLAN.md` | Hybrid methodology and gate order | G1 required | Validated: yes; Reviewed: yes |
+| `TECHNICAL_BLUEPRINT.md` | Runtime components and contracts | G1 required | Validated: yes; Reviewed: yes |
+| `SPRINT_PLAN.md` | Sprint/story plan | G1 required | Validated: yes; Reviewed: yes |
+| `TASK_GRAPH.md` | Task dependencies | G1 required | Validated: yes; Reviewed: yes |
+| `TRACKER.md` | Human-readable task tracker | G1 required | Validated: yes; Reviewed: yes |
+| `DOCUMENTATION_INDEX.md` | Entry point and source-of-truth map | G1 required | Validated: yes; Reviewed: yes |
+| `QA_GATES.md` | QA gate definitions and acceptance evidence model | G1 required | Validated: yes; Reviewed: yes |
+| `SECURITY_GATES.md` | Security gate definitions and waiver model | G1 required | Validated: yes; Reviewed: yes |
 
-HOTFIX-0001 introduces a stricter G1 Documentary Readiness Gate. The blocking document set should be represented first-class in the runtime and UI/API, not inferred from prose only:
+## Lifecycle and PM projection artifacts
 
-| Document | Category | Required before implementation |
-|---|---|---:|
-| `FACTORY_INTAKE.md` | G1 required | yes |
-| `REQUIREMENTS_ANALYSIS.md` | G1 required | yes |
-| `PATTERN_ANALYSIS.md` | G1 required | yes |
-| `ASSUMPTIONS_AND_OPEN_QUESTIONS.md` | G1 required | yes |
-| `PRD.md` | G1 required | yes |
-| `ADRS.md` | G1 required | yes |
-| `METHODOLOGY_PLAN.md` | G1 required | yes |
-| `TECHNICAL_BLUEPRINT.md` | G1 required | yes |
-| `SPRINT_PLAN.md` | G1 required | yes |
-| `TASK_GRAPH.md` | G1 required | yes |
-| `TRACKER.md` | G1 required | yes |
-| `QA_GATES.md` | G1 required | yes |
-| `SECURITY_GATES.md` | G1 required or explicit N/A | yes |
-| `DOCUMENTATION_INDEX.md` | G1 required | yes |
+Lifecycle artifacts are created/updated during execution and become required for their phase gates. PM projection artifacts support human visibility but are not execution truth by default.
 
-Lifecycle documents such as `QA_REPORT.md`, `SECURITY_REVIEW.md`, `QUALITY_REVIEW.md`, `DELIVERY_REPORT.md`, `NOTION_UPDATE.md`, change records, and retrospectives may be created/updated during execution by their responsible roles, then become required for their later gates.
+| File | Purpose | Category | Status |
+|---|---|---|---|
+| `QA_REPORT.md` | QA evidence | lifecycle | complete; R3/R4/R5 done |
+| `SECURITY_REVIEW.md` | Security evidence | lifecycle | complete — GREEN, no blocking findings |
+| `QUALITY_REVIEW.md` | Independent quality review | lifecycle | complete; stale INC-0001 next-action items removed by H4 |
+| `DELIVERY_REPORT.md` | Historical delivery/GO report for INC-0001 | lifecycle | superseded by HOTFIX-0001/H6 |
+| `NOTION_UPDATE.md` | Notion PM projection/update evidence | PM projection | complete as human PM projection; not canonical truth |
+| `HOTFIX_0001_DOCUMENTARY_SOURCE_OF_TRUTH_GATE.md` | Hotfix contract for G1 document readiness gate and Notion projection semantics | lifecycle/reference | complete |
+| `HOTFIX_0001_H5_DELIVERY_REVIEW.md` | H5 delivery review and Jean GO/NO-GO | lifecycle/reference | superseded by H6 canonical landing |
 
 ## Builder reading order
 
 1. `DOCUMENTATION_INDEX.md`
-2. `HOTFIX_0001_DOCUMENTARY_SOURCE_OF_TRUTH_GATE.md` when working this hotfix
-3. `FACTORY_INTAKE.md`
-4. `PRD.md`
-5. `ADRS.md`
-6. `METHODOLOGY_PLAN.md`
-7. `TECHNICAL_BLUEPRINT.md`
-8. `SPRINT_PLAN.md`
-9. `TASK_GRAPH.md`
-10. Factory DB task acceptance criteria
+2. `FACTORY_INTAKE.md`
+3. `REQUIREMENTS_ANALYSIS.md`
+4. `PATTERN_ANALYSIS.md`
+5. `ASSUMPTIONS_AND_OPEN_QUESTIONS.md`
+6. `PRD.md`
+7. `ADRS.md`
+8. `METHODOLOGY_PLAN.md`
+9. `TECHNICAL_BLUEPRINT.md`
+10. `SPRINT_PLAN.md`
+11. `TASK_GRAPH.md`
+12. `QA_GATES.md`
+13. `SECURITY_GATES.md`
+14. Factory DB task acceptance criteria
+15. `HOTFIX_0001_DOCUMENTARY_SOURCE_OF_TRUTH_GATE.md` when working this hotfix lineage
+
+Every Factory worker must also load/obey `factory-agent-operating-canon` in addition to its role-specific skills.
 
 ## Source-of-truth rule
 
 Factory DB + repo Markdown artifacts are canonical. Notion is a human PM projection, executive status surface, project register, and quick-link hub. Missing/stale Notion should be visible to humans as PM projection drift, but it must not become a default technical dispatch/readiness blocker unless Jean explicitly requires Notion for that specific project.
 
-## HOTFIX-0001 H1 implementation evidence
+## HOTFIX/H6 implementation evidence
 
-- Code: `hermes_cli/factory_pg.py` defines `G1_BLOCKING_DOCUMENTS`, `LIFECYCLE_DOCUMENTS`, `PM_PROJECTION_DOCUMENTS`, `project_document_status(project)`, and injects per-project `document_status` into `status()` payloads.
-- Tests: `tests/hermes_cli/test_factory_control_plane_refactor.py` covers category split, missing/indexed/uncommitted G1 blockers, negated review text, Notion-optional implementation preflight, and status payload exposure.
-- Verification command: `python -m pytest tests/hermes_cli/test_factory.py tests/hermes_cli/test_factory_control_plane_refactor.py tests/hermes_cli/test_factory_cron_control_plane.py tests/tools/test_factory_tools.py -q` → 36 passed, 1 warning.
-- Current artifact reconciliation note: this project intentionally still shows G1 document blockers for missing/unstamped analysis docs; H4 owns artifact reconciliation and must not be collapsed into H1.
+- Code: `hermes_cli/factory_pg.py` defines `G1_BLOCKING_DOCUMENTS`, `LIFECYCLE_DOCUMENTS`, `PM_PROJECTION_DOCUMENTS`, `project_document_status(project)`, injects per-project `document_status` into `status()` payloads, and adds document-status snapshots to delivery/critical-readiness gates.
+- Dispatch: `scripts/factory/factory_orchestrator_tick.py` injects the G1 document entry point, document-status summary, and common Factory skill requirement into worker prompts.
+- Agent skill: `skills/software-development/factory-agent-operating-canon/SKILL.md` is the shared operating canon for all Factory roles.
+- Dashboard: `/api/factory/status` and the Factory page expose G1 readiness, blocking documents, and per-file flags.
+- Tests: `tests/hermes_cli/test_factory_control_plane_refactor.py` covers category split, missing/indexed/uncommitted G1 blockers, Notion-optional implementation preflight, status payload exposure, and gate snapshots.

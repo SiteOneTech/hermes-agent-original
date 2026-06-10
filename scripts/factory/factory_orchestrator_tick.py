@@ -62,6 +62,41 @@ def _effective_gates(gates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(latest.values(), key=_gate_ts, reverse=True)
 
 
+def _canonical_doc_lines(project: dict[str, Any], task: dict[str, Any]) -> list[str]:
+    """Summarize the G1 documentation pack the spawned worker must read."""
+
+    project_id = str(project.get("project_id") or task.get("project_id") or "")
+    work_root = str(task.get("worktree_path") or project.get("repo_path") or "").strip()
+    artifact_dir = "factory/projects/" + project_id if project_id else "factory/projects/<project_id>"
+    metadata_raw = project.get("metadata")
+    metadata = metadata_raw if isinstance(metadata_raw, dict) else {}
+    artifact_value = metadata.get("artifact_dir")
+    if isinstance(artifact_value, str) and artifact_value.strip():
+        artifact_dir = artifact_value.strip()
+    statuses = project.get("document_status") if isinstance(project.get("document_status"), list) else []
+    entrypoint = f"{artifact_dir.rstrip('/')}/DOCUMENTATION_INDEX.md"
+    if work_root:
+        entrypoint = str(Path(work_root).expanduser() / entrypoint)
+    lines = [
+        "- Skill operativo común: `factory-agent-operating-canon` (obligatorio para todos los roles Factory).",
+        f"- Entrada documental obligatoria: {entrypoint}",
+        "- Antes de implementar o revisar, lee DOCUMENTATION_INDEX.md y los G1 docs que apliquen a tu fase; cita los paths usados en tu evidencia final.",
+    ]
+    if not statuses:
+        lines.append("- document_status no vino en el payload; si la tarea no es de bootstrap/reconciliación, bloquea y pide reconciliación G1.")
+        return lines
+    blockers = [row for row in statuses if row.get("category") == "g1_required" and row.get("blocking")]
+    lines.append(f"- G1 readiness: {len(statuses) - len(blockers)}/{len(statuses)} documentos sin blocker; blockers={len(blockers)}.")
+    for row in [r for r in statuses if r.get("category") == "g1_required"][:20]:
+        missing = [key for key in ("exists", "indexed", "committed", "validated", "reviewed") if not row.get(key)]
+        state = "READY" if not missing else "BLOCKED missing=" + ",".join(missing)
+        path = str(row.get("path") or row.get("file_name") or "")
+        if work_root and path and not Path(path).is_absolute():
+            path = str(Path(work_root).expanduser() / path)
+        lines.append(f"  - {row.get('file_name')}: {state} path={path}")
+    return lines
+
+
 def _task_prompt(payload: dict[str, Any], claim: dict[str, Any]) -> str:
     task = claim["task"]
     run_type = str(claim.get("run_type") or "implementation")
@@ -72,6 +107,7 @@ def _task_prompt(payload: dict[str, Any], claim: dict[str, Any]) -> str:
     repo_strategy = project_meta.get("repo_strategy") if isinstance(project_meta.get("repo_strategy"), dict) else {}
     related_tasks = [t for t in payload.get("tasks", []) if t.get("project_id") == project_id]
     gates = _effective_gates([g for g in payload.get("gates", []) if g.get("project_id") == project_id])[:20]
+    doc_lines = _canonical_doc_lines(project, task)
     return "\n".join(
         [
             "Eres un worker del SitioUno Software Factory. Ejecuta SOLO el incremento asignado y deja evidencia verificable." if not is_review else "Eres un reviewer del SitioUno Software Factory. Revisa SOLO el incremento asignado y decide si puede cerrarse.",
@@ -93,6 +129,9 @@ def _task_prompt(payload: dict[str, Any], claim: dict[str, Any]) -> str:
             f"Descripción: {task.get('description') or '—'}",
             f"Acceptance criteria: {json.dumps(task.get('acceptance_criteria') or [], ensure_ascii=False)}",
             f"Dependencias: {json.dumps(task.get('dependencies') or [], ensure_ascii=False)}",
+            "",
+            "Documentación canónica / G1 Documentary Readiness:",
+            *doc_lines,
             "",
             "Resumen/evidencia previa/rework:",
             str(task.get("result_summary") or "—")[-4000:],

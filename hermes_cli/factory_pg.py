@@ -1085,10 +1085,33 @@ def critical_readiness_findings(project_id: str) -> list[str]:
     return findings
 
 
+def _document_status_snapshot(project_id: str) -> dict[str, Any]:
+    """Return delivery-gate evidence proving G1 doc readiness at decision time."""
+
+    project = _project(project_id)
+    if not project:
+        return {"available": False, "project_id": project_id, "reason": "project_not_found"}
+    statuses = project_document_status(project)
+    blockers = [row for row in statuses if row.get("category") == "g1_required" and row.get("blocking")]
+    return {
+        "available": True,
+        "project_id": project_id,
+        "docs_ready": not blockers,
+        "document_count": len(statuses),
+        "g1_document_count": sum(1 for row in statuses if row.get("category") == "g1_required"),
+        "blocking_count": len(blockers),
+        "blocking_documents": [row.get("file_name") for row in blockers],
+        "documents": statuses,
+    }
+
+
 def record_gate(project_id: str, gate_type: str, status: str, *, lane_id: Optional[str] = None, task_id: Optional[str] = None, reviewer: Optional[str] = None, evidence: Optional[dict[str, Any]] = None, notes: Optional[str] = None, **_: Any) -> dict[str, Any]:
     ensure_runtime_schema()
     gate = str(gate_type or "").strip()
     state = str(status or "").strip()
+    gate_evidence = dict(evidence or {})
+    if gate in {"delivery", "critical_readiness"}:
+        gate_evidence.setdefault("document_status_snapshot", _document_status_snapshot(project_id))
     if gate in {"delivery", "critical_readiness"} and state == "passed":
         blockers = critical_readiness_findings(project_id)
         if blockers:
@@ -1096,7 +1119,7 @@ def record_gate(project_id: str, gate_type: str, status: str, *, lane_id: Option
 
     row = sql.statement_one(f"""
       INSERT INTO factory.gates (project_id, lane_id, task_id, gate_type, status, reviewer, evidence, notes, timestamp)
-      VALUES ({_q(project_id)}, {_q(lane_id)}, {_q(task_id)}, {_q(gate)}, {_q(state)}, {_q(reviewer)}, {_j(evidence or {})}, {_q(notes)}, now())
+      VALUES ({_q(project_id)}, {_q(lane_id)}, {_q(task_id)}, {_q(gate)}, {_q(state)}, {_q(reviewer)}, {_j(gate_evidence)}, {_q(notes)}, now())
       RETURNING gate_id, project_id, status, timestamp
     """, user=_user())
     gate_id = row["gate_id"] if row else None

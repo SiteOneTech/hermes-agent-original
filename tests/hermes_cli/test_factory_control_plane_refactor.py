@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import subprocess
+from pathlib import Path
 
 import pytest
 
-from hermes_cli import factory, factory_pg
+from hermes_cli import factory, factory_catalog, factory_pg
 
 
 class FakeSql:
@@ -429,6 +431,59 @@ def test_status_payload_includes_document_status(fake_sql, monkeypatch):
 
     payload = factory_pg.status("demo")
     assert payload["projects"][0]["document_status"] == [{"file_name": "PRD.md", "category": "g1_required"}]
+
+
+def test_record_delivery_gate_persists_document_status_snapshot(fake_sql, monkeypatch):
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: {"project_id": project_id, "risk_level": "medium", "repo_path": None, "metadata": {}})
+    monkeypatch.setattr(factory_pg, "project_document_status", lambda project: [
+        {"file_name": "PRD.md", "category": "g1_required", "blocking": False},
+        {"file_name": "QA_REPORT.md", "category": "lifecycle", "blocking": False},
+    ])
+    fake_sql.statement_one_results = [{"gate_id": 42, "project_id": "demo", "status": "passed", "timestamp": "now"}]
+
+    result = factory_pg.record_gate("demo", "delivery", "passed", reviewer="qa", evidence={"tests": "passed"})
+
+    assert result["gate_id"] == 42
+    joined = "\n".join(fake_sql.statements)
+    assert "document_status_snapshot" in joined
+    assert "blocking_count" in joined
+    assert "PRD.md" in joined
+
+
+def test_factory_catalog_assigns_common_operating_canon_to_all_agents():
+    for agent in factory_catalog.FACTORY_AGENTS:
+        skills = agent[5]
+        assert skills[0] == factory_catalog.FACTORY_CANONICAL_SKILL
+
+
+def test_orchestrator_prompt_injects_g1_docs_and_common_skill():
+    script = Path(__file__).resolve().parents[2] / "scripts" / "factory" / "factory_orchestrator_tick.py"
+    spec = importlib.util.spec_from_file_location("factory_orchestrator_tick_test", script)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    payload = {
+        "projects": [{
+            "project_id": "demo",
+            "name": "Demo",
+            "repo_path": "/repo",
+            "metadata": {"artifact_dir": "factory/projects/demo"},
+            "document_status": [
+                {"file_name": "DOCUMENTATION_INDEX.md", "path": "factory/projects/demo/DOCUMENTATION_INDEX.md", "category": "g1_required", "blocking": False, "exists": True, "indexed": True, "committed": True, "validated": True, "reviewed": True},
+                {"file_name": "PRD.md", "path": "factory/projects/demo/PRD.md", "category": "g1_required", "blocking": False, "exists": True, "indexed": True, "committed": True, "validated": True, "reviewed": True},
+            ],
+        }],
+        "tasks": [],
+        "gates": [],
+    }
+    claim = {"run_id": "run-1", "run_type": "implementation", "task": {"project_id": "demo", "task_id": "t1", "title": "Implement", "phase": "implementation", "engine": "codex", "worktree_path": "/repo/.worktrees/demo/t1"}}
+
+    prompt = module._task_prompt(payload, claim)
+
+    assert "factory-agent-operating-canon" in prompt
+    assert "DOCUMENTATION_INDEX.md" in prompt
+    assert "G1 readiness" in prompt
+    assert "/repo/.worktrees/demo/t1/factory/projects/demo/PRD.md" in prompt
 
 
 def test_dispatch_preflight_exempts_reconciliation_tasks():

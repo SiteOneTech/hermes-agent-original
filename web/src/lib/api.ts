@@ -1710,10 +1710,20 @@ export interface FactoryFinding {
 
 export interface FactoryDocumentStatus {
   name: string;
+  file_name?: string;
   path: string;
   url?: string | null;
   exists: boolean;
   size: number;
+  category?: "g1_required" | "lifecycle" | "pm_projection" | string | null;
+  indexed?: boolean;
+  committed?: boolean;
+  validated?: boolean;
+  reviewed?: boolean;
+  blocking?: boolean;
+  owner?: string | null;
+  reviewer?: string | null;
+  git_status?: string | null;
 }
 
 export interface FactoryRepositoryStrategyCard {
@@ -1758,6 +1768,9 @@ export interface FactoryProjectDashboard {
   workflow?: FactoryWorkflowState;
   repo_strategy_card?: FactoryRepositoryStrategyCard;
   required_docs: FactoryDocumentStatus[];
+  document_status?: FactoryDocumentStatus[];
+  g1_blocking_documents?: FactoryDocumentStatus[];
+  g1_blocking_count?: number;
   missing_required_docs: FactoryDocumentStatus[];
   findings: FactoryFinding[];
   quick_status: string;
@@ -1776,6 +1789,7 @@ export interface FactoryProject {
   human_owner?: string | null;
   summary?: string | null;
   metadata?: Record<string, unknown>;
+  document_status?: FactoryDocumentStatus[];
   started_at: string;
   updated_at: string;
   dashboard?: FactoryProjectDashboard;

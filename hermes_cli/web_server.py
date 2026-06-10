@@ -1093,6 +1093,10 @@ async def get_system_stats():
 # ---------------------------------------------------------------------------
 
 _FACTORY_REQUIRED_DOCS = (
+    "FACTORY_INTAKE.md",
+    "REQUIREMENTS_ANALYSIS.md",
+    "PATTERN_ANALYSIS.md",
+    "ASSUMPTIONS_AND_OPEN_QUESTIONS.md",
     "PRD.md",
     "ADRS.md",
     "METHODOLOGY_PLAN.md",
@@ -1103,9 +1107,6 @@ _FACTORY_REQUIRED_DOCS = (
     "DOCUMENTATION_INDEX.md",
     "QA_GATES.md",
     "SECURITY_GATES.md",
-    "QA_REPORT.md",
-    "SECURITY_REVIEW.md",
-    "DELIVERY_REPORT.md",
 )
 
 _FACTORY_DONE_STATUSES = {"done", "completed", "verified", "cancelled", "superseded"}
@@ -1245,9 +1246,46 @@ def _factory_markdown_link(label: str, url: str) -> str:
 
 def _factory_doc_inventory(project: Dict[str, Any]) -> List[Dict[str, Any]]:
     base = _factory_project_artifact_dir(project)
+    backend_status = project.get("document_status") if isinstance(project.get("document_status"), list) else []
+    if backend_status:
+        docs: list[dict[str, Any]] = []
+        for row in backend_status:
+            name = str(row.get("file_name") or row.get("name") or "").strip()
+            rel_path = str(row.get("path") or name).strip()
+            path = Path(rel_path)
+            if base is not None and not path.is_absolute():
+                artifact_dir_name = base.name
+                parts = path.parts
+                if artifact_dir_name in parts:
+                    path = Path(str(project.get("repo_path") or "")) / path
+                else:
+                    path = base / name
+            exists = bool(row.get("exists"))
+            try:
+                size = path.stat().st_size if exists and path.exists() else 0
+            except Exception:
+                size = 0
+            docs.append({
+                "name": name,
+                "file_name": name,
+                "path": rel_path,
+                "url": _factory_doc_external_url(project, path) if exists else "",
+                "exists": exists,
+                "size": size,
+                "category": row.get("category"),
+                "indexed": bool(row.get("indexed")),
+                "committed": bool(row.get("committed")),
+                "validated": bool(row.get("validated")),
+                "reviewed": bool(row.get("reviewed")),
+                "blocking": bool(row.get("blocking")),
+                "owner": row.get("owner"),
+                "reviewer": row.get("reviewer"),
+                "git_status": row.get("git_status"),
+            })
+        return docs
     if base is None:
         return []
-    docs: list[dict[str, Any]] = []
+    docs = []
     for name in _FACTORY_REQUIRED_DOCS:
         path = base / name
         try:
@@ -1258,10 +1296,20 @@ def _factory_doc_inventory(project: Dict[str, Any]) -> List[Dict[str, Any]]:
             size = 0
         docs.append({
             "name": name,
+            "file_name": name,
             "path": str(path),
             "url": _factory_doc_external_url(project, path) if exists else "",
             "exists": exists,
             "size": size,
+            "category": "g1_required",
+            "indexed": exists,
+            "committed": exists,
+            "validated": False,
+            "reviewed": False,
+            "blocking": not exists,
+            "owner": None,
+            "reviewer": None,
+            "git_status": None,
         })
     return docs
 
@@ -1367,6 +1415,7 @@ def _factory_project_dashboard(
     pending_gates = [gate for gate in effective_gates if str(gate.get("status") or "") == "pending"]
     docs = _factory_doc_inventory(project)
     missing_docs = [doc for doc in docs if not doc.get("exists")]
+    g1_blocking_docs = [doc for doc in docs if doc.get("category") == "g1_required" and doc.get("blocking")]
     missing_notion = _factory_project_notion(project) is None
     repo_strategy_card = _factory_repository_strategy_card(project, project_tasks)
     missing_repo_strategy = repo_strategy_card.get("status") != "passed"
@@ -1393,6 +1442,10 @@ def _factory_project_dashboard(
         summary_lines.append(
             f"{len(self_approved)} tarea(s) tienen mismo owner/reviewer; requiere revisión independiente."
         )
+    if g1_blocking_docs:
+        summary_lines.append(f"G1 documental bloqueado: {len(g1_blocking_docs)} documento(s) no están listos.")
+    elif docs:
+        summary_lines.append("G1 documental listo: todos los documentos requeridos existen, están indexados, commiteados, validados y revisados.")
     if missing_docs:
         summary_lines.append(f"Faltan {len(missing_docs)} documento(s) factory requeridos en el repo.")
     if missing_notion:
@@ -1439,6 +1492,16 @@ def _factory_project_dashboard(
                 "title": "Gates pendientes",
                 "message": "Existen gates sin cerrar.",
                 "count": len(pending_gates),
+            }
+        )
+    if g1_blocking_docs:
+        findings.append(
+            {
+                "severity": "warning",
+                "code": "g1_documentary_readiness_blockers",
+                "title": "G1 Documentary Readiness bloqueado",
+                "message": "Hay documentos G1 que no están listos para implementación: deben existir, estar indexados, commiteados, validados y revisados.",
+                "count": len(g1_blocking_docs),
             }
         )
     if missing_docs:
@@ -1505,6 +1568,9 @@ def _factory_project_dashboard(
         "workflow": workflow,
         "repo_strategy_card": repo_strategy_card,
         "required_docs": docs,
+        "document_status": docs,
+        "g1_blocking_documents": g1_blocking_docs,
+        "g1_blocking_count": len(g1_blocking_docs),
         "missing_required_docs": missing_docs,
         "findings": findings,
         "quick_status": " ".join(summary_lines),

@@ -33,6 +33,7 @@ import { H2 } from "@nous-research/ui/ui/components/typography/h2";
 import { api } from "@/lib/api";
 import type {
   FactoryDashboardResponse,
+  FactoryDocumentStatus,
   FactoryFinding,
   FactoryGate,
   FactoryProject,
@@ -508,6 +509,11 @@ export default function FactoryPage() {
   const notionBusy = Boolean(selectedProject && notionBusyProjectId === selectedProject.project_id);
   const selectedEffectiveGates = selectedProject?.dashboard?.effective_gates ?? [];
   const selectedBlockedTasks = selectedProject?.dashboard?.blocked_tasks ?? [];
+  const selectedDocs: FactoryDocumentStatus[] = selectedProject?.dashboard?.document_status ?? selectedProject?.dashboard?.required_docs ?? [];
+  const selectedG1Docs: FactoryDocumentStatus[] = selectedDocs.filter((doc: FactoryDocumentStatus) => (doc.category ?? "g1_required") === "g1_required");
+  const selectedDisplayedDocs: FactoryDocumentStatus[] = selectedG1Docs.length ? selectedG1Docs : selectedDocs;
+  const selectedG1ReadyCount = selectedG1Docs.filter((doc: FactoryDocumentStatus) => !doc.blocking).length;
+  const selectedG1BlockingCount = selectedProject?.dashboard?.g1_blocking_count ?? selectedG1Docs.filter((doc: FactoryDocumentStatus) => doc.blocking).length;
 
   if (loading) {
     return (
@@ -717,8 +723,9 @@ export default function FactoryPage() {
                   <MiniStat label="Tasks" value={countLabel(selectedProject.dashboard?.task_counts)} />
                   <MiniStat label="Gates" value={countLabel(selectedProject.dashboard?.gate_counts)} />
                   <MiniStat
-                    label="Docs factory/"
-                    value={`${selectedProject.dashboard?.required_docs.filter((doc) => doc.exists).length ?? 0}/${selectedProject.dashboard?.required_docs.length ?? 0}`}
+                    label="G1 docs"
+                    value={`${selectedG1ReadyCount}/${selectedG1Docs.length || selectedDocs.length}`}
+                    tone={selectedG1BlockingCount ? "warning" : "success"}
                   />
                 </div>
 
@@ -768,32 +775,54 @@ export default function FactoryPage() {
 
             <Card className="overflow-hidden">
               <CardHeader className="pb-3">
-                <CardTitle className="text-sm">Documentos requeridos</CardTitle>
+                <CardTitle className="text-sm">G1 Documentary Readiness</CardTitle>
               </CardHeader>
               <CardContent className="grid gap-2 text-xs">
-                {(selectedProject.dashboard?.required_docs ?? []).map((doc) => (
-                  <div key={doc.name} className="flex items-center justify-between gap-3 border-b border-border/50 pb-2 last:border-b-0 last:pb-0">
-                    <span className="flex min-w-0 items-center gap-2">
-                      <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                      {doc.url ? (
-                        <a
-                          href={doc.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="truncate text-primary underline-offset-4 hover:underline"
-                          title={doc.url}
-                        >
-                          {doc.name}
-                        </a>
-                      ) : (
-                        <span className="truncate" title={doc.path}>{doc.name}</span>
-                      )}
-                    </span>
-                    <Badge tone={doc.exists ? "success" : "warning"}>
-                      {doc.exists ? `${Math.round(doc.size / 1024)}KB` : "missing"}
-                    </Badge>
-                  </div>
-                ))}
+                {selectedDisplayedDocs.map((doc: FactoryDocumentStatus) => {
+                  const missingFlags = [
+                    ["exists", doc.exists],
+                    ["indexed", doc.indexed],
+                    ["committed", doc.committed],
+                    ["validated", doc.validated],
+                    ["reviewed", doc.reviewed],
+                  ].filter(([, value]) => !value).map(([key]) => key);
+                  return (
+                    <div key={doc.name} className="grid gap-2 border-b border-border/50 pb-2 last:border-b-0 last:pb-0">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="flex min-w-0 items-center gap-2">
+                          <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                          {doc.url ? (
+                            <a
+                              href={doc.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="truncate text-primary underline-offset-4 hover:underline"
+                              title={doc.url}
+                            >
+                              {doc.name}
+                            </a>
+                          ) : (
+                            <span className="truncate" title={doc.path}>{doc.name}</span>
+                          )}
+                        </span>
+                        <Badge tone={doc.blocking ? "warning" : "success"}>
+                          {doc.blocking ? "blocked" : "ready"}
+                        </Badge>
+                      </div>
+                      <div className="flex flex-wrap gap-1 text-[10px] text-muted-foreground">
+                        <Badge tone="outline">{doc.category ?? "g1_required"}</Badge>
+                        {doc.exists ? <Badge tone="success">exists</Badge> : <Badge tone="warning">missing</Badge>}
+                        {doc.indexed ? <Badge tone="success">indexed</Badge> : <Badge tone="warning">not indexed</Badge>}
+                        {doc.committed ? <Badge tone="success">committed</Badge> : <Badge tone="warning">uncommitted</Badge>}
+                        {doc.validated ? <Badge tone="success">validated</Badge> : <Badge tone="warning">not validated</Badge>}
+                        {doc.reviewed ? <Badge tone="success">reviewed</Badge> : <Badge tone="warning">not reviewed</Badge>}
+                      </div>
+                      {missingFlags.length ? (
+                        <p className="text-[11px] text-muted-foreground">Falta: {missingFlags.join(", ")}</p>
+                      ) : null}
+                    </div>
+                  );
+                })}
               </CardContent>
             </Card>
           </div>
@@ -892,9 +921,10 @@ function MetricCard({
   );
 }
 
-function MiniStat({ label, value }: { label: string; value: string }) {
+function MiniStat({ label, value, tone = "outline" }: { label: string; value: string; tone?: BadgeTone }) {
+  const toneClass = tone === "warning" ? "border-warning/40 bg-warning/5" : tone === "success" ? "border-success/40 bg-success/5" : "border-border/80 bg-background/30";
   return (
-    <div className="rounded-md border border-border/80 bg-background/30 p-3">
+    <div className={cn("rounded-md border p-3", toneClass)}>
       <p className="text-xs uppercase tracking-[0.12em] text-muted-foreground">{label}</p>
       <p className="mt-2 text-sm text-text-secondary">{value}</p>
     </div>
