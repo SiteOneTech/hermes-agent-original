@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 
 import pytest
 
@@ -124,6 +125,14 @@ def test_linked_notion_metadata_satisfies_reconciler_for_funnel_core(monkeypatch
     assert not any(f["code"] == "missing_notion_project" for f in findings_linked)
 
 
+def _commit_factory_docs(repo):
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.email", "factory@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Factory Test"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "factory"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "docs"], cwd=repo, check=True, capture_output=True, text=True)
+
+
 def test_cli_link_notion_uses_backend(monkeypatch, capsys):
     calls = {}
 
@@ -152,13 +161,133 @@ def test_cli_link_notion_uses_backend(monkeypatch, capsys):
 def test_dispatch_preflight_blocks_implementation_without_docs_or_notion():
     task = {"task_id": "demo-impl", "phase": "implementation", "status": "todo", "metadata": {}}
     blockers = factory_pg._dispatch_preflight_blockers(task, docs_ready=False, notion_ready=False)
-    assert "missing_notion_tracker" in blockers
     assert "missing_or_unindexed_docs" in blockers
+    assert "missing_notion_tracker" not in blockers
+
+
+def test_dispatch_preflight_allows_docs_ready_when_notion_missing_by_default():
+    task = {"task_id": "demo-impl", "phase": "implementation", "status": "todo", "metadata": {}}
+    assert factory_pg._dispatch_preflight_blockers(task, docs_ready=True, notion_ready=False) == []
 
 
 def test_dispatch_preflight_allows_when_docs_and_notion_ready():
     task = {"task_id": "demo-impl", "phase": "implementation", "status": "todo", "metadata": {}}
     assert factory_pg._dispatch_preflight_blockers(task, docs_ready=True, notion_ready=True) == []
+
+
+def test_document_status_distinguishes_g1_lifecycle_and_pm_projection(tmp_path):
+    factory_dir = tmp_path / "factory" / "projects" / "demo"
+    factory_dir.mkdir(parents=True)
+    for name in factory_pg.G1_BLOCKING_DOCUMENTS:
+        (factory_dir / name).write_text(f"# {name}\nvalidated: yes\nreviewed: yes\n", encoding="utf-8")
+    (factory_dir / "QA_REPORT.md").write_text("# QA\n", encoding="utf-8")
+    (factory_dir / "NOTION_UPDATE.md").write_text("# Notion\n", encoding="utf-8")
+    index_text = "\n".join(
+        f"- `{name}` — status: validated; reviewed by factory-orchestrator" for name in factory_pg.G1_BLOCKING_DOCUMENTS
+    )
+    index_text += "\n- `QA_REPORT.md` — lifecycle report\n- `NOTION_UPDATE.md` — PM projection\n"
+    (factory_dir / "DOCUMENTATION_INDEX.md").write_text(index_text, encoding="utf-8")
+    _commit_factory_docs(tmp_path)
+
+    statuses = factory_pg.project_document_status(
+        {"project_id": "demo", "repo_path": str(tmp_path), "metadata": {"artifact_dir": "factory/projects/demo"}}
+    )
+
+    by_name = {row["file_name"]: row for row in statuses}
+    assert by_name["PRD.md"]["category"] == "g1_required"
+    assert by_name["PRD.md"]["blocking"] is False
+    assert by_name["QA_REPORT.md"]["category"] == "lifecycle"
+    assert by_name["QA_REPORT.md"]["blocking"] is False
+    assert by_name["NOTION_UPDATE.md"]["category"] == "pm_projection"
+    assert by_name["NOTION_UPDATE.md"]["blocking"] is False
+
+
+def test_document_status_detects_missing_from_index_as_g1_blocker(tmp_path):
+    factory_dir = tmp_path / "factory" / "projects" / "demo"
+    factory_dir.mkdir(parents=True)
+    for name in factory_pg.G1_BLOCKING_DOCUMENTS:
+        (factory_dir / name).write_text(f"# {name}\nvalidated: yes\nreviewed: yes\n", encoding="utf-8")
+    (factory_dir / "DOCUMENTATION_INDEX.md").write_text("- `DOCUMENTATION_INDEX.md` — validated; reviewed\n", encoding="utf-8")
+    _commit_factory_docs(tmp_path)
+
+    statuses = factory_pg.project_document_status(
+        {"project_id": "demo", "repo_path": str(tmp_path), "metadata": {"artifact_dir": "factory/projects/demo"}}
+    )
+    prd = next(row for row in statuses if row["file_name"] == "PRD.md")
+    assert prd["exists"] is True
+    assert prd["indexed"] is False
+    assert prd["blocking"] is True
+
+
+def test_document_status_marks_uncommitted_g1_doc_blocking(tmp_path):
+    repo = tmp_path
+    factory_dir = repo / "factory" / "projects" / "demo"
+    factory_dir.mkdir(parents=True)
+    for name in factory_pg.G1_BLOCKING_DOCUMENTS:
+        (factory_dir / name).write_text(f"# {name}\nvalidated: yes\nreviewed: yes\n", encoding="utf-8")
+    (factory_dir / "DOCUMENTATION_INDEX.md").write_text(
+        "\n".join(f"- `{name}` — validated; reviewed" for name in factory_pg.G1_BLOCKING_DOCUMENTS),
+        encoding="utf-8",
+    )
+    _commit_factory_docs(repo)
+    (factory_dir / "PRD.md").write_text("# PRD\nvalidated: yes\nreviewed: yes\nchanged\n", encoding="utf-8")
+
+    statuses = factory_pg.project_document_status(
+        {"project_id": "demo", "repo_path": str(repo), "metadata": {"artifact_dir": "factory/projects/demo"}}
+    )
+    prd = next(row for row in statuses if row["file_name"] == "PRD.md")
+    assert prd["committed"] is False
+    assert prd["blocking"] is True
+
+
+def test_document_status_marks_missing_g1_file_blocking(tmp_path):
+    factory_dir = tmp_path / "factory" / "projects" / "demo"
+    factory_dir.mkdir(parents=True)
+    (factory_dir / "DOCUMENTATION_INDEX.md").write_text(
+        "\n".join(f"- `{name}` — status: validated; reviewed by qa" for name in factory_pg.G1_BLOCKING_DOCUMENTS),
+        encoding="utf-8",
+    )
+    _commit_factory_docs(tmp_path)
+
+    statuses = factory_pg.project_document_status(
+        {"project_id": "demo", "repo_path": str(tmp_path), "metadata": {"artifact_dir": "factory/projects/demo"}}
+    )
+    prd = next(row for row in statuses if row["file_name"] == "PRD.md")
+    assert prd["exists"] is False
+    assert prd["blocking"] is True
+
+
+def test_document_status_does_not_treat_negated_review_words_as_reviewed(tmp_path):
+    factory_dir = tmp_path / "factory" / "projects" / "demo"
+    factory_dir.mkdir(parents=True)
+    for name in factory_pg.G1_BLOCKING_DOCUMENTS:
+        (factory_dir / name).write_text(f"# {name}\nvalidated: yes\nnot reviewed yet\n", encoding="utf-8")
+    (factory_dir / "DOCUMENTATION_INDEX.md").write_text(
+        "\n".join(f"- `{name}` — validated: yes; not reviewed yet" for name in factory_pg.G1_BLOCKING_DOCUMENTS),
+        encoding="utf-8",
+    )
+    _commit_factory_docs(tmp_path)
+
+    statuses = factory_pg.project_document_status(
+        {"project_id": "demo", "repo_path": str(tmp_path), "metadata": {"artifact_dir": "factory/projects/demo"}}
+    )
+    prd = next(row for row in statuses if row["file_name"] == "PRD.md")
+    assert prd["validated"] is True
+    assert prd["reviewed"] is False
+    assert prd["blocking"] is True
+
+
+def test_status_payload_includes_document_status(fake_sql, monkeypatch):
+    fake_sql.rows_results = [
+        [{"project_id": "demo", "status": "active", "repo_path": None, "metadata": {}}],
+        [], [], [], [], [], [], [], [],
+    ]
+    monkeypatch.setattr(factory_pg, "list_agents", lambda: [])
+    monkeypatch.setattr(factory_pg, "factory_watchdog_alerts", lambda payload, project_id=None: [])
+    monkeypatch.setattr(factory_pg, "project_document_status", lambda project: [{"file_name": "PRD.md", "category": "g1_required"}])
+
+    payload = factory_pg.status("demo")
+    assert payload["projects"][0]["document_status"] == [{"file_name": "PRD.md", "category": "g1_required"}]
 
 
 def test_dispatch_preflight_exempts_reconciliation_tasks():

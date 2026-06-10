@@ -18,7 +18,11 @@ from hermes_cli import agent_core_sql as sql
 from hermes_cli import factory_contracts
 from hermes_cli.factory_catalog import DEFAULT_LANES, FACTORY_AGENTS, VALID_METHODS, slugify
 
-FACTORY_REQUIRED_DOCS = (
+G1_BLOCKING_DOCUMENTS = (
+    "FACTORY_INTAKE.md",
+    "REQUIREMENTS_ANALYSIS.md",
+    "PATTERN_ANALYSIS.md",
+    "ASSUMPTIONS_AND_OPEN_QUESTIONS.md",
     "PRD.md",
     "ADRS.md",
     "METHODOLOGY_PLAN.md",
@@ -29,9 +33,24 @@ FACTORY_REQUIRED_DOCS = (
     "DOCUMENTATION_INDEX.md",
     "QA_GATES.md",
     "SECURITY_GATES.md",
+)
+LIFECYCLE_DOCUMENTS = (
     "QA_REPORT.md",
     "SECURITY_REVIEW.md",
+    "QUALITY_REVIEW.md",
     "DELIVERY_REPORT.md",
+    "CHANGELOG.md",
+    "CHANGE_RECORDS.md",
+    "RETROSPECTIVE.md",
+)
+PM_PROJECTION_DOCUMENTS = (
+    "NOTION_UPDATE.md",
+)
+FACTORY_REQUIRED_DOCS = G1_BLOCKING_DOCUMENTS
+FACTORY_DOCUMENT_DEFINITIONS = (
+    *((name, "g1_required") for name in G1_BLOCKING_DOCUMENTS),
+    *((name, "lifecycle") for name in LIFECYCLE_DOCUMENTS),
+    *((name, "pm_projection") for name in PM_PROJECTION_DOCUMENTS),
 )
 CRITICAL_RISK_LEVELS = {"critical", "high"}
 RECONCILIATION_TASK_SPECS: dict[str, dict[str, Any]] = {
@@ -534,6 +553,144 @@ def _docs_missing_from_documentation_index(factory_dir: Path, required_docs: tup
     return [name for name in required_docs if name not in index_text]
 
 
+def _documentation_index_text(factory_dir: Path | None) -> str:
+    if factory_dir is None:
+        return ""
+    try:
+        return (factory_dir / "DOCUMENTATION_INDEX.md").read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
+def _documentation_index_line(index_text: str, file_name: str) -> str:
+    for line in index_text.splitlines():
+        if file_name in line:
+            return line
+    return ""
+
+
+def _project_document_metadata(project: dict[str, Any], file_name: str) -> dict[str, Any]:
+    metadata = _metadata(project)
+    docs = metadata.get("document_status") or metadata.get("documents") or metadata.get("factory_documents")
+    if isinstance(docs, dict):
+        value = docs.get(file_name)
+        return value if isinstance(value, dict) else {}
+    return {}
+
+
+def _git_status_by_file(repo_path: str, artifact_dir: str) -> dict[str, str] | None:
+    repo = Path(repo_path).expanduser() if repo_path else None
+    if not repo or not repo.exists():
+        return None
+    try:
+        probe = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "--is-inside-work-tree"],
+            text=True,
+            capture_output=True,
+            timeout=5,
+            check=False,
+        )
+        if probe.returncode != 0 or probe.stdout.strip() != "true":
+            return None
+        status = subprocess.run(
+            ["git", "-C", str(repo), "status", "--porcelain", "--", artifact_dir],
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+    except Exception:
+        return None
+    if status.returncode != 0:
+        return None
+    result: dict[str, str] = {}
+    prefix = str(artifact_dir).strip("/") + "/"
+    for raw in status.stdout.splitlines():
+        if not raw.strip():
+            continue
+        state = raw[:2].strip() or raw[:2]
+        path = raw[3:].strip()
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1].strip()
+        if path.startswith(prefix):
+            result[Path(path).name] = state
+    return result
+
+
+def _document_flag_from_text(metadata: dict[str, Any], index_line: str, file_text: str, flag: str) -> bool:
+    value = metadata.get(flag)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "yes", "y", "1", "passed", "validated", "reviewed", "approved"}
+    text = (index_line + "\n" + file_text[:2000]).lower()
+    if re.search(rf"\b(not|no|pending|todo|tbd|unvalidated|unreviewed)\b[^\n]{{0,40}}\b{re.escape(flag)}\b", text):
+        return False
+    if flag == "validated":
+        return bool(re.search(r"\b(validated|validado|validation)\b\s*[:=\-]\s*(yes|true|passed|ok|validated)", text) or re.search(r"\bstatus\b\s*[:=\-]\s*validated\b", text))
+    if flag == "reviewed":
+        return bool(
+            re.search(r"\b(reviewed|revisado)\b\s*[:=\-]\s*(yes|true|passed|ok|reviewed)", text)
+            or re.search(r"\b(reviewed by|reviewer|approved by|jean-approved)\b\s*[:=\-]?\s*[a-z0-9]", text)
+            or re.search(r"\bstatus\b\s*[:=\-]\s*(reviewed|approved)\b", text)
+        )
+    return False
+
+
+def project_document_status(project: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return first-class per-file Factory document readiness state.
+
+    G1 documents are blocking source-of-truth artifacts for implementation
+    dispatch. Lifecycle and PM projection docs are exposed for UI/reporting but
+    are not implementation blockers by default.
+    """
+
+    factory_dir, artifact_dir = _project_artifact_dir(project)
+    repo_path = str(project.get("repo_path") or "").strip()
+    index_text = _documentation_index_text(factory_dir)
+    git_state = _git_status_by_file(repo_path, artifact_dir) if repo_path else None
+    statuses: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for file_name, category in FACTORY_DOCUMENT_DEFINITIONS:
+        if file_name in seen:
+            continue
+        seen.add(file_name)
+        path = factory_dir / file_name if factory_dir is not None else None
+        exists = bool(path and path.is_file())
+        try:
+            file_text = path.read_text(encoding="utf-8", errors="replace") if exists and path is not None else ""
+        except Exception:
+            file_text = ""
+        index_line = _documentation_index_line(index_text, file_name)
+        indexed = bool(index_line)
+        committed = bool(exists and git_state is not None and file_name not in git_state)
+        doc_meta = _project_document_metadata(project, file_name)
+        validated = _document_flag_from_text(doc_meta, index_line, file_text, "validated")
+        reviewed = _document_flag_from_text(doc_meta, index_line, file_text, "reviewed")
+        owner = doc_meta.get("owner") or doc_meta.get("owner_profile")
+        reviewer = doc_meta.get("reviewer") or doc_meta.get("reviewer_profile")
+        blocking = category == "g1_required" and not (exists and indexed and committed and validated and reviewed)
+        statuses.append({
+            "file_name": file_name,
+            "path": f"{artifact_dir.rstrip('/')}/{file_name}",
+            "category": category,
+            "exists": exists,
+            "indexed": indexed,
+            "committed": committed,
+            "validated": validated,
+            "reviewed": reviewed,
+            "blocking": blocking,
+            "owner": owner,
+            "reviewer": reviewer,
+            "git_status": git_state.get(file_name) if git_state is not None else "unverified",
+        })
+    return statuses
+
+
+def _g1_document_blockers(project: dict[str, Any]) -> list[dict[str, Any]]:
+    return [row for row in project_document_status(project) if row.get("category") == "g1_required" and row.get("blocking")]
+
+
 def _repo_commit_explicitly_waived(metadata: dict[str, Any]) -> bool:
     return _any_explicit_waiver(
         metadata,
@@ -852,19 +1009,18 @@ def critical_readiness_findings(project_id: str) -> list[str]:
     if not factory_contracts.repository_strategy_is_complete(strategy):
         missing = ", ".join(strategy.get("missing_fields") or ["repo_scope"])
         findings.append(f"missing G0 repository strategy metadata: {missing}")
-    if not tracker_ok:
+    if metadata.get("notion_required") and not tracker_ok:
         findings.append("missing project-specific Notion PM tracker metadata")
 
     if not factory_dir or not factory_dir.is_dir():
         findings.append(f"missing project-local factory documentation directory: {artifact_dir}")
     else:
-        missing_docs = [name for name in FACTORY_REQUIRED_DOCS if not (factory_dir / name).is_file()]
-        if missing_docs and not _required_docs_explicitly_waived(metadata):
-            findings.append("missing minimum docs: " + ", ".join(missing_docs))
-        elif not _required_docs_explicitly_waived(metadata):
-            missing_from_index = _docs_missing_from_documentation_index(factory_dir)
-            if missing_from_index:
-                findings.append("documentation index missing required docs: " + ", ".join(missing_from_index))
+        document_blockers = [] if _required_docs_explicitly_waived(metadata) else _g1_document_blockers(project)
+        if document_blockers:
+            findings.append(
+                "g1 documentary readiness blockers: "
+                + ", ".join(f"{row['file_name']}({','.join(key for key in ('exists', 'indexed', 'committed', 'validated', 'reviewed') if not row.get(key))})" for row in document_blockers)
+            )
         if repo_path and not _repo_commit_explicitly_waived(metadata):
             uncommitted_paths = _uncommitted_project_artifacts(Path(repo_path), str(artifact_dir))
             if uncommitted_paths:
@@ -2283,7 +2439,7 @@ def _dispatch_preflight_blockers(
     blockers: list[str] = []
     if not docs_ready:
         blockers.append("missing_or_unindexed_docs")
-    if not notion_ready:
+    if not notion_ready and _metadata(task).get("notion_required"):
         blockers.append("missing_notion_tracker")
     return blockers
 
@@ -2292,8 +2448,7 @@ def _project_docs_notion_preflight(project: dict[str, Any], tasks: list[dict[str
     metadata = _metadata(project)
     findings = reconciliation_findings(project, tasks, pending_gates, gates)
     codes = {str(finding.get("code") or "") for finding in findings}
-    docs_blockers = {"missing_project_artifact_dir", "missing_required_docs", "docs_not_indexed", "uncommitted_project_artifacts"}
-    docs_ready = not bool(codes & docs_blockers)
+    docs_ready = not bool(_g1_document_blockers(project)) and "missing_project_artifact_dir" not in codes
     notion_ready = "missing_notion_project" not in codes
     return docs_ready, notion_ready, _dispatch_docs_first_waived(metadata)
 
@@ -2782,6 +2937,8 @@ def status(project_id: Optional[str] = None, **_: Any) -> dict[str, Any]:
     task_runs = _normalize_rows(sql.rows(f"SELECT * FROM factory.task_runs WHERE {filter_expr} ORDER BY started_at DESC LIMIT 300", user=_user()))
     human_questions = _normalize_rows(sql.rows(f"SELECT * FROM factory.human_questions WHERE {filter_expr} ORDER BY created_at DESC LIMIT 100", user=_user()))
     agents = list_agents()
+    for project in projects:
+        project["document_status"] = project_document_status(project)
     payload = {
         "db_backend": "agent_core_postgres",
         "database": sql.runtime_env().get("AGENT_DB_NAME", "zeus_agent"),

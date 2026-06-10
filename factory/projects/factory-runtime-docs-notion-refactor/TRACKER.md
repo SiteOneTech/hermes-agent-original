@@ -1,7 +1,7 @@
 # Tracker
 
 Project: `factory-runtime-docs-notion-refactor`
-Updated: 2026-06-10T00:00:00Z
+Updated: 2026-06-10T03:22:08Z
 Status: HOTFIX OPEN — previous delivery is HOLD under Jean's corrected documentary source-of-truth rule.
 
 | Item | Status | Owner | Evidence |
@@ -12,7 +12,7 @@ Status: HOTFIX OPEN — previous delivery is HOLD under Jean's corrected documen
 | INC-0001: Notion metadata CLI/API fix | done | Zeus | `link_notion_tracker` in hermes_cli/factory_pg.py; branch inc-0001 |
 | Jean methodology correction: docs + Factory DB are source of truth, Notion is PM projection | done | Jean/Zeus | `HOTFIX_0001_DOCUMENTARY_SOURCE_OF_TRUTH_GATE.md` |
 | H0: Open hotfix contract in same Factory project | done | Zeus | hotfix branch/worktree + Documentation Index + Task Graph updated |
-| H1: Implement first-class Factory document status model | todo | Factory worker | Runtime distinguishes G1 blocking docs, lifecycle docs, PM projection docs; status/API exposes per-document status |
+| H1: Implement first-class Factory document status model | implemented, pending independent gate | claude-builder | `hermes_cli/factory_pg.py` exposes `project_document_status`; `status()` payload includes per-project `document_status`; focused pytest suite passes |
 | H2: Correct dispatch/readiness semantics for Notion | todo | Factory worker | Missing Notion is PM projection warning unless `notion_required=true`; G1 docs block implementation |
 | H3: Add regression tests and live smoke | todo | QA verifier | Tests prove docs missing/unindexed/uncommitted block; docs ready + missing Notion dispatches by default |
 | H4: Reconcile current project artifacts and reports | todo | Factory reporter | TASK_GRAPH/TRACKER/QA/Delivery/Index agree with Factory DB and corrected rule |

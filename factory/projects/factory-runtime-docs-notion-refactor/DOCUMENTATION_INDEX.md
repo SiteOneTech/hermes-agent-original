@@ -2,7 +2,7 @@
 
 Project: `factory-runtime-docs-notion-refactor`
 Created: 2026-06-09T23:05:00Z
-Updated: 2026-06-10T00:00:00Z
+Updated: 2026-06-10T03:22:08Z
 Source of truth: Agent Core Postgres `factory.*` + versioned repo Markdown artifacts.
 PM projection: Notion is important for human/directive visibility, but it is not the source of truth unless Jean explicitly marks it mandatory for a specific project.
 
@@ -66,3 +66,10 @@ Lifecycle documents such as `QA_REPORT.md`, `SECURITY_REVIEW.md`, `QUALITY_REVIE
 ## Source-of-truth rule
 
 Factory DB + repo Markdown artifacts are canonical. Notion is a human PM projection, executive status surface, project register, and quick-link hub. Missing/stale Notion should be visible to humans as PM projection drift, but it must not become a default technical dispatch/readiness blocker unless Jean explicitly requires Notion for that specific project.
+
+## HOTFIX-0001 H1 implementation evidence
+
+- Code: `hermes_cli/factory_pg.py` defines `G1_BLOCKING_DOCUMENTS`, `LIFECYCLE_DOCUMENTS`, `PM_PROJECTION_DOCUMENTS`, `project_document_status(project)`, and injects per-project `document_status` into `status()` payloads.
+- Tests: `tests/hermes_cli/test_factory_control_plane_refactor.py` covers category split, missing/indexed/uncommitted G1 blockers, negated review text, Notion-optional implementation preflight, and status payload exposure.
+- Verification command: `python -m pytest tests/hermes_cli/test_factory.py tests/hermes_cli/test_factory_control_plane_refactor.py tests/hermes_cli/test_factory_cron_control_plane.py tests/tools/test_factory_tools.py -q` → 36 passed, 1 warning.
+- Current artifact reconciliation note: this project intentionally still shows G1 document blockers for missing/unstamped analysis docs; H4 owns artifact reconciliation and must not be collapsed into H1.
