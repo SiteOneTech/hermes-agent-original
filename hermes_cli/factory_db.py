@@ -181,14 +181,14 @@ CREATE INDEX IF NOT EXISTS idx_factory_gates_project_status ON factory_gates(pro
 """
 
 FACTORY_AGENTS = [
-    ("factory-orchestrator", "Factory Orchestrator", "Intake, routing, gates, metrics, reports", "zeus", ["kanban", "delegation", "terminal", "file", "cronjob", "skills", "web"], ["software-factory-orchestration", "kanban-orchestrator", "programming-delegation-engines"], ["merge", "deploy", "destructive", "credential-change"]),
+    ("factory-orchestrator", "Factory Orchestrator", "Intake, routing, gates, metrics, reports", "zeus", ["kanban", "delegation", "terminal", "file", "cronjob", "skills", "web"], ["software-factory-orchestration", "kanban-orchestrator", "programming-delegation-engines"], ["deploy", "destructive", "credential-change"]),
     ("product-analyst", "Product Analyst", "Functional analysis, PRD, acceptance criteria", "zeus", ["file", "web", "session_search", "skills"], ["writing-plans"], ["publish"]),
     ("solution-architect", "Solution Architect", "Architecture, boundaries, integration design", "claude_code", ["terminal", "file", "web", "skills"], ["writing-plans", "codebase-inspection"], ["architecture-approval"]),
     ("implementation-planner", "Implementation Planner", "Epics, stories, dependencies, task graph", "zeus", ["kanban", "file", "skills"], ["writing-plans", "software-factory-orchestration"], []),
-    ("claude-builder", "Claude Builder", "Complex implementation and refactors", "claude_code", ["terminal", "file", "web", "skills"], ["claude-code", "test-driven-development"], ["push", "merge"]),
-    ("codex-builder", "Codex Builder", "Bounded fixes, tests, QA on diffs", "codex", ["terminal", "file", "web", "skills"], ["codex", "test-driven-development"], ["push", "merge"]),
+    ("claude-builder", "Claude Builder", "Complex implementation and refactors", "claude_code", ["terminal", "file", "web", "skills"], ["claude-code", "test-driven-development"], []),
+    ("codex-builder", "Codex Builder", "Bounded fixes, tests, QA on diffs", "codex", ["terminal", "file", "web", "skills"], ["codex", "test-driven-development"], []),
     ("openhands-lab", "OpenHands Lab", "Sandbox experiments and independent validation", "openhands", ["terminal", "file", "web", "skills"], ["openhands-gcp"], ["external-write"]),
-    ("quality-reviewer", "Quality Reviewer", "Independent spec and quality gate", "codex", ["terminal", "file", "web", "skills"], ["requesting-code-review", "github-code-review"], ["approve-merge"]),
+    ("quality-reviewer", "Quality Reviewer", "Independent spec and quality gate", "codex", ["terminal", "file", "web", "skills"], ["requesting-code-review", "github-code-review"], []),
     ("security-reviewer", "Security Reviewer", "Security and fintech/PII gates", "codex", ["terminal", "file", "web", "skills"], ["requesting-code-review", "systematic-debugging"], ["security-waiver"]),
     ("qa-verifier", "QA Verifier", "Smoke tests and evidence capture", "zeus", ["terminal", "file", "browser", "vision", "skills"], ["dogfood"], ["waive-tests"]),
     ("devops-release", "DevOps Release", "CI, environments, release readiness", "claude_code", ["terminal", "file", "web", "skills"], ["github-pr-workflow"], ["deploy", "credential-change"]),
