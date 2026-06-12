@@ -249,10 +249,22 @@ class TestWebSearchUsesSearchBackend:
     """web_search_tool dispatches through _get_search_backend not _get_backend."""
 
     def test_search_tool_calls_search_backend(self, monkeypatch):
+        from agent import web_search_registry
         from tools import web_tools
 
         called_with = []
+        search_calls = []
         original_get_search = web_tools._get_search_backend
+
+        class DummySearchProvider:
+            name = "firecrawl"
+
+            def supports_search(self):
+                return True
+
+            def search(self, query, limit):
+                search_calls.append((query, limit))
+                return {"success": True, "data": {"web": []}}
 
         def tracking_get_search():
             result = original_get_search()
@@ -261,17 +273,15 @@ class TestWebSearchUsesSearchBackend:
 
         monkeypatch.setattr(web_tools, "_get_search_backend", tracking_get_search)
         monkeypatch.setattr(web_tools, "_load_web_config", lambda: {"backend": "firecrawl"})
-        monkeypatch.setenv("FIRECRAWL_API_KEY", "fake")
+        monkeypatch.setattr(web_tools, "_ensure_web_plugins_loaded", lambda: None)
+        monkeypatch.setattr(web_search_registry, "get_provider", lambda name: DummySearchProvider() if name == "firecrawl" else None)
 
-        # The function will fail at Firecrawl client level but we just
-        # need to verify _get_search_backend was called
-        try:
-            web_tools.web_search_tool("test", 1)
-        except Exception:
-            pass
+        result = json.loads(web_tools.web_search_tool("test", 1))
 
+        assert result == {"success": True, "data": {"web": []}}
         assert len(called_with) > 0
         assert called_with[0][0] == "search"
+        assert search_calls == [("test", 1)]
 
 
 class TestUnconfiguredErrorEnvelopeParity:
