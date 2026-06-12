@@ -131,6 +131,11 @@ def rows(select_sql: str, *, database: str | None = None, user: str | None = Non
 
 
 def one(select_sql: str, *, database: str | None = None, user: str | None = None) -> dict[str, Any] | None:
+    """Return one row from a SELECT-like query.
+
+    Callers should pass the base query without a trailing ``LIMIT``; this helper
+    appends ``LIMIT 1`` before wrapping the query for JSON output.
+    """
     result = rows(f"{select_sql} LIMIT 1", database=database, user=user)
     return result[0] if result else None
 

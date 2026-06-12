@@ -2033,7 +2033,7 @@ def record_factory_blocker_actions(classified: Optional[list[dict[str, Any]]] = 
                 f"{item.get('title') or 'blocked task'}. Recommended action: {item.get('recommended_action')}."
             )
             before = sql.one(
-                f"SELECT question_id FROM factory.human_questions WHERE question_id={_q(question_id)} OR (task_id={_q(task_id)} AND status='pending') LIMIT 1",
+                f"SELECT question_id FROM factory.human_questions WHERE question_id={_q(question_id)} OR (task_id={_q(task_id)} AND status='pending')",
                 user=_user(),
             )
             sql.psql(

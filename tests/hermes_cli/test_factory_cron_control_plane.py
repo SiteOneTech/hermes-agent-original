@@ -66,6 +66,43 @@ def test_factory_blocker_classifier_covers_blocked_and_orphan_tasks():
     assert classified["demo-t2"]["recommended_action"] == "repair_orphan_inflight_state"
 
 
+def test_record_factory_blocker_actions_lets_sql_one_add_limit(monkeypatch):
+    monkeypatch.setattr(factory_pg, "_SCHEMA_READY", True)
+    one_queries = []
+    psql_calls = []
+
+    def fake_one(query, **kwargs):
+        one_queries.append(query)
+        assert "LIMIT 1" not in query.upper()
+        return None
+
+    monkeypatch.setattr(factory_pg.sql, "one", fake_one)
+    monkeypatch.setattr(factory_pg.sql, "psql", lambda query, **kwargs: psql_calls.append(query))
+
+    result = factory_pg.record_factory_blocker_actions(
+        [
+            {
+                "task_id": "demo-blocked",
+                "project_id": "demo",
+                "lane_id": "demo-hybrid",
+                "title": "Needs owner decision",
+                "action_category": "human_question_required",
+                "blocker_category": "external_or_owner_decision",
+                "recommended_action": "create_human_question_and_notify_owner",
+                "requires_human": True,
+                "alert_key": "factory:demo:demo-blocked:human_question_required",
+            }
+        ],
+        payload={"projects": [], "tasks": [], "task_runs": [], "gates": [], "human_questions": []},
+    )
+
+    assert result == {"classified": 1, "events_recorded": 1, "questions_created": 1}
+    assert len(one_queries) == 1
+    assert one_queries[0].startswith("SELECT question_id FROM factory.human_questions WHERE question_id='hq-")
+    assert "OR (task_id='demo-blocked' AND status='pending')" in one_queries[0]
+    assert len(psql_calls) == 2
+
+
 def test_factory_watchdog_alerts_are_actionable_for_runtime_invariants():
     payload = {
         "projects": [{"project_id": "demo", "status": "delivery_hold", "autonomous_enabled": True}],
