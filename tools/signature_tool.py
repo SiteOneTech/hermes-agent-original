@@ -118,7 +118,10 @@ def _handle_signature_status(args: dict, **_kwargs) -> str:
             (SELECT count(*) FROM signature.submitters) AS submitters,
             (SELECT count(*) FROM signature.events) AS events,
             (SELECT count(*) FROM signature.approvals) AS approvals,
-            (SELECT count(*) FROM signature.attachments) AS attachments
+            (SELECT count(*) FROM signature.attachments) AS attachments,
+            (SELECT count(*) FROM signature.reminder_policies) AS reminder_policies,
+            (SELECT count(*) FROM signature.reminder_attempts) AS reminder_attempts,
+            (SELECT count(*) FROM signature.delivery_receipts) AS delivery_receipts
         """, user=_user())
         return _ok(db_backend="agent_core_postgres", counts=counts)
     except Exception as exc:
@@ -193,7 +196,10 @@ def _handle_request_get(args: dict, **_kwargs) -> str:
         submitters = sql.rows(f"SELECT * FROM signature.submitters WHERE request_id={_q(request_id)} ORDER BY signing_order, created_at", user=_user())
         events = sql.rows(f"SELECT * FROM signature.events WHERE request_id={_q(request_id)} ORDER BY signature_event_id", user=_user())
         approvals = sql.rows(f"SELECT * FROM signature.approvals WHERE request_id={_q(request_id)} ORDER BY signed_at", user=_user())
-        return _ok(request=request, submitters=submitters, events=events, approvals=approvals)
+        reminder_policies = sql.rows(f"SELECT * FROM signature.reminder_policies WHERE request_id={_q(request_id)} ORDER BY created_at", user=_user())
+        reminder_attempts = sql.rows(f"SELECT * FROM signature.reminder_attempts WHERE request_id={_q(request_id)} ORDER BY attempted_at DESC, created_at DESC", user=_user())
+        delivery_receipts = sql.rows(f"SELECT * FROM signature.delivery_receipts WHERE request_id={_q(request_id)} ORDER BY created_at DESC", user=_user())
+        return _ok(request=request, submitters=submitters, events=events, approvals=approvals, reminder_policies=reminder_policies, reminder_attempts=reminder_attempts, delivery_receipts=delivery_receipts)
     except Exception as exc:
         return _err(exc)
 
@@ -264,6 +270,149 @@ def _handle_approval_hash_create(args: dict, **_kwargs) -> str:
         return _err(exc)
 
 
+def _receipt_event_type(receipt_type: str, status: str) -> str:
+    if status == "failed":
+        return "delivery_failed"
+    return {
+        "invitation": "invitation_sent",
+        "otp": "otp_sent",
+        "reminder": "reminder_sent",
+        "final_copy": "final_copy_sent",
+    }.get(receipt_type, "delivery_receipt_recorded")
+
+
+def _handle_delivery_receipt_record(args: dict, **_kwargs) -> str:
+    try:
+        request_id = str(args.get("request_id") or "").strip()
+        receipt_type = str(args.get("receipt_type") or "").strip()
+        channel = str(args.get("channel") or "").strip()
+        status = str(args.get("status") or "").strip() or "sent"
+        allowed_receipts = {"invitation", "otp", "reminder", "final_copy"}
+        allowed_statuses = {"queued", "sent", "delivered", "failed", "bounced"}
+        if not request_id:
+            raise ValueError("request_id is required")
+        if receipt_type not in allowed_receipts:
+            raise ValueError(f"receipt_type must be one of {sorted(allowed_receipts)}")
+        if not channel:
+            raise ValueError("channel is required")
+        if status not in allowed_statuses:
+            raise ValueError(f"status must be one of {sorted(allowed_statuses)}")
+        idempotency_key = args.get("idempotency_key") or _sha256_text(_canonical_json({
+            "request_id": request_id,
+            "submitter_id": args.get("submitter_id"),
+            "receipt_type": receipt_type,
+            "channel": channel,
+            "recipient": args.get("recipient"),
+            "provider_message_id": args.get("provider_message_id"),
+        }))
+        receipt = sql.statement_one(f"""
+          INSERT INTO signature.delivery_receipts (request_id, submitter_id, receipt_type, channel, recipient, provider_message_id, status, error_message, delivered_at, idempotency_key, metadata, created_at, updated_at)
+          VALUES ({_q(request_id)}, {_q(args.get('submitter_id'))}, {_q(receipt_type)}, {_q(channel)}, {_q(args.get('recipient'))}, {_q(args.get('provider_message_id'))}, {_q(status)}, {_q(args.get('error_message'))}, {_q(args.get('delivered_at'))}::timestamptz, {_q(idempotency_key)}, {_j(args.get('metadata') or {})}, now(), now())
+          ON CONFLICT (idempotency_key) DO UPDATE SET status=EXCLUDED.status, error_message=EXCLUDED.error_message, delivered_at=COALESCE(EXCLUDED.delivered_at, signature.delivery_receipts.delivered_at), metadata=signature.delivery_receipts.metadata || EXCLUDED.metadata, updated_at=now()
+          RETURNING *
+        """, user=_user())
+        event = _record_event(
+            request_id,
+            submitter_id=args.get("submitter_id"),
+            event_type=_receipt_event_type(receipt_type, status),
+            actor_type=args.get("actor_type") or "system",
+            actor_ref=args.get("actor_ref") or "signature_core",
+            payload={
+                "delivery_receipt_id": (receipt or {}).get("delivery_receipt_id"),
+                "receipt_type": receipt_type,
+                "channel": channel,
+                "recipient": args.get("recipient"),
+                "provider_message_id": args.get("provider_message_id"),
+                "status": status,
+                "error_message": args.get("error_message"),
+                "idempotency_key": idempotency_key,
+            },
+            metadata=args.get("metadata") or {},
+        )
+        return _ok(receipt=receipt, event=event)
+    except Exception as exc:
+        return _err(exc)
+
+
+def _handle_reminder_policy_upsert(args: dict, **_kwargs) -> str:
+    try:
+        request_id = str(args.get("request_id") or "").strip()
+        cadence = str(args.get("cadence") or "").strip()
+        max_attempts = int(args.get("max_attempts") or 0)
+        if not request_id:
+            raise ValueError("request_id is required")
+        if not cadence:
+            raise ValueError("cadence is required")
+        if not args.get("next_due_at"):
+            raise ValueError("next_due_at is required")
+        if max_attempts < 1:
+            raise ValueError("max_attempts must be >= 1")
+        policy_id = args.get("reminder_policy_id") or _slug("signature-reminder-policy", request_id)
+        policy = sql.statement_one(f"""
+          INSERT INTO signature.reminder_policies (reminder_policy_id, request_id, cadence, next_due_at, max_attempts, escalation_settings, enabled, metadata, created_at, updated_at)
+          VALUES ({_q(policy_id)}, {_q(request_id)}, {_q(cadence)}, {_q(args.get('next_due_at'))}::timestamptz, {max_attempts}, {_j(args.get('escalation_settings') or {})}, {str(bool(args.get('enabled', True))).lower()}, {_j(args.get('metadata') or {})}, now(), now())
+          ON CONFLICT (request_id) DO UPDATE SET cadence=EXCLUDED.cadence, next_due_at=EXCLUDED.next_due_at, max_attempts=EXCLUDED.max_attempts, escalation_settings=EXCLUDED.escalation_settings, enabled=EXCLUDED.enabled, metadata=signature.reminder_policies.metadata || EXCLUDED.metadata, updated_at=now()
+          RETURNING *
+        """, user=_user())
+        event = _record_event(request_id, event_type="reminder_policy_updated", actor_type=args.get("actor_type") or "agent", actor_ref=args.get("actor_ref") or "agent", payload={"reminder_policy_id": policy_id, "cadence": cadence, "next_due_at": args.get("next_due_at"), "max_attempts": max_attempts, "escalation_settings": args.get("escalation_settings") or {}}, metadata=args.get("metadata") or {})
+        return _ok(policy=policy, event=event)
+    except Exception as exc:
+        return _err(exc)
+
+
+def _handle_reminder_attempt_record(args: dict, **_kwargs) -> str:
+    try:
+        request_id = str(args.get("request_id") or "").strip()
+        channel = str(args.get("channel") or "").strip()
+        status = str(args.get("status") or "").strip() or "sent"
+        if not request_id:
+            raise ValueError("request_id is required")
+        if not channel:
+            raise ValueError("channel is required")
+        if status not in {"queued", "sent", "delivered", "failed", "bounced"}:
+            raise ValueError("status must be queued, sent, delivered, failed, or bounced")
+        policy = sql.one(f"SELECT * FROM signature.reminder_policies WHERE request_id={_q(request_id)}", user=_user()) or {}
+        idempotency_key = args.get("idempotency_key") or _sha256_text(_canonical_json({
+            "request_id": request_id,
+            "submitter_id": args.get("submitter_id"),
+            "channel": channel,
+            "recipient": args.get("recipient"),
+            "provider_message_id": args.get("provider_message_id"),
+            "scheduled_for": args.get("scheduled_for") or args.get("next_due_at"),
+        }))
+        attempt = sql.statement_one(f"""
+          INSERT INTO signature.reminder_attempts (reminder_policy_id, request_id, submitter_id, channel, recipient, provider_message_id, status, error_message, scheduled_for, attempted_at, idempotency_key, metadata, created_at, updated_at)
+          VALUES ({_q(args.get('reminder_policy_id') or policy.get('reminder_policy_id'))}, {_q(request_id)}, {_q(args.get('submitter_id'))}, {_q(channel)}, {_q(args.get('recipient'))}, {_q(args.get('provider_message_id'))}, {_q(status)}, {_q(args.get('error_message'))}, {_q(args.get('scheduled_for'))}::timestamptz, COALESCE({_q(args.get('attempted_at'))}::timestamptz, now()), {_q(idempotency_key)}, {_j(args.get('metadata') or {})}, now(), now())
+          ON CONFLICT (idempotency_key) DO UPDATE SET status=EXCLUDED.status, error_message=EXCLUDED.error_message, provider_message_id=COALESCE(EXCLUDED.provider_message_id, signature.reminder_attempts.provider_message_id), metadata=signature.reminder_attempts.metadata || EXCLUDED.metadata, updated_at=now()
+          RETURNING *
+        """, user=_user())
+        policy_update = None
+        if args.get("next_due_at"):
+            policy_update = sql.statement_one(f"""
+              UPDATE signature.reminder_policies
+              SET next_due_at={_q(args.get('next_due_at'))}::timestamptz, updated_at=now()
+              WHERE request_id={_q(request_id)}
+              RETURNING *
+            """, user=_user())
+        receipt = json.loads(_handle_delivery_receipt_record({
+            "request_id": request_id,
+            "submitter_id": args.get("submitter_id"),
+            "receipt_type": "reminder",
+            "channel": channel,
+            "recipient": args.get("recipient"),
+            "provider_message_id": args.get("provider_message_id"),
+            "status": status,
+            "error_message": args.get("error_message"),
+            "idempotency_key": f"receipt:{idempotency_key}",
+            "metadata": {"reminder_attempt_id": (attempt or {}).get("reminder_attempt_id"), **(args.get("metadata") or {})},
+            "actor_type": args.get("actor_type") or "system",
+            "actor_ref": args.get("actor_ref") or "signature_core",
+        }))
+        return _ok(attempt=attempt, policy=policy_update, receipt=receipt.get("receipt"))
+    except Exception as exc:
+        return _err(exc)
+
+
 def _schema(name: str, description: str, props: dict, required: list[str] | None = None) -> dict:
     return {"type": "function", "function": {"name": name, "description": description, "parameters": {"type": "object", "properties": props, "required": required or []}}}
 
@@ -278,3 +427,6 @@ registry.register(name="signature_request_create", toolset="signature", schema=_
 registry.register(name="signature_request_get", toolset="signature", schema=_schema("signature_request_get", "Read a signature request with submitters, audit events, and approvals.", {"request_id": {"type": "string"}}, ["request_id"]), handler=_handle_request_get, check_fn=_check_signature, emoji="✍️")
 registry.register(name="signature_event_record", toolset="signature", schema=_schema("signature_event_record", "Append an audit event to a signature request with a chained event hash.", {"request_id": {"type": "string"}, "submitter_id": {"type": "string"}, "event_type": {"type": "string"}, "actor_type": {"type": "string"}, "actor_ref": {"type": "string"}, "ip_address": {"type": "string"}, "user_agent": {"type": "string"}, "event_payload": {"type": "object"}, **_meta_props()}, ["request_id", "event_type"]), handler=_handle_event_record, check_fn=_check_signature, emoji="✍️")
 registry.register(name="signature_approval_hash_create", toolset="signature", schema=_schema("signature_approval_hash_create", "Create a canonical approval record and SHA-256 approval hash for a signed/approved document.", {"approval_id": {"type": "string"}, "request_id": {"type": "string"}, "submitter_id": {"type": "string"}, "source_type": {"type": "string"}, "source_id": {"type": "string"}, "signature_text": {"type": "string"}, "signature_image_sha256": {"type": "string"}, "document_hash_sha256": {"type": "string"}, "approval_hash": {"type": "string"}, "ip_address": {"type": "string"}, "user_agent": {"type": "string"}, "signed_at": {"type": "string"}, "actor_type": {"type": "string"}, "actor_ref": {"type": "string"}, **_meta_props()}, ["request_id"]), handler=_handle_approval_hash_create, check_fn=_check_signature, emoji="✍️")
+registry.register(name="signature_delivery_receipt_record", toolset="signature", schema=_schema("signature_delivery_receipt_record", "Record an idempotent invitation, OTP, reminder, or final-copy delivery receipt with provider status/failure details.", {"request_id": {"type": "string"}, "submitter_id": {"type": "string"}, "receipt_type": {"type": "string", "enum": ["invitation", "otp", "reminder", "final_copy"]}, "channel": {"type": "string"}, "recipient": {"type": "string"}, "provider_message_id": {"type": "string"}, "status": {"type": "string", "enum": ["queued", "sent", "delivered", "failed", "bounced"]}, "error_message": {"type": "string"}, "delivered_at": {"type": "string"}, "idempotency_key": {"type": "string"}, "actor_type": {"type": "string"}, "actor_ref": {"type": "string"}, **_meta_props()}, ["request_id", "receipt_type", "channel"]), handler=_handle_delivery_receipt_record, check_fn=_check_signature, emoji="✍️")
+registry.register(name="signature_reminder_policy_upsert", toolset="signature", schema=_schema("signature_reminder_policy_upsert", "Create/update per-request reminder policy with cadence, next due timestamp, max attempts, and escalation settings.", {"reminder_policy_id": {"type": "string"}, "request_id": {"type": "string"}, "cadence": {"type": "string"}, "next_due_at": {"type": "string"}, "max_attempts": {"type": "integer"}, "escalation_settings": {"type": "object"}, "enabled": {"type": "boolean"}, "actor_type": {"type": "string"}, "actor_ref": {"type": "string"}, **_meta_props()}, ["request_id", "cadence", "next_due_at", "max_attempts"]), handler=_handle_reminder_policy_upsert, check_fn=_check_signature, emoji="✍️")
+registry.register(name="signature_reminder_attempt_record", toolset="signature", schema=_schema("signature_reminder_attempt_record", "Record an idempotent reminder attempt, failure details, optional next_due_at update, and matching reminder delivery receipt.", {"request_id": {"type": "string"}, "submitter_id": {"type": "string"}, "reminder_policy_id": {"type": "string"}, "channel": {"type": "string"}, "recipient": {"type": "string"}, "provider_message_id": {"type": "string"}, "status": {"type": "string", "enum": ["queued", "sent", "delivered", "failed", "bounced"]}, "error_message": {"type": "string"}, "scheduled_for": {"type": "string"}, "attempted_at": {"type": "string"}, "next_due_at": {"type": "string"}, "idempotency_key": {"type": "string"}, "actor_type": {"type": "string"}, "actor_ref": {"type": "string"}, **_meta_props()}, ["request_id", "channel"]), handler=_handle_reminder_attempt_record, check_fn=_check_signature, emoji="✍️")

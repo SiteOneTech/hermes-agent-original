@@ -96,7 +96,7 @@ CREATE TABLE IF NOT EXISTS signature.events (
   signature_event_id bigserial PRIMARY KEY,
   request_id text NOT NULL REFERENCES signature.document_requests(request_id) ON DELETE CASCADE,
   submitter_id text REFERENCES signature.submitters(submitter_id) ON DELETE SET NULL,
-  event_type text NOT NULL CHECK (event_type IN ('created','sent','viewed','started','field_updated','signed','approved','declined','completed','downloaded','agent_note','hash_created')),
+  event_type text NOT NULL CHECK (event_type IN ('created','sent','viewed','started','field_updated','signed','approved','declined','completed','downloaded','agent_note','hash_created','invitation_sent','otp_sent','reminder_policy_updated','reminder_sent','final_copy_sent','delivery_receipt_recorded','delivery_failed')),
   actor_type text NOT NULL DEFAULT 'customer' CHECK (actor_type IN ('customer','owner','agent','system','adapter')),
   actor_ref text,
   ip_address text,
@@ -125,12 +125,64 @@ CREATE TABLE IF NOT EXISTS signature.approvals (
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb
 );
 
+CREATE TABLE IF NOT EXISTS signature.reminder_policies (
+  reminder_policy_id text PRIMARY KEY,
+  request_id text NOT NULL UNIQUE REFERENCES signature.document_requests(request_id) ON DELETE CASCADE,
+  cadence text NOT NULL,
+  next_due_at timestamptz NOT NULL,
+  max_attempts integer NOT NULL DEFAULT 3 CHECK (max_attempts > 0),
+  escalation_settings jsonb NOT NULL DEFAULT '{}'::jsonb,
+  enabled boolean NOT NULL DEFAULT true,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS signature.reminder_attempts (
+  reminder_attempt_id bigserial PRIMARY KEY,
+  reminder_policy_id text REFERENCES signature.reminder_policies(reminder_policy_id) ON DELETE SET NULL,
+  request_id text NOT NULL REFERENCES signature.document_requests(request_id) ON DELETE CASCADE,
+  submitter_id text REFERENCES signature.submitters(submitter_id) ON DELETE SET NULL,
+  channel text NOT NULL,
+  recipient text,
+  provider_message_id text,
+  status text NOT NULL DEFAULT 'sent' CHECK (status IN ('queued','sent','delivered','failed','bounced')),
+  error_message text,
+  scheduled_for timestamptz,
+  attempted_at timestamptz NOT NULL DEFAULT now(),
+  idempotency_key text NOT NULL UNIQUE,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS signature.delivery_receipts (
+  delivery_receipt_id bigserial PRIMARY KEY,
+  request_id text NOT NULL REFERENCES signature.document_requests(request_id) ON DELETE CASCADE,
+  submitter_id text REFERENCES signature.submitters(submitter_id) ON DELETE SET NULL,
+  receipt_type text NOT NULL CHECK (receipt_type IN ('invitation','otp','reminder','final_copy')),
+  channel text NOT NULL,
+  recipient text,
+  provider_message_id text,
+  status text NOT NULL DEFAULT 'sent' CHECK (status IN ('queued','sent','delivered','failed','bounced')),
+  error_message text,
+  delivered_at timestamptz,
+  idempotency_key text NOT NULL UNIQUE,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE INDEX IF NOT EXISTS idx_signature_requests_source ON signature.document_requests(source_type, source_id);
 CREATE INDEX IF NOT EXISTS idx_signature_requests_status ON signature.document_requests(status, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_signature_submitters_request ON signature.submitters(request_id, signing_order);
 CREATE INDEX IF NOT EXISTS idx_signature_submitters_email ON signature.submitters(email);
 CREATE INDEX IF NOT EXISTS idx_signature_events_request ON signature.events(request_id, occurred_at DESC);
 CREATE INDEX IF NOT EXISTS idx_signature_approvals_source ON signature.approvals(source_type, source_id);
+CREATE INDEX IF NOT EXISTS idx_signature_reminder_policies_due ON signature.reminder_policies(enabled, next_due_at);
+CREATE INDEX IF NOT EXISTS idx_signature_reminder_attempts_request ON signature.reminder_attempts(request_id, attempted_at DESC);
+CREATE INDEX IF NOT EXISTS idx_signature_delivery_receipts_request ON signature.delivery_receipts(request_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_signature_delivery_receipts_type_status ON signature.delivery_receipts(receipt_type, status, created_at DESC);
 
 GRANT USAGE ON SCHEMA signature TO signature_runtime, agent_runtime;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA signature TO signature_runtime;

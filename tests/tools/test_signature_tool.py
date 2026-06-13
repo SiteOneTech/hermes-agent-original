@@ -15,6 +15,9 @@ def test_signature_toolset_registered():
     assert "signature_status" in tools
     assert "signature_request_create" in tools
     assert "signature_approval_hash_create" in tools
+    assert "signature_delivery_receipt_record" in tools
+    assert "signature_reminder_policy_upsert" in tools
+    assert "signature_reminder_attempt_record" in tools
 
 
 def test_approval_hash_is_deterministic(monkeypatch):
@@ -72,3 +75,126 @@ def test_request_create_requires_submitters():
     result = _loads(signature_tool._handle_request_create({"title": "No signers"}))
     assert result["error"]
     assert "submitters" in result["error"]
+
+
+def test_delivery_receipt_record_is_idempotent_and_records_failure(monkeypatch):
+    statements = []
+    events = []
+
+    def fake_statement_one(query, *, user=None):
+        statements.append(query)
+        if "INSERT INTO signature.delivery_receipts" in query:
+            return {
+                "delivery_receipt_id": "receipt-1",
+                "receipt_type": "otp",
+                "status": "failed",
+                "error_message": "provider timeout",
+                "idempotency_key": "otp:req-1:sub-1:abc",
+            }
+        if "INSERT INTO signature.events" in query:
+            events.append(query)
+            return {"signature_event_id": len(events), "event_hash": "event-hash"}
+        return {}
+
+    monkeypatch.setattr(signature_tool.sql, "statement_one", fake_statement_one)
+    monkeypatch.setattr(signature_tool.sql, "one", lambda *a, **k: {"event_hash": "prev-hash"})
+
+    result = _loads(signature_tool._handle_delivery_receipt_record({
+        "request_id": "req-1",
+        "submitter_id": "sub-1",
+        "receipt_type": "otp",
+        "channel": "email",
+        "recipient": "jean@example.test",
+        "provider_message_id": "abc",
+        "status": "failed",
+        "error_message": "provider timeout",
+        "idempotency_key": "otp:req-1:sub-1:abc",
+    }))
+
+    assert result["ok"] is True
+    assert result["receipt"]["status"] == "failed"
+    insert_sql = next(query for query in statements if "INSERT INTO signature.delivery_receipts" in query)
+    assert "ON CONFLICT (idempotency_key) DO UPDATE" in insert_sql
+    assert "error_message=EXCLUDED.error_message" in insert_sql
+    assert events
+
+
+def test_reminder_policy_upsert_stores_cadence_due_attempts_and_escalation(monkeypatch):
+    statements = []
+
+    def fake_statement_one(query, *, user=None):
+        statements.append(query)
+        if "INSERT INTO signature.reminder_policies" in query:
+            return {
+                "reminder_policy_id": "policy-1",
+                "request_id": "req-1",
+                "cadence": "daily",
+                "next_due_at": "2026-06-15T09:00:00Z",
+                "max_attempts": 5,
+                "escalation_settings": {"owner_after_attempts": 3},
+            }
+        if "INSERT INTO signature.events" in query:
+            return {"signature_event_id": 1, "event_hash": "event-hash"}
+        return {}
+
+    monkeypatch.setattr(signature_tool.sql, "statement_one", fake_statement_one)
+    monkeypatch.setattr(signature_tool.sql, "one", lambda *a, **k: {"event_hash": "prev-hash"})
+
+    result = _loads(signature_tool._handle_reminder_policy_upsert({
+        "request_id": "req-1",
+        "cadence": "daily",
+        "next_due_at": "2026-06-15T09:00:00Z",
+        "max_attempts": 5,
+        "escalation_settings": {"owner_after_attempts": 3, "near_expiry_hours": 24},
+    }))
+
+    assert result["ok"] is True
+    assert result["policy"]["cadence"] == "daily"
+    insert_sql = next(query for query in statements if "INSERT INTO signature.reminder_policies" in query)
+    assert "cadence" in insert_sql
+    assert "next_due_at" in insert_sql
+    assert "max_attempts" in insert_sql
+    assert "escalation_settings" in insert_sql
+    assert "ON CONFLICT (request_id) DO UPDATE" in insert_sql
+
+
+def test_reminder_attempt_record_is_idempotent_and_updates_next_due(monkeypatch):
+    statements = []
+
+    def fake_statement_one(query, *, user=None):
+        statements.append(query)
+        if "INSERT INTO signature.reminder_attempts" in query:
+            return {
+                "reminder_attempt_id": "attempt-1",
+                "status": "failed",
+                "error_message": "sms rejected",
+                "idempotency_key": "rem:req-1:sub-1:20260615",
+            }
+        if "INSERT INTO signature.delivery_receipts" in query:
+            return {"delivery_receipt_id": "receipt-1", "status": "failed"}
+        if "INSERT INTO signature.events" in query:
+            return {"signature_event_id": 1, "event_hash": "event-hash"}
+        return {}
+
+    monkeypatch.setattr(signature_tool.sql, "statement_one", fake_statement_one)
+    monkeypatch.setattr(signature_tool.sql, "one", lambda *a, **k: {"event_hash": "prev-hash"})
+
+    result = _loads(signature_tool._handle_reminder_attempt_record({
+        "request_id": "req-1",
+        "submitter_id": "sub-1",
+        "channel": "sms",
+        "recipient": "+15551234567",
+        "status": "failed",
+        "error_message": "sms rejected",
+        "provider_message_id": "sms-1",
+        "idempotency_key": "rem:req-1:sub-1:20260615",
+        "next_due_at": "2026-06-16T09:00:00Z",
+    }))
+
+    assert result["ok"] is True
+    assert result["attempt"]["status"] == "failed"
+    attempt_sql = next(query for query in statements if "INSERT INTO signature.reminder_attempts" in query)
+    assert "ON CONFLICT (idempotency_key) DO UPDATE" in attempt_sql
+    assert "error_message=EXCLUDED.error_message" in attempt_sql
+    assert any("UPDATE signature.reminder_policies" in query for query in statements)
+    assert any("INSERT INTO signature.delivery_receipts" in query for query in statements)
