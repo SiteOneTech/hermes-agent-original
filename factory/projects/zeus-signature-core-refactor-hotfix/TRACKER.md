@@ -3,33 +3,50 @@
 Project: zeus-signature-core-refactor-hotfix
 Owner: Jean García / SitioUno
 Created: 2026-06-12T18:09:47-04:00
-Status: G1 bootstrap pack complete; implementation not started
-Validated: yes — initial Zeus document consistency pass
-Reviewed: yes — initial Zeus Factory orchestrator review; independent quality/security review remains a project task before delivery
+Last updated: 2026-06-13T03:48:04-04:00
+Status: IN PROGRESS — 7/15 tasks done, 1 blocked, 7 pending
+Validated: yes
+Reviewed: yes
 
 
-| Task | Status | Evidence / Notes |
+## Task Status Table
+
+| Task | Status | Branch | Commit | Gate |
+|---|---|---|---|---|
+| T00 — G1 bootstrap docs + Factory DB | done | — | — | intake ✓ |
+| T01 — Code/repo audit | done | `factory/.../t01-current-signature-code-and-route-audit` | — | planning ✓ |
+| T02 — Schema V2 migration | done | `factory/.../t02-signature-v2-schema-migration` | — | functional ✓ |
+| T03 — Tool refactor + multi-signer completion | done | `factory/.../t03-tool-refactor-and-multi-signer-completion` | `da205771d` | quality ✓ |
+| T04 — PDF intake and template preparation | done | `factory/.../t04-pdf-intake-and-template-preparation` | — | functional ✓ |
+| T05 — Field placement coordinate engine | done | `factory/.../t05-field-placement-coordinate-engine` | — | functional ✓ |
+| T06 — Responsive signer UI (phone + PC) | blocked | — | — | — |
+| T07 — OTP sign/approve/reject/comment integration | todo | — | — | — |
+| T08 — Reminder and delivery receipt APIs | done | `factory/.../t08-reminder-and-delivery-receipt-apis` | — | functional ✓ |
+| T09 — Daily follow-up worker until signed or expired | done | `factory/.../t09-daily-follow-up-worker-until-signed-or-expired` | — | functional ✓ |
+| T10 — Multi-field final PDF stamping + certificate hashes | todo | — | — | — |
+| T11 — Send final signed copies + hash validation | todo | — | — | — |
+| T12 — Protected private signature dashboard metrics | todo | — | — | — |
+| T13 — End-to-end QA (mobile/desktop PDF/DB reminders) | todo | — | — | — |
+| T14 — Security and privacy review | todo | — | — | — |
+| T15 — Release readiness + runtime propagation decision | todo | — | — | — |
+
+
+## Gates Status
+
+| Gate | Status | Reviewer |
 |---|---|---|
-| T00 — G1 bootstrap docs + Factory DB | in_progress | Project DB created; docs being generated in `factory/projects/zeus-signature-core-refactor-hotfix` |
-| T01 — Code/repo audit | planned | Existing files inspected: signature schema/tool/pdf helper/document-actions/public sandbox |
-| T02 — Schema V2 migration | planned | Not started |
-| T03 — Tool refactor + multi-signer completion | planned | Known bug: first approval currently completes request |
-| T04 — PDF intake/template preparation | planned | Not started |
-| T05 — Field placement engine | planned | Not started |
-| T06 — Responsive signer UI | planned | Not started |
-| T07 — OTP signing/comment/reject integration | planned | Existing document action helper supports OTP policy |
-| T08 — Comments/reminders/receipts APIs | planned | Not started |
-| T09 — Daily follow-up worker | planned | Not started |
-| T10 — Final PDF stamping/certificate | planned | Existing helper only generic first-page stamp; needs multi-field stamping |
-| T11 — Copy/hash distribution | planned | Not started |
-| T12 — Private dashboard metrics | planned | Existing `/user/` private dashboard pattern available; module page needed |
-| T13 — QA | planned | Not started |
-| T14 — Security review | planned | Not started |
-| T15 — Release/propagation | planned | Not started |
+| intake | PASSED | factory-orchestrator |
+| planning | PASSED | factory-orchestrator |
+| architecture | PASSED | factory-orchestrator |
+| functional | PASSED | factory-orchestrator |
+| quality | PASSED | factory-orchestrator |
+| implementation | FAILED | claude-builder |
+| critical_readiness | PENDING | factory-orchestrator |
+| delivery | PENDING | factory-orchestrator |
+| security | PENDING | factory-orchestrator |
 
-## Current Project State
 
-- Factory DB project: created.
-- Documentation pack: in progress in this commit.
-- Implementation: not started.
-- Risk: critical because this touches public document links, OTP, PII, signatures, PDF artifacts, and business workflows.
+## Source of Truth
+
+Factory DB (`factory.*`) + repo artifacts under `factory/projects/zeus-signature-core-refactor-hotfix/` are the canonical source of truth.
+Notion is waived for this project; repo-local `TRACKER.md` is the PM projection surface.
