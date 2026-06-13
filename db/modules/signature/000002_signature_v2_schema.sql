@@ -12,6 +12,22 @@ ALTER TABLE signature.submitters
   ADD COLUMN IF NOT EXISTS started_at timestamptz,
   ADD COLUMN IF NOT EXISTS approved_at timestamptz;
 
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conrelid = 'signature.submitters'::regclass
+      AND conname = 'submitters_status_check'
+  ) THEN
+    ALTER TABLE signature.submitters DROP CONSTRAINT submitters_status_check;
+  END IF;
+
+  ALTER TABLE signature.submitters
+    ADD CONSTRAINT submitters_status_check
+    CHECK (status IN ('pending','sent','viewed','started','signed','approved','declined','expired','cancelled'));
+END $$;
+
 CREATE TABLE IF NOT EXISTS signature.template_versions (
   template_version_id text PRIMARY KEY,
   template_id text NOT NULL REFERENCES signature.templates(template_id) ON DELETE CASCADE,
@@ -198,6 +214,29 @@ CREATE INDEX IF NOT EXISTS idx_signature_delivery_receipts_submitter ON signatur
 CREATE INDEX IF NOT EXISTS idx_signature_metric_snapshots_captured ON signature.metric_snapshots(metric_scope, scope_ref, captured_at DESC);
 
 CREATE OR REPLACE VIEW signature.request_metrics AS
+WITH submitter_metrics AS (
+  SELECT
+    request_id,
+    count(*) FILTER (WHERE required AND role IN ('signer','approver')) AS required_submitters,
+    count(*) FILTER (WHERE required AND role IN ('signer','approver') AND status IN ('signed','approved')) AS completed_required_submitters,
+    count(*) FILTER (WHERE status IN ('pending','sent','viewed','started')) AS pending_submitters,
+    count(*) FILTER (WHERE status = 'declined') AS declined_submitters
+  FROM signature.submitters
+  GROUP BY request_id
+), reminder_metrics AS (
+  SELECT
+    request_id,
+    count(*) FILTER (WHERE status IN ('sent','delivered')) AS reminders_sent,
+    count(*) FILTER (WHERE status = 'failed') AS reminder_failures
+  FROM signature.reminder_attempts
+  GROUP BY request_id
+), receipt_metrics AS (
+  SELECT
+    request_id,
+    count(*) FILTER (WHERE kind = 'final_copy' AND status IN ('sent','delivered','opened','downloaded')) AS final_copy_receipts
+  FROM signature.delivery_receipts
+  GROUP BY request_id
+)
 SELECT
   r.request_id,
   r.template_id,
@@ -207,19 +246,18 @@ SELECT
   r.created_at,
   r.sent_at,
   r.completed_at,
-  count(s.submitter_id) FILTER (WHERE s.required AND s.role IN ('signer','approver')) AS required_submitters,
-  count(s.submitter_id) FILTER (WHERE s.required AND s.role IN ('signer','approver') AND s.status IN ('signed','approved')) AS completed_required_submitters,
-  count(s.submitter_id) FILTER (WHERE s.status IN ('pending','sent','viewed','started')) AS pending_submitters,
-  count(s.submitter_id) FILTER (WHERE s.status = 'declined') AS declined_submitters,
-  count(ra.reminder_attempt_id) FILTER (WHERE ra.status IN ('sent','delivered')) AS reminders_sent,
-  count(ra.reminder_attempt_id) FILTER (WHERE ra.status = 'failed') AS reminder_failures,
-  count(dr.delivery_receipt_id) FILTER (WHERE dr.kind = 'final_copy' AND dr.status IN ('sent','delivered','opened','downloaded')) AS final_copy_receipts,
+  coalesce(sm.required_submitters, 0)::bigint AS required_submitters,
+  coalesce(sm.completed_required_submitters, 0)::bigint AS completed_required_submitters,
+  coalesce(sm.pending_submitters, 0)::bigint AS pending_submitters,
+  coalesce(sm.declined_submitters, 0)::bigint AS declined_submitters,
+  coalesce(rm.reminders_sent, 0)::bigint AS reminders_sent,
+  coalesce(rm.reminder_failures, 0)::bigint AS reminder_failures,
+  coalesce(rcm.final_copy_receipts, 0)::bigint AS final_copy_receipts,
   EXTRACT(EPOCH FROM (r.completed_at - r.sent_at))::numeric AS seconds_to_complete
 FROM signature.document_requests r
-LEFT JOIN signature.submitters s ON s.request_id = r.request_id
-LEFT JOIN signature.reminder_attempts ra ON ra.request_id = r.request_id
-LEFT JOIN signature.delivery_receipts dr ON dr.request_id = r.request_id
-GROUP BY r.request_id;
+LEFT JOIN submitter_metrics sm ON sm.request_id = r.request_id
+LEFT JOIN reminder_metrics rm ON rm.request_id = r.request_id
+LEFT JOIN receipt_metrics rcm ON rcm.request_id = r.request_id;
 
 CREATE OR REPLACE VIEW signature.dashboard_metrics AS
 SELECT
