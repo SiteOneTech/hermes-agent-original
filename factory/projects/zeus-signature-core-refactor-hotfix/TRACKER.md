@@ -14,7 +14,7 @@ Reviewed: yes — initial Zeus Factory orchestrator review; independent quality/
 | T01 — Code/repo audit | planned | Existing files inspected: signature schema/tool/pdf helper/document-actions/public sandbox |
 | T02 — Schema V2 migration | done | Added `db/modules/signature/000002_signature_v2_schema.sql`, registered `signature` in `scripts/agent_core_db.py`, validated with targeted pytest and ephemeral PostgreSQL migration smoke in isolated worktree `/home/jean/workspace/zeus-signature-core-refactor-hotfix-t02-schema` |
 | T03 — Tool refactor + multi-signer completion | planned | Known bug: first approval currently completes request |
-| T04 — PDF intake/template preparation | planned | Not started |
+| T04 — PDF intake/template preparation | done | Implemented `signature_pdf_intake` and `signature_template_prepare`; tests verify PDF SHA-256/MIME/size/page-count/render metadata, missing signer/field/deadline questions, ad-hoc template version creation, and preservation of source hash + `signature-field-schema-v1` snapshot. Evidence: `python3 -m pytest tests/tools/test_signature_tool.py tests/test_signature_v2_schema_migration.py -q` → 22 passed; `python3 -m py_compile tools/signature_tool.py tools/signature_pdf.py` → passed. |
 | T05 — Field placement engine | planned | Not started |
 | T06 — Responsive signer UI | planned | Not started |
 | T07 — OTP signing/comment/reject integration | planned | Existing document action helper supports OTP policy |
