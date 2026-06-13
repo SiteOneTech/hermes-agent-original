@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from hermes_cli import agent_core_sql as sql
+from tools import signature_pdf
 from tools.registry import registry, tool_error
 
 SIGNATURE_METADATA_DESCRIPTION = (
@@ -446,6 +447,55 @@ def _handle_template_prepare(args: dict, **_kwargs) -> str:
         return _err(exc)
 
 
+def _handle_template_field_upsert(args: dict, **_kwargs) -> str:
+    try:
+        template_version_id = str(args.get("template_version_id") or "").strip()
+        if not template_version_id:
+            raise ValueError("template_version_id is required")
+        field = args.get("field") or {}
+        if not isinstance(field, dict):
+            raise ValueError("field must be an object")
+        page = args.get("page") or {}
+        if not page:
+            raise ValueError("page width/height are required")
+
+        if args.get("viewport"):
+            field = {**field, **signature_pdf.viewport_to_pdf_points(field, page, viewport=args.get("viewport"))}
+        elif all(key in field for key in ("x_pct", "y_pct", "w_pct", "h_pct")) and not all(key in field for key in ("x", "y", "width", "height")):
+            field = {**field, **signature_pdf.viewport_to_pdf_points(field, page)}
+
+        placement = signature_pdf.resolve_anchor_placement(
+            field,
+            args.get("text_matches") or [],
+            page=page,
+            manual_override=args.get("manual_override"),
+        )
+        if placement.get("placement_status") in {"ambiguous_anchor", "anchor_not_found", "anchor_occurrence_not_found"}:
+            return _ok(ready=False, placement=placement, field_placement=None)
+
+        normalized = _normalize_field(placement, template_version_id, int(args.get("field_index") or 1))
+        normalized["metadata"] = {
+            **(normalized.get("metadata") or {}),
+            "coordinate_system": "pdf_points_top_left",
+            "pdf_y_bottom": placement.get("pdf_y_bottom"),
+            "placement_status": placement.get("placement_status"),
+        }
+        if placement.get("placement_status") == "manual_override":
+            normalized["metadata"]["manual_override"] = True
+        if placement.get("metadata"):
+            normalized["metadata"].update(placement["metadata"])
+        normalized["placement_status"] = placement.get("placement_status")
+        saved = sql.statement_one(f"""
+          INSERT INTO signature.field_placements (field_id, template_version_id, role, field_type, label, required, page_number, x, y, width, height, rotation, x_pct, y_pct, w_pct, h_pct, anchor_text, anchor_occurrence, anchor_bbox, anchor_strategy, anchor_tolerance, validation, appearance, metadata, created_at, updated_at)
+          VALUES ({_q(normalized['field_id'])}, {_q(template_version_id)}, {_q(normalized['role'])}, {_q(normalized['field_type'])}, {_q(normalized['label'])}, {_q(normalized['required'])}::boolean, {normalized['page_number']}, {normalized['x']}, {normalized['y']}, {normalized['width']}, {normalized['height']}, {normalized['rotation']}, {normalized['x_pct']}, {normalized['y_pct']}, {normalized['w_pct']}, {normalized['h_pct']}, {_q(normalized['anchor_text'])}, {_q(normalized['anchor_occurrence'])}::integer, {_j(normalized['anchor_bbox'])}, {_q(normalized['anchor_strategy'])}, {_q(normalized['anchor_tolerance'])}::numeric, {_j(normalized['validation'])}, {_j(normalized['appearance'])}, {_j(normalized['metadata'])}, now(), now())
+          ON CONFLICT (field_id) DO UPDATE SET template_version_id=EXCLUDED.template_version_id, role=EXCLUDED.role, field_type=EXCLUDED.field_type, label=EXCLUDED.label, required=EXCLUDED.required, page_number=EXCLUDED.page_number, x=EXCLUDED.x, y=EXCLUDED.y, width=EXCLUDED.width, height=EXCLUDED.height, rotation=EXCLUDED.rotation, x_pct=EXCLUDED.x_pct, y_pct=EXCLUDED.y_pct, w_pct=EXCLUDED.w_pct, h_pct=EXCLUDED.h_pct, anchor_text=EXCLUDED.anchor_text, anchor_occurrence=EXCLUDED.anchor_occurrence, anchor_bbox=EXCLUDED.anchor_bbox, anchor_strategy=EXCLUDED.anchor_strategy, anchor_tolerance=EXCLUDED.anchor_tolerance, validation=EXCLUDED.validation, appearance=EXCLUDED.appearance, metadata=EXCLUDED.metadata, updated_at=now()
+          RETURNING *
+        """, user=_user())
+        return _ok(ready=True, placement=normalized, field_placement=saved)
+    except Exception as exc:
+        return _err(exc)
+
+
 def _handle_request_create(args: dict, **_kwargs) -> str:
     try:
         title = str(args.get("title") or "").strip()
@@ -605,6 +655,7 @@ registry.register(name="signature_status", toolset="signature", schema=_schema("
 registry.register(name="signature_template_upsert", toolset="signature", schema=_schema("signature_template_upsert", "Create or update a reusable e-signature template with fields/submitter roles.", {"template_id": {"type": "string"}, "name": {"type": "string"}, "document_url": {"type": "string"}, "fields": {"type": "array", "items": {"type": "object"}}, "submitters": {"type": "array", "items": {"type": "object"}}, "preferences": {"type": "object"}, **_meta_props()}, ["name"]), handler=_handle_template_upsert, check_fn=_check_signature, emoji="✍️")
 registry.register(name="signature_pdf_intake", toolset="signature", schema=_schema("signature_pdf_intake", "Register a source PDF for Signature Core intake, computing SHA-256, page count, MIME/size, and preview render metadata or PNG previews when preview_dir is provided.", {"pdf_path": {"type": "string"}, "request_id": {"type": "string"}, "attachment_id": {"type": "string"}, "preview_dir": {"type": "string"}, "max_preview_pages": {"type": "integer"}, **_meta_props()}, ["pdf_path"]), handler=_handle_pdf_intake, check_fn=_check_signature, emoji="📄")
 registry.register(name="signature_template_prepare", toolset="signature", schema=_schema("signature_template_prepare", "Ask targeted missing signer/field/deadline questions or create an ad-hoc Signature Core template version from an intaken PDF and field schema.", {"template_id": {"type": "string"}, "template_version_id": {"type": "string"}, "name": {"type": "string"}, "source_document_attachment_id": {"type": "string"}, "document_sha256": {"type": "string"}, "document_url": {"type": "string"}, "fields": {"type": "array", "items": {"type": "object"}}, "submitters": {"type": "array", "items": {"type": "object"}}, "deadline": {"type": "string"}, "expires_at": {"type": "string"}, "status": {"type": "string", "enum": ["draft", "active", "archived"]}, "preferences": {"type": "object"}, "preparation_notes": {"type": "string"}, "created_by": {"type": "string"}, "actor_ref": {"type": "string"}, **_meta_props()}, ["name", "source_document_attachment_id", "document_sha256"]), handler=_handle_template_prepare, check_fn=_check_signature, emoji="📄")
+registry.register(name="signature_template_field_upsert", toolset="signature", schema=_schema("signature_template_field_upsert", "Create or update one template field placement, converting viewport coordinates to PDF points and resolving anchor-text placement. Ambiguous anchors return ready=false until anchor_occurrence or manual_override is supplied.", {"template_version_id": {"type": "string"}, "field": {"type": "object"}, "field_index": {"type": "integer"}, "page": {"type": "object", "description": "PDF page size in points: {width,height}."}, "viewport": {"type": "object", "description": "Optional rendered viewport size in pixels when field uses x_px/y_px/w_px/h_px."}, "text_matches": {"type": "array", "items": {"type": "object"}}, "manual_override": {"type": "object"}, **_meta_props()}, ["template_version_id", "field", "page"]), handler=_handle_template_field_upsert, check_fn=_check_signature, emoji="📍")
 registry.register(name="signature_request_create", toolset="signature", schema=_schema("signature_request_create", "Create a document/signature request with opaque signer links and field snapshots.", {"request_id": {"type": "string"}, "template_id": {"type": "string"}, "template_version_id": {"type": "string"}, "source_type": {"type": "string"}, "source_id": {"type": "string"}, "title": {"type": "string"}, "status": {"type": "string"}, "document_url": {"type": "string"}, "fields": {"type": "array", "items": {"type": "object"}}, "submitters": {"type": "array", "items": {"type": "object"}}, "preferences": {"type": "object"}, "expires_at": {"type": "string"}, "signing_mode": {"type": "string", "enum": ["parallel", "sequential", "mixed"]}, "decline_blocks": {"type": "boolean"}, "actor_ref": {"type": "string"}, **_meta_props()}, ["title", "submitters"]), handler=_handle_request_create, check_fn=_check_signature, emoji="✍️")
 registry.register(name="signature_request_get", toolset="signature", schema=_schema("signature_request_get", "Read a signature request with submitters, audit events, and approvals.", {"request_id": {"type": "string"}}, ["request_id"]), handler=_handle_request_get, check_fn=_check_signature, emoji="✍️")
 registry.register(name="signature_event_record", toolset="signature", schema=_schema("signature_event_record", "Append an audit event to a signature request with a chained event hash.", {"request_id": {"type": "string"}, "submitter_id": {"type": "string"}, "event_type": {"type": "string"}, "actor_type": {"type": "string"}, "actor_ref": {"type": "string"}, "ip_address": {"type": "string"}, "user_agent": {"type": "string"}, "event_payload": {"type": "object"}, **_meta_props()}, ["request_id", "event_type"]), handler=_handle_event_record, check_fn=_check_signature, emoji="✍️")

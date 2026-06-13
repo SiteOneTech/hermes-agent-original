@@ -18,6 +18,7 @@ def test_signature_toolset_registered():
     assert "signature_approval_hash_create" in tools
     assert "signature_pdf_intake" in tools
     assert "signature_template_prepare" in tools
+    assert "signature_template_field_upsert" in tools
 
 
 def test_approval_hash_is_deterministic(monkeypatch):
