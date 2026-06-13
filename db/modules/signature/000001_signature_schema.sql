@@ -96,7 +96,7 @@ CREATE TABLE IF NOT EXISTS signature.events (
   signature_event_id bigserial PRIMARY KEY,
   request_id text NOT NULL REFERENCES signature.document_requests(request_id) ON DELETE CASCADE,
   submitter_id text REFERENCES signature.submitters(submitter_id) ON DELETE SET NULL,
-  event_type text NOT NULL CHECK (event_type IN ('created','sent','viewed','started','field_updated','signed','approved','declined','completed','downloaded','agent_note','hash_created')),
+  event_type text NOT NULL CHECK (event_type IN ('created','sent','viewed','started','field_updated','commented','signed','approved','declined','completed','downloaded','agent_note','hash_created')),
   actor_type text NOT NULL DEFAULT 'customer' CHECK (actor_type IN ('customer','owner','agent','system','adapter')),
   actor_ref text,
   ip_address text,
@@ -106,6 +106,24 @@ CREATE TABLE IF NOT EXISTS signature.events (
   event_hash text NOT NULL,
   occurred_at timestamptz NOT NULL DEFAULT now(),
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE TABLE IF NOT EXISTS signature.comments (
+  comment_id text PRIMARY KEY,
+  request_id text NOT NULL REFERENCES signature.document_requests(request_id) ON DELETE CASCADE,
+  submitter_id text REFERENCES signature.submitters(submitter_id) ON DELETE SET NULL,
+  field_id text,
+  scope text NOT NULL DEFAULT 'request' CHECK (scope IN ('request','field')),
+  body text NOT NULL,
+  reason_type text,
+  visibility text NOT NULL DEFAULT 'owner' CHECK (visibility IN ('signer','owner','internal')),
+  trusted_identity boolean NOT NULL DEFAULT false,
+  actor_type text NOT NULL DEFAULT 'customer' CHECK (actor_type IN ('customer','owner','agent','system','adapter')),
+  actor_ref text,
+  ip_address text,
+  user_agent text,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS signature.approvals (
@@ -130,6 +148,8 @@ CREATE INDEX IF NOT EXISTS idx_signature_requests_status ON signature.document_r
 CREATE INDEX IF NOT EXISTS idx_signature_submitters_request ON signature.submitters(request_id, signing_order);
 CREATE INDEX IF NOT EXISTS idx_signature_submitters_email ON signature.submitters(email);
 CREATE INDEX IF NOT EXISTS idx_signature_events_request ON signature.events(request_id, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_signature_comments_request ON signature.comments(request_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_signature_comments_field ON signature.comments(request_id, field_id) WHERE field_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_signature_approvals_source ON signature.approvals(source_type, source_id);
 
 GRANT USAGE ON SCHEMA signature TO signature_runtime, agent_runtime;

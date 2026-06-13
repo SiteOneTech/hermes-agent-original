@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
+from datetime import datetime, timezone
 from typing import Any
 
 from hermes_cli import agent_core_sql as sql
@@ -193,7 +194,194 @@ def _handle_request_get(args: dict, **_kwargs) -> str:
         submitters = sql.rows(f"SELECT * FROM signature.submitters WHERE request_id={_q(request_id)} ORDER BY signing_order, created_at", user=_user())
         events = sql.rows(f"SELECT * FROM signature.events WHERE request_id={_q(request_id)} ORDER BY signature_event_id", user=_user())
         approvals = sql.rows(f"SELECT * FROM signature.approvals WHERE request_id={_q(request_id)} ORDER BY signed_at", user=_user())
-        return _ok(request=request, submitters=submitters, events=events, approvals=approvals)
+        comments = sql.rows(f"SELECT * FROM signature.comments WHERE request_id={_q(request_id)} ORDER BY created_at, comment_id", user=_user())
+        return _ok(request=request, submitters=submitters, events=events, approvals=approvals, comments=comments)
+    except Exception as exc:
+        return _err(exc)
+
+
+SIGNATURE_ACTIONS = {
+    "sign": "signed",
+    "signed": "signed",
+    "approve": "approved",
+    "approved": "approved",
+    "reject": "rejected",
+    "rejected": "rejected",
+    "decline": "rejected",
+    "declined": "rejected",
+    "comment": "commented",
+    "commented": "commented",
+}
+OTP_REQUIRED_SIGNATURE_ACTIONS = {"signed", "approved", "rejected"}
+CLOSED_REQUEST_STATUSES = {"completed", "declined", "expired", "cancelled"}
+CLOSED_SUBMITTER_STATUSES = {"signed", "approved", "declined", "expired", "cancelled"}
+
+
+def _normalize_signature_action(value: Any) -> str | None:
+    return SIGNATURE_ACTIONS.get(str(value or "").strip().lower())
+
+
+def _event_type_for_signature_action(action: str) -> str:
+    return "declined" if action == "rejected" else action
+
+
+def _status_for_signature_action(action: str) -> str:
+    return "declined" if action == "rejected" else action
+
+
+def _parse_dt(value: Any) -> datetime | None:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
+def _request_actionable(request: dict[str, Any]) -> bool:
+    if str(request.get("status") or "").strip().lower() in CLOSED_REQUEST_STATUSES:
+        return False
+    expires_at = _parse_dt(request.get("expires_at"))
+    return not (expires_at and expires_at <= datetime.now(timezone.utc))
+
+
+def _recipient_target(submitter: dict[str, Any], actor_ref: Any = None) -> str | None:
+    for key in ("email", "phone"):
+        value = str(submitter.get(key) or "").strip().lower()
+        if value:
+            return value
+    value = str(actor_ref or submitter.get("name") or "").strip().lower()
+    return value or None
+
+
+def _recipient_target_hash(submitter: dict[str, Any], actor_ref: Any = None) -> str | None:
+    target = _recipient_target(submitter, actor_ref)
+    return _sha256_text(target) if target else None
+
+
+def _load_request_for_action(request_id: str) -> dict[str, Any]:
+    request = sql.one(f"SELECT * FROM signature.document_requests WHERE request_id={_q(request_id)}", user=_user())
+    if not request:
+        raise ValueError("request_not_found")
+    if not _request_actionable(request):
+        raise ValueError("request_not_actionable")
+    return request
+
+
+def _require_recipient_otp(args: dict[str, Any], submitter: dict[str, Any] | None = None) -> None:
+    if args.get("otp_verified") is not True or not str(args.get("otp_challenge_id") or "").strip():
+        raise ValueError("otp_required")
+    if submitter is not None:
+        expected = _recipient_target_hash(submitter, args.get("actor_ref"))
+        actual = str(args.get("otp_target_hash") or "").strip()
+        if not expected or not actual or actual != expected:
+            raise ValueError("otp_not_bound_to_recipient")
+
+
+def _load_submitter_for_token(request_id: str, signer_token: Any) -> dict[str, Any]:
+    token = str(signer_token or "").strip()
+    if not token:
+        raise ValueError("signer_token_required")
+    submitter = sql.one(
+        f"SELECT * FROM signature.submitters WHERE request_id={_q(request_id)} AND token_hash_sha256={_q(_sha256_text(token))}",
+        user=_user(),
+    )
+    if not submitter:
+        raise ValueError("invalid_signer_token")
+    if str(submitter.get("status") or "").strip().lower() in CLOSED_SUBMITTER_STATUSES:
+        raise ValueError("submitter_not_actionable")
+    return submitter
+
+
+def _validate_recipient_action(args: dict[str, Any]) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    request_id = str(args.get("request_id") or "").strip()
+    action = _normalize_signature_action(args.get("action") or args.get("event_type") or "approved")
+    if not request_id:
+        raise ValueError("request_id is required")
+    if not action:
+        raise ValueError("invalid_signature_action")
+    request = _load_request_for_action(request_id)
+    if action in OTP_REQUIRED_SIGNATURE_ACTIONS:
+        _require_recipient_otp(args)
+    submitter = _load_submitter_for_token(request_id, args.get("signer_token"))
+    if action in OTP_REQUIRED_SIGNATURE_ACTIONS:
+        _require_recipient_otp(args, submitter)
+    return action, request, submitter
+
+
+def _comment_body(args: dict[str, Any], action: str) -> str | None:
+    value = str(args.get("rejection_reason") or args.get("comment") or "").strip()
+    if action == "rejected" and not value:
+        raise ValueError("rejection_reason_required")
+    return value[:4000] if value else None
+
+
+def _record_comment_if_present(args: dict[str, Any], action: str, submitter: dict[str, Any]) -> dict[str, Any] | None:
+    body = _comment_body(args, action)
+    if not body:
+        return None
+    request_id = str(args.get("request_id") or "").strip()
+    field_id = str(args.get("field_id") or "").strip() or None
+    scope = "field" if field_id else "request"
+    comment_id = args.get("comment_id") or _slug("signature-comment", f"{request_id}-{submitter.get('submitter_id')}-{field_id or 'request'}-{_sha256_text(body)[:12]}")
+    return sql.statement_one(f"""
+      INSERT INTO signature.comments (comment_id, request_id, submitter_id, field_id, scope, body, reason_type, visibility, trusted_identity, actor_type, actor_ref, ip_address, user_agent, metadata)
+      VALUES ({_q(comment_id)}, {_q(request_id)}, {_q(submitter.get('submitter_id'))}, {_q(field_id)}, {_q(scope)}, {_q(body)}, {_q('rejection' if action == 'rejected' else args.get('reason_type'))}, {_q(args.get('visibility') or 'owner')}, {str(bool(args.get('otp_verified'))).lower()}, {_q(args.get('actor_type') or 'customer')}, {_q(args.get('actor_ref'))}, {_q(args.get('ip_address'))}, {_q(args.get('user_agent'))}, {_j(args.get('metadata') or {})})
+      ON CONFLICT (comment_id) DO UPDATE SET body=EXCLUDED.body, metadata=EXCLUDED.metadata
+      RETURNING *
+    """, user=_user())
+
+
+def _update_recipient_status(request_id: str, submitter_id: str, action: str, args: dict[str, Any]) -> None:
+    status = _status_for_signature_action(action)
+    if action == "commented":
+        return
+    timestamp_column = "declined_at" if status == "declined" else "signed_at"
+    request_status = "declined" if status == "declined" else "partially_signed"
+    sql.psql(f"""
+      UPDATE signature.submitters
+      SET status={_q(status)}, {timestamp_column}=COALESCE({_q(args.get('signed_at'))}::timestamptz, now()), ip_address=COALESCE({_q(args.get('ip_address'))}, ip_address), user_agent=COALESCE({_q(args.get('user_agent'))}, user_agent), updated_at=now()
+      WHERE submitter_id={_q(submitter_id)};
+      WITH required AS (
+        SELECT count(*) FILTER (WHERE role IN ('signer','approver') AND status NOT IN ('signed','approved')) AS remaining_required
+        FROM signature.submitters
+        WHERE request_id={_q(request_id)}
+      )
+      UPDATE signature.document_requests
+      SET status=CASE WHEN {_q(status)}='declined' THEN 'declined' WHEN (SELECT remaining_required FROM required)=0 THEN 'completed' ELSE {_q(request_status)} END,
+          completed_at=CASE WHEN {_q(status)}<>'declined' AND (SELECT remaining_required FROM required)=0 THEN COALESCE(completed_at, now()) ELSE completed_at END,
+          updated_at=now()
+      WHERE request_id={_q(request_id)};
+    """, user=_user())
+
+
+def _handle_recipient_action_record(args: dict, **_kwargs) -> str:
+    try:
+        action, _request, submitter = _validate_recipient_action(args)
+        comment = _record_comment_if_present(args, action, submitter)
+        _update_recipient_status(str(args.get("request_id") or "").strip(), str(submitter.get("submitter_id") or ""), action, args)
+        payload = {
+            "action": action,
+            "field_id": args.get("field_id"),
+            "comment_id": (comment or {}).get("comment_id"),
+            "comment": (comment or {}).get("body"),
+            "otp_challenge_id": args.get("otp_challenge_id") if action in OTP_REQUIRED_SIGNATURE_ACTIONS else None,
+        }
+        event = _record_event(
+            str(args.get("request_id") or "").strip(),
+            submitter_id=submitter.get("submitter_id"),
+            event_type=_event_type_for_signature_action(action),
+            actor_type=args.get("actor_type") or "customer",
+            actor_ref=args.get("actor_ref"),
+            payload=payload,
+            ip_address=args.get("ip_address"),
+            user_agent=args.get("user_agent"),
+            metadata=args.get("metadata") or {},
+        )
+        return _ok(action=action, submitter_id=submitter.get("submitter_id"), comment=comment, event=event)
     except Exception as exc:
         return _err(exc)
 
@@ -225,13 +413,13 @@ def _handle_approval_hash_create(args: dict, **_kwargs) -> str:
         request_id = str(args.get("request_id") or "").strip()
         if not request_id:
             raise ValueError("request_id is required")
-        request = sql.one(f"SELECT * FROM signature.document_requests WHERE request_id={_q(request_id)}", user=_user())
-        if not request:
-            raise ValueError("request not found")
-        approval_id = args.get("approval_id") or _slug("signature-approval", f"{request_id}-{args.get('submitter_id') or args.get('actor_ref') or 'approval'}")
+        secured_args = {**args, "action": "approved"}
+        _action, request, submitter = _validate_recipient_action(secured_args)
+        submitter_id = submitter.get("submitter_id")
+        approval_id = args.get("approval_id") or _slug("signature-approval", f"{request_id}-{submitter_id or args.get('actor_ref') or 'approval'}")
         context = {
             "request_id": request_id,
-            "submitter_id": args.get("submitter_id"),
+            "submitter_id": submitter_id,
             "source_type": args.get("source_type") or request.get("source_type"),
             "source_id": args.get("source_id") or request.get("source_id"),
             "title": request.get("title"),
@@ -247,18 +435,20 @@ def _handle_approval_hash_create(args: dict, **_kwargs) -> str:
         approval_hash = args.get("approval_hash") or _sha256_text(_canonical_json(context))
         approval = sql.statement_one(f"""
           INSERT INTO signature.approvals (approval_id, request_id, submitter_id, source_type, source_id, approval_context, signature_text, signature_image_sha256, document_hash_sha256, approval_hash, ip_address, user_agent, signed_at, metadata)
-          VALUES ({_q(approval_id)}, {_q(request_id)}, {_q(args.get('submitter_id'))}, {_q(context['source_type'])}, {_q(context['source_id'])}, {_j(context)}, {_q(args.get('signature_text'))}, {_q(args.get('signature_image_sha256'))}, {_q(context['document_hash_sha256'])}, {_q(approval_hash)}, {_q(args.get('ip_address'))}, {_q(args.get('user_agent'))}, COALESCE({_q(args.get('signed_at'))}::timestamptz, now()), {_j(args.get('metadata') or {})})
+          VALUES ({_q(approval_id)}, {_q(request_id)}, {_q(submitter_id)}, {_q(context['source_type'])}, {_q(context['source_id'])}, {_j(context)}, {_q(args.get('signature_text'))}, {_q(args.get('signature_image_sha256'))}, {_q(context['document_hash_sha256'])}, {_q(approval_hash)}, {_q(args.get('ip_address'))}, {_q(args.get('user_agent'))}, COALESCE({_q(args.get('signed_at'))}::timestamptz, now()), {_j(args.get('metadata') or {})})
           ON CONFLICT (approval_id) DO UPDATE SET approval_context=EXCLUDED.approval_context, signature_text=EXCLUDED.signature_text, signature_image_sha256=EXCLUDED.signature_image_sha256, document_hash_sha256=EXCLUDED.document_hash_sha256, approval_hash=EXCLUDED.approval_hash, ip_address=EXCLUDED.ip_address, user_agent=EXCLUDED.user_agent, signed_at=EXCLUDED.signed_at, metadata=EXCLUDED.metadata
           RETURNING *
         """, user=_user())
+        _update_recipient_status(request_id, str(submitter_id or ""), "approved", args)
         sql.psql(f"""
-          UPDATE signature.submitters SET status='approved', signed_at=COALESCE({_q(args.get('signed_at'))}::timestamptz, now()), updated_at=now()
-          WHERE submitter_id={_q(args.get('submitter_id'))};
-          UPDATE signature.document_requests SET status='completed', approval_hash={_q(approval_hash)}, document_hash_sha256=COALESCE({_q(context['document_hash_sha256'])}, document_hash_sha256), completed_at=COALESCE(completed_at, now()), updated_at=now()
+          UPDATE signature.document_requests
+          SET approval_hash={_q(approval_hash)},
+              document_hash_sha256=COALESCE({_q(context['document_hash_sha256'])}, document_hash_sha256),
+              updated_at=now()
           WHERE request_id={_q(request_id)};
         """, user=_user())
-        event = _record_event(request_id, submitter_id=args.get("submitter_id"), event_type="approved", actor_type=args.get("actor_type") or "customer", actor_ref=args.get("actor_ref"), payload={"approval_id": approval_id, "approval_hash": approval_hash, "context": context}, ip_address=args.get("ip_address"), user_agent=args.get("user_agent"), metadata=args.get("metadata") or {})
-        _record_event(request_id, submitter_id=args.get("submitter_id"), event_type="hash_created", actor_type="system", actor_ref="signature_core", payload={"approval_hash": approval_hash, "approval_id": approval_id}, metadata=args.get("metadata") or {})
+        event = _record_event(request_id, submitter_id=submitter_id, event_type="approved", actor_type=args.get("actor_type") or "customer", actor_ref=args.get("actor_ref"), payload={"approval_id": approval_id, "approval_hash": approval_hash, "context": context, "otp_challenge_id": args.get("otp_challenge_id")}, ip_address=args.get("ip_address"), user_agent=args.get("user_agent"), metadata=args.get("metadata") or {})
+        _record_event(request_id, submitter_id=submitter_id, event_type="hash_created", actor_type="system", actor_ref="signature_core", payload={"approval_hash": approval_hash, "approval_id": approval_id}, metadata=args.get("metadata") or {})
         return _ok(approval=approval, approval_hash=approval_hash, event=event)
     except Exception as exc:
         return _err(exc)
@@ -275,6 +465,7 @@ def _meta_props() -> dict[str, Any]:
 registry.register(name="signature_status", toolset="signature", schema=_schema("signature_status", "Return Signature Core row counts and DB backend.", {}), handler=_handle_signature_status, check_fn=_check_signature, emoji="✍️")
 registry.register(name="signature_template_upsert", toolset="signature", schema=_schema("signature_template_upsert", "Create or update a reusable e-signature template with fields/submitter roles.", {"template_id": {"type": "string"}, "name": {"type": "string"}, "document_url": {"type": "string"}, "fields": {"type": "array", "items": {"type": "object"}}, "submitters": {"type": "array", "items": {"type": "object"}}, "preferences": {"type": "object"}, **_meta_props()}, ["name"]), handler=_handle_template_upsert, check_fn=_check_signature, emoji="✍️")
 registry.register(name="signature_request_create", toolset="signature", schema=_schema("signature_request_create", "Create a document/signature request with opaque signer links and field snapshots.", {"request_id": {"type": "string"}, "template_id": {"type": "string"}, "source_type": {"type": "string"}, "source_id": {"type": "string"}, "title": {"type": "string"}, "status": {"type": "string"}, "document_url": {"type": "string"}, "fields": {"type": "array", "items": {"type": "object"}}, "submitters": {"type": "array", "items": {"type": "object"}}, "preferences": {"type": "object"}, "expires_at": {"type": "string"}, "actor_ref": {"type": "string"}, **_meta_props()}, ["title", "submitters"]), handler=_handle_request_create, check_fn=_check_signature, emoji="✍️")
-registry.register(name="signature_request_get", toolset="signature", schema=_schema("signature_request_get", "Read a signature request with submitters, audit events, and approvals.", {"request_id": {"type": "string"}}, ["request_id"]), handler=_handle_request_get, check_fn=_check_signature, emoji="✍️")
+registry.register(name="signature_request_get", toolset="signature", schema=_schema("signature_request_get", "Read a signature request with submitters, audit events, approvals, and comments.", {"request_id": {"type": "string"}}, ["request_id"]), handler=_handle_request_get, check_fn=_check_signature, emoji="✍️")
 registry.register(name="signature_event_record", toolset="signature", schema=_schema("signature_event_record", "Append an audit event to a signature request with a chained event hash.", {"request_id": {"type": "string"}, "submitter_id": {"type": "string"}, "event_type": {"type": "string"}, "actor_type": {"type": "string"}, "actor_ref": {"type": "string"}, "ip_address": {"type": "string"}, "user_agent": {"type": "string"}, "event_payload": {"type": "object"}, **_meta_props()}, ["request_id", "event_type"]), handler=_handle_event_record, check_fn=_check_signature, emoji="✍️")
-registry.register(name="signature_approval_hash_create", toolset="signature", schema=_schema("signature_approval_hash_create", "Create a canonical approval record and SHA-256 approval hash for a signed/approved document.", {"approval_id": {"type": "string"}, "request_id": {"type": "string"}, "submitter_id": {"type": "string"}, "source_type": {"type": "string"}, "source_id": {"type": "string"}, "signature_text": {"type": "string"}, "signature_image_sha256": {"type": "string"}, "document_hash_sha256": {"type": "string"}, "approval_hash": {"type": "string"}, "ip_address": {"type": "string"}, "user_agent": {"type": "string"}, "signed_at": {"type": "string"}, "actor_type": {"type": "string"}, "actor_ref": {"type": "string"}, **_meta_props()}, ["request_id"]), handler=_handle_approval_hash_create, check_fn=_check_signature, emoji="✍️")
+registry.register(name="signature_recipient_action_record", toolset="signature", schema=_schema("signature_recipient_action_record", "Record a recipient-bound Signature Core action. Sign/approve/reject require signer token plus verified OTP; comments/rejection reasons are persisted and audited with request/field scope.", {"request_id": {"type": "string"}, "action": {"type": "string", "description": "sign, approve, reject, or comment"}, "signer_token": {"type": "string"}, "otp_verified": {"type": "boolean"}, "otp_challenge_id": {"type": "string"}, "otp_target_hash": {"type": "string"}, "field_id": {"type": "string"}, "comment": {"type": "string"}, "rejection_reason": {"type": "string"}, "ip_address": {"type": "string"}, "user_agent": {"type": "string"}, "actor_type": {"type": "string"}, "actor_ref": {"type": "string"}, **_meta_props()}, ["request_id", "action", "signer_token"]), handler=_handle_recipient_action_record, check_fn=_check_signature, emoji="✍️")
+registry.register(name="signature_approval_hash_create", toolset="signature", schema=_schema("signature_approval_hash_create", "Create a canonical approval record and SHA-256 approval hash for a signed/approved document. Requires signer token plus recipient-bound verified OTP.", {"approval_id": {"type": "string"}, "request_id": {"type": "string"}, "signer_token": {"type": "string"}, "otp_verified": {"type": "boolean"}, "otp_challenge_id": {"type": "string"}, "otp_target_hash": {"type": "string"}, "source_type": {"type": "string"}, "source_id": {"type": "string"}, "signature_text": {"type": "string"}, "signature_image_sha256": {"type": "string"}, "document_hash_sha256": {"type": "string"}, "approval_hash": {"type": "string"}, "ip_address": {"type": "string"}, "user_agent": {"type": "string"}, "signed_at": {"type": "string"}, "actor_type": {"type": "string"}, "actor_ref": {"type": "string"}, **_meta_props()}, ["request_id", "signer_token"]), handler=_handle_approval_hash_create, check_fn=_check_signature, emoji="✍️")
