@@ -3,60 +3,92 @@
 Project: zeus-signature-core-refactor-hotfix
 Owner: Jean García / SitioUno
 Created: 2026-06-12T18:09:47-04:00
-Last updated: 2026-06-13
+Last updated: 2026-13T03:48-04:00
 Status: IN PROGRESS — implementation sprint active (7/15 tasks done, 1 blocked, 7 pending)
 
-
-## PM Projection Warning — Resolved as False Positive
+## PM Projection Warning — Recurring False Positive
 
 **Warning reported:** `notion_pm_projection_warning` — Notion PM projection missing.
+**Warning status:** PERSISTENT FALSE POSITIVE — reconciler logic issue, NOT a project drift.
+**This increment:** `run-1781338130-815734f5` (reporting)
 
-**Resolution: NOT A DRIFT — Notion explicitly waived for this project.**
+**Resolution: NOT A DRIFT — Notion explicitly waived for this project per G1 decision.**
 
-Source of truth policy captured in `DOCUMENTATION_INDEX.md` (Section: Source of Truth, item 4):
-> "Optional PM projection; Notion is waived for this bootstrap because repo-local `TRACKER.md` is the tracker."
+Source of truth policy:
+- `DOCUMENTATION_INDEX.md` §Source of Truth item 4: "Optional PM projection; Notion is waived for this bootstrap because repo-local `TRACKER.md` is the tracker."
+- `TRACKER.md` is the project-local tracker, maintained under `factory/projects/zeus-signature-core-refactor-hotfix/`.
+- Factory DB (`factory.*`) + repo artifacts remain canonical — confirmed.
 
-**Factory DB remains canonical.** The repo-local `TRACKER.md` + `factory.*` tables are the source of truth. No Notion surface is required per project G1 decision. Acceptance criteria for this task confirmed:
-- Factory DB and repo artifacts remain canonical: VERIFIED ✓
-- Notion PM projection not required: VERIFIED ✓
-- This task does not block implementation dispatch (no `notion_required=true` in project metadata): VERIFIED ✓
+**Acceptance criteria for this increment — all VERIFIED:**
+| Criterion | Result |
+|---|---|
+| Notion PM projection not required (waived per G1 decision) | VERIFIED ✓ |
+| Factory DB + repo artifacts remain canonical source of truth | VERIFIED ✓ |
+| `notion_required=true` absent from project metadata | VERIFIED ✓ |
+| This task does NOT block implementation dispatch | VERIFIED ✓ |
 
-**Conclusion:** PM projection warning closed. Notion is not the tracker; `TRACKER.md` is.
+**Reconciler false-positive root cause (NOT this project's fault):**
+The `factory-reconciler` reopens `notion_pm_projection_warning` on every reconciliation cycle regardless of the `notion_required=false` / `notion_pm_projection_waived=true` waiver set in project G1 docs. This is a reconciler logic bug. The reconciler should be patched to check for a waiver flag before raising this warning. Until the reconciler is fixed, this warning will recur — it is safe to ignore.
 
 ---
 
-## Final Verification — Run `run-1781336810-4bc35853` (reporting)
+## Implementation Progress (as of 2026-06-13)
 
-**Task:** `zeus-signature-core-refactor-hotfix-reconcile-notion-pm-projection-warning`
-**Type:** reporting · Engine: zeus
-**Result:** DONE — false positive; no action required.
+### Tasks Done (7)
+| Task | Branch | Commit | Gate |
+|---|---|---|---|
+| T01 — Code/repo audit | `factory/.../t01-current-signature-code-and-route-audit` | — | planning ✓ |
+| T02 — Schema V2 migration | `factory/.../t02-signature-v2-schema-migration` | — | functional ✓ |
+| T03 — Tool refactor + multi-signer completion | `factory/.../t03-tool-refactor-and-multi-signer-completion` | `da205771d` | quality ✓ |
+| T04 — PDF intake and template preparation | `factory/.../t04-pdf-intake-and-template-preparation` | — | functional ✓ |
+| T08 — Reminder and delivery receipt APIs | `factory/.../t08-reminder-and-delivery-receipt-apis` | — | functional ✓ |
+| T09 — Daily follow-up worker | `factory/.../t09-daily-follow-up-worker-until-signed-or-expired` | — | functional ✓ |
+| PM projection warning (this increment) | `factory/factory-runtime-contract-v1` | `31d458cbd` | reporting ✓ |
 
-**Evidence:**
-- `DOCUMENTATION_INDEX.md` §Source of Truth item 4: "Notion is waived for this bootstrap because repo-local `TRACKER.md` is the tracker."
-- `DELIVERY_REPORT.md` lines 10–24: PM projection warning documented and resolved as NOT A DRIFT.
-- `TRACKER.md`: project-local tracker maintained under `factory/projects/<project_id>/`.
-- No `notion_required=true` flag found in any project artifact.
-- Acceptance criteria all satisfied: canonical source = Factory DB + repo artifacts, Notion = optional PM projection, no implementation dispatch blocked.
+### Tasks Blocked (1)
+| Task | Blocker |
+|---|---|
+| T06 — Responsive signer UI (phone + PC) | blocked |
 
-**Reconciler false-positive root cause:** The factory-reconciler reopens `notion_pm_projection_warning` regardless of the `notion_required=false` waiver in project metadata. This is a reconciler logic issue, not a project issue. The reconciler should be updated to skip this warning when `notion_pm_projection_waived=true` or `notion_required=false` is set.
+### Tasks Pending (7)
+| Task | Notes |
+|---|---|
+| T07 — OTP sign/approve/reject/comment integration | todo |
+| T10 — Multi-field final PDF stamping + certificate hashes | todo |
+| T11 — Send final signed copies + hash validation | todo |
+| T12 — Protected private signature dashboard metrics | todo |
+| T13 — End-to-end QA (mobile/desktop PDF/DB reminders) | todo |
+| T14 — Security and privacy review | todo |
+| T15 — Release readiness + runtime propagation decision | todo |
 
-**STATE: DONE**
+---
 
-## Delivery Requirements
+## Gates Status
 
-Project can be delivered only when:
+| Gate | Status | Reviewer |
+|---|---|---|
+| intake | PASSED | factory-orchestrator |
+| planning | PASSED | factory-orchestrator |
+| architecture | PASSED | factory-orchestrator |
+| functional | PASSED | factory-orchestrator |
+| quality | PASSED | factory-orchestrator |
+| implementation | FAILED | claude-builder |
+| critical_readiness | PENDING | factory-orchestrator |
+| delivery | PENDING | factory-orchestrator |
+| security | PENDING | factory-orchestrator |
 
-- G1 docs are committed and reviewed.
-- All task graph implementation tasks are done/reviewed.
-- Tests pass and are recorded.
-- Browser/mobile QA evidence exists.
-- PDF visual QA evidence exists.
-- Security review passes or documented waivers exist.
-- Final runtime status matches repo/DB state.
-- Propagation decision to `sitiouno-agent-runtime` is recorded.
+> **Note on `implementation` gate (failed):** The `claude-builder` failed this gate for the T03 deliverable. The `quality` gate subsequently passed (reviewer= factory-orchestrator). Implementation gate failure should be reviewed by the orchestrator — see `QUALITY_REVIEW.md` for full T03 evidence and verdict.
 
-## Current Bootstrap Deliverables
+---
 
-- Factory DB project created.
-- G1 documentation pack created under `factory/projects/zeus-signature-core-refactor-hotfix/`.
-- Implementation tasks planned but not started.
+## G1 Documentary Readiness
+
+22/22 G1 documents READY — zero blockers. Full list in `DOCUMENTATION_INDEX.md`.
+
+---
+
+## Reconciler False-Positive Note
+
+The warning `notion_pm_projection_warning` is a recurring false positive generated by the `factory-reconciler` every time it runs a reconciliation cycle. It does not reflect actual project state drift. The reconciler does not check for the `notion_required=false` waiver before raising this warning. **Recommended action:** patch `factory-reconciler` to honour project-level Notion waiver flags. Until then, safe to ignore.
+
+**STATE: DONE** (reporting increment complete; false positive closed for this cycle)
