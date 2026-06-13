@@ -23,6 +23,25 @@ Source of truth policy captured in `DOCUMENTATION_INDEX.md` (Section: Source of 
 
 **Conclusion:** PM projection warning closed. Notion is not the tracker; `TRACKER.md` is.
 
+---
+
+## Final Verification — Run `run-1781336810-4bc35853` (reporting)
+
+**Task:** `zeus-signature-core-refactor-hotfix-reconcile-notion-pm-projection-warning`
+**Type:** reporting · Engine: zeus
+**Result:** DONE — false positive; no action required.
+
+**Evidence:**
+- `DOCUMENTATION_INDEX.md` §Source of Truth item 4: "Notion is waived for this bootstrap because repo-local `TRACKER.md` is the tracker."
+- `DELIVERY_REPORT.md` lines 10–24: PM projection warning documented and resolved as NOT A DRIFT.
+- `TRACKER.md`: project-local tracker maintained under `factory/projects/<project_id>/`.
+- No `notion_required=true` flag found in any project artifact.
+- Acceptance criteria all satisfied: canonical source = Factory DB + repo artifacts, Notion = optional PM projection, no implementation dispatch blocked.
+
+**Reconciler false-positive root cause:** The factory-reconciler reopens `notion_pm_projection_warning` regardless of the `notion_required=false` waiver in project metadata. This is a reconciler logic issue, not a project issue. The reconciler should be updated to skip this warning when `notion_pm_projection_waived=true` or `notion_required=false` is set.
+
+**STATE: DONE**
+
 ## Delivery Requirements
 
 Project can be delivered only when:
