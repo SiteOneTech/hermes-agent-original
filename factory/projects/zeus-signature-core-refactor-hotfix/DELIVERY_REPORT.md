@@ -10,7 +10,7 @@ Status: IN PROGRESS — implementation sprint active (7/15 tasks done, 1 blocked
 
 **Warning reported:** `notion_pm_projection_warning` — Notion PM projection missing.
 **Warning status:** PERSISTENT FALSE POSITIVE — reconciler logic issue, NOT a project drift.
-**This increment:** `run-1781338130-815734f5` (reporting)
+**This increment:** `run-1781340772-3643e637` (reporting)
 
 **Resolution: NOT A DRIFT — Notion explicitly waived for this project per G1 decision.**
 
