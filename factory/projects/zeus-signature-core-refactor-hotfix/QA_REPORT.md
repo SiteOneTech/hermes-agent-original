@@ -10,7 +10,15 @@ Reviewed: yes — initial Zeus Factory orchestrator review; independent quality/
 
 ## Current State
 
-Seed report for project bootstrap. V2 implementation QA has not started.
+T06 responsive signing UI implemented and visually verified. The public static renderer now produces a SitioUno-branded signing workspace with PDF stage, overlay fields, signer progress panel, high-DPI signature canvas, desktop two-column layout, and mobile sticky action bar. Later T07 owns OTP completion semantics.
+
+## T06 Responsive Signer UI Evidence
+
+- Test RED observed: `ModuleNotFoundError: No module named 'scripts.runtime.sitiouno_document_workspace'` before implementation.
+- Unit/render tests: `PYTHONPATH=. /home/jean/Projects/hermes-agent-original/venv/bin/python -m pytest tests/test_sitiouno_signature_workspace_t06.py -q -o 'addopts='` → `2 passed`.
+- Regression bundle: `PYTHONPATH=. /home/jean/Projects/hermes-agent-original/venv/bin/python -m pytest tests/test_publish_delivery_sandbox_document_actions.py tests/test_sitiouno_signature_workspace_t06.py -q -o 'addopts='` → `6 passed`.
+- Desktop browser QA: generated with `google-chrome --headless=new --window-size=1440,1000`, evidence `evidence/t06-responsive-signer-ui/desktop-1440x1000.png`.
+- Mobile browser QA: generated with `google-chrome --headless=new --window-size=390,844`, evidence `evidence/t06-responsive-signer-ui/mobile-390x844.png`.
 
 ## Baseline Evidence Available Before V2
 
@@ -30,8 +38,8 @@ Existing prior probes showed the Signature Core DB/tools layer can store approva
 | Tool unit tests | pytest output | pending |
 | Multi-signer completion | failing-before/fixed-after test | pending |
 | PDF field placement | generated fixture + rendered page images | pending |
-| Mobile signing UI | screenshot/browser result | pending |
-| Desktop signing UI | screenshot/browser result | pending |
+| Mobile signing UI | screenshot/browser result | passed — `evidence/t06-responsive-signer-ui/mobile-390x844.png` |
+| Desktop signing UI | screenshot/browser result | passed — `evidence/t06-responsive-signer-ui/desktop-1440x1000.png` |
 | OTP action flow | request/verify/action tests | pending |
 | Reminder worker | idempotent due/reminder output | pending |
 | Final copy/hash delivery | receipt rows/logs | pending |

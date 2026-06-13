@@ -3,8 +3,8 @@
 Project: zeus-signature-core-refactor-hotfix
 Owner: Jean García / SitioUno
 Created: 2026-06-12T18:09:47-04:00
-Last updated: 2026-06-13T03:48:04-04:00
-Status: IN PROGRESS — implementation sprint active (7/15 tasks done, 1 blocked, 7 pending)
+Last updated: 2026-06-13T19:24:14-04:00
+Status: IN PROGRESS — implementation sprint active (8/15 tasks done, 0 blocked, 7 pending)
 
 ## PM Projection Warning — Recurring False Positive
 
@@ -34,21 +34,23 @@ The `factory-reconciler` reopens `notion_pm_projection_warning` on every reconci
 
 ## Implementation Progress (as of 2026-06-13)
 
-### Tasks Done (7)
+### Tasks Done (8 project tasks)
 | Task | Branch | Commit | Gate |
 |---|---|---|---|
 | T01 — Code/repo audit | `factory/.../t01-current-signature-code-and-route-audit` | — | planning ✓ |
 | T02 — Schema V2 migration | `factory/.../t02-signature-v2-schema-migration` | — | functional ✓ |
 | T03 — Tool refactor + multi-signer completion | `factory/.../t03-tool-refactor-and-multi-signer-completion` | `da205771d` | quality ✓ |
 | T04 — PDF intake and template preparation | `factory/.../t04-pdf-intake-and-template-preparation` | — | functional ✓ |
+| T05 — Field placement coordinate engine | `factory/.../t05-field-placement-coordinate-engine` | — | functional ✓ |
+| T06 — Responsive signer UI | `factory/.../t06-responsive-signer-ui` | pending | implementation ✓ |
 | T08 — Reminder and delivery receipt APIs | `factory/.../t08-reminder-and-delivery-receipt-apis` | — | functional ✓ |
 | T09 — Daily follow-up worker | `factory/.../t09-daily-follow-up-worker-until-signed-or-expired` | — | functional ✓ |
-| PM projection warning (this increment) | `factory/factory-runtime-contract-v1` | `31d458cbd` | reporting ✓ |
 
-### Tasks Blocked (1)
-| Task | Blocker |
-|---|---|
-| T06 — Responsive signer UI (phone + PC) | blocked |
+Reporting increment already closed separately: PM projection warning on `factory/factory-runtime-contract-v1` at `31d458cbd` with reporting gate ✓.
+
+### Tasks Blocked (0)
+
+No blocked tasks remain after T06 branch/worktree assignment and responsive signer UI implementation.
 
 ### Tasks Pending (7)
 | Task | Notes |

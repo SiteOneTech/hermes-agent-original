@@ -3,8 +3,8 @@
 Project: zeus-signature-core-refactor-hotfix
 Owner: Jean García / SitioUno
 Created: 2026-06-12T18:09:47-04:00
-Last updated: 2026-06-13T03:48:04-04:00
-Status: IN PROGRESS — 7/15 tasks done, 1 blocked, 7 pending
+Last updated: 2026-06-13T19:24:14-04:00
+Status: IN PROGRESS — 8/15 tasks done, 0 blocked, 7 pending
 Validated: yes
 Reviewed: yes
 
@@ -19,7 +19,7 @@ Reviewed: yes
 | T03 — Tool refactor + multi-signer completion | done | `factory/.../t03-tool-refactor-and-multi-signer-completion` | `da205771d` | quality ✓ |
 | T04 — PDF intake and template preparation | done | `factory/.../t04-pdf-intake-and-template-preparation` | — | functional ✓ |
 | T05 — Field placement coordinate engine | done | `factory/.../t05-field-placement-coordinate-engine` | — | functional ✓ |
-| T06 — Responsive signer UI (phone + PC) | blocked | — | — | — |
+| T06 — Responsive signer UI (phone + PC) | done | `factory/.../t06-responsive-signer-ui` | pending | implementation ✓ |
 | T07 — OTP sign/approve/reject/comment integration | todo | — | — | — |
 | T08 — Reminder and delivery receipt APIs | done | `factory/.../t08-reminder-and-delivery-receipt-apis` | — | functional ✓ |
 | T09 — Daily follow-up worker until signed or expired | done | `factory/.../t09-daily-follow-up-worker-until-signed-or-expired` | — | functional ✓ |
