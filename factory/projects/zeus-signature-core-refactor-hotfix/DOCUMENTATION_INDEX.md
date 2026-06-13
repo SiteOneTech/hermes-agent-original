@@ -13,7 +13,15 @@ Reviewed: yes — initial Zeus Factory orchestrator review; independent quality/
 1. Agent Core Postgres `factory.*` tables.
 2. This project-local Markdown pack under `factory/projects/zeus-signature-core-refactor-hotfix/`.
 3. Git branch/worktree state.
-4. Optional PM projection; Notion is waived for this bootstrap because repo-local `TRACKER.md` is the tracker.
+4. Notion PM projection (human reporting surface); repo-local `TRACKER.md` remains agents' canonical tracker.
+
+## Notion PM Projection
+
+- **notion_tracker_url**: https://app.notion.com/p/Zeus-Signature-Core-Refactor-PDF-Signing-Collection-Hotfix-Factory-PM-37e37b39cad6812ea750f19285329717
+- **notion_tracker_page_id**: `37e37b39-cad6-812e-a750-f19285329717`
+- **Status**: Active — synced post-T06 close (2026-06-13)
+- **Owner**: Jean García / Zeus
+- Notion is human reporting only; Factory DB + repo Markdown docs stay agents' source of truth.
 
 ## Required G1 Docs
 
