@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
+from datetime import UTC, datetime
 from typing import Any
 
 from hermes_cli import agent_core_sql as sql
@@ -66,6 +67,69 @@ def _sha256_text(value: str) -> str:
 
 def _canonical_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+_REQUIRED_COMPLETION_ROLES = {"signer", "approver"}
+_COMPLETE_SUBMITTER_STATUSES = {"signed", "approved"}
+
+
+def _parse_timestamp(value: Any) -> datetime | None:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=UTC)
+    if isinstance(value, str):
+        candidate = value.strip()
+        if not candidate:
+            return None
+        if candidate.endswith("Z"):
+            candidate = f"{candidate[:-1]}+00:00"
+        try:
+            parsed = datetime.fromisoformat(candidate)
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+    return None
+
+
+def _is_required_obligation(submitter: dict[str, Any]) -> bool:
+    return submitter.get("role") in _REQUIRED_COMPLETION_ROLES and submitter.get("required") is not False
+
+
+def _is_submitter_complete(submitter: dict[str, Any]) -> bool:
+    return str(submitter.get("status") or "").lower() in _COMPLETE_SUBMITTER_STATUSES
+
+
+def _completion_status_for_submitter(submitter: dict[str, Any] | None) -> str:
+    if (submitter or {}).get("role") == "signer":
+        return "signed"
+    return "approved"
+
+
+def _derive_request_lifecycle(request: dict[str, Any], submitters: list[dict[str, Any]]) -> dict[str, Any]:
+    """Derive aggregate request status from V2 submitter obligations."""
+    current_status = str(request.get("status") or "sent")
+    required_submitters = [submitter for submitter in submitters if _is_required_obligation(submitter)]
+    completed_required = [submitter for submitter in required_submitters if _is_submitter_complete(submitter)]
+    decline_blocks = request.get("decline_blocks") is not False
+
+    if current_status == "completed":
+        return {"status": "completed", "completed": True, "required_count": len(required_submitters), "completed_required_count": len(completed_required)}
+
+    if decline_blocks and any(str(submitter.get("status") or "").lower() == "declined" for submitter in required_submitters):
+        return {"status": "declined", "completed": False, "required_count": len(required_submitters), "completed_required_count": len(completed_required)}
+
+    expires_at = _parse_timestamp(request.get("expires_at"))
+    if expires_at and expires_at <= datetime.now(UTC):
+        return {"status": "expired", "completed": False, "required_count": len(required_submitters), "completed_required_count": len(completed_required)}
+
+    if required_submitters and len(completed_required) == len(required_submitters):
+        return {"status": "completed", "completed": True, "required_count": len(required_submitters), "completed_required_count": len(completed_required)}
+
+    if completed_required:
+        return {"status": "partially_signed", "completed": False, "required_count": len(required_submitters), "completed_required_count": len(completed_required)}
+
+    return {"status": current_status, "completed": False, "required_count": len(required_submitters), "completed_required_count": 0}
 
 
 def _event_hash(request_id: str, event_type: str, actor_ref: str | None, payload: Any, previous_hash: str | None) -> str:
@@ -159,9 +223,9 @@ def _handle_request_create(args: dict, **_kwargs) -> str:
         fields = args.get("fields") if args.get("fields") is not None else (template or {}).get("fields") or []
         template_submitters = (template or {}).get("submitters") or []
         request = sql.statement_one(f"""
-          INSERT INTO signature.document_requests (request_id, template_id, source_type, source_id, title, status, document_url, fields_snapshot, submitters_snapshot, preferences, metadata, expires_at, created_at, updated_at)
-          VALUES ({_q(request_id)}, {_q(args.get('template_id'))}, {_q(args.get('source_type'))}, {_q(args.get('source_id'))}, {_q(title)}, {_q(args.get('status') or 'draft')}, {_q(args.get('document_url') or (template or {}).get('document_url'))}, {_j(fields)}, {_j(template_submitters or submitters)}, {_j(args.get('preferences') or (template or {}).get('preferences') or {})}, {_j(args.get('metadata') or {})}, {_q(args.get('expires_at'))}::timestamptz, now(), now())
-          ON CONFLICT (request_id) DO UPDATE SET template_id=EXCLUDED.template_id, source_type=EXCLUDED.source_type, source_id=EXCLUDED.source_id, title=EXCLUDED.title, status=EXCLUDED.status, document_url=EXCLUDED.document_url, fields_snapshot=EXCLUDED.fields_snapshot, submitters_snapshot=EXCLUDED.submitters_snapshot, preferences=EXCLUDED.preferences, metadata=EXCLUDED.metadata, expires_at=EXCLUDED.expires_at, updated_at=now()
+          INSERT INTO signature.document_requests (request_id, template_id, template_version_id, source_type, source_id, title, status, document_url, fields_snapshot, submitters_snapshot, preferences, metadata, expires_at, decline_blocks, signing_mode, created_at, updated_at)
+          VALUES ({_q(request_id)}, {_q(args.get('template_id'))}, {_q(args.get('template_version_id'))}, {_q(args.get('source_type'))}, {_q(args.get('source_id'))}, {_q(title)}, {_q(args.get('status') or 'draft')}, {_q(args.get('document_url') or (template or {}).get('document_url'))}, {_j(fields)}, {_j(template_submitters or submitters)}, {_j(args.get('preferences') or (template or {}).get('preferences') or {})}, {_j(args.get('metadata') or {})}, {_q(args.get('expires_at'))}::timestamptz, {_q(args.get('decline_blocks') is not False)}::boolean, {_q(args.get('signing_mode') or 'parallel')}, now(), now())
+          ON CONFLICT (request_id) DO UPDATE SET template_id=EXCLUDED.template_id, template_version_id=EXCLUDED.template_version_id, source_type=EXCLUDED.source_type, source_id=EXCLUDED.source_id, title=EXCLUDED.title, status=EXCLUDED.status, document_url=EXCLUDED.document_url, fields_snapshot=EXCLUDED.fields_snapshot, submitters_snapshot=EXCLUDED.submitters_snapshot, preferences=EXCLUDED.preferences, metadata=EXCLUDED.metadata, expires_at=EXCLUDED.expires_at, decline_blocks=EXCLUDED.decline_blocks, signing_mode=EXCLUDED.signing_mode, updated_at=now()
           RETURNING *
         """, user=_user())
         sql.psql(f"DELETE FROM signature.submitters WHERE request_id={_q(request_id)};", user=_user())
@@ -171,8 +235,8 @@ def _handle_request_create(args: dict, **_kwargs) -> str:
             slug = secrets.token_urlsafe(18)
             submitter_id = sub.get("submitter_id") or _slug("signature-submitter", f"{request_id}-{sub.get('email') or sub.get('name') or idx}")
             saved = sql.statement_one(f"""
-              INSERT INTO signature.submitters (submitter_id, request_id, role, signing_order, name, email, phone, slug, token_hash_sha256, status, metadata)
-              VALUES ({_q(submitter_id)}, {_q(request_id)}, {_q(sub.get('role') or 'signer')}, {int(sub.get('signing_order') or idx)}, {_q(sub.get('name'))}, {_q(sub.get('email'))}, {_q(sub.get('phone'))}, {_q(slug)}, {_q(_sha256_text(token))}, {_q(sub.get('status') or 'pending')}, {_j(sub.get('metadata') or {})})
+              INSERT INTO signature.submitters (submitter_id, request_id, role, signing_order, name, email, phone, slug, token_hash_sha256, status, required, metadata)
+              VALUES ({_q(submitter_id)}, {_q(request_id)}, {_q(sub.get('role') or 'signer')}, {int(sub.get('signing_order') or idx)}, {_q(sub.get('name'))}, {_q(sub.get('email'))}, {_q(sub.get('phone'))}, {_q(slug)}, {_q(_sha256_text(token))}, {_q(sub.get('status') or 'pending')}, {_q(sub.get('required') is not False)}::boolean, {_j(sub.get('metadata') or {})})
               RETURNING *
             """, user=_user())
             saved_submitters.append({**(saved or {}), "signing_url": _request_url(slug), "token": token})
@@ -245,21 +309,46 @@ def _handle_approval_hash_create(args: dict, **_kwargs) -> str:
             "metadata": args.get("metadata") or {},
         }
         approval_hash = args.get("approval_hash") or _sha256_text(_canonical_json(context))
+        submitter = None
+        if args.get("submitter_id"):
+            submitter = sql.one(f"SELECT * FROM signature.submitters WHERE submitter_id={_q(args.get('submitter_id'))}", user=_user())
+        submitter_status = _completion_status_for_submitter(submitter)
         approval = sql.statement_one(f"""
           INSERT INTO signature.approvals (approval_id, request_id, submitter_id, source_type, source_id, approval_context, signature_text, signature_image_sha256, document_hash_sha256, approval_hash, ip_address, user_agent, signed_at, metadata)
           VALUES ({_q(approval_id)}, {_q(request_id)}, {_q(args.get('submitter_id'))}, {_q(context['source_type'])}, {_q(context['source_id'])}, {_j(context)}, {_q(args.get('signature_text'))}, {_q(args.get('signature_image_sha256'))}, {_q(context['document_hash_sha256'])}, {_q(approval_hash)}, {_q(args.get('ip_address'))}, {_q(args.get('user_agent'))}, COALESCE({_q(args.get('signed_at'))}::timestamptz, now()), {_j(args.get('metadata') or {})})
           ON CONFLICT (approval_id) DO UPDATE SET approval_context=EXCLUDED.approval_context, signature_text=EXCLUDED.signature_text, signature_image_sha256=EXCLUDED.signature_image_sha256, document_hash_sha256=EXCLUDED.document_hash_sha256, approval_hash=EXCLUDED.approval_hash, ip_address=EXCLUDED.ip_address, user_agent=EXCLUDED.user_agent, signed_at=EXCLUDED.signed_at, metadata=EXCLUDED.metadata
           RETURNING *
         """, user=_user())
+        if args.get("submitter_id"):
+            sql.psql(f"""
+              UPDATE signature.submitters
+              SET status={_q(submitter_status)},
+                  signed_at=CASE WHEN {_q(submitter_status)}='signed' THEN COALESCE({_q(args.get('signed_at'))}::timestamptz, now()) ELSE signed_at END,
+                  approved_at=CASE WHEN {_q(submitter_status)}='approved' THEN COALESCE({_q(args.get('signed_at'))}::timestamptz, now()) ELSE approved_at END,
+                  ip_address=COALESCE({_q(args.get('ip_address'))}, ip_address),
+                  user_agent=COALESCE({_q(args.get('user_agent'))}, user_agent),
+                  updated_at=now()
+              WHERE submitter_id={_q(args.get('submitter_id'))};
+            """, user=_user())
+        submitters = sql.rows(f"SELECT * FROM signature.submitters WHERE request_id={_q(request_id)} ORDER BY signing_order, created_at", user=_user())
+        lifecycle = _derive_request_lifecycle(request, submitters)
+        completed = lifecycle["completed"]
         sql.psql(f"""
-          UPDATE signature.submitters SET status='approved', signed_at=COALESCE({_q(args.get('signed_at'))}::timestamptz, now()), updated_at=now()
-          WHERE submitter_id={_q(args.get('submitter_id'))};
-          UPDATE signature.document_requests SET status='completed', approval_hash={_q(approval_hash)}, document_hash_sha256=COALESCE({_q(context['document_hash_sha256'])}, document_hash_sha256), completed_at=COALESCE(completed_at, now()), updated_at=now()
+          UPDATE signature.document_requests
+          SET status={_q(lifecycle['status'])},
+              approval_hash=CASE WHEN {str(completed).lower()} THEN COALESCE({_q(approval_hash)}, approval_hash) ELSE approval_hash END,
+              document_hash_sha256=COALESCE({_q(context['document_hash_sha256'])}, document_hash_sha256),
+              completed_at=CASE WHEN {str(completed).lower()} THEN COALESCE(completed_at, now()) ELSE completed_at END,
+              last_activity_at=now(),
+              updated_at=now()
           WHERE request_id={_q(request_id)};
         """, user=_user())
-        event = _record_event(request_id, submitter_id=args.get("submitter_id"), event_type="approved", actor_type=args.get("actor_type") or "customer", actor_ref=args.get("actor_ref"), payload={"approval_id": approval_id, "approval_hash": approval_hash, "context": context}, ip_address=args.get("ip_address"), user_agent=args.get("user_agent"), metadata=args.get("metadata") or {})
+        event_type = "signed" if submitter_status == "signed" else "approved"
+        event = _record_event(request_id, submitter_id=args.get("submitter_id"), event_type=event_type, actor_type=args.get("actor_type") or "customer", actor_ref=args.get("actor_ref"), payload={"approval_id": approval_id, "approval_hash": approval_hash, "context": context, "request_status": lifecycle["status"]}, ip_address=args.get("ip_address"), user_agent=args.get("user_agent"), metadata=args.get("metadata") or {})
         _record_event(request_id, submitter_id=args.get("submitter_id"), event_type="hash_created", actor_type="system", actor_ref="signature_core", payload={"approval_hash": approval_hash, "approval_id": approval_id}, metadata=args.get("metadata") or {})
-        return _ok(approval=approval, approval_hash=approval_hash, event=event)
+        if completed:
+            _record_event(request_id, submitter_id=args.get("submitter_id"), event_type="completed", actor_type="system", actor_ref="signature_core", payload={"approval_hash": approval_hash, "required_count": lifecycle["required_count"]}, metadata=args.get("metadata") or {})
+        return _ok(approval=approval, approval_hash=approval_hash, event=event, request_status=lifecycle["status"], lifecycle=lifecycle)
     except Exception as exc:
         return _err(exc)
 
@@ -274,7 +363,7 @@ def _meta_props() -> dict[str, Any]:
 
 registry.register(name="signature_status", toolset="signature", schema=_schema("signature_status", "Return Signature Core row counts and DB backend.", {}), handler=_handle_signature_status, check_fn=_check_signature, emoji="✍️")
 registry.register(name="signature_template_upsert", toolset="signature", schema=_schema("signature_template_upsert", "Create or update a reusable e-signature template with fields/submitter roles.", {"template_id": {"type": "string"}, "name": {"type": "string"}, "document_url": {"type": "string"}, "fields": {"type": "array", "items": {"type": "object"}}, "submitters": {"type": "array", "items": {"type": "object"}}, "preferences": {"type": "object"}, **_meta_props()}, ["name"]), handler=_handle_template_upsert, check_fn=_check_signature, emoji="✍️")
-registry.register(name="signature_request_create", toolset="signature", schema=_schema("signature_request_create", "Create a document/signature request with opaque signer links and field snapshots.", {"request_id": {"type": "string"}, "template_id": {"type": "string"}, "source_type": {"type": "string"}, "source_id": {"type": "string"}, "title": {"type": "string"}, "status": {"type": "string"}, "document_url": {"type": "string"}, "fields": {"type": "array", "items": {"type": "object"}}, "submitters": {"type": "array", "items": {"type": "object"}}, "preferences": {"type": "object"}, "expires_at": {"type": "string"}, "actor_ref": {"type": "string"}, **_meta_props()}, ["title", "submitters"]), handler=_handle_request_create, check_fn=_check_signature, emoji="✍️")
+registry.register(name="signature_request_create", toolset="signature", schema=_schema("signature_request_create", "Create a document/signature request with opaque signer links and field snapshots.", {"request_id": {"type": "string"}, "template_id": {"type": "string"}, "template_version_id": {"type": "string"}, "source_type": {"type": "string"}, "source_id": {"type": "string"}, "title": {"type": "string"}, "status": {"type": "string"}, "document_url": {"type": "string"}, "fields": {"type": "array", "items": {"type": "object"}}, "submitters": {"type": "array", "items": {"type": "object"}}, "preferences": {"type": "object"}, "expires_at": {"type": "string"}, "signing_mode": {"type": "string", "enum": ["parallel", "sequential", "mixed"]}, "decline_blocks": {"type": "boolean"}, "actor_ref": {"type": "string"}, **_meta_props()}, ["title", "submitters"]), handler=_handle_request_create, check_fn=_check_signature, emoji="✍️")
 registry.register(name="signature_request_get", toolset="signature", schema=_schema("signature_request_get", "Read a signature request with submitters, audit events, and approvals.", {"request_id": {"type": "string"}}, ["request_id"]), handler=_handle_request_get, check_fn=_check_signature, emoji="✍️")
 registry.register(name="signature_event_record", toolset="signature", schema=_schema("signature_event_record", "Append an audit event to a signature request with a chained event hash.", {"request_id": {"type": "string"}, "submitter_id": {"type": "string"}, "event_type": {"type": "string"}, "actor_type": {"type": "string"}, "actor_ref": {"type": "string"}, "ip_address": {"type": "string"}, "user_agent": {"type": "string"}, "event_payload": {"type": "object"}, **_meta_props()}, ["request_id", "event_type"]), handler=_handle_event_record, check_fn=_check_signature, emoji="✍️")
 registry.register(name="signature_approval_hash_create", toolset="signature", schema=_schema("signature_approval_hash_create", "Create a canonical approval record and SHA-256 approval hash for a signed/approved document.", {"approval_id": {"type": "string"}, "request_id": {"type": "string"}, "submitter_id": {"type": "string"}, "source_type": {"type": "string"}, "source_id": {"type": "string"}, "signature_text": {"type": "string"}, "signature_image_sha256": {"type": "string"}, "document_hash_sha256": {"type": "string"}, "approval_hash": {"type": "string"}, "ip_address": {"type": "string"}, "user_agent": {"type": "string"}, "signed_at": {"type": "string"}, "actor_type": {"type": "string"}, "actor_ref": {"type": "string"}, **_meta_props()}, ["request_id"]), handler=_handle_approval_hash_create, check_fn=_check_signature, emoji="✍️")
