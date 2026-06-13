@@ -96,7 +96,7 @@ CREATE TABLE IF NOT EXISTS signature.events (
   signature_event_id bigserial PRIMARY KEY,
   request_id text NOT NULL REFERENCES signature.document_requests(request_id) ON DELETE CASCADE,
   submitter_id text REFERENCES signature.submitters(submitter_id) ON DELETE SET NULL,
-  event_type text NOT NULL CHECK (event_type IN ('created','sent','viewed','started','field_updated','signed','approved','declined','completed','downloaded','agent_note','hash_created','invitation_sent','otp_sent','reminder_policy_updated','reminder_sent','final_copy_sent','delivery_receipt_recorded','delivery_failed')),
+  event_type text NOT NULL CHECK (event_type IN ('created','sent','viewed','started','field_updated','signed','approved','declined','completed','downloaded','agent_note','hash_created','invitation_sent','otp_sent','reminder_policy_updated','reminder_sent','final_copy_sent','delivery_receipt_recorded','delivery_failed','owner_escalated')),
   actor_type text NOT NULL DEFAULT 'customer' CHECK (actor_type IN ('customer','owner','agent','system','adapter')),
   actor_ref text,
   ip_address text,

@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from hermes_cli import agent_core_sql as sql
@@ -413,6 +414,187 @@ def _handle_reminder_attempt_record(args: dict, **_kwargs) -> str:
         return _err(exc)
 
 
+def _parse_dt(value: Any) -> datetime | None:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    parsed = datetime.fromisoformat(text)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _iso(value: datetime) -> str:
+    return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _next_due_for_cadence(current_due: Any, cadence: str) -> str:
+    base = _parse_dt(current_due) or datetime.now(timezone.utc)
+    normalized = (cadence or "daily").strip().lower()
+    if normalized in {"daily", "1d", "24h", "every_day"}:
+        delta = timedelta(days=1)
+    elif normalized in {"weekly", "7d"}:
+        delta = timedelta(days=7)
+    else:
+        delta = timedelta(days=1)
+    return _iso(base + delta)
+
+
+def _recipient_channel(row: dict[str, Any], default_channel: str | None = None) -> tuple[str, str | None]:
+    if default_channel:
+        recipient = row.get("email") if default_channel == "email" else row.get("phone")
+        return default_channel, recipient or row.get("email") or row.get("phone")
+    if row.get("email"):
+        return "email", row.get("email")
+    if row.get("phone"):
+        return "sms", row.get("phone")
+    return "in_app", row.get("submitter_id")
+
+
+def _due_followup_rows(now_sql: str, limit: int) -> list[dict[str, Any]]:
+    return sql.rows(f"""
+      SELECT
+        p.reminder_policy_id,
+        p.request_id,
+        p.cadence,
+        p.next_due_at,
+        p.max_attempts,
+        p.escalation_settings,
+        r.status AS request_status,
+        r.expires_at,
+        s.submitter_id,
+        s.status AS submitter_status,
+        s.email,
+        s.phone,
+        s.name,
+        COALESCE(attempts.attempt_count, 0) AS attempt_count,
+        COALESCE(attempts.failed_attempts, 0) AS failed_attempts
+      FROM signature.reminder_policies p
+      JOIN signature.document_requests r ON r.request_id = p.request_id
+      JOIN signature.submitters s ON s.request_id = p.request_id
+      LEFT JOIN LATERAL (
+        SELECT
+          count(*) AS attempt_count,
+          count(*) FILTER (WHERE status IN ('failed','bounced')) AS failed_attempts
+        FROM signature.reminder_attempts ra
+        WHERE ra.request_id = p.request_id
+          AND (ra.submitter_id = s.submitter_id OR ra.submitter_id IS NULL)
+      ) attempts ON true
+      WHERE p.enabled = true
+        AND p.next_due_at <= {now_sql}::timestamptz
+        AND r.status IN ('sent','viewed','partially_signed')
+        AND (r.expires_at IS NULL OR r.expires_at > {now_sql}::timestamptz)
+        AND s.status IN ('pending','sent','viewed')
+        AND COALESCE(attempts.attempt_count, 0) < p.max_attempts
+      ORDER BY p.next_due_at ASC, r.created_at ASC, s.signing_order ASC
+      LIMIT {limit}
+    """, user=_user())
+
+
+def _escalation_reasons(row: dict[str, Any], now: datetime, delivery_status: str) -> list[str]:
+    settings = row.get("escalation_settings") or {}
+    near_expiry_hours = int(settings.get("near_expiry_hours") or 0)
+    owner_after_failures = int(settings.get("owner_after_failures") or settings.get("owner_after_attempts") or 0)
+    failed_attempts = int(row.get("failed_attempts") or 0)
+    if delivery_status in {"failed", "bounced"}:
+        failed_attempts += 1
+    reasons: list[str] = []
+    expires_at = _parse_dt(row.get("expires_at"))
+    if near_expiry_hours > 0 and expires_at and expires_at <= now + timedelta(hours=near_expiry_hours):
+        reasons.append("near_expiry")
+    if owner_after_failures > 0 and failed_attempts >= owner_after_failures:
+        reasons.append("repeated_delivery_failures")
+    return reasons
+
+
+def _handle_followup_due(args: dict, **_kwargs) -> str:
+    try:
+        now = _parse_dt(args.get("now")) or datetime.now(timezone.utc)
+        now_text = _iso(now)
+        now_sql = _q(now_text)
+        limit = max(1, min(int(args.get("limit") or 50), 500))
+        delivery_status = str(args.get("delivery_status") or "queued").strip()
+        if delivery_status not in {"queued", "sent", "delivered", "failed", "bounced"}:
+            raise ValueError("delivery_status must be queued, sent, delivered, failed, or bounced")
+        rows = _due_followup_rows(now_sql, limit)
+        reminders: list[dict[str, Any]] = []
+        policy_updates: list[dict[str, Any]] = []
+        escalations: list[dict[str, Any]] = []
+        touched_policies: set[str] = set()
+        for row in rows:
+            channel, recipient = _recipient_channel(row, args.get("channel"))
+            scheduled_for = row.get("next_due_at") or now_text
+            next_due_at = _next_due_for_cadence(scheduled_for, row.get("cadence") or "daily")
+            idempotency_key = _sha256_text(_canonical_json({
+                "worker": "signature_followup_due",
+                "request_id": row.get("request_id"),
+                "submitter_id": row.get("submitter_id"),
+                "reminder_policy_id": row.get("reminder_policy_id"),
+                "scheduled_for": str(scheduled_for),
+            }))
+            attempt_result = json.loads(_handle_reminder_attempt_record({
+                "request_id": row.get("request_id"),
+                "submitter_id": row.get("submitter_id"),
+                "reminder_policy_id": row.get("reminder_policy_id"),
+                "channel": channel,
+                "recipient": recipient,
+                "status": delivery_status,
+                "error_message": args.get("error_message"),
+                "scheduled_for": scheduled_for,
+                "attempted_at": now_text,
+                "idempotency_key": idempotency_key,
+                "metadata": {"worker": "signature_followup_due", "policy_next_due_at": str(scheduled_for)},
+                "actor_type": "system",
+                "actor_ref": "signature_followup_worker",
+            }))
+            if attempt_result.get("error"):
+                raise ValueError(attempt_result["error"])
+            reminders.append({
+                "request_id": row.get("request_id"),
+                "submitter_id": row.get("submitter_id"),
+                "channel": channel,
+                "recipient": recipient,
+                "status": delivery_status,
+                "scheduled_for": str(scheduled_for),
+                "next_due_at": next_due_at,
+                "attempt": attempt_result.get("attempt"),
+            })
+            policy_id = str(row.get("reminder_policy_id") or "")
+            if policy_id and policy_id not in touched_policies:
+                updated = sql.statement_one(f"""
+                  UPDATE signature.reminder_policies
+                  SET next_due_at={_q(next_due_at)}::timestamptz, updated_at=now()
+                  WHERE reminder_policy_id={_q(policy_id)}
+                  RETURNING *
+                """, user=_user())
+                policy_updates.append(updated or {"reminder_policy_id": policy_id, "next_due_at": next_due_at})
+                touched_policies.add(policy_id)
+            reasons = _escalation_reasons(row, now, delivery_status)
+            if reasons:
+                event = _record_event(
+                    str(row.get("request_id")),
+                    submitter_id=row.get("submitter_id"),
+                    event_type="owner_escalated",
+                    actor_type="system",
+                    actor_ref="signature_followup_worker",
+                    payload={
+                        "reasons": reasons,
+                        "reminder_policy_id": row.get("reminder_policy_id"),
+                        "failed_attempts": row.get("failed_attempts"),
+                        "expires_at": row.get("expires_at"),
+                    },
+                    metadata={"worker": "signature_followup_due"},
+                )
+                escalations.append({"request_id": row.get("request_id"), "submitter_id": row.get("submitter_id"), "reasons": reasons, "event": event})
+        return _ok(processed=len(reminders), reminders=reminders, policy_updates=policy_updates, escalations=escalations)
+    except Exception as exc:
+        return _err(exc)
+
+
 def _schema(name: str, description: str, props: dict, required: list[str] | None = None) -> dict:
     return {"type": "function", "function": {"name": name, "description": description, "parameters": {"type": "object", "properties": props, "required": required or []}}}
 
@@ -430,3 +612,4 @@ registry.register(name="signature_approval_hash_create", toolset="signature", sc
 registry.register(name="signature_delivery_receipt_record", toolset="signature", schema=_schema("signature_delivery_receipt_record", "Record an idempotent invitation, OTP, reminder, or final-copy delivery receipt with provider status/failure details.", {"request_id": {"type": "string"}, "submitter_id": {"type": "string"}, "receipt_type": {"type": "string", "enum": ["invitation", "otp", "reminder", "final_copy"]}, "channel": {"type": "string"}, "recipient": {"type": "string"}, "provider_message_id": {"type": "string"}, "status": {"type": "string", "enum": ["queued", "sent", "delivered", "failed", "bounced"]}, "error_message": {"type": "string"}, "delivered_at": {"type": "string"}, "idempotency_key": {"type": "string"}, "actor_type": {"type": "string"}, "actor_ref": {"type": "string"}, **_meta_props()}, ["request_id", "receipt_type", "channel"]), handler=_handle_delivery_receipt_record, check_fn=_check_signature, emoji="✍️")
 registry.register(name="signature_reminder_policy_upsert", toolset="signature", schema=_schema("signature_reminder_policy_upsert", "Create/update per-request reminder policy with cadence, next due timestamp, max attempts, and escalation settings.", {"reminder_policy_id": {"type": "string"}, "request_id": {"type": "string"}, "cadence": {"type": "string"}, "next_due_at": {"type": "string"}, "max_attempts": {"type": "integer"}, "escalation_settings": {"type": "object"}, "enabled": {"type": "boolean"}, "actor_type": {"type": "string"}, "actor_ref": {"type": "string"}, **_meta_props()}, ["request_id", "cadence", "next_due_at", "max_attempts"]), handler=_handle_reminder_policy_upsert, check_fn=_check_signature, emoji="✍️")
 registry.register(name="signature_reminder_attempt_record", toolset="signature", schema=_schema("signature_reminder_attempt_record", "Record an idempotent reminder attempt, failure details, optional next_due_at update, and matching reminder delivery receipt.", {"request_id": {"type": "string"}, "submitter_id": {"type": "string"}, "reminder_policy_id": {"type": "string"}, "channel": {"type": "string"}, "recipient": {"type": "string"}, "provider_message_id": {"type": "string"}, "status": {"type": "string", "enum": ["queued", "sent", "delivered", "failed", "bounced"]}, "error_message": {"type": "string"}, "scheduled_for": {"type": "string"}, "attempted_at": {"type": "string"}, "next_due_at": {"type": "string"}, "idempotency_key": {"type": "string"}, "actor_type": {"type": "string"}, "actor_ref": {"type": "string"}, **_meta_props()}, ["request_id", "channel"]), handler=_handle_reminder_attempt_record, check_fn=_check_signature, emoji="✍️")
+registry.register(name="signature_followup_due", toolset="signature", schema=_schema("signature_followup_due", "Run the Signature Core daily follow-up worker: find due pending signers, queue one reminder per policy window, advance next_due_at, and record owner escalations for near-expiry or repeated failures.", {"now": {"type": "string"}, "limit": {"type": "integer"}, "channel": {"type": "string", "enum": ["email", "sms", "in_app"]}, "delivery_status": {"type": "string", "enum": ["queued", "sent", "delivered", "failed", "bounced"]}, "error_message": {"type": "string"}}, []), handler=_handle_followup_due, check_fn=_check_signature, emoji="✍️")

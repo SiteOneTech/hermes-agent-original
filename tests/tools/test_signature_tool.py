@@ -18,6 +18,7 @@ def test_signature_toolset_registered():
     assert "signature_delivery_receipt_record" in tools
     assert "signature_reminder_policy_upsert" in tools
     assert "signature_reminder_attempt_record" in tools
+    assert "signature_followup_due" in tools
 
 
 def test_approval_hash_is_deterministic(monkeypatch):
@@ -198,3 +199,101 @@ def test_reminder_attempt_record_is_idempotent_and_updates_next_due(monkeypatch)
     assert "error_message=EXCLUDED.error_message" in attempt_sql
     assert any("UPDATE signature.reminder_policies" in query for query in statements)
     assert any("INSERT INTO signature.delivery_receipts" in query for query in statements)
+
+
+def test_followup_due_records_one_daily_reminder_and_advances_policy(monkeypatch):
+    rows_queries = []
+    attempts = []
+    receipts = []
+    events = []
+
+    due_row = {
+        "reminder_policy_id": "policy-1",
+        "request_id": "req-1",
+        "submitter_id": "sub-1",
+        "email": "signer@example.test",
+        "phone": None,
+        "next_due_at": "2026-06-15T09:00:00Z",
+        "cadence": "daily",
+        "max_attempts": 5,
+        "attempt_count": 1,
+        "failed_attempts": 0,
+        "escalation_settings": {"near_expiry_hours": 48, "owner_after_failures": 3},
+        "expires_at": "2026-06-20T09:00:00Z",
+    }
+
+    def fake_rows(query, *, user=None):
+        rows_queries.append(query)
+        return [due_row]
+
+    def fake_statement_one(query, *, user=None):
+        if "INSERT INTO signature.reminder_attempts" in query:
+            attempts.append(query)
+            return {"reminder_attempt_id": len(attempts), "status": "queued", "idempotency_key": "key-1"}
+        if "INSERT INTO signature.delivery_receipts" in query:
+            receipts.append(query)
+            return {"delivery_receipt_id": len(attempts), "status": "queued"}
+        if "INSERT INTO signature.events" in query:
+            events.append(query)
+            return {"signature_event_id": len(events), "event_hash": "event-hash"}
+        if "UPDATE signature.reminder_policies" in query:
+            return {"reminder_policy_id": "policy-1", "next_due_at": "2026-06-16T09:00:00Z"}
+        return {}
+
+    monkeypatch.setattr(signature_tool.sql, "rows", fake_rows)
+    monkeypatch.setattr(signature_tool.sql, "statement_one", fake_statement_one)
+    monkeypatch.setattr(signature_tool.sql, "one", lambda *a, **k: {"event_hash": "prev-hash"})
+
+    result = _loads(signature_tool._handle_followup_due({"now": "2026-06-15T09:00:00Z"}))
+
+    assert result["ok"] is True
+    assert result["processed"] == 1
+    assert result["reminders"][0]["submitter_id"] == "sub-1"
+    assert result["reminders"][0]["channel"] == "email"
+    assert attempts
+    assert "scheduled_for" in attempts[0]
+    assert receipts and "receipt:" in receipts[0]
+    assert any("r.status IN ('sent','viewed','partially_signed')" in query for query in rows_queries)
+    assert result["policy_updates"][0]["next_due_at"] == "2026-06-16T09:00:00Z"
+
+
+def test_followup_due_escalates_owner_for_near_expiry_and_failures(monkeypatch):
+    events = []
+    due_rows = [
+        {
+            "reminder_policy_id": "policy-1",
+            "request_id": "req-1",
+            "submitter_id": "sub-1",
+            "email": "signer@example.test",
+            "phone": None,
+            "next_due_at": "2026-06-15T09:00:00Z",
+            "cadence": "daily",
+            "max_attempts": 5,
+            "attempt_count": 3,
+            "failed_attempts": 3,
+            "escalation_settings": {"near_expiry_hours": 48, "owner_after_failures": 3},
+            "expires_at": "2026-06-16T08:00:00Z",
+        }
+    ]
+
+    def fake_statement_one(query, *, user=None):
+        if "INSERT INTO signature.reminder_attempts" in query:
+            return {"reminder_attempt_id": 1, "status": "queued", "idempotency_key": "key-1"}
+        if "INSERT INTO signature.delivery_receipts" in query:
+            return {"delivery_receipt_id": 1, "status": "queued"}
+        if "INSERT INTO signature.events" in query:
+            events.append(query)
+            return {"signature_event_id": len(events), "event_hash": "event-hash"}
+        if "UPDATE signature.reminder_policies" in query:
+            return {"reminder_policy_id": "policy-1", "next_due_at": "2026-06-16T09:00:00Z"}
+        return {}
+
+    monkeypatch.setattr(signature_tool.sql, "rows", lambda *a, **k: due_rows)
+    monkeypatch.setattr(signature_tool.sql, "statement_one", fake_statement_one)
+    monkeypatch.setattr(signature_tool.sql, "one", lambda *a, **k: {"event_hash": "prev-hash"})
+
+    result = _loads(signature_tool._handle_followup_due({"now": "2026-06-15T09:00:00Z"}))
+
+    assert result["ok"] is True
+    assert sorted(result["escalations"][0]["reasons"]) == ["near_expiry", "repeated_delivery_failures"]
+    assert any("owner_escalated" in query for query in events)

@@ -65,15 +65,17 @@ BEGIN
     ALTER TABLE signature.events DROP CONSTRAINT events_event_type_check;
   END IF;
 
-  IF NOT EXISTS (
+  IF EXISTS (
     SELECT 1
     FROM pg_constraint
     WHERE conrelid = 'signature.events'::regclass
       AND conname = 'signature_events_event_type_check'
   ) THEN
-    ALTER TABLE signature.events ADD CONSTRAINT signature_events_event_type_check
-      CHECK (event_type IN ('created','sent','viewed','started','field_updated','signed','approved','declined','completed','downloaded','agent_note','hash_created','invitation_sent','otp_sent','reminder_policy_updated','reminder_sent','final_copy_sent','delivery_receipt_recorded','delivery_failed'));
+    ALTER TABLE signature.events DROP CONSTRAINT signature_events_event_type_check;
   END IF;
+
+  ALTER TABLE signature.events ADD CONSTRAINT signature_events_event_type_check
+    CHECK (event_type IN ('created','sent','viewed','started','field_updated','signed','approved','declined','completed','downloaded','agent_note','hash_created','invitation_sent','otp_sent','reminder_policy_updated','reminder_sent','final_copy_sent','delivery_receipt_recorded','delivery_failed','owner_escalated'));
 END $$;
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON signature.reminder_policies TO signature_runtime;
