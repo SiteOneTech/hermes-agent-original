@@ -42,7 +42,7 @@ The `factory-reconciler` reopens `notion_pm_projection_warning` on every reconci
 | T03 — Tool refactor + multi-signer completion | `factory/.../t03-tool-refactor-and-multi-signer-completion` | `da205771d` | quality ✓ |
 | T04 — PDF intake and template preparation | `factory/.../t04-pdf-intake-and-template-preparation` | — | functional ✓ |
 | T05 — Field placement coordinate engine | `factory/.../t05-field-placement-coordinate-engine` | — | functional ✓ |
-| T06 — Responsive signer UI | `factory/.../t06-responsive-signer-ui` | pending | implementation ✓ |
+| T06 — Responsive signer UI | `factory/.../t06-responsive-signer-ui` | `9c566e849` | implementation ✓ |
 | T08 — Reminder and delivery receipt APIs | `factory/.../t08-reminder-and-delivery-receipt-apis` | — | functional ✓ |
 | T09 — Daily follow-up worker | `factory/.../t09-daily-follow-up-worker-until-signed-or-expired` | — | functional ✓ |
 
