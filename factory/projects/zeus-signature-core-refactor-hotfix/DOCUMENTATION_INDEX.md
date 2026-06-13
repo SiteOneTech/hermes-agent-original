@@ -78,4 +78,5 @@ Before any implementation task, a worker must read this index first, then:
 - `SECURITY_REVIEW.md`
 - `DELIVERY_REPORT.md`
 - `DB_TASKS.md`
+- `T01_CURRENT_SIGNATURE_CODE_AND_ROUTE_AUDIT.md`
 
