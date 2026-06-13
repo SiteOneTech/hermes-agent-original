@@ -12,7 +12,7 @@ Reviewed: yes — initial Zeus Factory orchestrator review; independent quality/
 |---|---|---|
 | T00 — G1 bootstrap docs + Factory DB | in_progress | Project DB created; docs being generated in `factory/projects/zeus-signature-core-refactor-hotfix` |
 | T01 — Code/repo audit | planned | Existing files inspected: signature schema/tool/pdf helper/document-actions/public sandbox |
-| T02 — Schema V2 migration | planned | Not started |
+| T02 — Schema V2 migration | done | Added `db/modules/signature/000002_signature_v2_schema.sql`, registered `signature` in `scripts/agent_core_db.py`, validated with targeted pytest and ephemeral PostgreSQL migration smoke in isolated worktree `/home/jean/workspace/zeus-signature-core-refactor-hotfix-t02-schema` |
 | T03 — Tool refactor + multi-signer completion | planned | Known bug: first approval currently completes request |
 | T04 — PDF intake/template preparation | planned | Not started |
 | T05 — Field placement engine | planned | Not started |
