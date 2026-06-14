@@ -205,6 +205,16 @@ TOOLSETS = {
         "includes": []
     },
 
+    "agent_management": {
+        "description": "Zeus runtime-agent management core: post-payment onboarding, internal intake forms, build reports, and actuation plans",
+        "tools": [
+            "agent_mgmt_onboarding_start", "agent_mgmt_onboarding_form_update",
+            "agent_mgmt_onboarding_next_prompt", "agent_mgmt_onboarding_report_generate",
+            "agent_mgmt_actuation_plan_generate",
+        ],
+        "includes": []
+    },
+
     "calendar": {
         "description": "Agent-native calendar and booking tools backed by a self-hosted scheduler",
         "tools": [

@@ -13,3 +13,8 @@ status: draft-ready
 - Recorded G0 strategy as Zeus primary with runtime propagation.
 - Created PMV G1 documentation pack.
 - Created implementation task for runtime shared secret pack inheritance.
+
+## 2026-06-14 — Sophie onboarding workflow
+- Added post-payment Sophie onboarding workflow doc.
+- Added Agent Management Core schema/tooling plan for internal onboarding form, Zeus build report, and actuation plan.
+- Recorded agent-first post-onboarding guidance model with escalation only for exceptions.

@@ -14,6 +14,7 @@ status: draft-ready
 - Runtime shared-secret MVP: planned/implementation branch created.
 - Infisical shared project: pending implementation/ops task.
 - Bael smoke: pending after shared project and sync implementation.
+- Sophie onboarding intake: implementation branch in progress for post-payment conversational form/report/actuation workflow.
 
 ## Risks
 - Shared API key blast radius if SendGrid key is abused.
