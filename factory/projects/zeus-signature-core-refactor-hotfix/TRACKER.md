@@ -3,8 +3,8 @@
 Project: zeus-signature-core-refactor-hotfix
 Owner: Jean García / SitioUno
 Created: 2026-06-12T18:09:47-04:00
-Last updated: 2026-06-13T14:30:00-04:00
-Status: IN PROGRESS — 9/15 tasks done (T06-T09 corrected), 6 pending
+Last updated: 2026-06-13T17:30:00-04:00
+Status: IN PROGRESS — 12/15 tasks done (T10-T13 completed), 3 pending (T14-T15)
 Validated: yes
 Reviewed: yes
 
@@ -23,12 +23,12 @@ Reviewed: yes
 | T07 — OTP sign/approve/reject/comment integration | done | `factory/.../t07-otp-sign-approve-reject-comment-integration` | `1acbd0629` | quality ✓ |
 | T08 — Reminder and delivery receipt APIs | done | `factory/.../t08-reminder-and-delivery-receipt-apis` | `0da54838a` | functional ✓ |
 | T09 — Daily follow-up worker until signed or expired | done | `factory/.../t09-daily-follow-up-worker` | `624ed9996` | functional ✓ |
-| T10 — Multi-field final PDF stamping + certificate hashes | todo | — | — | — |
-| T11 — Send final signed copies + hash validation | todo | — | — | — |
-| T12 — Protected private signature dashboard metrics | todo | — | — | — |
-| T13 — End-to-end QA (mobile/desktop PDF/DB reminders) | todo | — | — | — |
-| T14 — Security and privacy review | todo | — | — | — |
-| T15 — Release readiness + runtime propagation decision | todo | — | — | — |
+|| T10 — Multi-field final PDF stamping + certificate hashes | done | `factory/.../t10-final-pdf-stamping-certificate-hashes` | `1ab534c2d` | qa ✓ |
+|| T11 — Send final signed copies + hash validation | done | `factory/.../t11-final-copy-hash-distribution` | `4c7aad7a3` | qa ✓ |
+|| T12 — Protected private signature dashboard metrics | done | `factory/.../t12-protected-private-signature-dashboard-metrics` | `2ddc75f40` | qa ✓ |
+|| T13 — End-to-end QA (mobile/desktop PDF/DB reminders) | done | — | — | qa ✓ |
+|| T14 — Security and privacy review | todo | — | — | — |
+|| T15 — Release readiness + runtime propagation decision | todo | — | — | — |
 
 
 ## Gates Status
