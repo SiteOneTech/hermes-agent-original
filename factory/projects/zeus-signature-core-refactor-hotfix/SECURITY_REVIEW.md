@@ -3,7 +3,7 @@
 Project: zeus-signature-core-refactor-hotfix
 Task: T14 — Security and privacy review
 Profile: security-reviewer
-Run: run-1781404166-a3f32c5b
+Run: run-1781404166-a3f32c5b; rework recheck run-1781405484-ca368168
 Date: 2026-06-13
 Verdict: BLOCKED — security gate must not pass until rework below is integrated and re-verified.
 
@@ -84,6 +84,45 @@ Observed results:
   - `signature_pad: False`
   - `signature-pad: False`
 - `hermes factory status zeus-signature-core-refactor-hotfix --json` could not be used from this profile/runtime: local Hermes CLI reports `invalid choice: 'factory'`. No direct `factory.*` DB writes were attempted.
+
+### Rework Recheck — run-1781405484-ca368168
+
+Additional commands run from the same T14 worktree on 2026-06-13T22:53:01-04:00:
+
+```bash
+python -m pytest tests/tools/test_signature_tool.py tests/test_delivery_document_actions.py tests/test_publish_delivery_sandbox_document_actions.py tests/gateway/test_webhook_signature_rate_limit.py -q
+python - <<'PY'
+from pathlib import Path
+checks = {
+ 'base_signature_tool_old_completion': ('tools/signature_tool.py', "UPDATE signature.document_requests SET status='completed'"),
+ 'base_public_download': ('scripts/runtime/publish_delivery_sandbox.py', 'location /download/'),
+ 'base_user_signatures_route': ('scripts/runtime/publish_delivery_sandbox.py', '/user/signatures'),
+ 'base_signature_recipient_action_record': ('tools/signature_tool.py', 'signature_recipient_action_record'),
+ 'base_requires_signer_token_schema': ('tools/signature_tool.py', "'signer_token'"),
+ 'base_agpl_docs': ('factory/projects/zeus-signature-core-refactor-hotfix/ADRS.md', 'AGPL'),
+}
+for name,(p,needle) in checks.items():
+    text=Path(p).read_text(encoding='utf-8')
+    print(f'{name}: {needle in text}')
+PY
+for b in factory/zeus-signature-core-refactor-hotfix/t07-otp-sign-approve-reject-comment-integration factory/zeus-signature-core-refactor-hotfix/t10-final-pdf-stamping-certificate-hashes factory/zeus-signature-core-refactor-hotfix/t11-final-copy-hash-distribution factory/zeus-signature-core-refactor-hotfix/t12-protected-private-signature-dashboard-metrics; do
+  if git merge-base --is-ancestor "$b" HEAD; then echo "$b: merged_into_t14"; else echo "$b: NOT_merged_into_t14"; fi
+done
+```
+
+Observed recheck results:
+
+- Focused tests: `12 passed in 1.01s`.
+- Base/review branch checks:
+  - `base_signature_tool_old_completion: True`
+  - `base_public_download: True`
+  - `base_user_signatures_route: False`
+  - `base_signature_recipient_action_record: False`
+  - `base_requires_signer_token_schema: False`
+  - `base_agpl_docs: True`
+- Branch composition checks:
+  - T07, T10, T11, and T12 are all `NOT_merged_into_t14`; no coherent integration branch/worktree was available for this rework review.
+- Gate outcome is unchanged: BLOCKED. The requested rework prerequisite (single integrated runtime with T07+T10+T11+T12 plus negative tests) is still absent in the reviewed branch.
 
 ## Security Findings
 
