@@ -96,7 +96,7 @@ CREATE TABLE IF NOT EXISTS signature.events (
   signature_event_id bigserial PRIMARY KEY,
   request_id text NOT NULL REFERENCES signature.document_requests(request_id) ON DELETE CASCADE,
   submitter_id text REFERENCES signature.submitters(submitter_id) ON DELETE SET NULL,
-  event_type text NOT NULL CHECK (event_type IN ('created','sent','viewed','started','field_updated','signed','approved','declined','completed','downloaded','agent_note','hash_created')),
+  event_type text NOT NULL CHECK (event_type IN ('created','sent','viewed','started','field_updated','signed','approved','declined','completed','downloaded','agent_note','hash_created','final_copy_sent','final_copy_failed','owner_escalation')),
   actor_type text NOT NULL DEFAULT 'customer' CHECK (actor_type IN ('customer','owner','agent','system','adapter')),
   actor_ref text,
   ip_address text,
@@ -125,12 +125,30 @@ CREATE TABLE IF NOT EXISTS signature.approvals (
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb
 );
 
+CREATE TABLE IF NOT EXISTS signature.delivery_receipts (
+  delivery_receipt_id bigserial PRIMARY KEY,
+  request_id text NOT NULL REFERENCES signature.document_requests(request_id) ON DELETE CASCADE,
+  submitter_id text REFERENCES signature.submitters(submitter_id) ON DELETE SET NULL,
+  delivery_type text NOT NULL CHECK (delivery_type IN ('invitation','otp','reminder','final_copy')),
+  channel text NOT NULL,
+  recipient text,
+  provider_message_id text,
+  status text NOT NULL CHECK (status IN ('queued','sent','delivered','failed','retry_scheduled','escalated')),
+  error text,
+  payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  attempted_at timestamptz NOT NULL DEFAULT now(),
+  delivered_at timestamptz
+);
+
 CREATE INDEX IF NOT EXISTS idx_signature_requests_source ON signature.document_requests(source_type, source_id);
 CREATE INDEX IF NOT EXISTS idx_signature_requests_status ON signature.document_requests(status, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_signature_submitters_request ON signature.submitters(request_id, signing_order);
 CREATE INDEX IF NOT EXISTS idx_signature_submitters_email ON signature.submitters(email);
 CREATE INDEX IF NOT EXISTS idx_signature_events_request ON signature.events(request_id, occurred_at DESC);
 CREATE INDEX IF NOT EXISTS idx_signature_approvals_source ON signature.approvals(source_type, source_id);
+CREATE INDEX IF NOT EXISTS idx_signature_delivery_receipts_request ON signature.delivery_receipts(request_id, submitter_id, delivery_type, attempted_at DESC);
+CREATE INDEX IF NOT EXISTS idx_signature_delivery_receipts_status ON signature.delivery_receipts(status, attempted_at DESC);
 
 GRANT USAGE ON SCHEMA signature TO signature_runtime, agent_runtime;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA signature TO signature_runtime;
