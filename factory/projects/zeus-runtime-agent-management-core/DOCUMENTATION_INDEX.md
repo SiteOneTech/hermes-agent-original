@@ -23,6 +23,7 @@ status: draft-ready
 | SPRINT_PLAN.md | Sprint plan | yes | yes |
 | TASK_GRAPH.md | Task graph/dependencies | yes | yes |
 | ONBOARDING_WORKFLOW.md | Sophie post-payment conversational onboarding and actuation workflow | yes | yes |
+| RUNTIME_MANAGEMENT_FLOW.md | PMV flow from ready onboarding report to managed-agent registry, deployment run, health, and supervision status | yes | yes |
 | TRACKER.md | Status tracker | yes | yes |
 | DOCUMENTATION_INDEX.md | G1 index and status | yes | yes |
 | QA_GATES.md | QA gates | yes | yes |

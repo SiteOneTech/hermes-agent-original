@@ -24,13 +24,13 @@ status: draft-ready
 - Tools: register agent, assign class, list capabilities, report secret-pack status.
 - Add Sophie post-payment onboarding intake: internal form updates, next-question prompts, Zeus build report, and actuation plan.
 
-## Sprint 3 — Onboarding/deploy
-- VM provisioning workflow.
-- Runtime repo deploy version pinning.
-- Nettu/Agent Core DB bootstrap.
-- Channel setup checklist.
+## Sprint 3 — Runtime management/deploy PMV
+- Prepare managed-agent registry record from a ready Sophie `zeus_build_report`.
+- Create runtime deployment/activation run with checklist and target environment.
+- Track runtime lifecycle status, runtime details, health checks, and management events.
+- Expose a Zeus status tool for latest run/health/events.
 
-## Sprint 4 — Monitoring/supervision/tickets/dashboard
+## Sprint 4 — Full deploy automation
 - Health snapshots.
 - Runtime-to-Zeus ticket ingestion.
 - Zeus dashboard/API for fleet status and tickets.

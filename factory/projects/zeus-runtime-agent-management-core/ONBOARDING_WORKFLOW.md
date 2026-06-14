@@ -153,7 +153,7 @@ The generated report contains:
 - recommended build sequence
 - raw form data for audit/replay
 
-This report is the input Zeus uses to create/update the agent registry record, class pack, secrets/readiness checklist, and runtime deployment plan.
+This report is the input Zeus uses to create/update the agent registry record, class pack, secrets/readiness checklist, and runtime deployment plan. The PMV runtime management handoff is documented in `RUNTIME_MANAGEMENT_FLOW.md` and implemented through the separate Zeus-only `agent_management_runtime` toolset: `agent_mgmt_agent_prepare_from_onboarding`, `agent_mgmt_runtime_status_update`, `agent_mgmt_runtime_health_record`, and `agent_mgmt_agent_status`.
 
 ## 8. Post-onboarding actuation flow
 

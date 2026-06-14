@@ -173,14 +173,193 @@ def test_actuation_plan_guides_customer_without_human_dependency():
     assert any(step["owner_agent"] == "Customer Success Agent" for step in plan["phases"])
 
 
-def test_toolset_exports_agent_management_onboarding_tools():
-    tools = set(toolsets.TOOLSETS["agent_management"]["tools"])
+def test_runtime_management_plan_contains_activation_checklist():
+    report = {
+        "status": "ready_for_zeus_build_review",
+        "agent_class": "generic_smb",
+        "zeus_build_brief": {
+            "client_business": "Acme Cleaning",
+            "owner_name": "Ana",
+            "primary_channel": "WhatsApp",
+        },
+        "recommended_feature_packs": ["crm", "calendar", "quotes"],
+        "required_shared_capabilities": ["sendgrid_email"],
+    }
 
-    assert "agent_mgmt_onboarding_start" in tools
-    assert "agent_mgmt_onboarding_form_update" in tools
-    assert "agent_mgmt_onboarding_next_prompt" in tools
-    assert "agent_mgmt_onboarding_report_generate" in tools
-    assert "agent_mgmt_actuation_plan_generate" in tools
+    plan = agent_management_tool._build_runtime_management_plan(
+        {"agent_id": "agent-acme", "display_name": "Acme Agent", "agent_class": "generic_smb"},
+        {"session_id": "onb-acme", "client_name": "Ana"},
+        report,
+        target_environment="sandbox",
+    )
+
+    assert plan["agent_id"] == "agent-acme"
+    assert plan["target_environment"] == "sandbox"
+    assert plan["target_runtime_repo"] == "SiteOneTech/sitiouno-agent-runtime"
+    assert plan["human_intervention_policy"] == "zeus_supervises_agents_execute_routine_steps"
+    step_ids = [step["id"] for step in plan["checklist"]]
+    assert step_ids == [
+        "registry_record",
+        "secret_pack_sync",
+        "runtime_bootstrap",
+        "channel_smoke",
+        "activation_handoff",
+    ]
+    assert plan["feature_packs"] == ["crm", "calendar", "quotes"]
+
+
+def test_prepare_from_onboarding_requires_ready_report(monkeypatch):
+    session = {
+        "session_id": "onb-acme",
+        "client_name": "Ana",
+        "client_contact": "whatsapp:+10000000000",
+        "agent_class": "generic_smb",
+        "form_data": {"business": {"name": "Acme"}, "owner": {"name": "Ana"}},
+    }
+    report = {"report_id": 7, "status": "needs_more_intake", "report": {"status": "needs_more_intake"}}
+
+    def fake_one(query, *args, **kwargs):
+        if "onboarding_sessions" in query:
+            return session
+        if "onboarding_reports" in query:
+            return report
+        return None
+
+    monkeypatch.setattr(agent_management_tool.sql, "one", fake_one)
+    monkeypatch.setattr(agent_management_tool.sql, "runtime_env", lambda: {"AGENT_MANAGEMENT_DB_RUNTIME_USER": "agent_management_runtime"})
+
+    payload = json.loads(agent_management_tool._handle_agent_prepare_from_onboarding({"session_id": "onb-acme"}))
+
+    assert "ready_for_zeus_build_review" in payload["error"]
+
+
+def test_prepare_from_onboarding_creates_registry_agent_run_and_links_session(monkeypatch):
+    session = {
+        "session_id": "onb-acme",
+        "client_name": "Ana",
+        "client_contact": "whatsapp:+10000000000",
+        "agent_class": "generic_smb",
+        "form_data": {
+            "business": {"name": "Acme Cleaning", "description": "Residential cleaning", "country": "US"},
+            "owner": {"name": "Ana", "primary_channel": "WhatsApp"},
+        },
+    }
+    report_payload = {
+        "status": "ready_for_zeus_build_review",
+        "agent_class": "generic_smb",
+        "zeus_build_brief": {
+            "client_business": "Acme Cleaning",
+            "owner_name": "Ana",
+            "primary_channel": "WhatsApp",
+        },
+        "recommended_feature_packs": ["crm", "calendar"],
+        "required_shared_capabilities": ["sendgrid_email"],
+    }
+    report_row = {"report_id": 9, "status": "ready_for_zeus_build_review", "report": report_payload}
+    statements = []
+
+    def fake_one(query, *args, **kwargs):
+        if "onboarding_sessions" in query:
+            return session
+        if "onboarding_reports" in query:
+            return report_row
+        return None
+
+    def fake_statement_one(query, *args, **kwargs):
+        statements.append(query)
+        if "INSERT INTO agent_management.managed_agents" in query:
+            return {
+                "agent_id": "agent-acme-cleaning",
+                "display_name": "Acme Cleaning Agent",
+                "agent_class": "generic_smb",
+                "status": "build_ready",
+            }
+        if "INSERT INTO agent_management.runtime_management_runs" in query:
+            return {
+                "run_id": "run-agent-acme-cleaning-deploy-sandbox",
+                "agent_id": "agent-acme-cleaning",
+                "run_type": "deploy",
+                "status": "planned",
+                "plan": {},
+            }
+        if "UPDATE agent_management.onboarding_sessions" in query:
+            return {**session, "agent_id": "agent-acme-cleaning", "status": "agent_prepared"}
+        if "INSERT INTO agent_management.runtime_management_events" in query:
+            return {"event_id": 1}
+        raise AssertionError(query)
+
+    monkeypatch.setattr(agent_management_tool.sql, "one", fake_one)
+    monkeypatch.setattr(agent_management_tool.sql, "statement_one", fake_statement_one)
+    monkeypatch.setattr(agent_management_tool.sql, "runtime_env", lambda: {"AGENT_MANAGEMENT_DB_RUNTIME_USER": "agent_management_runtime"})
+
+    payload = json.loads(agent_management_tool._handle_agent_prepare_from_onboarding({
+        "session_id": "onb-acme",
+        "target_environment": "sandbox",
+        "created_by": "zeus",
+    }))
+
+    assert payload["ok"] is True
+    assert payload["agent"]["status"] == "build_ready"
+    assert payload["runtime_run"]["status"] == "planned"
+    assert payload["runtime_plan"]["checklist"][0]["id"] == "registry_record"
+    assert any("managed_agents" in statement for statement in statements)
+    assert any("runtime_management_runs" in statement for statement in statements)
+    assert any("onboarding_sessions" in statement for statement in statements)
+
+
+def test_runtime_status_update_rejects_unknown_status_before_db():
+    payload = json.loads(agent_management_tool._handle_runtime_status_update({
+        "run_id": "run-1",
+        "status": "rm -rf",
+    }))
+
+    assert "invalid runtime run status" in payload["error"]
+
+
+def test_runtime_status_update_rejects_secret_like_runtime_details(monkeypatch):
+    monkeypatch.setattr(
+        agent_management_tool,
+        "_runtime_run_or_error",
+        lambda run_id: {"run_id": run_id, "agent_id": "agent-1", "status": "planned"},
+    )
+
+    payload = json.loads(agent_management_tool._handle_runtime_status_update({
+        "run_id": "run-1",
+        "status": "queued",
+        "runtime_details": {"api_key": "should-not-store"},
+    }))
+
+    assert "secret-like field" in payload["error"]
+
+
+def test_health_record_rejects_secret_like_payload_keys():
+    payload = json.loads(agent_management_tool._handle_runtime_health_record({
+        "agent_id": "agent-1",
+        "status": "healthy",
+        "health": {"api_key": "should-not-store"},
+    }))
+
+    assert "secret-like field" in payload["error"]
+
+
+def test_toolset_keeps_sophie_onboarding_separate_from_runtime_control_tools():
+    onboarding_tools = set(toolsets.TOOLSETS["agent_management"]["tools"])
+    runtime_tools = set(toolsets.TOOLSETS["agent_management_runtime"]["tools"])
+
+    assert "agent_mgmt_onboarding_start" in onboarding_tools
+    assert "agent_mgmt_onboarding_form_update" in onboarding_tools
+    assert "agent_mgmt_onboarding_next_prompt" in onboarding_tools
+    assert "agent_mgmt_onboarding_report_generate" in onboarding_tools
+    assert "agent_mgmt_actuation_plan_generate" in onboarding_tools
+    assert "agent_mgmt_agent_prepare_from_onboarding" not in onboarding_tools
+    assert "agent_mgmt_runtime_status_update" not in onboarding_tools
+    assert "agent_mgmt_runtime_health_record" not in onboarding_tools
+    assert "agent_mgmt_agent_status" not in onboarding_tools
+
+    assert "agent_mgmt_agent_prepare_from_onboarding" in runtime_tools
+    assert "agent_mgmt_runtime_status_update" in runtime_tools
+    assert "agent_mgmt_runtime_health_record" in runtime_tools
+    assert "agent_mgmt_agent_status" in runtime_tools
 
 
 def test_model_tool_definitions_expose_flat_function_schema():
@@ -202,7 +381,29 @@ def test_model_tool_definitions_expose_flat_function_schema():
 
     by_name = {definition["function"]["name"]: definition for definition in definitions}
     start = by_name["agent_mgmt_onboarding_start"]["function"]
+    assert "agent_mgmt_agent_prepare_from_onboarding" not in by_name
+    assert "agent_mgmt_runtime_status_update" not in by_name
     assert "function" not in start
     assert start["parameters"]["type"] == "object"
     assert "payment_received" in start["parameters"]["required"]
     assert "deploy_authorized_by" in start["parameters"]["required"]
+
+    runtime_originals = {}
+    for name in toolsets.TOOLSETS["agent_management_runtime"]["tools"]:
+        entry = registry.get_entry(name)
+        assert entry is not None
+        runtime_originals[name] = entry.check_fn
+        entry.check_fn = lambda: True
+    invalidate_check_fn_cache()
+    try:
+        runtime_definitions = model_tools.get_tool_definitions(enabled_toolsets=["agent_management_runtime"], quiet_mode=False)
+    finally:
+        for name, original in runtime_originals.items():
+            entry = registry.get_entry(name)
+            assert entry is not None
+            entry.check_fn = original
+        invalidate_check_fn_cache()
+
+    runtime_by_name = {definition["function"]["name"]: definition for definition in runtime_definitions}
+    assert "agent_mgmt_agent_prepare_from_onboarding" in runtime_by_name
+    assert "agent_mgmt_onboarding_start" not in runtime_by_name
