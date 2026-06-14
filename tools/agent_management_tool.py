@@ -67,6 +67,33 @@ DEFAULT_AGENT_CLASS_PACKS = {
     },
 }
 
+TARGET_RUNTIME_REPO = "SiteOneTech/sitiouno-agent-runtime"
+RUNTIME_ENVIRONMENTS = {"sandbox", "staging", "production"}
+RUNTIME_RUN_STATUSES = {
+    "planned",
+    "queued",
+    "provisioning",
+    "configuring",
+    "smoke_testing",
+    "active",
+    "blocked",
+    "failed",
+    "cancelled",
+    "completed",
+}
+MANAGED_AGENT_STATUSES = {
+    "planned",
+    "build_ready",
+    "provisioning",
+    "smoke_testing",
+    "active",
+    "degraded",
+    "paused",
+    "needs_attention",
+    "retired",
+}
+HEALTH_STATUSES = {"healthy", "degraded", "unreachable", "unknown"}
+
 SECRET_LIKE_KEY_RE = re.compile(
     r"(api[_-]?key|token|secret|password|passwd|credential|client[_-]?secret|private[_-]?key|access[_-]?key|refresh[_-]?token|authorization|bearer)",
     re.IGNORECASE,
@@ -109,7 +136,11 @@ def _check_agent_management() -> bool:
         if not sql.enabled():
             return False
         proc = sql.psql(
-            "SELECT to_regclass('agent_management.onboarding_sessions') IS NOT NULL;",
+            """
+            SELECT
+              to_regclass('agent_management.onboarding_sessions') IS NOT NULL
+              AND to_regclass('agent_management.runtime_management_runs') IS NOT NULL;
+            """,
             user=_user(),
         )
         return proc.stdout.strip().lower() in {"t", "true"}
@@ -254,6 +285,35 @@ def _extract_list(value: Any) -> list[Any]:
     return [value]
 
 
+def _require_choice(value: Any, allowed: set[str], field: str) -> str:
+    text = str(value or "").strip()
+    if text not in allowed:
+        allowed_text = ", ".join(sorted(allowed))
+        raise ValueError(f"invalid {field}: {text or '<empty>'}; allowed: {allowed_text}")
+    return text
+
+
+def _runtime_run_status_to_agent_status(status: str) -> str:
+    return {
+        "planned": "build_ready",
+        "queued": "provisioning",
+        "provisioning": "provisioning",
+        "configuring": "provisioning",
+        "smoke_testing": "smoke_testing",
+        "active": "active",
+        "completed": "active",
+        "blocked": "needs_attention",
+        "failed": "needs_attention",
+        "cancelled": "paused",
+    }.get(status, "needs_attention")
+
+
+def _business_and_owner_from_session(session: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    raw_form_data = session.get("form_data")
+    form_data: dict[str, Any] = raw_form_data if isinstance(raw_form_data, dict) else {}
+    return _section(form_data, "business"), _section(form_data, "owner")
+
+
 def _section(form_data: dict[str, Any], name: str) -> dict[str, Any]:
     value = form_data.get(name)
     return value if isinstance(value, dict) else {}
@@ -368,6 +428,67 @@ def _build_actuation_plan(session: dict[str, Any], form_data: dict[str, Any]) ->
     }
 
 
+def _build_runtime_management_plan(
+    agent: dict[str, Any],
+    session: dict[str, Any],
+    report: dict[str, Any],
+    *,
+    target_environment: str = "sandbox",
+) -> dict[str, Any]:
+    safe_report = _redact_onboarding_payload(report)
+    brief = _section(safe_report, "zeus_build_brief")
+    feature_packs = _extract_list(safe_report.get("recommended_feature_packs"))
+    required_shared_capabilities = _extract_list(safe_report.get("required_shared_capabilities"))
+    return {
+        "agent_id": agent.get("agent_id"),
+        "display_name": agent.get("display_name"),
+        "session_id": session.get("session_id"),
+        "agent_class": agent.get("agent_class") or safe_report.get("agent_class") or session.get("agent_class") or "generic_smb",
+        "target_environment": target_environment,
+        "target_runtime_repo": TARGET_RUNTIME_REPO,
+        "human_intervention_policy": "zeus_supervises_agents_execute_routine_steps",
+        "client_business": brief.get("client_business") or agent.get("business_name"),
+        "owner_name": brief.get("owner_name") or agent.get("owner_name"),
+        "primary_channel": brief.get("primary_channel"),
+        "feature_packs": feature_packs,
+        "required_shared_capabilities": required_shared_capabilities,
+        "checklist": [
+            {
+                "id": "registry_record",
+                "status": "pending",
+                "owner_agent": "Zeus Runtime Manager",
+                "description": "Create/update the managed_agents registry row from the Sophie onboarding report.",
+            },
+            {
+                "id": "secret_pack_sync",
+                "status": "pending",
+                "owner_agent": "Zeus Runtime Manager",
+                "description": "Verify agent-specific Infisical project and shared secret pack inheritance without collecting secrets in chat.",
+                "required_capabilities": required_shared_capabilities,
+            },
+            {
+                "id": "runtime_bootstrap",
+                "status": "pending",
+                "owner_agent": "Runtime Activation Agent",
+                "description": "Provision or update the runtime VM/profile/config from the canonical runtime repo and selected class pack.",
+                "target_runtime_repo": TARGET_RUNTIME_REPO,
+            },
+            {
+                "id": "channel_smoke",
+                "status": "pending",
+                "owner_agent": "Runtime Activation Agent",
+                "description": "Smoke test gateway, dashboard, calendar/CRM/notification basics, and the first customer-facing channel.",
+            },
+            {
+                "id": "activation_handoff",
+                "status": "pending",
+                "owner_agent": "Customer Success Agent",
+                "description": "Hand off to Sophie/Customer Success for guided first-week usage and exception-only escalation.",
+            },
+        ],
+    }
+
+
 def _session_or_error(session_id: str) -> dict[str, Any]:
     row = sql.one(
         f"SELECT * FROM agent_management.onboarding_sessions WHERE session_id={_q(session_id)}",
@@ -376,6 +497,62 @@ def _session_or_error(session_id: str) -> dict[str, Any]:
     if not row:
         raise ValueError(f"onboarding session not found: {session_id}")
     return row
+
+
+def _agent_or_error(agent_id: str) -> dict[str, Any]:
+    row = sql.one(
+        f"SELECT * FROM agent_management.managed_agents WHERE agent_id={_q(agent_id)}",
+        user=_user(),
+    )
+    if not row:
+        raise ValueError(f"managed agent not found: {agent_id}")
+    return row
+
+
+def _runtime_run_or_error(run_id: str) -> dict[str, Any]:
+    row = sql.one(
+        f"SELECT * FROM agent_management.runtime_management_runs WHERE run_id={_q(run_id)}",
+        user=_user(),
+    )
+    if not row:
+        raise ValueError(f"runtime management run not found: {run_id}")
+    return row
+
+
+def _latest_build_report_or_error(session_id: str) -> dict[str, Any]:
+    row = sql.one(
+        f"""
+        SELECT * FROM agent_management.onboarding_reports
+        WHERE session_id={_q(session_id)} AND report_type='zeus_build_report'
+        ORDER BY updated_at DESC
+        """,
+        user=_user(),
+    )
+    if not row:
+        raise ValueError("zeus_build_report must be generated before runtime management preparation")
+    raw_report = row.get("report")
+    report = raw_report if isinstance(raw_report, dict) else {}
+    if row.get("status") != "ready_for_zeus_build_review" or report.get("status") != "ready_for_zeus_build_review":
+        raise ValueError("zeus_build_report status must be ready_for_zeus_build_review before runtime management preparation")
+    return row
+
+
+def _runtime_details(args: dict[str, Any]) -> dict[str, Any]:
+    raw_details = args.get("runtime_details")
+    raw = raw_details if isinstance(raw_details, dict) else {}
+    allowed = {
+        "vm_hostname",
+        "tailscale_ip",
+        "public_domain",
+        "private_dashboard_url",
+        "infisical_project_id",
+        "runtime_repo",
+        "runtime_version",
+    }
+    clean_all = _sanitize_onboarding_input(raw, path="runtime_details")
+    if not isinstance(clean_all, dict):
+        return {}
+    return {k: v for k, v in clean_all.items() if k in allowed}
 
 
 def _handle_onboarding_start(args: dict, **_kwargs) -> str:
@@ -557,6 +734,260 @@ def _handle_actuation_plan_generate(args: dict, **_kwargs) -> str:
         return _err(exc)
 
 
+def _handle_agent_prepare_from_onboarding(args: dict, **_kwargs) -> str:
+    try:
+        session_id = str(args.get("session_id") or "").strip()
+        if not session_id:
+            raise ValueError("session_id is required")
+        target_environment = _require_choice(args.get("target_environment") or "sandbox", RUNTIME_ENVIRONMENTS, "target_environment")
+        metadata = _sanitize_onboarding_input(args.get("metadata") or {}, path="metadata")
+        session = _session_or_error(session_id)
+        report_row = _latest_build_report_or_error(session_id)
+        raw_report = report_row.get("report")
+        report: dict[str, Any] = raw_report if isinstance(raw_report, dict) else {}
+        business, owner = _business_and_owner_from_session(session)
+        brief = _section(report, "zeus_build_brief")
+        business_name = brief.get("client_business") or business.get("name") or session.get("client_name")
+        owner_name = brief.get("owner_name") or owner.get("name") or session.get("client_name")
+        agent_id = str(args.get("agent_id") or _slug("agent", str(business_name or session_id))).strip()
+        display_name = str(args.get("display_name") or f"{business_name} Agent").strip()
+        agent_class = str(report.get("agent_class") or session.get("agent_class") or "generic_smb")
+        agent_metadata = _merge_form_data(
+            metadata if isinstance(metadata, dict) else {},
+            {
+                "source_session_id": session_id,
+                "source_report_id": report_row.get("report_id"),
+                "target_environment": target_environment,
+                "feature_packs": _extract_list(report.get("recommended_feature_packs")),
+                "required_shared_capabilities": _extract_list(report.get("required_shared_capabilities")),
+                "management_flow": "runtime_management_pmv",
+            },
+        )
+        agent = sql.statement_one(
+            f"""
+            INSERT INTO agent_management.managed_agents (
+              agent_id, display_name, client_name, owner_name, owner_contact, business_name,
+              agent_class, status, runtime_repo, metadata, created_at, updated_at
+            ) VALUES (
+              {_q(agent_id)}, {_q(display_name)}, {_q(session.get('client_name'))}, {_q(owner_name)}, {_q(session.get('client_contact'))}, {_q(business_name)},
+              {_q(agent_class)}, 'build_ready', {_q(TARGET_RUNTIME_REPO)}, {_j(agent_metadata)}, now(), now()
+            )
+            ON CONFLICT (agent_id) DO UPDATE SET
+              display_name=EXCLUDED.display_name,
+              client_name=EXCLUDED.client_name,
+              owner_name=EXCLUDED.owner_name,
+              owner_contact=EXCLUDED.owner_contact,
+              business_name=EXCLUDED.business_name,
+              agent_class=EXCLUDED.agent_class,
+              status='build_ready',
+              runtime_repo=EXCLUDED.runtime_repo,
+              metadata=agent_management.managed_agents.metadata || EXCLUDED.metadata,
+              updated_at=now()
+            RETURNING *
+            """,
+            user=_user(),
+        )
+        if not agent:
+            raise RuntimeError("managed agent prepare did not return a row")
+        runtime_plan = _build_runtime_management_plan(agent, session, report, target_environment=target_environment)
+        run_id = str(args.get("run_id") or _slug("run", f"{agent_id}-deploy-{target_environment}")).strip()
+        run_metadata = {
+            "source_session_id": session_id,
+            "source_report_id": report_row.get("report_id"),
+            "created_by": args.get("created_by") or "zeus",
+        }
+        run = sql.statement_one(
+            f"""
+            INSERT INTO agent_management.runtime_management_runs (
+              run_id, agent_id, run_type, status, requested_by, assigned_agent,
+              source_session_id, source_report_id, target_runtime_repo, target_environment,
+              plan, checklist, metadata, created_at, updated_at
+            ) VALUES (
+              {_q(run_id)}, {_q(agent_id)}, 'deploy', 'planned', {_q(args.get('created_by') or 'zeus')}, 'Zeus Runtime Manager',
+              {_q(session_id)}, {_q(report_row.get('report_id'))}, {_q(TARGET_RUNTIME_REPO)}, {_q(target_environment)},
+              {_j(runtime_plan)}, {_j(runtime_plan['checklist'])}, {_j(run_metadata)}, now(), now()
+            )
+            ON CONFLICT (run_id) DO UPDATE SET
+              status='planned',
+              plan=EXCLUDED.plan,
+              checklist=EXCLUDED.checklist,
+              metadata=agent_management.runtime_management_runs.metadata || EXCLUDED.metadata,
+              updated_at=now()
+            RETURNING *
+            """,
+            user=_user(),
+        )
+        linked_session = sql.statement_one(
+            f"""
+            UPDATE agent_management.onboarding_sessions
+            SET agent_id={_q(agent_id)}, status='agent_prepared', updated_at=now()
+            WHERE session_id={_q(session_id)}
+            RETURNING *
+            """,
+            user=_user(),
+        )
+        sql.statement_one(
+            f"""
+            INSERT INTO agent_management.runtime_management_events (agent_id, run_id, actor, event_type, status_to, payload, created_at)
+            VALUES ({_q(agent_id)}, {_q(run_id)}, {_q(args.get('created_by') or 'zeus')}, 'agent_prepared_from_onboarding', 'build_ready', {_j({'session_id': session_id, 'report_id': report_row.get('report_id'), 'target_environment': target_environment})}, now())
+            RETURNING *
+            """,
+            user=_user(),
+        )
+        return _ok(
+            agent=_redact_session_row(agent),
+            runtime_run=_redact_session_row(run),
+            onboarding_session=_redact_session_row(linked_session),
+            runtime_plan=runtime_plan,
+        )
+    except Exception as exc:
+        return _err(exc)
+
+
+def _handle_runtime_status_update(args: dict, **_kwargs) -> str:
+    try:
+        run_id = str(args.get("run_id") or "").strip()
+        if not run_id:
+            raise ValueError("run_id is required")
+        new_status = _require_choice(args.get("status"), RUNTIME_RUN_STATUSES, "runtime run status")
+        metadata = _sanitize_onboarding_input(args.get("metadata") or {}, path="metadata")
+        checklist = args.get("checklist") if isinstance(args.get("checklist"), list) else None
+        if checklist is not None:
+            checklist = _sanitize_onboarding_input(checklist, path="checklist")
+        run = _runtime_run_or_error(run_id)
+        agent_id = str(run.get("agent_id") or "")
+        if not agent_id:
+            raise ValueError(f"runtime management run has no agent_id: {run_id}")
+        previous_status = str(run.get("status") or "")
+        details = _runtime_details(args)
+        checklist_sql = f", checklist={_j(checklist)}" if checklist is not None else ""
+        updated_run = sql.statement_one(
+            f"""
+            UPDATE agent_management.runtime_management_runs
+            SET status={_q(new_status)}, metadata=metadata || {_j(metadata)}, updated_at=now(){checklist_sql}
+            WHERE run_id={_q(run_id)}
+            RETURNING *
+            """,
+            user=_user(),
+        )
+        agent_status = _runtime_run_status_to_agent_status(new_status)
+        updated_agent = sql.statement_one(
+            f"""
+            UPDATE agent_management.managed_agents
+            SET status={_q(agent_status)},
+                vm_hostname=COALESCE({_q(details.get('vm_hostname'))}, vm_hostname),
+                tailscale_ip=COALESCE({_q(details.get('tailscale_ip'))}, tailscale_ip),
+                public_domain=COALESCE({_q(details.get('public_domain'))}, public_domain),
+                private_dashboard_url=COALESCE({_q(details.get('private_dashboard_url'))}, private_dashboard_url),
+                infisical_project_id=COALESCE({_q(details.get('infisical_project_id'))}, infisical_project_id),
+                runtime_repo=COALESCE({_q(details.get('runtime_repo'))}, runtime_repo),
+                runtime_version=COALESCE({_q(details.get('runtime_version'))}, runtime_version),
+                last_runtime_run_id={_q(run_id)},
+                updated_at=now()
+            WHERE agent_id={_q(agent_id)}
+            RETURNING *
+            """,
+            user=_user(),
+        )
+        sql.statement_one(
+            f"""
+            INSERT INTO agent_management.runtime_management_events (agent_id, run_id, actor, event_type, status_from, status_to, payload, created_at)
+            VALUES ({_q(agent_id)}, {_q(run_id)}, {_q(args.get('actor') or 'zeus')}, 'runtime_status_update', {_q(previous_status)}, {_q(new_status)}, {_j({'metadata_keys': sorted(metadata.keys()) if isinstance(metadata, dict) else [], 'runtime_detail_keys': sorted(details.keys())})}, now())
+            RETURNING *
+            """,
+            user=_user(),
+        )
+        return _ok(agent=_redact_session_row(updated_agent), runtime_run=_redact_session_row(updated_run))
+    except Exception as exc:
+        return _err(exc)
+
+
+def _handle_runtime_health_record(args: dict, **_kwargs) -> str:
+    try:
+        agent_id = str(args.get("agent_id") or "").strip()
+        if not agent_id:
+            raise ValueError("agent_id is required")
+        status = _require_choice(args.get("status") or "unknown", HEALTH_STATUSES, "runtime health status")
+        health = _sanitize_onboarding_input(args.get("health") if isinstance(args.get("health"), dict) else {}, path="health")
+        checked_by = str(args.get("checked_by") or "Supervisor Agent")
+        _agent_or_error(agent_id)
+        row = sql.statement_one(
+            f"""
+            INSERT INTO agent_management.runtime_health_checks (agent_id, status, checked_by, health, created_at)
+            VALUES ({_q(agent_id)}, {_q(status)}, {_q(checked_by)}, {_j(health)}, now())
+            RETURNING *
+            """,
+            user=_user(),
+        )
+        agent_status = "active" if status == "healthy" else ("degraded" if status in {"degraded", "unreachable"} else None)
+        status_sql = f"status={_q(agent_status)}," if agent_status else ""
+        agent = sql.statement_one(
+            f"""
+            UPDATE agent_management.managed_agents
+            SET {status_sql} last_health_status={_q(status)}, last_health_at=now(), updated_at=now()
+            WHERE agent_id={_q(agent_id)}
+            RETURNING *
+            """,
+            user=_user(),
+        )
+        sql.statement_one(
+            f"""
+            INSERT INTO agent_management.runtime_management_events (agent_id, actor, event_type, status_to, payload, created_at)
+            VALUES ({_q(agent_id)}, {_q(checked_by)}, 'runtime_health_recorded', {_q(status)}, {_j({'health_keys': sorted(health.keys()) if isinstance(health, dict) else []})}, now())
+            RETURNING *
+            """,
+            user=_user(),
+        )
+        return _ok(agent=_redact_session_row(agent), health_check=_redact_session_row(row))
+    except Exception as exc:
+        return _err(exc)
+
+
+def _handle_agent_status(args: dict, **_kwargs) -> str:
+    try:
+        agent_id = str(args.get("agent_id") or "").strip()
+        session_id = str(args.get("session_id") or "").strip()
+        if not agent_id and session_id:
+            session = _session_or_error(session_id)
+            agent_id = str(session.get("agent_id") or "")
+        if not agent_id:
+            raise ValueError("agent_id or session_id with linked agent is required")
+        agent = _agent_or_error(agent_id)
+        latest_run = sql.one(
+            f"""
+            SELECT * FROM agent_management.runtime_management_runs
+            WHERE agent_id={_q(agent_id)}
+            ORDER BY updated_at DESC
+            """,
+            user=_user(),
+        )
+        latest_health = sql.one(
+            f"""
+            SELECT * FROM agent_management.runtime_health_checks
+            WHERE agent_id={_q(agent_id)}
+            ORDER BY created_at DESC
+            """,
+            user=_user(),
+        )
+        events = sql.rows(
+            f"""
+            SELECT * FROM agent_management.runtime_management_events
+            WHERE agent_id={_q(agent_id)}
+            ORDER BY created_at DESC
+            LIMIT 10
+            """,
+            user=_user(),
+        )
+        return _ok(
+            agent=_redact_session_row(agent),
+            latest_runtime_run=_redact_session_row(latest_run),
+            latest_health_check=_redact_session_row(latest_health),
+            recent_events=[_redact_session_row(event) for event in events],
+        )
+    except Exception as exc:
+        return _err(exc)
+
+
 def _schema(name: str, description: str, props: dict, required: list[str] | None = None) -> dict:
     return {
         "name": name,
@@ -649,4 +1080,78 @@ registry.register(
     handler=_handle_actuation_plan_generate,
     check_fn=_check_agent_management,
     emoji="🗺️",
+)
+
+registry.register(
+    name="agent_mgmt_agent_prepare_from_onboarding",
+    toolset="agent_management_runtime",
+    schema=_schema(
+        "agent_mgmt_agent_prepare_from_onboarding",
+        "Prepare a managed runtime-agent registry record and deployment run from a ready Sophie onboarding build report. Zeus-only control-plane action; Sophie must not call it directly.",
+        {
+            "session_id": {"type": "string"},
+            "agent_id": {"type": "string"},
+            "display_name": {"type": "string"},
+            "target_environment": {"type": "string", "enum": sorted(RUNTIME_ENVIRONMENTS)},
+            "created_by": {"type": "string"},
+            "metadata": {"type": "object", "description": AGENT_MANAGEMENT_METADATA_DESCRIPTION},
+        },
+        ["session_id"],
+    ),
+    handler=_handle_agent_prepare_from_onboarding,
+    check_fn=_check_agent_management,
+    emoji="🏗️",
+)
+
+registry.register(
+    name="agent_mgmt_runtime_status_update",
+    toolset="agent_management_runtime",
+    schema=_schema(
+        "agent_mgmt_runtime_status_update",
+        "Update a runtime management deployment/run status and optionally attach runtime details such as VM hostname, Tailscale IP, public domain, dashboard URL, Infisical project id, or runtime version.",
+        {
+            "run_id": {"type": "string"},
+            "status": {"type": "string", "enum": sorted(RUNTIME_RUN_STATUSES)},
+            "actor": {"type": "string"},
+            "runtime_details": {"type": "object"},
+            "checklist": {"type": "array", "items": {"type": "object"}},
+            "metadata": {"type": "object", "description": AGENT_MANAGEMENT_METADATA_DESCRIPTION},
+        },
+        ["run_id", "status"],
+    ),
+    handler=_handle_runtime_status_update,
+    check_fn=_check_agent_management,
+    emoji="🚦",
+)
+
+registry.register(
+    name="agent_mgmt_runtime_health_record",
+    toolset="agent_management_runtime",
+    schema=_schema(
+        "agent_mgmt_runtime_health_record",
+        "Record a runtime-agent health check and update the managed agent health/status summary. Health payloads must be status-only and secret-free.",
+        {
+            "agent_id": {"type": "string"},
+            "status": {"type": "string", "enum": sorted(HEALTH_STATUSES)},
+            "checked_by": {"type": "string"},
+            "health": {"type": "object"},
+        },
+        ["agent_id", "status"],
+    ),
+    handler=_handle_runtime_health_record,
+    check_fn=_check_agent_management,
+    emoji="🩺",
+)
+
+registry.register(
+    name="agent_mgmt_agent_status",
+    toolset="agent_management_runtime",
+    schema=_schema(
+        "agent_mgmt_agent_status",
+        "Fetch the managed runtime-agent registry row with latest deployment run, latest health check, and recent management events. Accepts agent_id or a session_id already linked to an agent.",
+        {"agent_id": {"type": "string"}, "session_id": {"type": "string"}},
+    ),
+    handler=_handle_agent_status,
+    check_fn=_check_agent_management,
+    emoji="📡",
 )

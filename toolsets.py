@@ -206,11 +206,21 @@ TOOLSETS = {
     },
 
     "agent_management": {
-        "description": "Zeus runtime-agent management core: post-payment onboarding, internal intake forms, build reports, and actuation plans",
+        "description": "Sophie-safe Agent Management onboarding: post-payment intake forms, build reports, and actuation plans",
         "tools": [
             "agent_mgmt_onboarding_start", "agent_mgmt_onboarding_form_update",
             "agent_mgmt_onboarding_next_prompt", "agent_mgmt_onboarding_report_generate",
             "agent_mgmt_actuation_plan_generate",
+        ],
+        "includes": []
+    },
+
+    "agent_management_runtime": {
+        "description": "Zeus-only runtime-agent control plane: prepare managed agents, deployment runs, health, and supervision status",
+        "tools": [
+            "agent_mgmt_agent_prepare_from_onboarding",
+            "agent_mgmt_runtime_status_update", "agent_mgmt_runtime_health_record",
+            "agent_mgmt_agent_status",
         ],
         "includes": []
     },

@@ -11,10 +11,11 @@ status: draft-ready
 ## Status summary
 - G0 repo strategy: passed (`zeus_then_runtime`).
 - G1 docs: draft-ready in this branch.
-- Runtime shared-secret MVP: planned/implementation branch created.
+- Runtime shared-secret MVP: merged and verified.
 - Infisical shared project: pending implementation/ops task.
 - Bael smoke: pending after shared project and sync implementation.
-- Sophie onboarding intake: implementation branch in progress for post-payment conversational form/report/actuation workflow.
+- Sophie onboarding intake: merged in `hermes-agent-original` main.
+- Runtime management PMV: implementation branch in progress for managed-agent registry, deployment runs, health, and status tools.
 
 ## Risks
 - Shared API key blast radius if SendGrid key is abused.
@@ -23,4 +24,4 @@ status: draft-ready
 - Existing runtime repo main checkout has unrelated dirty file; use isolated worktree only.
 
 ## Next checkpoint
-After T02 implementation: run focused tests, push runtime branch, then create/execute Infisical shared project/access task for Bael.
+After runtime management PMV: run focused tests, live Agent Core smoke, independent review, merge to `hermes-agent-original` main, then keep full deploy automation and Infisical shared-project activation as separate operational increments.

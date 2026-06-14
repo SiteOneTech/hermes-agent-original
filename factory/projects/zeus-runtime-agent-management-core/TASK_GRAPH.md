@@ -19,8 +19,9 @@ T01 G1 documentary pack
 T01 -> T05 Agent management core schema/design backlog
 T05 -> T06 Agent class manifest MVP
 T06 -> T06A Sophie post-payment onboarding form/report/actuation workflow
-T06A -> T07 Onboarding/deploy automation MVP
-T07 -> T08 Monitoring/supervision/tickets/dashboard MVP
+T06A -> T07 Runtime agent management flow PMV
+T07 -> T08 Full deploy automation MVP
+T08 -> T09 Monitoring/supervision/tickets/dashboard MVP
 ```
 
 ## Factory DB tasks created now
