@@ -652,6 +652,176 @@ def _handle_completed_pdf_record(args: dict, **_kwargs) -> str:
         return _err(exc)
 
 
+def _submitter_channel(submitter: dict[str, Any], delivery_result: dict[str, Any] | None) -> str:
+    if delivery_result and delivery_result.get("channel"):
+        return str(delivery_result["channel"])
+    metadata = submitter.get("metadata") or {}
+    if metadata.get("final_copy_channel"):
+        return str(metadata["final_copy_channel"])
+    if metadata.get("delivery_channel"):
+        return str(metadata["delivery_channel"])
+    if submitter.get("email"):
+        return "email"
+    if submitter.get("phone"):
+        return "sms"
+    return "manual"
+
+
+def _submitter_recipient(submitter: dict[str, Any], channel: str) -> str | None:
+    if channel in {"email", "mail"}:
+        return submitter.get("email") or submitter.get("phone")
+    if channel in {"sms", "whatsapp", "phone"}:
+        return submitter.get("phone") or submitter.get("email")
+    return submitter.get("email") or submitter.get("phone") or submitter.get("name")
+
+
+def _normalise_delivery_results(value: Any) -> dict[str, dict[str, Any]]:
+    if not value:
+        return {}
+    if isinstance(value, dict):
+        items = value.values()
+    elif isinstance(value, list):
+        items = value
+    else:
+        raise ValueError("delivery_results must be a list or object")
+    results: dict[str, dict[str, Any]] = {}
+    for item in items:
+        if not isinstance(item, dict) or not item.get("submitter_id"):
+            raise ValueError("each delivery result must include submitter_id")
+        results[str(item["submitter_id"])] = item
+    return results
+
+
+def _final_copy_validation_summary(request: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
+    metadata = request.get("metadata") or {}
+    final_sha256 = args.get("final_sha256") or args.get("completed_pdf_sha256") or metadata.get("completed_pdf_sha256")
+    if not final_sha256:
+        raise ValueError("final_sha256 or request metadata.completed_pdf_sha256 is required")
+    final_document_url = args.get("completed_pdf_url") or request.get("completed_document_url")
+    if not final_document_url:
+        raise ValueError("completed_pdf_url or request.completed_document_url is required")
+    return {
+        "final_document_url": final_document_url,
+        "final_document_sha256": final_sha256,
+        "audit_url": args.get("audit_pdf_url") or request.get("audit_url"),
+        "audit_pdf_sha256": args.get("audit_pdf_sha256") or metadata.get("audit_pdf_sha256"),
+        "original_document_sha256": args.get("original_sha256") or request.get("document_hash_sha256"),
+        "approval_hashes": args.get("approval_hashes") or metadata.get("approval_hashes") or [],
+        "event_chain_summary": args.get("event_chain_summary") or metadata.get("event_chain_summary") or [],
+        "certificate_summary": args.get("certificate_summary") or metadata.get("certificate_summary") or {},
+    }
+
+
+def _insert_delivery_receipt(
+    request_id: str,
+    submitter: dict[str, Any],
+    *,
+    channel: str,
+    recipient: str | None,
+    status: str,
+    provider_message_id: str | None,
+    error: str | None,
+    payload: dict[str, Any],
+    metadata: dict[str, Any],
+) -> dict[str, Any] | None:
+    idempotency_key = _sha256_text(_canonical_json({
+        "request_id": request_id,
+        "submitter_id": submitter.get("submitter_id"),
+        "receipt_type": "final_copy",
+        "channel": channel,
+        "recipient": recipient,
+        "provider_message_id": provider_message_id,
+        "payload": payload,
+    }))
+    merged_metadata = {"payload": payload, **metadata}
+    return sql.statement_one(f"""
+      INSERT INTO signature.delivery_receipts (request_id, submitter_id, receipt_type, channel, recipient, provider_message_id, status, error_message, delivered_at, idempotency_key, metadata, created_at, updated_at)
+      VALUES ({_q(request_id)}, {_q(submitter.get('submitter_id'))}, 'final_copy', {_q(channel)}, {_q(recipient)}, {_q(provider_message_id)}, {_q(status)}, {_q(error)}, CASE WHEN {_q(status)} IN ('sent','delivered') THEN now() ELSE NULL END, {_q(idempotency_key)}, {_j(merged_metadata)}, now(), now())
+      ON CONFLICT (idempotency_key) DO UPDATE SET status=EXCLUDED.status, error_message=EXCLUDED.error_message, delivered_at=COALESCE(EXCLUDED.delivered_at, signature.delivery_receipts.delivered_at), metadata=signature.delivery_receipts.metadata || EXCLUDED.metadata, updated_at=now()
+      RETURNING *
+    """, user=_user())
+
+
+def _handle_final_copies_send(args: dict, **_kwargs) -> str:
+    try:
+        request_id = str(args.get("request_id") or "").strip()
+        if not request_id:
+            raise ValueError("request_id is required")
+        request = sql.one(f"SELECT * FROM signature.document_requests WHERE request_id={_q(request_id)}", user=_user())
+        if not request:
+            raise ValueError("request not found")
+        if request.get("status") != "completed" and not args.get("allow_non_completed"):
+            raise ValueError("final copies can only be sent after the request is completed")
+        validation_summary = _final_copy_validation_summary(request, args)
+        submitters = sql.rows(f"SELECT * FROM signature.submitters WHERE request_id={_q(request_id)} ORDER BY signing_order, created_at", user=_user())
+        signers = [sub for sub in submitters if sub.get("role") in {"signer", "approver"}]
+        if not signers:
+            raise ValueError("request has no signer/approver submitters")
+        result_by_submitter = _normalise_delivery_results(args.get("delivery_results"))
+        deliveries = []
+        retry_actions = []
+        for submitter in signers:
+            submitter_id = str(submitter.get("submitter_id"))
+            delivery_result = result_by_submitter.get(submitter_id, {})
+            channel = _submitter_channel(submitter, delivery_result)
+            recipient = delivery_result.get("recipient") or _submitter_recipient(submitter, channel)
+            status = str(delivery_result.get("status") or args.get("default_status") or "queued")
+            error = delivery_result.get("error")
+            provider_message_id = delivery_result.get("provider_message_id") or delivery_result.get("message_id")
+            payload = {
+                "subject": args.get("subject") or "Final signed document and SHA-256 validation",
+                "message": args.get("message") or "Your final signed document is ready. Validate it with the included SHA-256 summary.",
+                "validation_summary": validation_summary,
+            }
+            receipt = _insert_delivery_receipt(
+                request_id,
+                submitter,
+                channel=channel,
+                recipient=recipient,
+                status=status,
+                provider_message_id=provider_message_id,
+                error=error,
+                payload=payload,
+                metadata={"delivery_result": delivery_result, "retry_policy": args.get("retry_policy") or {}},
+            )
+            event_type = "final_copy_failed" if status == "failed" else "final_copy_sent"
+            _record_event(
+                request_id,
+                submitter_id=submitter_id,
+                event_type=event_type,
+                actor_type="system",
+                actor_ref="signature_core",
+                payload={"channel": channel, "recipient": recipient, "status": status, "error": error, "validation_summary": validation_summary},
+                metadata={"delivery_type": "final_copy", "provider_message_id": provider_message_id},
+            )
+            delivery = {
+                "submitter_id": submitter_id,
+                "channel": channel,
+                "recipient": recipient,
+                "status": status,
+                "provider_message_id": provider_message_id,
+                "error": error,
+                "validation_summary": validation_summary,
+                "receipt": receipt,
+            }
+            deliveries.append(delivery)
+            if status == "failed":
+                retry_action = {"submitter_id": submitter_id, "channel": channel, "recipient": recipient, "reason": error or "delivery failed"}
+                retry_actions.append(retry_action)
+        if retry_actions:
+            _record_event(
+                request_id,
+                event_type="owner_escalation",
+                actor_type="system",
+                actor_ref="signature_core",
+                payload={"reason": "final_copy_delivery_failed", "retry_actions": retry_actions, "owner_channel": args.get("owner_escalation_channel")},
+                metadata={"delivery_type": "final_copy"},
+            )
+        return _ok(deliveries=deliveries, retry_actions=retry_actions, validation_summary=validation_summary)
+    except Exception as exc:
+        return _err(exc)
+
+
 def _schema(name: str, description: str, props: dict, required: list[str] | None = None) -> dict:
     return {"type": "function", "function": {"name": name, "description": description, "parameters": {"type": "object", "properties": props, "required": required or []}}}
 
@@ -671,3 +841,4 @@ registry.register(name="signature_reminder_policy_upsert", toolset="signature", 
 registry.register(name="signature_reminder_attempt_record", toolset="signature", schema=_schema("signature_reminder_attempt_record", "Record an idempotent reminder attempt, failure details, optional next_due_at update, and matching reminder delivery receipt.", {"request_id": {"type": "string"}, "submitter_id": {"type": "string"}, "reminder_policy_id": {"type": "string"}, "channel": {"type": "string"}, "recipient": {"type": "string"}, "provider_message_id": {"type": "string"}, "status": {"type": "string", "enum": ["queued", "sent", "delivered", "failed", "bounced"]}, "error_message": {"type": "string"}, "scheduled_for": {"type": "string"}, "attempted_at": {"type": "string"}, "next_due_at": {"type": "string"}, "idempotency_key": {"type": "string"}, "actor_type": {"type": "string"}, "actor_ref": {"type": "string"}, **_meta_props()}, ["request_id", "channel"]), handler=_handle_reminder_attempt_record, check_fn=_check_signature, emoji="✍️")
 registry.register(name="signature_followup_due", toolset="signature", schema=_schema("signature_followup_due", "Run the Signature Core daily follow-up worker: find due pending signers, queue one reminder per policy window, advance next_due_at, and record owner escalations for near-expiry or repeated failures.", {"now": {"type": "string"}, "limit": {"type": "integer"}, "channel": {"type": "string", "enum": ["email", "sms", "in_app"]}, "delivery_status": {"type": "string", "enum": ["queued", "sent", "delivered", "failed", "bounced"]}, "error_message": {"type": "string"}}, []), handler=_handle_followup_due, check_fn=_check_signature, emoji="✍️")
 registry.register(name="signature_completed_pdf_record", toolset="signature", schema=_schema("signature_completed_pdf_record", "Store completed PDF and audit PDF attachment metadata with SHA-256 hashes and visual QA evidence.", {"request_id": {"type": "string"}, "completed_pdf": {"type": "object"}, "audit_pdf": {"type": "object"}, "original_sha256": {"type": "string"}, "final_sha256": {"type": "string"}, "approval_hashes": {"type": "array", "items": {"type": "string"}}, "event_chain_summary": {"type": "array", "items": {"type": "object"}}, "visual_qa_evidence": {"type": "object"}}, ["request_id", "completed_pdf", "audit_pdf"]), handler=_handle_completed_pdf_record, check_fn=_check_signature, emoji="✍️")
+registry.register(name="signature_final_copies_send", toolset="signature", schema=_schema("signature_final_copies_send", "Record final signed-copy delivery to every signer/approver with final document link, SHA-256 validation summary, per-channel receipts, and retry/escalation actions for failures.", {"request_id": {"type": "string"}, "completed_pdf_url": {"type": "string"}, "completed_pdf_sha256": {"type": "string"}, "final_sha256": {"type": "string"}, "audit_pdf_url": {"type": "string"}, "audit_pdf_sha256": {"type": "string"}, "original_sha256": {"type": "string"}, "approval_hashes": {"type": "array", "items": {"type": "string"}}, "event_chain_summary": {"type": "array", "items": {"type": "object"}}, "certificate_summary": {"type": "object"}, "delivery_results": {"type": "array", "items": {"type": "object"}}, "default_status": {"type": "string"}, "retry_policy": {"type": "object"}, "owner_escalation_channel": {"type": "string"}, "allow_non_completed": {"type": "boolean"}, "subject": {"type": "string"}, "message": {"type": "string"}}, ["request_id"]), handler=_handle_final_copies_send, check_fn=_check_signature, emoji="✍️")
