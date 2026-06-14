@@ -275,7 +275,8 @@ def main() -> None:
             spawned = _spawn_worker(db, prompt_payload, tick["claimed"])
         after = db.status()
         state = _read_watchdog_state()
-        claimed_null_rounds = 0 if tick.get("claimed") else int(state.get("claimed_null_rounds") or 0) + 1
+        claimed_null_suspicious = (not tick.get("claimed")) and factory_pg._claimed_null_alert_expected(after, project_id=project_id)
+        claimed_null_rounds = int(state.get("claimed_null_rounds") or 0) + 1 if claimed_null_suspicious else 0
         state["claimed_null_rounds"] = claimed_null_rounds
         state["last_tick_at"] = _now()
         _write_watchdog_state(state)

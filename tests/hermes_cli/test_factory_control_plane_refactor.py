@@ -109,16 +109,18 @@ def test_link_notion_tracker_raises_on_readback_mismatch(fake_sql):
         factory_pg.link_notion_tracker("demo", page_id="37a37b39cad68146b9f2e1fdf0bdf727", url=None)
 
 
-def test_missing_notion_is_pm_projection_warning_by_default(monkeypatch):
+def test_missing_notion_is_required_human_pm_projection_by_default(monkeypatch):
     monkeypatch.setattr(factory_pg, "_project_artifact_dir", lambda project: (None, "factory/projects/funnel-core-crm-workflow"))
     project_missing = {"project_id": "funnel-core-crm-workflow", "status": "active", "metadata": {}}
     findings = factory_pg.reconciliation_findings(project_missing, tasks=[{"task_id": "t1", "status": "todo"}], pending_gates=[])
     codes = {f["code"] for f in findings}
-    assert "notion_pm_projection_warning" in codes
-    assert "missing_notion_project" not in codes
+    assert "missing_notion_project" in codes
+    assert "notion_pm_projection_warning" not in codes
+    notion_finding = next(f for f in findings if f["code"] == "missing_notion_project")
+    assert notion_finding["metadata"]["notion_role"] == "human_pm_projection_not_agent_truth"
 
 
-def test_missing_notion_is_source_of_truth_blocker_when_required(monkeypatch):
+def test_missing_notion_is_still_human_projection_when_required(monkeypatch):
     monkeypatch.setattr(factory_pg, "_project_artifact_dir", lambda project: (None, "factory/projects/funnel-core-crm-workflow"))
     project_missing = {"project_id": "funnel-core-crm-workflow", "status": "active", "metadata": {"notion_required": True}}
     findings = factory_pg.reconciliation_findings(project_missing, tasks=[{"task_id": "t1", "status": "todo"}], pending_gates=[])
@@ -127,13 +129,13 @@ def test_missing_notion_is_source_of_truth_blocker_when_required(monkeypatch):
     assert "notion_pm_projection_warning" not in codes
 
 
-def test_notion_required_string_false_does_not_make_notion_mandatory(monkeypatch):
+def test_notion_required_string_false_does_not_suppress_mandatory_human_projection(monkeypatch):
     monkeypatch.setattr(factory_pg, "_project_artifact_dir", lambda project: (None, "factory/projects/funnel-core-crm-workflow"))
     project_missing = {"project_id": "funnel-core-crm-workflow", "status": "active", "metadata": {"notion_required": "false"}}
     findings = factory_pg.reconciliation_findings(project_missing, tasks=[{"task_id": "t1", "status": "todo"}], pending_gates=[])
     codes = {f["code"] for f in findings}
-    assert "notion_pm_projection_warning" in codes
-    assert "missing_notion_project" not in codes
+    assert "missing_notion_project" in codes
+    assert "notion_pm_projection_warning" not in codes
 
 
 def test_stale_notion_string_false_is_not_treated_as_stale(monkeypatch):
@@ -150,18 +152,18 @@ def test_stale_notion_string_false_is_not_treated_as_stale(monkeypatch):
     assert not any(f["code"] in {"missing_notion_project", "notion_pm_projection_warning"} for f in findings)
 
 
-def test_legacy_required_notion_blocker_resolves_when_notion_not_required():
+def test_missing_notion_blocker_does_not_resolve_until_tracker_exists():
     project = {"project_id": "demo", "status": "active", "metadata": {}}
     task = {
         "task_id": "demo-missing-notion",
         "status": "blocked",
         "metadata": {"reconciliation_anomaly": "missing_notion_project"},
     }
-    assert factory_pg._resolved_reconciliation_anomaly(project, task) == ("missing_notion_project", "structured_reconciliation_metadata")
+    assert factory_pg._resolved_reconciliation_anomaly(project, task) is None
 
 
-def test_projection_warning_resolves_when_notion_becomes_mandatory():
-    project = {"project_id": "demo", "status": "active", "metadata": {"notion_required": True}}
+def test_legacy_projection_warning_resolves_because_missing_notion_is_now_required():
+    project = {"project_id": "demo", "status": "active", "metadata": {}}
     task = {
         "task_id": "demo-notion-warning",
         "status": "blocked",
@@ -182,7 +184,7 @@ def test_notion_projection_warning_task_does_not_cover_required_notion_blocker()
     assert factory_pg._task_covers_reconciliation_anomaly(task, "missing_notion_project") is False
 
 
-def test_stale_notion_is_pm_projection_warning_by_default(monkeypatch):
+def test_stale_notion_is_required_human_pm_projection_by_default(monkeypatch):
     monkeypatch.setattr(factory_pg, "_project_artifact_dir", lambda project: (None, "factory/projects/funnel-core-crm-workflow"))
     project_stale = {
         "project_id": "funnel-core-crm-workflow",
@@ -193,7 +195,7 @@ def test_stale_notion_is_pm_projection_warning_by_default(monkeypatch):
         },
     }
     findings = factory_pg.reconciliation_findings(project_stale, tasks=[{"task_id": "t1", "status": "todo"}], pending_gates=[])
-    assert any(f["code"] == "notion_pm_projection_warning" and f["metadata"].get("notion_issue") == "stale" for f in findings)
+    assert any(f["code"] == "missing_notion_project" and f["metadata"].get("notion_issue") == "stale" for f in findings)
 
 
 def test_linked_notion_metadata_satisfies_reconciler_for_funnel_core(monkeypatch):
@@ -210,7 +212,7 @@ def test_linked_notion_metadata_satisfies_reconciler_for_funnel_core(monkeypatch
     assert not any(f["code"] in {"missing_notion_project", "notion_pm_projection_warning"} for f in findings_linked)
 
 
-def test_critical_readiness_ignores_missing_notion_unless_required(fake_sql, monkeypatch, tmp_path):
+def test_critical_readiness_requires_notion_human_projection_by_default(fake_sql, monkeypatch, tmp_path):
     factory_dir = tmp_path / "factory" / "projects" / "demo"
     factory_dir.mkdir(parents=True)
     monkeypatch.setattr(factory_pg, "_project", lambda project_id: {
@@ -235,7 +237,7 @@ def test_critical_readiness_ignores_missing_notion_unless_required(fake_sql, mon
         },
     })
     fake_sql.rows_results = [[]]
-    assert not any("Notion" in finding for finding in factory_pg.critical_readiness_findings("demo"))
+    assert any("required Notion PM tracker is missing" in finding for finding in factory_pg.critical_readiness_findings("demo"))
 
 
 def test_critical_readiness_blocks_missing_notion_when_required(fake_sql, monkeypatch, tmp_path):
@@ -304,12 +306,12 @@ def test_dispatch_preflight_blocks_implementation_without_docs_or_notion():
     task = {"task_id": "demo-impl", "phase": "implementation", "status": "todo", "metadata": {}}
     blockers = factory_pg._dispatch_preflight_blockers(task, docs_ready=False, notion_ready=False)
     assert "missing_or_unindexed_docs" in blockers
-    assert "missing_notion_tracker" not in blockers
+    assert "missing_notion_tracker" in blockers
 
 
-def test_dispatch_preflight_blocks_notion_only_when_project_requires_it():
+def test_dispatch_preflight_blocks_notion_by_default_for_human_pm_projection():
     task = {"task_id": "demo-impl", "phase": "implementation", "status": "todo", "metadata": {}}
-    assert factory_pg._dispatch_preflight_blockers(task, docs_ready=True, notion_ready=False, notion_required=False) == []
+    assert factory_pg._dispatch_preflight_blockers(task, docs_ready=True, notion_ready=False, notion_required=False) == ["missing_notion_tracker"]
     assert factory_pg._dispatch_preflight_blockers(task, docs_ready=True, notion_ready=False, notion_required=True) == ["missing_notion_tracker"]
 
 
@@ -522,6 +524,143 @@ def test_close_project_cancels_active_runs_and_records_monitor_evidence(fake_sql
     assert "'cancelled'" in joined
     assert "stale_task_runs_cancelled" in joined
     assert "monitor_evidence" in joined
+
+
+def test_close_task_records_post_action_notion_increment_checkpoint(fake_sql):
+    fake_sql.statement_one_results = [
+        {"project_id": "demo", "lane_id": "lane-1", "task_id": "demo-inc-0001", "status": "done"}
+    ]
+
+    result = factory_pg.close_task(
+        "demo-inc-0001",
+        status="done",
+        result_summary="Implemented the first production increment.",
+        evidence={"commit": "abc123", "tests": "passed"},
+        actor="codex-builder",
+        reconcile=False,
+    )
+
+    assert result["notion_post_action"]["queued"] is True
+    assert result["notion_post_action"]["timing"] == "post_action_increment_closure"
+    joined = "\n".join(fake_sql.statements)
+    assert "notion_increment_closure_checkpoint" in joined
+    assert "human_pm_projection_not_agent_truth" in joined
+    assert "canonical_pre_action_docs" in joined
+    assert "post_action_increment_closure" in joined
+
+
+def test_close_task_does_not_reopen_notion_reconciliation_as_stale(fake_sql):
+    fake_sql.statement_one_results = [
+        {
+            "project_id": "demo",
+            "lane_id": "lane-1",
+            "task_id": "demo-reconcile-missing-notion-project",
+            "status": "done",
+        }
+    ]
+
+    result = factory_pg.close_task(
+        "demo-reconcile-missing-notion-project",
+        status="done",
+        result_summary="Synced Notion PM projection and read back the tracker page.",
+        evidence={"notion_sync_completed": True, "notion_tracker_page_id": "37e37b39-cad6-812e-a750-f19285329717"},
+        actor="factory-reporter",
+        reconcile=False,
+    )
+
+    assert result["notion_post_action"]["queued"] is False
+    joined = "\n".join(fake_sql.statements)
+    assert '"notion_projection_stale": false' in joined
+    assert '"notion_sync_required": false' in joined
+    assert "notion_increment_closure_checkpoint" not in joined
+    assert "notion_increment_closure_synced" in joined
+
+
+def test_factory_notion_markdown_includes_sequential_post_action_increment_closures():
+    from hermes_cli import web_server
+
+    project = {
+        "project_id": "demo",
+        "name": "Demo Factory Project",
+        "status": "active",
+        "methodology": "hybrid",
+        "risk_level": "medium",
+        "repo_path": "/repo/demo",
+        "base_branch": "main",
+        "metadata": {"artifact_dir": "factory/projects/demo"},
+        "dashboard": {"quick_status": "Dos incrementos cerrados.", "required_docs": []},
+    }
+    payload = {
+        "tasks": [
+            {
+                "project_id": "demo",
+                "task_id": "demo-inc-0002",
+                "title": "Second increment",
+                "status": "done",
+                "owner_profile": "claude-code-builder",
+                "priority": 20,
+                "increment_key": "INC-0002",
+                "increment_order": 2,
+                "result_summary": "Second increment delivered.",
+                "evidence_status": "present",
+                "finished_at": "2026-06-13T11:00:00Z",
+                "metadata": {"closure_source": "factory_task_close", "evidence": {"commit": "def456"}},
+            },
+            {
+                "project_id": "demo",
+                "task_id": "demo-inc-0001",
+                "title": "First increment",
+                "status": "done",
+                "owner_profile": "codex-builder",
+                "priority": 10,
+                "increment_key": "INC-0001",
+                "increment_order": 1,
+                "result_summary": "First increment delivered.",
+                "evidence_status": "present",
+                "finished_at": "2026-06-13T10:00:00Z",
+                "metadata": {"closure_source": "factory_task_close", "evidence": {"commit": "abc123"}},
+            },
+        ],
+        "gates": [],
+        "events": [],
+        "task_runs": [],
+    }
+
+    markdown = web_server._factory_notion_markdown(payload, project)
+
+    assert "## 7. Cierres secuenciales de incrementos" in markdown
+    assert "post-acción" in markdown
+    assert markdown.index("INC-0001") < markdown.index("INC-0002")
+    assert "First increment delivered." in markdown
+    assert "Second increment delivered." in markdown
+    assert "Fuente operativa: **Agent Core Postgres `factory.*`**" in markdown
+
+
+def test_factory_notion_blocks_do_not_truncate_late_increment_closure_section():
+    from hermes_cli import web_server
+
+    markdown = "\n".join(
+        [f"prelude line {idx}" for idx in range(120)]
+        + [
+            "## 7. Cierres secuenciales de incrementos",
+            "Cada cierre se registra post-acción.",
+            "| 1 | INC-0001 | First increment | done | commit=abc123 |",
+        ]
+    )
+    blocks = web_server._factory_notion_blocks(markdown)
+    rendered_parts = []
+    for block in blocks:
+        block_type = block.get("type")
+        if not isinstance(block_type, str):
+            continue
+        rich_text = block.get(block_type, {}).get("rich_text", [])
+        rendered_parts.append(
+            "".join(chunk.get("plain_text") or chunk.get("text", {}).get("content", "") for chunk in rich_text)
+        )
+    rendered = "\n".join(rendered_parts)
+
+    assert "Cierres secuenciales de incrementos" in rendered
+    assert "INC-0001" in rendered
 
 
 def test_final_semantic_state_ignores_historical_markers():

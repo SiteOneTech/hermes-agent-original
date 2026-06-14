@@ -1,0 +1,78 @@
+"""Canonical SitioUno customer document workspace templates.
+
+These helpers keep signatures, quotes, invoices, and receipts on the same
+customer-facing visual system: light SitioUno document sheet, official logo,
+OTP-first access gate, fixed six-box OTP input, and overflow-safe technical
+hashes.
+"""
+from __future__ import annotations
+
+import html
+import json
+from typing import Any
+
+
+def _e(value: Any) -> str:
+    return html.escape("" if value is None else str(value), quote=True)
+
+
+def _json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def render_signature_workspace(
+    *,
+    token: str,
+    request_id: str,
+    submitter_id: str,
+    public_document_number: str,
+    title: str,
+    document_label: str,
+    project_label: str,
+    recipient_name: str,
+    recipient_email: str,
+    client_name: str,
+    document_url: str,
+    document_hash_sha256: str,
+) -> str:
+    """Render an OTP-gated signature workspace using the quote/invoice UX."""
+    data = {
+        "token": token,
+        "requestId": request_id,
+        "submitterId": submitter_id,
+        "documentUrl": document_url,
+        "documentHash": document_hash_sha256,
+        "publicDocumentNumber": public_document_number,
+        "recipientName": recipient_name,
+        "recipientEmail": recipient_email,
+        "clientName": client_name,
+    }
+    otp_inputs = "".join(
+        f"<input class='otp-digit' inputmode='numeric' pattern='[0-9]' maxlength='1' autocomplete='one-time-code' aria-label='Dígito {i} del código OTP'/>"
+        for i in range(1, 7)
+    )
+    return f"""<!doctype html><html lang='es'><head><meta charset='utf-8'/><meta name='viewport' content='width=device-width,initial-scale=1'/><title>{_e(title)} — SitioUno</title><style>
+:root{{--bg:#f5f7fb;--sheet:#fff;--ink:#111827;--muted:#667085;--line:#d9dee8;--brand:#0f62fe;--ok:#15803d;--red:#b42318;--shadow:0 18px 45px rgba(16,24,40,.10)}}
+*{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,Arial,Helvetica,sans-serif}}.shell{{width:min(1220px,calc(100% - 28px));margin:0 auto;padding:28px 0 54px}}.topbar{{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;gap:14px}}.brand-logo{{height:42px;max-width:230px;object-fit:contain}}.workspace{{display:grid;grid-template-columns:minmax(0,820px) 340px;gap:22px;align-items:start}}.document-sheet,.panel-card{{background:white;border:1px solid var(--line);box-shadow:var(--shadow);border-radius:24px}}.document-sheet{{min-height:760px;padding:52px 56px;border-radius:0}}.panel-card{{padding:18px;margin-bottom:16px}}.doc-head{{display:flex;justify-content:space-between;gap:28px;border-bottom:1px solid var(--line);padding-bottom:24px;margin-bottom:28px}}.doc-kicker{{text-transform:uppercase;letter-spacing:.12em;color:var(--muted);font-size:12px;font-weight:800}}.doc-title{{font-size:30px;line-height:1.12;margin:7px 0 0}}.doc-meta{{text-align:right;color:var(--muted);font-size:13px;line-height:1.55;min-width:185px}}.party{{border:1px solid var(--line);border-radius:14px;padding:16px;background:#fbfcff;margin-bottom:18px}}.button{{display:inline-flex;width:100%;align-items:center;justify-content:center;border:1px solid var(--line);border-radius:14px;padding:12px 14px;font-weight:850;text-decoration:none;background:#fff;color:#111827;margin-top:10px;cursor:pointer}}.button.primary{{background:var(--brand);border-color:var(--brand);color:#fff}}.button.secondary{{background:#f8fafc}}.button[disabled]{{opacity:.55;cursor:not-allowed}}.muted{{color:var(--muted)}}.small{{font-size:13px;line-height:1.45}}.locked .workspace{{display:none}}.unlocked .gate{{display:none}}.gate{{background:#fff;border:1px solid var(--line);box-shadow:var(--shadow);border-radius:28px;padding:clamp(24px,5vw,44px);max-width:760px;margin:24px auto}}.gate h1{{font-size:clamp(34px,6vw,58px);line-height:.98;margin:10px 0 12px;letter-spacing:-.055em}}.gate-note{{border-left:4px solid var(--brand);padding-left:12px;color:var(--muted);font-size:13px;line-height:1.45;margin:16px 0}}.otp-row{{display:grid;grid-template-columns:repeat(6,minmax(42px,1fr));gap:10px;margin:16px 0}}.otp-digit{{height:62px;border:1px solid var(--line);border-radius:14px;text-align:center;font-size:30px;font-weight:900;letter-spacing:.02em;background:#fff;color:#111827}}.otp-digit:focus{{outline:3px solid rgba(15,98,254,.18);border-color:var(--brand)}}.signature-pad{{border:1px solid var(--line);border-radius:16px;background:#fff;margin:10px 0;overflow:hidden}}.signature-pad canvas{{display:block;width:100%;height:180px;touch-action:none}}label{{display:block;font-size:13px;font-weight:850;margin-top:12px}}input,textarea{{width:100%;border:1px solid var(--line);border-radius:14px;padding:12px 14px;font:inherit;background:#fff;color:var(--ink)}}textarea{{min-height:90px}}.notice{{border:1px solid var(--line);border-radius:14px;padding:12px;margin-top:12px;font-size:13px;line-height:1.45;color:var(--muted);background:#f8fafc}}.notice.ok{{border-color:#bbf7d0;background:#f0fdf4;color:#166534}}.notice.err{{border-color:#fecaca;background:#fff5f5;color:#b42318}}.hidden{{display:none!important}}.doc-frame{{width:100%;height:min(72vh,860px);border:1px solid var(--line);border-radius:16px;background:#f8fafc}}.hash-value{{display:block;max-width:100%;overflow-wrap:anywhere;word-break:break-all;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;color:#475467;background:#f8fafc;border:1px solid var(--line);border-radius:12px;padding:10px;margin-top:8px}}.checkrow{{display:flex;align-items:flex-start;gap:10px;margin-top:12px}}.checkrow input{{width:auto;margin-top:3px}}@media(max-width:900px){{.workspace{{grid-template-columns:1fr}}.document-sheet{{padding:28px 22px}}.doc-head{{display:block}}.doc-meta{{text-align:left;margin-top:14px}}.topbar{{align-items:flex-start;flex-direction:column}}}}
+</style></head><body class='locked'><main class='shell'><div class='topbar'><img class='brand-logo' src='/assets/sitiouno-logo-blue-on-white-1600x320.png' alt='SitioUno'/><span class='muted small'>Documento comercial seguro</span></div><section class='gate'><div class='doc-kicker'>Validación de identidad</div><h1>Confirma tu acceso para revisar y firmar</h1><p class='muted'>Por seguridad, este enlace requiere un código enviado al email registrado del firmante. Después de validar, podrás revisar el documento y firmarlo en pantalla.</p><div class='gate-note'>Documento: <strong>{_e(public_document_number)}</strong><br/>Firmante: <strong>{_e(recipient_name)}</strong><br/>Canal de validación: {_e(recipient_email)}</div><button id='requestOtpBtn' class='button primary' type='button'>Enviar código al email</button><div id='otpBox' class='hidden'><label>Código de 6 dígitos</label><div class='otp-row'>{otp_inputs}</div><button id='verifyOtpBtn' class='button primary' type='button' disabled>Validar y abrir documento</button></div><p id='gateStatus' class='muted small'></p></section><div class='workspace'><article class='document-sheet'><div class='doc-head'><div><div class='doc-kicker'>Firma digital</div><h1 class='doc-title'>{_e(title)}</h1></div><div class='doc-meta'>Número: <strong>{_e(public_document_number)}</strong><br/>Estado: Pendiente de firma<br/>Cliente: {_e(client_name)}</div></div><div class='party'><h3>Documento</h3><p><strong>{_e(document_label)}</strong><br/>{_e(project_label)}</p><details><summary class='small muted'>Ver hash técnico del documento</summary><code class='hash-value'>{_e(document_hash_sha256)}</code></details></div><iframe class='doc-frame' title='Documento para revisión' src='about:blank' data-src='{_e(document_url)}'></iframe><p><a class='button secondary' href='{_e(document_url)}' target='_blank' rel='noopener'>Abrir PDF en otra pestaña</a></p></article><aside><div class='panel-card'><div class='doc-kicker'>Paso 2</div><h2>Firmar conformidad</h2><p class='muted small'>Revisa el documento y firma solo si estás conforme.</p><label for='signerName'>Nombre del firmante</label><input id='signerName' value='{_e(recipient_name)}' required/><label>Firma en pantalla</label><div class='signature-pad'><canvas id='sigCanvas' aria-label='Área para dibujar la firma'></canvas></div><button id='clearSigBtn' class='button secondary' type='button'>Limpiar firma</button><label for='notes'>Comentario opcional</label><textarea id='notes' placeholder='Opcional: cargo, observación o referencia'></textarea><label class='checkrow'><input id='acceptCheck' type='checkbox'/> <span>Declaro que revisé el documento y firmo en señal de recepción, aceptación y conformidad.</span></label><button id='signBtn' class='button primary' type='button'>Firmar documento</button><div id='actionStatus' class='notice hidden'></div></div></aside></div></main><script>
+const DATA = {_json(data)};
+const TOKEN_KEY = 's1_action_token_' + DATA.token;
+let challengeId = '';
+let actionToken = sessionStorage.getItem(TOKEN_KEY) || '';
+let signatureDrawn = false;
+function $(id){{return document.getElementById(id);}}
+function setGate(text){{$('gateStatus').textContent = text || '';}}
+function setNotice(text, ok){{const n=$('actionStatus'); n.className='notice '+(ok?'ok':'err'); n.textContent=text||'';}}
+function otpValue(){{return Array.from(document.querySelectorAll('.otp-digit')).map(function(i){{return (i.value||'').replace(/\\D/g,'').slice(0,1);}}).join('');}}
+function updateVerifyState(){{$('verifyOtpBtn').disabled = !(challengeId && otpValue().length === 6);}}
+function bindOtpBoxes(){{document.querySelectorAll('.otp-digit').forEach(function(input,idx,arr){{input.addEventListener('input',function(){{input.value=(input.value||'').replace(/\\D/g,'').slice(0,1); if(input.value&&arr[idx+1])arr[idx+1].focus(); updateVerifyState();}});input.addEventListener('keydown',function(e){{if(e.key==='Backspace'&&!input.value&&arr[idx-1])arr[idx-1].focus();}});input.addEventListener('paste',function(e){{const text=(e.clipboardData||window.clipboardData).getData('text').replace(/\\D/g,'').slice(0,6); if(text){{e.preventDefault(); arr.forEach(function(box,j){{box.value=text[j]||'';}}); updateVerifyState(); (arr[Math.min(text.length,6)-1]||input).focus();}}}});}});}}
+function eventPayload(type, extra){{extra=extra||{{}};const metadata=Object.assign({{}},extra.metadata||{{}},{{signature_request_id:DATA.requestId,submitter_id:DATA.submitterId,public_document_number:DATA.publicDocumentNumber,document_hash_sha256:DATA.documentHash,signer_name:($('signerName')||{{}}).value||DATA.recipientName,signer_email:DATA.recipientEmail,client_name:DATA.clientName}});return {{event_type:type,deliverable_id:DATA.requestId,token:DATA.token,actor_type:'customer',actor_ref:DATA.recipientEmail,comment:extra.comment||'',action_token:actionToken||undefined,metadata:metadata}};}}
+async function postJson(url,payload){{const r=await fetch(url,{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(payload)}});let data={{}};try{{data=await r.json();}}catch(e){{}}if(!r.ok&&!data.error)data.error='http_'+r.status;return data;}}
+function unlockUI(){{if(actionToken){{document.body.className='unlocked';const iframe=document.querySelector('iframe.doc-frame'); if(iframe&&!iframe.src.endsWith('.pdf')) iframe.src=iframe.dataset.src; setupSignaturePad();}}else{{document.body.className='locked';}}}}
+async function requestUnlockOtp(){{setGate('Enviando código...'); $('requestOtpBtn').disabled=true; const r=await postJson('/api/document-actions/request-otp',eventPayload('unlock')); if(r.ok||r.error==='otp_recently_requested'){{challengeId=r.challenge_id||challengeId; $('otpBox').classList.remove('hidden'); setGate(r.ok?'Código enviado por Zeus de SitioUno. Escríbelo en las casillas.':'Ya hay un código vigente. Escríbelo en las casillas.'); document.querySelector('.otp-digit')?.focus(); updateVerifyState();}}else{{$('requestOtpBtn').disabled=false; setGate('No se pudo enviar el código: '+(r.error||'error'));}}}}
+async function verifyUnlockOtp(){{const otp=otpValue(); if(!challengeId||otp.length!==6){{setGate('Escribe los 6 dígitos del código.'); updateVerifyState(); return;}} $('verifyOtpBtn').disabled=true; setGate('Validando código...'); const form=new URLSearchParams(); form.set('challenge_id',challengeId); form.set('otp',otp); const r=await fetch('/api/document-actions/verify-otp',{{method:'POST',headers:{{'Content-Type':'application/x-www-form-urlencoded'}},body:form.toString()}}); let data={{}}; try{{data=await r.json();}}catch(e){{}} if(r.ok&&data.ok&&data.action_token){{actionToken=data.action_token; sessionStorage.setItem(TOKEN_KEY,actionToken); setGate('Identidad validada. Abriendo documento...'); unlockUI();}}else{{setGate('Código inválido o vencido: '+(data.error||('http_'+r.status))); updateVerifyState();}}}}
+function setupSignaturePad(){{const canvas=$('sigCanvas'); if(!canvas||canvas.dataset.ready)return; canvas.dataset.ready='1'; const ctx=canvas.getContext('2d'); let drawing=false; function configure(){{ctx.lineWidth=2.4;ctx.lineCap='round';ctx.lineJoin='round';ctx.strokeStyle='#0f172a';}} function resize(){{const rect=canvas.getBoundingClientRect();const ratio=Math.max(window.devicePixelRatio||1,1);const w=Math.max(1,Math.round(rect.width*ratio));const h=Math.max(1,Math.round(rect.height*ratio));if(canvas.width!==w||canvas.height!==h){{canvas.width=w;canvas.height=h;ctx.setTransform(ratio,0,0,ratio,0,0);configure();}}}} function pos(e){{const r=canvas.getBoundingClientRect();const p=e.touches&&e.touches[0]?e.touches[0]:e;return {{x:p.clientX-r.left,y:p.clientY-r.top}};}} function start(e){{resize();drawing=true;const p=pos(e);ctx.beginPath();ctx.moveTo(p.x,p.y);e.preventDefault();}} function move(e){{if(!drawing)return;const p=pos(e);ctx.lineTo(p.x,p.y);ctx.stroke();signatureDrawn=true;e.preventDefault();}} function end(){{drawing=false;}} resize(); window.addEventListener('resize',function(){{if(!signatureDrawn)resize();}}); canvas.addEventListener('pointerdown',start); canvas.addEventListener('pointermove',move); window.addEventListener('pointerup',end); window.addEventListener('pointercancel',end);}}
+function clearSignature(){{const canvas=$('sigCanvas');const ctx=canvas.getContext('2d');ctx.save();ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,canvas.width,canvas.height);ctx.restore();signatureDrawn=false;}}
+async function submitSignature(){{if(!actionToken){{setNotice('Primero valida el código OTP.',false);return;}} if(!$('signerName').value.trim()){{setNotice('Escribe el nombre del firmante.',false);return;}} if(!signatureDrawn){{setNotice('Dibuja la firma en el recuadro.',false);return;}} if(!$('acceptCheck').checked){{setNotice('Marca la declaración de aceptación para continuar.',false);return;}} $('signBtn').disabled=true; const canvas=$('sigCanvas'); const metadata={{signature_text:$('signerName').value.trim(),signature_image_data_url:canvas.toDataURL('image/png'),signed_at:new Date().toISOString()}}; const r=await postJson('/api/document-actions',eventPayload('signed',{{comment:($('notes').value||'Documento firmado'),metadata:metadata}})); if(r.ok){{setNotice('Firma enviada. Zeus de SitioUno registrará el comprobante y el PDF firmado.',true);}}else{{$('signBtn').disabled=false;setNotice('No se pudo enviar la firma: '+(r.error||'error'),false);}}}}
+$('requestOtpBtn').addEventListener('click',requestUnlockOtp); $('verifyOtpBtn').addEventListener('click',verifyUnlockOtp); $('clearSigBtn').addEventListener('click',clearSignature); $('signBtn').addEventListener('click',submitSignature); bindOtpBoxes(); unlockUI(); updateVerifyState();
+</script></body></html>"""

@@ -62,25 +62,84 @@ def email_address_from_target(target: str) -> str | None:
     return value if "@" in value else None
 
 
-def subject_for_otp(item: dict, message: str) -> str:
-    doc = "documento seguro"
+def document_label_from_message(item: dict, message: str) -> str:
+    raw_metadata = item.get("metadata")
+    metadata: dict = raw_metadata if isinstance(raw_metadata, dict) else {}
+    for key in ("public_document_number", "quote_number", "invoice_number", "document_number"):
+        value = metadata.get(key)
+        if value:
+            return str(value)
     match = re.search(r"documento\s+([^\s.]+)", message, re.IGNORECASE)
     if match:
-        doc = match.group(1)
+        return match.group(1)
+    return str(item.get("deliverable_id") or "documento seguro")
+
+
+def purpose_label_for_otp(item: dict) -> str:
     purpose = str(item.get("event_type") or item.get("purpose") or "validación")
-    if purpose == "unlock":
+    return {
+        "unlock": "validar tu identidad",
+        "approved": "aceptar la cotización",
+        "rejected": "rechazar el documento",
+        "signed": "firmar el documento",
+    }.get(purpose, "validar este documento")
+
+
+def subject_for_otp(item: dict, message: str) -> str:
+    doc = document_label_from_message(item, message)
+    if str(item.get("event_type") or item.get("purpose") or "") == "unlock":
         return f"Código de Zeus de SitioUno para validar identidad — {doc}"
     return f"Código de Zeus de SitioUno — {doc}"
+
+
+def otp_from_message(message: str) -> str:
+    match = OTP_RE.search(message)
+    if not match:
+        raise ValueError("OTP message must include a 6-digit code")
+    return match.group(1)
+
+
+def render_sitiouno_otp_email_text(item: dict, safe_message: str) -> str:
+    otp = otp_from_message(safe_message)
+    doc = document_label_from_message(item, safe_message)
+    purpose = purpose_label_for_otp(item)
+    return (
+        f"Tu código de Zeus de SitioUno para {purpose} en el documento {doc} es:\n\n"
+        f"{otp}\n\n"
+        "Expira en 10 minutos. No compartas el código.\n"
+        "Este código valida tu identidad en un documento seguro de SitioUno."
+    )
+
+
+def render_sitiouno_otp_email_html(item: dict, safe_message: str) -> str:
+    otp = otp_from_message(safe_message)
+    doc = html.escape(document_label_from_message(item, safe_message), quote=True)
+    purpose = html.escape(purpose_label_for_otp(item), quote=True)
+    digit_boxes = "".join(
+        f'<span class="sitiouno-otp-digit" style="display:inline-block;width:44px;height:52px;line-height:52px;text-align:center;border:1px solid #d9dee8;border-radius:14px;background:#ffffff;color:#111827;font-size:28px;font-weight:900;letter-spacing:.02em;margin:0 4px;box-shadow:0 8px 18px rgba(16,24,40,.08);">{html.escape(digit)}</span>'
+        for digit in otp
+    )
+    return f"""
+<div data-sitiouno-otp-template="v1">
+  <p style="margin:0 0 14px;color:#0f172a;">Usa este código para {purpose} en el documento seguro de SitioUno.</p>
+  <div style="border:1px solid #d9dee8;border-radius:20px;background:#f8fafc;padding:18px;text-align:center;margin:18px 0;">
+    <div style="font-size:12px;text-transform:uppercase;letter-spacing:.12em;color:#667085;font-weight:800;margin-bottom:10px;">Código de verificación</div>
+    <div role="text" aria-label="Código OTP {html.escape(otp, quote=True)}" style="white-space:nowrap;">{digit_boxes}</div>
+    <div style="font-size:13px;color:#667085;margin-top:12px;">Expira en 10 minutos.</div>
+  </div>
+  <div style="border-left:4px solid #0f62fe;padding-left:12px;margin:16px 0;color:#475467;font-size:14px;line-height:1.55;">
+    Documento: <strong style="color:#111827;">{doc}</strong><br/>
+    Canal validado: este mismo correo.
+  </div>
+  <p style="margin:14px 0 0;color:#475467;">No compartas el código. SitioUno nunca te pedirá reenviarlo fuera del enlace seguro.</p>
+</div>""".strip()
 
 
 def send_email_otp(item: dict, target_email: str, message: str) -> dict:
     safe_message = sanitize_public_message(message)
     subject = subject_for_otp(item, safe_message)
-    text = safe_message + "\n\nEste código valida tu identidad en un documento seguro de SitioUno. No compartas el código."
-    html_body = (
-        "<p>" + html.escape(safe_message) + "</p>"
-        "<p>Este código valida tu identidad en un documento seguro de SitioUno. No compartas el código.</p>"
-    )
+    text = render_sitiouno_otp_email_text(item, safe_message)
+    html_body = render_sitiouno_otp_email_html(item, safe_message)
     return notification_tool._email_adapter_send(
         {
             "to_email": target_email,
@@ -91,6 +150,7 @@ def send_email_otp(item: dict, target_email: str, message: str) -> dict:
             "metadata": {
                 "business_id": "sitiouno",
                 "source": "otp_outbox_dispatcher",
+                "template": "sitiouno_otp_v1",
                 "otp_event_id": item.get("event_id"),
                 "challenge_id": item.get("challenge_id"),
                 "deliverable_id": item.get("deliverable_id"),

@@ -76,22 +76,23 @@ RECONCILIATION_TASK_SPECS: dict[str, dict[str, Any]] = {
         "engine": "zeus",
         "priority": 10,
         "acceptance": [
-            "Project-specific Notion PM tracker exists, unless Jean explicitly authorized a no-Notion exception for this project.",
-            "Factory DB project metadata includes notion_tracker_page_id or notion_tracker_url when Notion is required.",
-            "Notion remains human reporting only; Factory DB stays the source of truth.",
+            "Project-specific Notion PM page exists from the Factory template and links to canonical repo documentation.",
+            "Factory DB project metadata includes notion_tracker_page_id or notion_tracker_url for the human PM projection.",
+            "Notion remains human reporting only; Factory DB + repo Markdown docs stay the agents' source of truth.",
+            "Every increment closure is reflected post-action in the Notion page before the project is considered sequentially current.",
         ],
     },
     "notion_pm_projection_warning": {
-        "title": "PM — Projection warning: update Factory Notion reporting surface",
+        "title": "PM — Legacy projection warning: reconcile to required Factory Notion reporting surface",
         "phase": "reporting",
         "owner": "factory-reporter",
         "reviewer": "factory-orchestrator",
         "engine": "zeus",
         "priority": 900,
         "acceptance": [
-            "Missing or stale Notion PM projection is reported for executive visibility.",
+            "Legacy optional Notion warning is migrated into the required missing_notion_project reconciliation path.",
             "Factory DB and repo artifacts remain the canonical source of truth.",
-            "This task does not block normal implementation dispatch unless project metadata sets notion_required=true.",
+            "Notion is mandatory human PM projection, not an agent source of truth.",
         ],
     },
     "missing_project_artifact_dir": {
@@ -854,18 +855,14 @@ def reconciliation_findings(project: dict[str, Any], tasks: list[dict[str, Any]]
         )
     notion_issue = _notion_projection_issue(metadata)
     if notion_issue:
-        if _metadata_bool(metadata, "notion_required"):
-            add(
-                "missing_notion_project",
-                f"Notion PM tracker is required but {notion_issue}",
-                notion_issue=notion_issue,
-            )
-        else:
-            add(
-                "notion_pm_projection_warning",
-                f"Notion PM projection is {notion_issue}; Factory DB remains canonical source of truth",
-                notion_issue=notion_issue,
-            )
+        add(
+            "missing_notion_project",
+            f"Required human Notion PM projection is {notion_issue}; Factory DB + repo Markdown docs remain agent source of truth",
+            notion_issue=notion_issue,
+            notion_role="human_pm_projection_not_agent_truth",
+            canonical_agent_truth="factory_db_plus_repo_markdown_docs",
+            timing="template_page_before_visibility_and_increment_closures_post_action",
+        )
 
     if factory_dir is None or not factory_dir.is_dir():
         add("missing_project_artifact_dir", f"Missing project-local Factory artifact directory: {artifact_dir}", artifact_dir=artifact_dir)
@@ -1050,7 +1047,7 @@ def critical_readiness_findings(project_id: str) -> list[str]:
     if not factory_contracts.repository_strategy_is_complete(strategy):
         missing = ", ".join(strategy.get("missing_fields") or ["repo_scope"])
         findings.append(f"missing G0 repository strategy metadata: {missing}")
-    if _metadata_bool(metadata, "notion_required") and notion_issue:
+    if notion_issue:
         findings.append(f"required Notion PM tracker is {notion_issue}")
 
     if not factory_dir or not factory_dir.is_dir():
@@ -1238,6 +1235,60 @@ def link_notion_tracker(
     }
 
 
+def _notion_increment_closure_checkpoint(
+    *,
+    task_id: str,
+    project_id: str,
+    lane_id: Any,
+    status: str,
+    summary: str,
+    evidence: dict[str, Any],
+    actor: str,
+    queued: bool = True,
+) -> dict[str, Any]:
+    return {
+        "queued": queued,
+        "notion_role": "human_pm_projection_not_agent_truth",
+        "timing": "post_action_increment_closure",
+        "event_type": "notion_increment_closure_checkpoint" if queued else "notion_increment_closure_synced",
+        "source": "factory_task_close",
+        "project_id": project_id,
+        "lane_id": lane_id,
+        "task_id": task_id,
+        "status": status,
+        "summary": summary,
+        "evidence": evidence,
+        "closed_by": actor,
+        "canonical_pre_action_docs": "Factory DB + repo Markdown docs are the agent source of truth; Notion is the post-action human PM projection.",
+        "notion_sync_required": queued,
+    }
+
+
+def _task_close_completes_notion_sync(task_id: str, evidence: dict[str, Any]) -> bool:
+    """Return True when the task being closed is the Notion projection repair itself.
+
+    Normal increment closures must mark the PM projection stale so the reporter
+    updates Notion after action. The reconciliation/reporting task that performs
+    that sync is different: closing it must clear the stale flag, otherwise
+    `close_task()` immediately recreates the same reconciliation anomaly.
+    """
+
+    if evidence.get("notion_sync_completed") is True:
+        return True
+    if "reconcile-missing-notion" not in str(task_id or ""):
+        return False
+    return any(
+        evidence.get(key)
+        for key in (
+            "notion_tracker_page_id",
+            "notion_tracker_url",
+            "notion_page_id",
+            "notion_page",
+            "notion_url",
+        )
+    )
+
+
 def close_task(
     task_id: str,
     *,
@@ -1287,6 +1338,36 @@ def close_task(
         raise ValueError(f"Factory task not found: {tid}")
     project_id = str(row.get("project_id") or "")
     lane_id = row.get("lane_id")
+    notion_sync_completed = _task_close_completes_notion_sync(tid, evidence_payload)
+    notion_checkpoint = _notion_increment_closure_checkpoint(
+        task_id=tid,
+        project_id=project_id,
+        lane_id=lane_id,
+        status=final_status,
+        summary=summary,
+        evidence=evidence_payload,
+        actor=actor_name,
+        queued=not notion_sync_completed,
+    )
+    if notion_sync_completed:
+        synced_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        project_notion_metadata = {
+            "notion_projection_stale": False,
+            "notion_sync_required": False,
+            "notion_last_increment_closure_synced_at": synced_at,
+            "notion_tracker_last_synced_at": synced_at,
+            "notion_last_increment_closure": notion_checkpoint,
+        }
+        notion_event_type = "notion_increment_closure_synced"
+        notion_event_message = f"Post-action Notion PM projection synced by {tid}"
+    else:
+        project_notion_metadata = {
+            "notion_projection_stale": True,
+            "notion_sync_required": True,
+            "notion_last_increment_closure": notion_checkpoint,
+        }
+        notion_event_type = "notion_increment_closure_checkpoint"
+        notion_event_message = f"Post-action Notion PM projection checkpoint queued for {tid}"
     sql.psql(
         f"""
         UPDATE factory.task_runs
@@ -1299,8 +1380,16 @@ def close_task(
         WHERE task_id={_q(tid)}
           AND status IN ('queued','running');
 
+        UPDATE factory.projects
+        SET metadata = metadata || {_j(project_notion_metadata)},
+            updated_at=now()
+        WHERE project_id={_q(project_id)};
+
         INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
         VALUES ({_q(project_id)}, {_q(lane_id)}, {_q(tid)}, {_q(actor_name)}, 'task_closed', {_q(f'Task {tid} closed as {final_status}')}, {_j({'status': final_status, 'evidence': evidence_payload, 'result_summary': summary})});
+
+        INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
+        VALUES ({_q(project_id)}, {_q(lane_id)}, {_q(tid)}, {_q(actor_name)}, {_q(notion_event_type)}, {_q(notion_event_message)}, {_j(notion_checkpoint)});
         """,
         user=_user(),
     )
@@ -1311,6 +1400,7 @@ def close_task(
         "task_id": tid,
         "status": final_status,
         "evidence_status": evidence_state,
+        "notion_post_action": notion_checkpoint,
         "reconcile": reconciled,
     }
 
@@ -2137,12 +2227,41 @@ def factory_watchdog_alerts(payload: Optional[dict[str, Any]] = None, *, blocked
     return alerts
 
 
+def _payload_has_claimable_task(project_id: str, tasks: list[dict[str, Any]]) -> bool:
+    """Mirror the dependency semantics used by ``_next_runnable_task``.
+
+    The watchdog runs from a status payload, not directly from SQL. Counting
+    every ``todo`` row as runnable creates false positives when the only open
+    work is behind a blocked dependency. The cron claimed-null alert should fire
+    only when a task is actually claimable by the dispatcher: status todo/ready
+    and all declared dependencies are terminal.
+    """
+
+    project_tasks = [task for task in tasks if str(task.get("project_id") or "") == project_id]
+    terminal_task_ids = {
+        str(task.get("task_id") or "")
+        for task in project_tasks
+        if str(task.get("status") or "") in TERMINAL_TASK_STATUSES
+    }
+    for task in project_tasks:
+        if str(task.get("status") or "") not in {"todo", "ready"}:
+            continue
+        dependencies = task.get("dependencies") or []
+        if isinstance(dependencies, str):
+            dependencies = [dependencies]
+        if not isinstance(dependencies, list):
+            dependencies = []
+        if all(str(dep) in terminal_task_ids for dep in dependencies):
+            return True
+    return False
+
+
 def _claimed_null_alert_expected(payload: dict[str, Any], *, project_id: Optional[str] = None) -> bool:
     """Return True only when claimed=null is suspicious, not simply idle.
 
     A cron tick that claims no work is healthy when there are no autonomous
-    projects with runnable tasks, or while a run is already active. Alert only
-    when the dispatcher should have been able to claim review/rework/todo work.
+    projects with dependency-ready tasks, or while a run is already active.
+    Alert only when the dispatcher should have been able to claim work.
     """
 
     projects = {
@@ -2157,13 +2276,8 @@ def _claimed_null_alert_expected(payload: dict[str, Any], *, project_id: Optiona
         for run in payload.get("task_runs", [])
         if str(run.get("status") or "") in {"queued", "running"}
     }
-    runnable_by_project: dict[str, int] = {}
-    for task in payload.get("tasks", []):
-        pid = str(task.get("project_id") or "")
-        if pid not in projects:
-            continue
-        if str(task.get("status") or "") in RESUME_RUNNABLE_TASK_STATUSES:
-            runnable_by_project[pid] = runnable_by_project.get(pid, 0) + 1
+    payload_tasks = payload.get("tasks", [])
+    tasks = payload_tasks if isinstance(payload_tasks, list) else []
     for pid, project in projects.items():
         if not project.get("autonomous_enabled"):
             continue
@@ -2171,7 +2285,7 @@ def _claimed_null_alert_expected(payload: dict[str, Any], *, project_id: Optiona
             continue
         if pid in active_run_projects:
             continue
-        if runnable_by_project.get(pid, 0) > 0:
+        if _payload_has_claimable_task(pid, tasks):
             return True
     return False
 
@@ -2209,9 +2323,13 @@ def _resolved_reconciliation_anomaly(project: dict[str, Any] | None, task: dict[
     if code == "missing_repository_strategy":
         return (code, source) if _repository_strategy_complete(project) else None
     if code == "missing_notion_project":
-        return (code, source) if not _metadata_bool(project_metadata, "notion_required") or _notion_projection_issue(project_metadata) is None else None
+        return (code, source) if _notion_projection_issue(project_metadata) is None else None
     if code == "notion_pm_projection_warning":
-        return (code, source) if _metadata_bool(project_metadata, "notion_required") or _notion_projection_issue(project_metadata) is None else None
+        # Legacy optional-warning tasks should not keep projects in an absorbing
+        # reporting state. The current reconciler will create the required
+        # missing_notion_project task whenever the Notion PM projection is absent
+        # or stale.
+        return code, source
 
     factory_dir, artifact_dir = _project_artifact_dir(project)
     if code == "missing_project_artifact_dir":
@@ -2500,7 +2618,7 @@ def _dispatch_preflight_blockers(
     blockers: list[str] = []
     if not docs_ready:
         blockers.append("missing_or_unindexed_docs")
-    if not notion_ready and (notion_required or _metadata_bool(_metadata(task), "notion_required")):
+    if not notion_ready:
         blockers.append("missing_notion_tracker")
     return blockers
 

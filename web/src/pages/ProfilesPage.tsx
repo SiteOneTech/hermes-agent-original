@@ -98,6 +98,7 @@ const PROFILE_ROLE_HINTS: Record<string, string> = {
 
 const AGENT_AVATAR_OPTIONS = [
   "zeus",
+  "profile-su",
   "sophie-atc",
   "factory-orchestrator",
   "product-analyst",

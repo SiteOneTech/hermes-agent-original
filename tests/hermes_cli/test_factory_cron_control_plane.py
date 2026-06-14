@@ -138,6 +138,19 @@ def test_factory_watchdog_alerts_are_actionable_for_runtime_invariants():
     runnable_alerts = factory_pg.factory_watchdog_alerts(runnable_payload, claimed_null_rounds=3)
     assert {alert["alert_type"] for alert in runnable_alerts} == {"cron_claimed_null_repeated"}
 
+    dependency_blocked_payload = {
+        "projects": [{"project_id": "demo", "status": "active", "autonomous_enabled": True}],
+        "tasks": [
+            {"project_id": "demo", "task_id": "demo-blocked", "status": "blocked"},
+            {"project_id": "demo", "task_id": "demo-next", "status": "todo", "dependencies": ["demo-blocked"]},
+        ],
+        "task_runs": [],
+        "gates": [],
+        "human_questions": [],
+    }
+    dependency_blocked_alerts = factory_pg.factory_watchdog_alerts(dependency_blocked_payload, claimed_null_rounds=3)
+    assert "cron_claimed_null_repeated" not in {alert["alert_type"] for alert in dependency_blocked_alerts}
+
 
 def test_repo_factory_cron_scripts_run_against_backend(monkeypatch, capsys, tmp_path):
     class FakeBackend:

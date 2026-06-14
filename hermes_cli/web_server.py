@@ -1831,7 +1831,7 @@ _FACTORY_REQUIRED_DOCS = (
     "SECURITY_GATES.md",
 )
 
-_FACTORY_DONE_STATUSES = {"done", "completed", "verified", "cancelled", "superseded"}
+_FACTORY_DONE_STATUSES = {"done", "completed", "verified", "accepted", "cancelled", "superseded"}
 _FACTORY_OPEN_STATUSES = {"todo", "ready", "in_progress", "blocked", "review_pending_human"}
 
 
@@ -2462,6 +2462,37 @@ def _factory_notion_markdown(payload: Dict[str, Any], project: Dict[str, Any]) -
     current_task = dashboard.get("current_task") or {}
     active_run = dashboard.get("active_run") or {}
 
+    def task_metadata(row: Dict[str, Any]) -> Dict[str, Any]:
+        raw = row.get("metadata")
+        if isinstance(raw, dict):
+            return raw
+        parsed = _factory_json_load(raw, {}) if isinstance(raw, str) else {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    def sort_int(value: Any, default: int = 999_999) -> int:
+        try:
+            return int(value)
+        except Exception:
+            return default
+
+    terminal_increment_rows = [
+        task
+        for task in tasks
+        if str(task.get("status") or "").lower() in _FACTORY_DONE_STATUSES
+        and (
+            task.get("increment_key")
+            or task.get("increment_order") is not None
+            or task_metadata(task).get("closure_source") == "factory_task_close"
+        )
+    ]
+    terminal_increment_rows = sorted(
+        terminal_increment_rows,
+        key=lambda task: (
+            sort_int(task.get("increment_order"), sort_int(task.get("priority"))),
+            str(task.get("finished_at") or task.get("updated_at") or task.get("task_id") or ""),
+        ),
+    )[:40]
+
     task_table = ["| ID | Tarea | Estado | Owner | Evidencia |", "|---|---|---|---|---|"]
     task_table.extend(
         "| "
@@ -2541,6 +2572,36 @@ def _factory_notion_markdown(payload: Dict[str, Any], project: Dict[str, Any]) -
         )
     if len(doc_table) == 2:
         doc_table.append("| — | — | — | — |")
+
+    closure_table = ["| Secuencia | Incremento | Tarea | Cierre post-acción | Evidencia |", "|---:|---|---|---|---|"]
+    for task in terminal_increment_rows:
+        metadata = task_metadata(task)
+        evidence = metadata.get("evidence") if isinstance(metadata.get("evidence"), dict) else {}
+        evidence_bits: list[str] = []
+        if isinstance(evidence, dict):
+            for key in ("commit", "pr", "tests", "artifact", "artifact_path", "url"):
+                value = evidence.get(key)
+                if value:
+                    evidence_bits.append(f"{key}={value}")
+        sequence = task.get("increment_order") if task.get("increment_order") is not None else task.get("priority")
+        increment = task.get("increment_key") or task.get("task_id") or "—"
+        summary = task.get("result_summary") or metadata.get("summary") or "—"
+        closed_at = task.get("finished_at") or task.get("updated_at") or "—"
+        closure_table.append(
+            "| "
+            + " | ".join(
+                [
+                    _factory_markdown_cell(sequence),
+                    _factory_markdown_cell(increment),
+                    _factory_markdown_cell(task.get("title") or task.get("task_id")),
+                    _factory_markdown_cell(f"{closed_at} · {summary}"),
+                    _factory_markdown_cell("; ".join(evidence_bits) or task.get("evidence_status") or "—"),
+                ]
+            )
+            + " |"
+        )
+    if len(closure_table) == 2:
+        closure_table.append("| — | — | — | — | — |")
 
     event_table = ["| Fecha | Actor | Evento | Mensaje |", "|---|---|---|---|"]
     event_table.extend(
@@ -2625,28 +2686,34 @@ def _factory_notion_markdown(payload: Dict[str, Any], project: Dict[str, Any]) -
             "",
             *gate_table,
             "",
-            "## 7. Bitácora ejecutiva",
+            "## 7. Cierres secuenciales de incrementos",
+            "",
+            "Cada cierre se registra post-acción: los agentes trabajan con los documentos canónicos pre-acción en repo/Factory DB, y Notion queda como vista humana secuencial del avance.",
+            "",
+            *closure_table,
+            "",
+            "## 8. Bitácora ejecutiva",
             "",
             "Registro reciente de eventos Factory. Esto debe sentirse como log de proyecto, no como plantilla vacía.",
             "",
             *event_table,
             "",
-            "## 8. Runs / workers recientes",
+            "## 9. Runs / workers recientes",
             "",
             *run_table,
             "",
-            "## 9. Anomalías y deuda metodológica",
+            "## 10. Anomalías y deuda metodológica",
             "",
             *finding_lines,
             "",
-            "## 10. Próximos pasos / supervisión humana",
+            "## 11. Próximos pasos / supervisión humana",
             "",
             "- [ ] Verificar estado live en Factory DB antes de retomar ejecución.",
             "- [ ] Resolver gates failed/pending antes de marcar cierre.",
             "- [ ] Crear o linkear cualquier doc missing antes del cierre.",
             "- [ ] Actualizar esta página al cierre de sprint o cuando cambie un blocker real.",
             "",
-            "## 11. Retrospectiva / metodología",
+            "## 12. Retrospectiva / metodología",
             "",
             "- Qué funcionó:",
             "- Qué produjo deriva:",
@@ -2700,7 +2767,7 @@ def _factory_notion_rich_text(text: str) -> list[dict[str, Any]]:
     return chunks or [{"type": "text", "text": {"content": " "}}]
 
 
-def _factory_notion_blocks(markdown: str, *, limit: int = 90) -> list[dict[str, Any]]:
+def _factory_notion_blocks(markdown: str, *, limit: int = 240) -> list[dict[str, Any]]:
     """Convert a Markdown status snapshot into simple Notion paragraph/code blocks."""
 
     blocks: list[dict[str, Any]] = []
@@ -2725,6 +2792,15 @@ def _factory_notion_blocks(markdown: str, *, limit: int = 90) -> list[dict[str, 
         if len(blocks) >= limit:
             break
     return blocks or [{"object": "block", "type": "paragraph", "paragraph": {"rich_text": [{"type": "text", "text": {"content": "Factory status synced."}}]}}]
+
+
+def _factory_append_notion_page_children(page_id: str, blocks: list[dict[str, Any]], api_key: str, *, chunk_size: int = 100) -> None:
+    """Append blocks using Notion's 100-children request limit."""
+
+    for start in range(0, len(blocks), chunk_size):
+        chunk = blocks[start:start + chunk_size]
+        if chunk:
+            _notion_request("PATCH", f"blocks/{page_id}/children", api_key, {"children": chunk})
 
 
 def _factory_replace_notion_page_children(page_id: str, markdown: str, api_key: str) -> None:
@@ -2752,7 +2828,7 @@ def _factory_replace_notion_page_children(page_id: str, markdown: str, api_key: 
         if not children.get("has_more") or not children.get("next_cursor"):
             break
         cursor = str(children.get("next_cursor") or "")
-    _notion_request("PATCH", f"blocks/{page_id}/children", api_key, {"children": _factory_notion_blocks(markdown)})
+    _factory_append_notion_page_children(page_id, _factory_notion_blocks(markdown), api_key)
 
 
 def _notion_page_title(page: Dict[str, Any]) -> str:
@@ -2910,6 +2986,9 @@ async def sync_factory_project_notion(project_id: str):
         "notion_role": "human_pm_reporting_not_agent_truth",
         "notion_tracker_last_synced_at": _factory_utc_now(),
         "notion_tracker_last_sync_summary": (project.get("dashboard") or {}).get("quick_status") or "Factory dashboard synced",
+        "notion_projection_stale": False,
+        "notion_sync_required": False,
+        "notion_last_increment_closure_synced_at": _factory_utc_now(),
     }
     api_key = _notion_api_key()
     page_id = str(existing.get("page_id") or "").strip()
@@ -2957,6 +3036,7 @@ async def create_factory_project_notion(project_id: str):
             raise RuntimeError("Could not resolve the Factory Notion root page")
         title = f"🏭 {project.get('name') or project_id} — Factory PM"
         markdown = _factory_notion_markdown(payload, project)
+        blocks = _factory_notion_blocks(markdown)
         page = await loop.run_in_executor(
             None,
             lambda: _notion_request(
@@ -2966,10 +3046,13 @@ async def create_factory_project_notion(project_id: str):
                 {
                     "parent": {"page_id": parent_id},
                     "properties": {"title": [{"text": {"content": title[:180]}}]},
-                    "children": _factory_notion_blocks(markdown),
+                    "children": blocks[:100],
                 },
             ),
         )
+        created_page_id = str(page.get("id") or "").strip()
+        if created_page_id and len(blocks) > 100:
+            await loop.run_in_executor(None, _factory_append_notion_page_children, created_page_id, blocks[100:], api_key)
     except HTTPException:
         raise
     except Exception as exc:
@@ -2983,6 +3066,9 @@ async def create_factory_project_notion(project_id: str):
         "notion_tracker_page_id": page_id,
         "notion_tracker_url": url,
         "notion_tracker_created_at": _factory_utc_now(),
+        "notion_tracker_last_synced_at": _factory_utc_now(),
+        "notion_projection_stale": False,
+        "notion_sync_required": False,
         "notion_parent_page_id": parent_id,
     }
     _factory_update_project_metadata(project_id, metadata)

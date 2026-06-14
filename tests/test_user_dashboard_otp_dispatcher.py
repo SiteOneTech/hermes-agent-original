@@ -46,6 +46,11 @@ def test_email_otp_uses_sendgrid_notification_adapter_and_sitiouno_identity(monk
     assert "Hermes" not in rendered
     assert "Zeus de SitioUno" in rendered
     assert "123456" in payload["text"]
+    assert payload["metadata"]["template"] == "sitiouno_otp_v1"
+    assert 'data-sitiouno-otp-template="v1"' in payload["html"]
+    assert payload["html"].count('class="sitiouno-otp-digit"') == 6
+    assert "es: 123456" not in payload["html"]
+    assert "No compartas el código" in payload["html"]
 
 
 def test_challenge_is_current_rejects_missing_expired_or_attempted_challenges(tmp_path):

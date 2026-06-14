@@ -37,6 +37,7 @@ DOCUMENT_ACCESS_ACTIVITY_DB_TYPES = {
     "document_action_otp_requested": "otp_requested",
     "document_action_unlocked": "unlocked",
 }
+OWNER_SIGNED_DOCUMENT_EVENT_TYPES = {"signed"}
 EVENT_TYPES_WITH_OWNER_ACTION = DOCUMENT_ACTION_EVENT_TYPES | {"change_requested", "payment_failed"}
 SALES_EVENT_TYPES = {"opened", "paid", "payment_started", "cancelled", "expired"} | DOCUMENT_ACTION_EVENT_TYPES | DOCUMENT_ACCESS_ACTIVITY_EVENT_TYPES
 RECEIPT_EVENT_TYPES = {"opened"} | DOCUMENT_ACTION_EVENT_TYPES | DOCUMENT_ACCESS_ACTIVITY_EVENT_TYPES
@@ -168,7 +169,110 @@ def _status_for_event(event_type: str, current: str | None) -> str | None:
     return None
 
 
-def _record_follow_up(kind: str, subject: str, event: dict[str, Any], metadata: dict[str, Any]) -> None:
+def _owner_notification_targets() -> list[str]:
+    env = {**os.environ, **sql.runtime_env()}
+    raw = (
+        env.get("SIGNATURE_OWNER_NOTIFICATION_TARGETS")
+        or env.get("AGENT_OWNER_NOTIFICATION_TARGETS")
+        or env.get("OWNER_NOTIFICATION_TARGETS")
+        or "telegram"
+    )
+    targets = [target.strip() for target in raw.replace(";", ",").split(",") if target.strip()]
+    return targets or ["telegram"]
+
+
+def _send_owner_notification(message: str, metadata: dict[str, Any]) -> dict[str, Any]:
+    """Send an owner-facing notification from the trusted ingest side.
+
+    The public delivery sandbox only writes JSONL events; it never receives
+    messaging secrets. This trusted worker uses Hermes' existing send_message
+    adapter and defaults to the configured Telegram home channel. Additional
+    targets can be supplied via SIGNATURE_OWNER_NOTIFICATION_TARGETS, e.g.
+    ``telegram,whatsapp``.
+    """
+
+    from tools.send_message_tool import send_message_tool
+
+    results: list[dict[str, Any]] = []
+    for target in _owner_notification_targets():
+        try:
+            raw = send_message_tool({"action": "send", "target": target, "message": message})
+            result = json.loads(raw) if isinstance(raw, str) else raw
+            if not isinstance(result, dict):
+                result = {"ok": False, "target": target, "raw": result}
+        except Exception as exc:
+            result = {"ok": False, "target": target, "error": str(exc)}
+        result.setdefault("target", target)
+        results.append(result)
+    ok = any(bool(item.get("success") or item.get("ok")) and not item.get("error") for item in results)
+    return {"ok": ok, "results": results, "metadata": metadata}
+
+
+def _document_label(kind: str, subject: str, event: dict[str, Any], metadata: dict[str, Any]) -> str:
+    return str(
+        metadata.get("public_document_number")
+        or metadata.get("document_title")
+        or metadata.get("title")
+        or metadata.get("quote_number")
+        or metadata.get("invoice_number")
+        or metadata.get("receipt_number")
+        or metadata.get("signature_request_id")
+        or subject
+        or event.get("deliverable_id")
+        or kind
+        or "documento"
+    ).strip()
+
+
+def _signer_label(event: dict[str, Any], metadata: dict[str, Any]) -> str:
+    return str(
+        metadata.get("signer_name")
+        or metadata.get("signature_text")
+        or metadata.get("signer_email")
+        or metadata.get("client_name")
+        or event.get("actor_ref")
+        or event.get("actor_type")
+        or "firmante"
+    ).strip()
+
+
+def _owner_signed_document_message(kind: str, subject: str, event: dict[str, Any], metadata: dict[str, Any]) -> str:
+    document = _document_label(kind, subject, event, metadata)
+    signer = _signer_label(event, metadata)
+    request_id = metadata.get("signature_request_id") or event.get("deliverable_id")
+    status_line = "Recibí una firma validada por OTP en el flujo canónico de documentos."
+    if metadata.get("all_required_signed") is True or str(metadata.get("request_status") or "").lower() in {"completed", "complete"}:
+        status_line = "El documento quedó firmado por todos los firmantes requeridos."
+    lines = [
+        "✍️ Documento firmado",
+        "",
+        f"Documento: {document}",
+        f"Firmante: {signer}",
+        status_line,
+    ]
+    if request_id:
+        lines.append(f"Referencia: {request_id}")
+    lines.append("Zeus continuará con el proceso canónico de validación, evidencia y entrega final.")
+    return "\n".join(lines)
+
+
+def _notify_owner_if_document_signed(kind: str, subject: str, event: dict[str, Any], metadata: dict[str, Any], follow_up: dict[str, Any] | None) -> dict[str, Any] | None:
+    event_type = str(event.get("event_type") or "").strip()
+    if event_type not in OWNER_SIGNED_DOCUMENT_EVENT_TYPES:
+        return None
+    if not follow_up:
+        return None
+    notification_metadata = dict(metadata)
+    notification_metadata.update({
+        "event_type": event_type,
+        "owner_notification": "document_signed",
+        "follow_up_id": follow_up.get("follow_up_id"),
+    })
+    message = _owner_signed_document_message(kind, subject, event, notification_metadata)
+    return _send_owner_notification(message, notification_metadata)
+
+
+def _record_follow_up(kind: str, subject: str, event: dict[str, Any], metadata: dict[str, Any]) -> dict[str, Any] | None:
     event_type = str(event.get("event_type") or "")
     if event_type not in EVENT_TYPES_WITH_OWNER_ACTION:
         return
@@ -194,7 +298,7 @@ def _record_follow_up(kind: str, subject: str, event: dict[str, Any], metadata: 
     if comment:
         summary = f"{summary}: {comment}"
     priority = "high" if event_type in {"approved", "rejected", "signed", "change_requested", "payment_failed"} else "normal"
-    sql.statement_one(
+    return sql.statement_one(
         f"""
         INSERT INTO crm.follow_ups (organization_id, contact_id, opportunity_id, due_at, summary, status, priority, assignee, metadata, created_at, updated_at)
         VALUES (NULL, NULL, NULL, now(), {_q(summary)}, 'open', {_q(priority)}, 'agent', {_j(metadata)}, now(), now())
@@ -317,7 +421,8 @@ def ingest_sales_event(event: dict[str, Any], public_root: Path) -> str | None:
             f"UPDATE sales.customer_workspaces SET status={_q(new_status)}, updated_at=now(), metadata=metadata || {_j(extra)} WHERE workspace_id={_q(workspace['workspace_id'])} RETURNING *",
             user=_sales_user(),
         )
-    _record_follow_up(workspace.get("document_type") or "documento", workspace.get("document_id") or "", event, metadata)
+    follow_up = _record_follow_up(workspace.get("document_type") or "documento", workspace.get("document_id") or "", event, metadata)
+    _notify_owner_if_document_signed(workspace.get("document_type") or "documento", workspace.get("document_id") or "", event, metadata, follow_up)
     _refresh_sales_comments({**workspace, "status": new_status or workspace.get("status")}, public_root)
     return "sales:ingested"
 
@@ -354,9 +459,36 @@ def ingest_receipt_event(event: dict[str, Any], public_root: Path) -> str | None
             f"UPDATE accounting.receipts SET {', '.join(updates)} WHERE receipt_id={_q(receipt['receipt_id'])} RETURNING *",
             user=_accounting_user(),
         )
-    _record_follow_up("recibo/nota de pago", receipt.get("receipt_id") or "", event, metadata)
+    follow_up = _record_follow_up("recibo/nota de pago", receipt.get("receipt_id") or "", event, metadata)
+    _notify_owner_if_document_signed("recibo/nota de pago", receipt.get("receipt_id") or "", event, metadata, follow_up)
     _refresh_receipt_comments({**receipt, "status": new_status or receipt.get("status")}, public_root)
     return "receipt:ingested"
+
+
+def ingest_owner_document_event(event: dict[str, Any]) -> str | None:
+    """Fallback owner notification for signed document events from any workspace.
+
+    Sales and accounting adapters record their own canonical module events first.
+    This fallback handles pure Signature Core/document workspaces whose public
+    event contains enough metadata to notify the owner even when no sales or
+    receipt row matches the deliverable id.
+    """
+
+    raw_event_type = str(event.get("event_type") or "").strip()
+    if raw_event_type not in OWNER_SIGNED_DOCUMENT_EVENT_TYPES:
+        return None
+    metadata = _canonical_metadata(event)
+    subject = str(
+        metadata.get("signature_request_id")
+        or metadata.get("public_document_number")
+        or event.get("deliverable_id")
+        or "documento"
+    ).strip()
+    follow_up = _record_follow_up("documento firmado", subject, event, metadata)
+    if not follow_up:
+        return "owner_document:duplicate"
+    _notify_owner_if_document_signed("documento firmado", subject, event, metadata, follow_up)
+    return "owner_document:ingested"
 
 
 def load_events(path: Path) -> list[dict[str, Any]]:
@@ -394,7 +526,7 @@ def main(argv: list[str] | None = None) -> int:
         if since_dt.tzinfo is None:
             since_dt = since_dt.replace(tzinfo=timezone.utc)
 
-    counts: dict[str, int] = {"seen": 0, "sales_ingested": 0, "receipt_ingested": 0, "stripe_ingested": 0, "duplicates": 0, "unmatched": 0, "dry_run": 0, "adapter_errors": 0}
+    counts: dict[str, int] = {"seen": 0, "sales_ingested": 0, "receipt_ingested": 0, "stripe_ingested": 0, "owner_document_ingested": 0, "duplicates": 0, "unmatched": 0, "dry_run": 0, "adapter_errors": 0}
     for event in load_events(events_path):
         if args.deliverable_id and str(event.get("deliverable_id")) != args.deliverable_id:
             continue
@@ -415,6 +547,7 @@ def main(argv: list[str] | None = None) -> int:
             ("stripe", lambda ev: ingest_stripe_event(ev)),
             ("sales", lambda ev: ingest_sales_event(ev, public_root)),
             ("receipt", lambda ev: ingest_receipt_event(ev, public_root)),
+            ("owner_document", lambda ev: ingest_owner_document_event(ev)),
         ):
             if result is not None:
                 break
@@ -434,11 +567,13 @@ def main(argv: list[str] | None = None) -> int:
             counts["sales_ingested"] += 1
         elif result == "receipt:ingested":
             counts["receipt_ingested"] += 1
+        elif result == "owner_document:ingested":
+            counts["owner_document_ingested"] += 1
         elif result and "duplicate" in result:
             counts["duplicates"] += 1
         else:
             counts["unmatched"] += 1
-    if not args.quiet or counts["sales_ingested"] or counts["receipt_ingested"]:
+    if not args.quiet or counts["sales_ingested"] or counts["receipt_ingested"] or counts["owner_document_ingested"]:
         print(json.dumps({"ok": True, "events_path": str(events_path), "public_root": str(public_root), "counts": counts}, ensure_ascii=False, indent=2))
     return 0
 
