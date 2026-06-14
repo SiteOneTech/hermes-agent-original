@@ -21,6 +21,7 @@ def test_signature_toolset_registered():
     assert "signature_followup_due" in tools
     assert "signature_completed_pdf_record" in tools
     assert "signature_final_copies_send" in tools
+    assert "signature_dashboard_metrics" in tools
 
 
 def test_approval_hash_is_deterministic(monkeypatch):
@@ -78,6 +79,41 @@ def test_request_create_requires_submitters():
     result = _loads(signature_tool._handle_request_create({"title": "No signers"}))
     assert result["error"]
     assert "submitters" in result["error"]
+
+
+def test_dashboard_metrics_summarizes_counts_receipts_and_hashes(monkeypatch):
+    one_queries = []
+
+    def fake_one(query, *, user=None):
+        one_queries.append(query)
+        return {
+            "active": 3,
+            "pending": 5,
+            "expiring": 2,
+            "completed": 8,
+            "declined": 1,
+            "reminders": 4,
+            "copy_receipts": 7,
+            "hash_verified": 6,
+            "hash_missing": 1,
+        }
+
+    def fake_rows(query, *, user=None):
+        assert "FROM signature.document_requests" in query
+        return [{"request_id": "req-1", "title": "Contrato Qrovia", "status": "sent", "pending_signers": 2, "hash_status": "verified"}]
+
+    monkeypatch.setattr(signature_tool.sql, "one", fake_one)
+    monkeypatch.setattr(signature_tool.sql, "rows", fake_rows)
+
+    result = _loads(signature_tool._handle_dashboard_metrics({"limit": 10, "expiring_days": 14}))
+
+    assert result["ok"] is True
+    assert result["summary"]["active"] == 3
+    assert result["summary"]["pending"] == 5
+    assert result["summary"]["copy_receipts"] == 7
+    assert result["summary"]["hash_status"] == "attention_required"
+    assert result["processes"][0]["title"] == "Contrato Qrovia"
+    assert any("reminder_attempts" in query and "delivery_receipts" in query for query in one_queries)
 
 
 def test_delivery_receipt_record_is_idempotent_and_records_failure(monkeypatch):

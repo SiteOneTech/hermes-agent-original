@@ -129,3 +129,70 @@ def test_generated_server_stripe_webhook_rejects_bad_signature(tmp_path):
     server._handle_stripe_webhook(handler)
 
     assert handler.status == 400
+
+
+class _FakeGetHandler:
+    def __init__(self, cookie: str | None = None):
+        self.headers = {"Cookie": cookie or "", "Host": "example.test"}
+        self.rfile = BytesIO()
+        self.wfile = BytesIO()
+        self.status = None
+        self.response_headers = []
+
+    def send_response(self, status):
+        self.status = status
+
+    def send_header(self, key, value):
+        self.response_headers.append((key, value))
+
+    def end_headers(self):
+        self.wfile.write(b"\r\n\r\n")
+
+
+def _header(handler: _FakeGetHandler, key: str) -> str | None:
+    return next((value for name, value in handler.response_headers if name.lower() == key.lower()), None)
+
+
+def test_signature_dashboard_requires_otp_session(tmp_path):
+    server = _server_module(tmp_path)
+    handler = _FakeGetHandler()
+
+    server._handle_user_get(handler, "/user/signatures/", {})
+
+    assert handler.status == 303
+    assert _header(handler, "Location") == "/user/login"
+
+
+def test_signature_dashboard_renders_protected_metrics_and_status(tmp_path, monkeypatch):
+    server = _server_module(tmp_path)
+    data_dir = server.USER_DATA_DIR
+    data_dir.mkdir(parents=True)
+    (data_dir / "signature_dashboard.json").write_text(json.dumps({
+        "summary": {
+            "active": 3,
+            "pending": 5,
+            "expiring": 2,
+            "completed": 8,
+            "declined": 1,
+            "reminders": 4,
+            "copy_receipts": 7,
+            "hash_status": "verified",
+        },
+        "processes": [
+            {"title": "Contrato Qrovia", "status": "pending", "pending_signers": 2, "hash_status": "verified", "expires_at": "2026-06-20"},
+            {"title": "NDA Flexipos", "status": "declined", "pending_signers": 0, "hash_status": "missing", "expires_at": "2026-06-18"},
+        ],
+    }), encoding="utf-8")
+    monkeypatch.setattr(server, "_session_from_request", lambda handler: {"user_id": "jean", "channel_id": "whatsapp"})
+    handler = _FakeGetHandler(cookie="session=ok")
+
+    server._handle_user_get(handler, "/user/signatures/", {})
+
+    html = handler.wfile.getvalue().decode("utf-8")
+    assert handler.status == 200
+    assert "Dashboard de firmas" in html
+    for label in ["Activas", "Pendientes", "Por vencer", "Completadas", "Declinadas", "Recordatorios", "Copias", "Hash"]:
+        assert label in html
+    assert "Contrato Qrovia" in html
+    assert "NDA Flexipos" in html
+    assert "verified" in html

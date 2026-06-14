@@ -822,6 +822,65 @@ def _handle_final_copies_send(args: dict, **_kwargs) -> str:
         return _err(exc)
 
 
+def _handle_dashboard_metrics(args: dict, **_kwargs) -> str:
+    try:
+        limit = max(1, min(int(args.get("limit") or 25), 100))
+        expiring_days = max(1, min(int(args.get("expiring_days") or 7), 90))
+        summary = sql.one(f"""
+          SELECT
+            count(*) FILTER (WHERE r.status IN ('sent','viewed','partially_signed')) AS active,
+            count(*) FILTER (WHERE s.status IN ('pending','sent','viewed','started')) AS pending,
+            count(DISTINCT r.request_id) FILTER (WHERE r.expires_at IS NOT NULL AND r.expires_at <= now() + interval '{expiring_days} days' AND r.status NOT IN ('completed','declined','expired','cancelled')) AS expiring,
+            count(DISTINCT r.request_id) FILTER (WHERE r.status='completed' AND r.completed_at >= date_trunc('month', now())) AS completed,
+            count(DISTINCT r.request_id) FILTER (WHERE r.status='declined') AS declined,
+            (SELECT count(*) FROM signature.reminder_attempts) AS reminders,
+            (SELECT count(*) FROM signature.delivery_receipts WHERE receipt_type='final_copy') AS copy_receipts,
+            count(DISTINCT r.request_id) FILTER (WHERE COALESCE(r.metadata->>'completed_pdf_sha256', '') <> '' OR COALESCE(r.approval_hash, '') <> '' OR EXISTS (SELECT 1 FROM signature.attachments a WHERE a.request_id=r.request_id AND COALESCE(a.sha256, '') <> '')) AS hash_verified,
+            count(DISTINCT r.request_id) FILTER (WHERE r.status='completed' AND COALESCE(r.metadata->>'completed_pdf_sha256', '') = '' AND COALESCE(r.approval_hash, '') = '' AND NOT EXISTS (SELECT 1 FROM signature.attachments a WHERE a.request_id=r.request_id AND COALESCE(a.sha256, '') <> '')) AS hash_missing
+          FROM signature.document_requests r
+          LEFT JOIN signature.submitters s ON s.request_id = r.request_id
+        """, user=_user()) or {}
+        processes = sql.rows(f"""
+          SELECT
+            r.request_id,
+            r.title,
+            r.status,
+            r.expires_at,
+            count(s.submitter_id) FILTER (WHERE s.status IN ('pending','sent','viewed','started')) AS pending_signers,
+            count(ra.reminder_attempt_id) AS reminders,
+            count(dr.delivery_receipt_id) FILTER (WHERE dr.receipt_type='final_copy') AS copy_receipts,
+            CASE
+              WHEN COALESCE(r.metadata->>'completed_pdf_sha256', '') <> '' OR COALESCE(r.approval_hash, '') <> '' OR count(a.attachment_id) FILTER (WHERE COALESCE(a.sha256, '') <> '') > 0 THEN 'verified'
+              WHEN r.status='completed' THEN 'missing'
+              ELSE 'pending'
+            END AS hash_status
+          FROM signature.document_requests r
+          LEFT JOIN signature.submitters s ON s.request_id = r.request_id
+          LEFT JOIN signature.reminder_attempts ra ON ra.request_id = r.request_id
+          LEFT JOIN signature.delivery_receipts dr ON dr.request_id = r.request_id
+          LEFT JOIN signature.attachments a ON a.request_id = r.request_id
+          GROUP BY r.request_id, r.title, r.status, r.expires_at, r.metadata, r.approval_hash
+          ORDER BY r.updated_at DESC NULLS LAST, r.created_at DESC
+          LIMIT {limit}
+        """, user=_user())
+        hash_missing = int(summary.get("hash_missing") or 0)
+        summary = {
+            "active": int(summary.get("active") or 0),
+            "pending": int(summary.get("pending") or 0),
+            "expiring": int(summary.get("expiring") or 0),
+            "completed": int(summary.get("completed") or 0),
+            "declined": int(summary.get("declined") or 0),
+            "reminders": int(summary.get("reminders") or 0),
+            "copy_receipts": int(summary.get("copy_receipts") or 0),
+            "hash_verified": int(summary.get("hash_verified") or 0),
+            "hash_missing": hash_missing,
+            "hash_status": "attention_required" if hash_missing else "verified",
+        }
+        return _ok(summary=summary, processes=processes)
+    except Exception as exc:
+        return _err(exc)
+
+
 def _schema(name: str, description: str, props: dict, required: list[str] | None = None) -> dict:
     return {"type": "function", "function": {"name": name, "description": description, "parameters": {"type": "object", "properties": props, "required": required or []}}}
 
@@ -842,3 +901,4 @@ registry.register(name="signature_reminder_attempt_record", toolset="signature",
 registry.register(name="signature_followup_due", toolset="signature", schema=_schema("signature_followup_due", "Run the Signature Core daily follow-up worker: find due pending signers, queue one reminder per policy window, advance next_due_at, and record owner escalations for near-expiry or repeated failures.", {"now": {"type": "string"}, "limit": {"type": "integer"}, "channel": {"type": "string", "enum": ["email", "sms", "in_app"]}, "delivery_status": {"type": "string", "enum": ["queued", "sent", "delivered", "failed", "bounced"]}, "error_message": {"type": "string"}}, []), handler=_handle_followup_due, check_fn=_check_signature, emoji="✍️")
 registry.register(name="signature_completed_pdf_record", toolset="signature", schema=_schema("signature_completed_pdf_record", "Store completed PDF and audit PDF attachment metadata with SHA-256 hashes and visual QA evidence.", {"request_id": {"type": "string"}, "completed_pdf": {"type": "object"}, "audit_pdf": {"type": "object"}, "original_sha256": {"type": "string"}, "final_sha256": {"type": "string"}, "approval_hashes": {"type": "array", "items": {"type": "string"}}, "event_chain_summary": {"type": "array", "items": {"type": "object"}}, "visual_qa_evidence": {"type": "object"}}, ["request_id", "completed_pdf", "audit_pdf"]), handler=_handle_completed_pdf_record, check_fn=_check_signature, emoji="✍️")
 registry.register(name="signature_final_copies_send", toolset="signature", schema=_schema("signature_final_copies_send", "Record final signed-copy delivery to every signer/approver with final document link, SHA-256 validation summary, per-channel receipts, and retry/escalation actions for failures.", {"request_id": {"type": "string"}, "completed_pdf_url": {"type": "string"}, "completed_pdf_sha256": {"type": "string"}, "final_sha256": {"type": "string"}, "audit_pdf_url": {"type": "string"}, "audit_pdf_sha256": {"type": "string"}, "original_sha256": {"type": "string"}, "approval_hashes": {"type": "array", "items": {"type": "string"}}, "event_chain_summary": {"type": "array", "items": {"type": "object"}}, "certificate_summary": {"type": "object"}, "delivery_results": {"type": "array", "items": {"type": "object"}}, "default_status": {"type": "string"}, "retry_policy": {"type": "object"}, "owner_escalation_channel": {"type": "string"}, "allow_non_completed": {"type": "boolean"}, "subject": {"type": "string"}, "message": {"type": "string"}}, ["request_id"]), handler=_handle_final_copies_send, check_fn=_check_signature, emoji="✍️")
+registry.register(name="signature_dashboard_metrics", toolset="signature", schema=_schema("signature_dashboard_metrics", "Return private Signature Core dashboard metrics: active, pending, expiring, completed, declined, reminders, final-copy receipts, and hash status.", {"limit": {"type": "integer"}, "expiring_days": {"type": "integer"}}, []), handler=_handle_dashboard_metrics, check_fn=_check_signature, emoji="✍️")

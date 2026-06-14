@@ -553,6 +553,60 @@ def _login_page(message: str | None = None, challenge_id: str | None = None) -> 
     return _layout(f"{AGENT_NAME} User - Login", body)
 
 
+def _signature_dashboard_data() -> dict[str, Any]:
+    path = USER_DATA_DIR / "signature_dashboard.json"
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+    return {
+        "summary": {
+            "active": 0,
+            "pending": 0,
+            "expiring": 0,
+            "completed": 0,
+            "declined": 0,
+            "reminders": 0,
+            "copy_receipts": 0,
+            "hash_status": "unknown",
+        },
+        "processes": [],
+    }
+
+
+def _signature_dashboard_page(session: dict[str, Any]) -> str:
+    data = _signature_dashboard_data()
+    summary = data.get("summary") if isinstance(data.get("summary"), dict) else {}
+    processes = data.get("processes") if isinstance(data.get("processes"), list) else []
+    cards = [
+        ("Activas", summary.get("active", 0), "Solicitudes en curso"),
+        ("Pendientes", summary.get("pending", 0), "Firmantes por completar"),
+        ("Por vencer", summary.get("expiring", 0), "Requieren atención"),
+        ("Completadas", summary.get("completed", 0), "Finalizadas"),
+        ("Declinadas", summary.get("declined", 0), "Rechazadas"),
+        ("Recordatorios", summary.get("reminders", 0), "Intentos registrados"),
+        ("Copias", summary.get("copy_receipts", 0), "Recibos de copia final"),
+        ("Hash", summary.get("hash_status", "unknown"), "Estado de validación"),
+    ]
+    metric_html = "".join(
+        f"<div class='metric'><span class='icon'>✍️</span><span class='eyebrow'>{_e(label)}</span><strong>{_e(value)}</strong><p class='muted'>{_e(note)}</p></div>"
+        for label, value, note in cards
+    )
+    rows = "".join(
+        f"<tr><td>{_e(item.get('title') or item.get('request_id') or 'Firma')}</td><td>{_e(item.get('status') or 'unknown')}</td><td>{_e(item.get('pending_signers', 0))}</td><td>{_e(item.get('expires_at') or '—')}</td><td>{_e(item.get('hash_status') or 'unknown')}</td></tr>"
+        for item in processes if isinstance(item, dict)
+    )
+    body = f"""
+    <section class="hero"><span class="eyebrow">{_e(session.get('user_id'))}</span><h1>Dashboard de firmas</h1><p class="muted">Métricas privadas de Signature Core protegidas por la sesión OTP temporal del dashboard.</p><div class="hero-actions"><a class="button secondary" href="/user/">Volver</a><a class="button secondary" href="/user/logout">Cerrar sesión</a></div></section>
+    <section class="grid">{metric_html}</section>
+    <section class="card" style="margin-top:14px"><span class="eyebrow">Procesos</span><h2>Estado de solicitudes</h2><table><thead><tr><th>Proceso</th><th>Estado</th><th>Pendientes</th><th>Vence</th><th>Hash</th></tr></thead><tbody>{rows or '<tr><td colspan="5">Sin procesos de firma registrados.</td></tr>'}</tbody></table></section>
+    """
+    return _layout(f"{AGENT_NAME} User - Firmas", body)
+
+
 def _dashboard_page(session: dict[str, Any]) -> str:
     cfg = _dashboard_config()
     metrics = cfg.get("metrics") or []
@@ -566,6 +620,8 @@ def _dashboard_page(session: dict[str, Any]) -> str:
         f"<a class='module-card {'primary' if mod.get('primary') else ''}' href='{_e(mod.get('href') or '#')}'><div class='module-top'><span class='icon'>{_e(mod.get('icon') or '◦')}</span><span class='status {_e(mod.get('status') or 'planned')}'>{_e(mod.get('status_label') or mod.get('status') or 'planned')}</span></div><span class='eyebrow'>{_e(mod.get('kind') or 'módulo')}</span><h3>{_e(mod.get('title'))}</h3><p class='muted'>{_e(mod.get('description'))}</p><p class='caption'>{_e(mod.get('metric') or '')}</p></a>"
         for mod in modules
     )
+    signature_card = "<a class='module-card primary' href='/user/signatures/'><div class='module-top'><span class='icon'>✍️</span><span class='status active'>activo</span></div><span class='eyebrow'>módulo privado</span><h3>Firmas</h3><p class='muted'>Métricas de solicitudes, firmantes, recordatorios, copias y hashes.</p><p class='caption'>Protegido por sesión OTP</p></a>"
+    module_html = signature_card + module_html
     decision_html = "".join(f"<p>• <strong>{_e(d.get('title'))}</strong>: {_e(d.get('summary'))}</p>" for d in decisions)
     body = f"""
     <section class="hero"><span class="eyebrow">{_e(cfg.get('display_name') or session.get('user_id'))}</span><h1>Mapa del agente</h1><p class="muted">Vista ejecutiva de lo que el agente puede operar por chat: agenda, CRM, cotizaciones, invoices, documentos firmados, ventas, productos y módulos especializados como Fitness Coach. No es una UI de gestión pesada: es un panel claro para mostrar capacidades, métricas y accesos protegidos.</p><div class="hero-actions"><a class="button" href="/w/VtV636xEVsdDGmzSHys6vrko/coach/">Abrir Fitness Coach</a><a class="button secondary" href="/user/logout">Cerrar sesión</a></div></section>
@@ -589,6 +645,13 @@ def _handle_user_get(handler: BaseHTTPRequestHandler, path: str, query: dict[str
             _redirect(handler, "/user/login")
             return
         _html_response(handler, 200, _dashboard_page(session))
+        return
+    if path in {"/user/signatures", "/user/signatures/"}:
+        session = _session_from_request(handler)
+        if not session:
+            _redirect(handler, "/user/login")
+            return
+        _html_response(handler, 200, _signature_dashboard_page(session))
         return
     _json_response(handler, 404, {"ok": False, "error": "not_found"})
 
