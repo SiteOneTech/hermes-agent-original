@@ -19,9 +19,10 @@ status: draft-ready
 - Sync Bael and validate `notification_status`/email smoke test.
 - Add drift detection: missing required shared keys per agent class.
 
-## Sprint 2 — Agent registry and class packs
+## Sprint 2 — Agent registry, class packs, and onboarding
 - Add local Agent Core schema for managed runtime agents and class manifests.
 - Tools: register agent, assign class, list capabilities, report secret-pack status.
+- Add Sophie post-payment onboarding intake: internal form updates, next-question prompts, Zeus build report, and actuation plan.
 
 ## Sprint 3 — Onboarding/deploy
 - VM provisioning workflow.
