@@ -49,7 +49,22 @@ jobs:
       group: auto-fix-main
       cancel-in-progress: true
     steps:
+      - name: Check GitHub App credentials
+        id: app-token-preflight
+        env:
+          APP_ID: ${{ secrets.APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
+        shell: bash
+        run: |
+          if [ -n "$APP_ID" ] && [ -n "$APP_PRIVATE_KEY" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Skipping main lockfile auto-fix because APP_ID/APP_PRIVATE_KEY secrets are not configured for this fork. Nix verification still runs in nix.yml."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Generate GitHub App token
+        if: steps.app-token-preflight.outputs.available == 'true'
         id: app-token
         uses: actions/create-github-app-token@7bfa3a4717ef143a604ee0a99d859b8886a96d00  # v1.9.3
         with:
@@ -57,20 +72,23 @@ jobs:
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        if: steps.app-token-preflight.outputs.available == 'true'
         with:
           ref: main
           token: ${{ steps.app-token.outputs.token }}
 
       - uses: ./.github/actions/nix-setup
+        if: steps.app-token-preflight.outputs.available == 'true'
         with:
           cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
 
       - name: Apply lockfile hashes
+        if: steps.app-token-preflight.outputs.available == 'true'
         id: apply
         run: nix run .#fix-lockfiles -- --apply
 
       - name: Commit & push
-        if: steps.apply.outputs.changed == 'true'
+        if: steps.app-token-preflight.outputs.available == 'true' && steps.apply.outputs.changed == 'true'
         shell: bash
         run: |
           set -euo pipefail
