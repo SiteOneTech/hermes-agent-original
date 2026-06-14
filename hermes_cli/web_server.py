@@ -9963,6 +9963,9 @@ def _profile_to_dict(info) -> Dict[str, Any]:
         "avatar_path": _profile_attr(info, "avatar_path", "") or "",
         "engine_label": _profile_attr(info, "engine_label", "") or "",
         "engine_model": _profile_attr(info, "engine_model", "") or "",
+        "toolsets": list(_profile_attr(info, "toolsets", []) or []),
+        "assigned_skills": list(_profile_attr(info, "assigned_skills", []) or []),
+        "skill_names": list(_profile_attr(info, "skill_names", []) or []),
         "distribution_name": _profile_attr(info, "distribution_name"),
         "distribution_version": _profile_attr(info, "distribution_version"),
         "distribution_source": _profile_attr(info, "distribution_source"),
@@ -9982,6 +9985,7 @@ def _fallback_profile_dicts(profiles_mod) -> List[Dict[str, Any]]:
     if default_home.is_dir():
         model, provider = _safe(lambda: profiles_mod._read_config_model(default_home), (None, None))
         meta = _safe(lambda: profiles_mod.read_profile_meta(default_home), {})
+        caps = _safe(lambda: profiles_mod._read_profile_capabilities(default_home), {})
         profiles.append({
             "name": "default",
             "path": str(default_home),
@@ -9997,6 +10001,9 @@ def _fallback_profile_dicts(profiles_mod) -> List[Dict[str, Any]]:
             "avatar_path": meta.get("avatar_path", ""),
             "engine_label": meta.get("engine_label", ""),
             "engine_model": meta.get("engine_model", ""),
+            "toolsets": list(caps.get("toolsets", []) or []),
+            "assigned_skills": list(caps.get("assigned_skills", []) or []),
+            "skill_names": list(caps.get("skill_names", []) or []),
             "distribution_name": None,
             "distribution_version": None,
             "distribution_source": None,
@@ -10010,6 +10017,7 @@ def _fallback_profile_dicts(profiles_mod) -> List[Dict[str, Any]]:
                 continue
             model, provider = _safe(lambda entry=entry: profiles_mod._read_config_model(entry), (None, None))
             meta = _safe(lambda entry=entry: profiles_mod.read_profile_meta(entry), {})
+            caps = _safe(lambda entry=entry: profiles_mod._read_profile_capabilities(entry), {})
             profiles.append({
                 "name": entry.name,
                 "path": str(entry),
@@ -10025,6 +10033,9 @@ def _fallback_profile_dicts(profiles_mod) -> List[Dict[str, Any]]:
                 "avatar_path": meta.get("avatar_path", ""),
                 "engine_label": meta.get("engine_label", ""),
                 "engine_model": meta.get("engine_model", ""),
+                "toolsets": list(caps.get("toolsets", []) or []),
+                "assigned_skills": list(caps.get("assigned_skills", []) or []),
+                "skill_names": list(caps.get("skill_names", []) or []),
                 "distribution_name": None,
                 "distribution_version": None,
                 "distribution_source": None,

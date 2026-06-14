@@ -1846,6 +1846,9 @@ export interface ProfileInfo {
   avatar_path: string;
   engine_label: string;
   engine_model: string;
+  toolsets: string[];
+  assigned_skills: string[];
+  skill_names: string[];
   distribution_name: string | null;
   distribution_version: string | null;
   distribution_source: string | null;

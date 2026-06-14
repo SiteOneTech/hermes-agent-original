@@ -179,6 +179,20 @@ function profileModelLabel(profile: ProfileInfo): string | null {
   return profile.engine_model?.trim() || profile.model || null;
 }
 
+function profileCapabilityChips(
+  values: string[] | undefined,
+  maxVisible = 5,
+): { visible: string[]; overflow: number; total: number } {
+  const normalized = Array.from(
+    new Set((values ?? []).map((value) => value.trim()).filter(Boolean)),
+  );
+  return {
+    visible: normalized.slice(0, maxVisible),
+    overflow: Math.max(0, normalized.length - maxVisible),
+    total: normalized.length,
+  };
+}
+
 /**
  * Per-card "⋯" actions menu. Holds every action for the profile (set active,
  * model, description, SOUL, copy command, rename, delete) so the card row stays
@@ -247,7 +261,7 @@ function ProfileActionsMenu({
       {open && (
         <div
           role="menu"
-          className="absolute right-0 top-full z-50 mt-1 min-w-[200px] border border-border bg-card shadow-lg"
+          className="absolute right-0 top-full z-[120] mt-1 min-w-[220px] border border-border bg-card shadow-xl"
         >
           {!isActive && (
             <button
@@ -1214,8 +1228,14 @@ export default function ProfilesPage() {
             const avatarUrl = profileAvatarUrl(p);
             const modelLabel = profileModelLabel(p);
             const engineLabel = profileEngineLabel(p);
+            const toolChips = profileCapabilityChips(p.toolsets, 6);
+            const skillSource =
+              p.assigned_skills.length > 0 ? p.assigned_skills : p.skill_names;
+            const skillChips = profileCapabilityChips(skillSource, 6);
+            const skillLabel =
+              p.assigned_skills.length > 0 ? "Assigned skills" : t.profiles.skills;
             return (
-              <Card key={p.name} className="h-full overflow-hidden">
+              <Card key={p.name} className="h-full overflow-visible">
                 <div className="relative h-28 overflow-hidden border-b border-border bg-gradient-to-br from-primary/20 via-muted/30 to-background">
                   <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(255,255,255,0.22),transparent_32%),radial-gradient(circle_at_80%_0%,rgba(255,255,255,0.12),transparent_28%)]" />
                   <div className="absolute bottom-3 left-4 flex items-end gap-3">
@@ -1413,6 +1433,49 @@ export default function ProfilesPage() {
                             {L.reviewBadge}
                           </Badge>
                         )}
+                      </div>
+
+                      <div
+                        data-profile-capabilities
+                        className="grid gap-2 rounded-lg border border-border/70 bg-muted/20 p-2 text-xs"
+                      >
+                        <div className="grid gap-1">
+                          <span className="font-medium uppercase tracking-wider text-muted-foreground">
+                            Tools
+                          </span>
+                          <div className="flex flex-wrap gap-1">
+                            {toolChips.visible.map((toolset) => (
+                              <Badge key={toolset} tone="outline" className="font-mono">
+                                {toolset}
+                              </Badge>
+                            ))}
+                            {toolChips.overflow > 0 && (
+                              <Badge tone="secondary">+{toolChips.overflow}</Badge>
+                            )}
+                            {toolChips.total === 0 && (
+                              <span className="text-muted-foreground/70">—</span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="grid gap-1">
+                          <span className="font-medium uppercase tracking-wider text-muted-foreground">
+                            {skillLabel}
+                          </span>
+                          <div className="flex flex-wrap gap-1">
+                            {skillChips.visible.map((skill) => (
+                              <Badge key={skill} tone="outline" className="font-mono">
+                                {skill}
+                              </Badge>
+                            ))}
+                            {skillChips.overflow > 0 && (
+                              <Badge tone="secondary">+{skillChips.overflow}</Badge>
+                            )}
+                            {skillChips.total === 0 && (
+                              <span className="text-muted-foreground/70">—</span>
+                            )}
+                          </div>
+                        </div>
                       </div>
 
                       <div className="mt-auto flex flex-col gap-0.5 pt-1 text-xs text-muted-foreground">

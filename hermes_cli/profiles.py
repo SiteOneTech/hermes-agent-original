@@ -27,9 +27,9 @@ import shutil
 import stat
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from agent.skill_utils import is_excluded_skill_path
 
@@ -541,6 +541,14 @@ class ProfileInfo:
     avatar_path: str = ""
     engine_label: str = ""
     engine_model: str = ""
+    # Dashboard capability summaries. ``toolsets`` mirrors the profile's
+    # configured runtime/tool surface (top-level ``toolsets`` first,
+    # ``platform_toolsets.cli`` as a compatibility fallback). ``assigned_skills``
+    # is the explicit preload list from config, while ``skill_names`` is the
+    # installed/enabled skill inventory for display/search.
+    toolsets: List[str] = field(default_factory=list)
+    assigned_skills: List[str] = field(default_factory=list)
+    skill_names: List[str] = field(default_factory=list)
 
 
 def _read_distribution_meta(profile_dir: Path) -> tuple:
@@ -607,6 +615,99 @@ def _count_skills(profile_dir: Path) -> int:
             continue
         count += 1
     return count
+
+
+def _listify_config_value(value: Any) -> List[str]:
+    """Normalize a config scalar/list into a stable list of non-empty strings."""
+    if value is None:
+        return []
+    raw_items = value if isinstance(value, list) else [value]
+    result: List[str] = []
+    for item in raw_items:
+        text = str(item).strip()
+        if text:
+            result.append(text)
+    return result
+
+
+def _read_skill_name_from_md(skill_md: Path) -> str:
+    """Return the skill's frontmatter name, falling back to its directory."""
+    fallback = skill_md.parent.name
+    try:
+        text = skill_md.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return fallback
+    if not text.startswith("---"):
+        return fallback
+    try:
+        import yaml
+
+        frontmatter = text.split("---", 2)[1]
+        data = yaml.safe_load(frontmatter) or {}
+        if isinstance(data, dict):
+            name = str(data.get("name") or "").strip()
+            if name:
+                return name
+    except Exception:
+        return fallback
+    return fallback
+
+
+def _enabled_profile_skill_names(profile_dir: Path, config: dict) -> List[str]:
+    """List installed skill names that are not disabled in config.yaml."""
+    skills_dir = profile_dir / "skills"
+    if not skills_dir.is_dir():
+        return []
+    skills_cfg = config.get("skills") if isinstance(config, dict) else {}
+    disabled = set()
+    if isinstance(skills_cfg, dict):
+        disabled = {str(name).strip() for name in _listify_config_value(skills_cfg.get("disabled"))}
+    names: set[str] = set()
+    for skill_md in skills_dir.rglob("SKILL.md"):
+        if is_excluded_skill_path(skill_md):
+            continue
+        name = _read_skill_name_from_md(skill_md)
+        if name and name not in disabled:
+            names.add(name)
+    return sorted(names, key=str.casefold)
+
+
+def _read_profile_capabilities(profile_dir: Path) -> dict:
+    """Read dashboard-facing toolset and skill summaries for a profile.
+
+    This deliberately avoids calling the full tools/skills HTTP endpoints for
+    every profile card.  It reads the profile-local config and skill inventory
+    directly so `/api/profiles` can show each profile's capabilities in one
+    request without mutating anything.
+    """
+    config_path = profile_dir / "config.yaml"
+    config: dict = {}
+    if config_path.exists():
+        try:
+            import yaml
+
+            loaded = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+            if isinstance(loaded, dict):
+                config = loaded
+        except Exception:
+            config = {}
+
+    toolsets = _listify_config_value(config.get("toolsets"))
+    if not toolsets:
+        platform_toolsets = config.get("platform_toolsets")
+        if isinstance(platform_toolsets, dict):
+            toolsets = _listify_config_value(platform_toolsets.get("cli"))
+
+    skills_cfg = config.get("skills") if isinstance(config, dict) else {}
+    assigned_skills = []
+    if isinstance(skills_cfg, dict):
+        assigned_skills = _listify_config_value(skills_cfg.get("assigned"))
+
+    return {
+        "toolsets": toolsets,
+        "assigned_skills": assigned_skills,
+        "skill_names": _enabled_profile_skill_names(profile_dir, config),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -716,6 +817,7 @@ def list_profiles() -> List[ProfileInfo]:
         model, provider = _read_config_model(default_home)
         dist_name, dist_version, dist_source = _read_distribution_meta(default_home)
         meta = read_profile_meta(default_home)
+        caps = _read_profile_capabilities(default_home)
         profiles.append(ProfileInfo(
             name="default",
             path=default_home,
@@ -734,6 +836,9 @@ def list_profiles() -> List[ProfileInfo]:
             avatar_path=meta.get("avatar_path", ""),
             engine_label=meta.get("engine_label", ""),
             engine_model=meta.get("engine_model", ""),
+            toolsets=caps.get("toolsets", []),
+            assigned_skills=caps.get("assigned_skills", []),
+            skill_names=caps.get("skill_names", []),
         ))
 
     # Named profiles
@@ -756,6 +861,7 @@ def list_profiles() -> List[ProfileInfo]:
                 alias_path = None
             dist_name, dist_version, dist_source = _read_distribution_meta(entry)
             meta = read_profile_meta(entry)
+            caps = _read_profile_capabilities(entry)
             profiles.append(ProfileInfo(
                 name=name,
                 path=entry,
@@ -776,6 +882,9 @@ def list_profiles() -> List[ProfileInfo]:
                 avatar_path=meta.get("avatar_path", ""),
                 engine_label=meta.get("engine_label", ""),
                 engine_model=meta.get("engine_model", ""),
+                toolsets=caps.get("toolsets", []),
+                assigned_skills=caps.get("assigned_skills", []),
+                skill_names=caps.get("skill_names", []),
             ))
 
     return profiles
