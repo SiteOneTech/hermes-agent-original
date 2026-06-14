@@ -15,6 +15,7 @@ def test_signature_toolset_registered():
     assert "signature_status" in tools
     assert "signature_request_create" in tools
     assert "signature_approval_hash_create" in tools
+    assert "signature_completed_pdf_record" in tools
 
 
 def test_approval_hash_is_deterministic(monkeypatch):

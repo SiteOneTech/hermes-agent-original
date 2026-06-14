@@ -264,6 +264,62 @@ def _handle_approval_hash_create(args: dict, **_kwargs) -> str:
         return _err(exc)
 
 
+def _artifact_id(request_id: str, kind: str, sha256: str | None) -> str:
+    return _slug("signature-attachment", f"{request_id}-{kind}-{(sha256 or '')[:16] or 'artifact'}")
+
+
+def _require_artifact(name: str, value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} must be an object")
+    if not value.get("sha256") or not value.get("storage_path"):
+        raise ValueError(f"{name}.sha256 and {name}.storage_path are required")
+    return value
+
+
+def _insert_attachment(request_id: str, artifact: dict[str, Any], *, kind: str, metadata: dict[str, Any]) -> dict[str, Any] | None:
+    attachment_id = artifact.get("attachment_id") or _artifact_id(request_id, kind, artifact.get("sha256"))
+    return sql.statement_one(f"""
+      INSERT INTO signature.attachments (attachment_id, request_id, submitter_id, kind, filename, mime_type, storage_path, public_url, byte_size, sha256, width, height, metadata)
+      VALUES ({_q(attachment_id)}, {_q(request_id)}, {_q(artifact.get('submitter_id'))}, {_q(kind)}, {_q(artifact.get('filename'))}, {_q(artifact.get('mime_type') or 'application/pdf')}, {_q(artifact.get('storage_path'))}, {_q(artifact.get('public_url'))}, {_q(artifact.get('byte_size'))}, {_q(artifact.get('sha256'))}, {_q(artifact.get('width'))}, {_q(artifact.get('height'))}, {_j({**(artifact.get('metadata') or {}), **metadata})})
+      ON CONFLICT (attachment_id) DO UPDATE SET filename=EXCLUDED.filename, mime_type=EXCLUDED.mime_type, storage_path=EXCLUDED.storage_path, public_url=EXCLUDED.public_url, byte_size=EXCLUDED.byte_size, sha256=EXCLUDED.sha256, width=EXCLUDED.width, height=EXCLUDED.height, metadata=EXCLUDED.metadata
+      RETURNING attachment_id, kind, filename, storage_path, public_url, byte_size, sha256, metadata
+    """, user=_user())
+
+
+def _handle_completed_pdf_record(args: dict, **_kwargs) -> str:
+    try:
+        request_id = str(args.get("request_id") or "").strip()
+        if not request_id:
+            raise ValueError("request_id is required")
+        request = sql.one(f"SELECT * FROM signature.document_requests WHERE request_id={_q(request_id)}", user=_user())
+        if not request:
+            raise ValueError("request not found")
+        completed_pdf = _require_artifact("completed_pdf", args.get("completed_pdf"))
+        audit_pdf = _require_artifact("audit_pdf", args.get("audit_pdf"))
+        evidence = {
+            "original_sha256": args.get("original_sha256"),
+            "final_sha256": args.get("final_sha256") or completed_pdf.get("sha256"),
+            "approval_hashes": args.get("approval_hashes") or [],
+            "event_chain_summary": args.get("event_chain_summary") or [],
+            "visual_qa_evidence": args.get("visual_qa_evidence") or {},
+        }
+        completed = _insert_attachment(request_id, completed_pdf, kind="completed_pdf", metadata=evidence)
+        audit = _insert_attachment(request_id, audit_pdf, kind="audit_pdf", metadata=evidence)
+        sql.psql(f"""
+          UPDATE signature.document_requests
+          SET completed_document_url=COALESCE({_q(completed_pdf.get('public_url') or completed_pdf.get('storage_path'))}, completed_document_url),
+              audit_url=COALESCE({_q(audit_pdf.get('public_url') or audit_pdf.get('storage_path'))}, audit_url),
+              document_hash_sha256=COALESCE({_q(args.get('original_sha256'))}, document_hash_sha256),
+              metadata=metadata || {_j({'completed_pdf_sha256': completed_pdf.get('sha256'), 'audit_pdf_sha256': audit_pdf.get('sha256'), 'visual_qa_evidence': evidence['visual_qa_evidence']})},
+              updated_at=now()
+          WHERE request_id={_q(request_id)};
+        """, user=_user())
+        event = _record_event(request_id, event_type="completed", actor_type="system", actor_ref="signature_core", payload={"completed_pdf_sha256": completed_pdf.get("sha256"), "audit_pdf_sha256": audit_pdf.get("sha256"), "approval_hashes": evidence["approval_hashes"], "visual_qa_evidence": evidence["visual_qa_evidence"]}, metadata=evidence)
+        return _ok(completed_pdf=completed, audit_pdf=audit, event=event)
+    except Exception as exc:
+        return _err(exc)
+
+
 def _schema(name: str, description: str, props: dict, required: list[str] | None = None) -> dict:
     return {"type": "function", "function": {"name": name, "description": description, "parameters": {"type": "object", "properties": props, "required": required or []}}}
 
@@ -278,3 +334,4 @@ registry.register(name="signature_request_create", toolset="signature", schema=_
 registry.register(name="signature_request_get", toolset="signature", schema=_schema("signature_request_get", "Read a signature request with submitters, audit events, and approvals.", {"request_id": {"type": "string"}}, ["request_id"]), handler=_handle_request_get, check_fn=_check_signature, emoji="✍️")
 registry.register(name="signature_event_record", toolset="signature", schema=_schema("signature_event_record", "Append an audit event to a signature request with a chained event hash.", {"request_id": {"type": "string"}, "submitter_id": {"type": "string"}, "event_type": {"type": "string"}, "actor_type": {"type": "string"}, "actor_ref": {"type": "string"}, "ip_address": {"type": "string"}, "user_agent": {"type": "string"}, "event_payload": {"type": "object"}, **_meta_props()}, ["request_id", "event_type"]), handler=_handle_event_record, check_fn=_check_signature, emoji="✍️")
 registry.register(name="signature_approval_hash_create", toolset="signature", schema=_schema("signature_approval_hash_create", "Create a canonical approval record and SHA-256 approval hash for a signed/approved document.", {"approval_id": {"type": "string"}, "request_id": {"type": "string"}, "submitter_id": {"type": "string"}, "source_type": {"type": "string"}, "source_id": {"type": "string"}, "signature_text": {"type": "string"}, "signature_image_sha256": {"type": "string"}, "document_hash_sha256": {"type": "string"}, "approval_hash": {"type": "string"}, "ip_address": {"type": "string"}, "user_agent": {"type": "string"}, "signed_at": {"type": "string"}, "actor_type": {"type": "string"}, "actor_ref": {"type": "string"}, **_meta_props()}, ["request_id"]), handler=_handle_approval_hash_create, check_fn=_check_signature, emoji="✍️")
+registry.register(name="signature_completed_pdf_record", toolset="signature", schema=_schema("signature_completed_pdf_record", "Store completed PDF and audit PDF attachment metadata with SHA-256 hashes and visual QA evidence.", {"request_id": {"type": "string"}, "completed_pdf": {"type": "object"}, "audit_pdf": {"type": "object"}, "original_sha256": {"type": "string"}, "final_sha256": {"type": "string"}, "approval_hashes": {"type": "array", "items": {"type": "string"}}, "event_chain_summary": {"type": "array", "items": {"type": "object"}}, "visual_qa_evidence": {"type": "object"}}, ["request_id", "completed_pdf", "audit_pdf"]), handler=_handle_completed_pdf_record, check_fn=_check_signature, emoji="✍️")
