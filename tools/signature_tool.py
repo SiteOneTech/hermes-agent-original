@@ -595,6 +595,63 @@ def _handle_followup_due(args: dict, **_kwargs) -> str:
         return _err(exc)
 
 
+def _artifact_id(request_id: str, kind: str, sha256: str | None) -> str:
+    return _slug("signature-attachment", f"{request_id}-{kind}-{(sha256 or '')[:16] or 'artifact'}")
+
+
+def _require_artifact(name: str, value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} must be an object")
+    if not value.get("sha256") or not value.get("storage_path"):
+        raise ValueError(f"{name}.sha256 and {name}.storage_path are required")
+    return value
+
+
+def _insert_attachment(request_id: str, artifact: dict[str, Any], *, kind: str, metadata: dict[str, Any]) -> dict[str, Any] | None:
+    attachment_id = artifact.get("attachment_id") or _artifact_id(request_id, kind, artifact.get("sha256"))
+    return sql.statement_one(f"""
+      INSERT INTO signature.attachments (attachment_id, request_id, submitter_id, kind, filename, mime_type, storage_path, public_url, byte_size, sha256, width, height, metadata)
+      VALUES ({_q(attachment_id)}, {_q(request_id)}, {_q(artifact.get('submitter_id'))}, {_q(kind)}, {_q(artifact.get('filename'))}, {_q(artifact.get('mime_type') or 'application/pdf')}, {_q(artifact.get('storage_path'))}, {_q(artifact.get('public_url'))}, {_q(artifact.get('byte_size'))}, {_q(artifact.get('sha256'))}, {_q(artifact.get('width'))}, {_q(artifact.get('height'))}, {_j({**(artifact.get('metadata') or {}), **metadata})})
+      ON CONFLICT (attachment_id) DO UPDATE SET filename=EXCLUDED.filename, mime_type=EXCLUDED.mime_type, storage_path=EXCLUDED.storage_path, public_url=EXCLUDED.public_url, byte_size=EXCLUDED.byte_size, sha256=EXCLUDED.sha256, width=EXCLUDED.width, height=EXCLUDED.height, metadata=EXCLUDED.metadata
+      RETURNING attachment_id, kind, filename, storage_path, public_url, byte_size, sha256, metadata
+    """, user=_user())
+
+
+def _handle_completed_pdf_record(args: dict, **_kwargs) -> str:
+    try:
+        request_id = str(args.get("request_id") or "").strip()
+        if not request_id:
+            raise ValueError("request_id is required")
+        request = sql.one(f"SELECT * FROM signature.document_requests WHERE request_id={_q(request_id)}", user=_user())
+        if not request:
+            raise ValueError("request not found")
+        completed_pdf = _require_artifact("completed_pdf", args.get("completed_pdf"))
+        audit_pdf = _require_artifact("audit_pdf", args.get("audit_pdf"))
+        evidence = {
+            "original_sha256": args.get("original_sha256"),
+            "final_sha256": args.get("final_sha256") or completed_pdf.get("sha256"),
+            "approval_hashes": args.get("approval_hashes") or [],
+            "event_chain_summary": args.get("event_chain_summary") or [],
+            "visual_qa_evidence": args.get("visual_qa_evidence") or {},
+        }
+        completed = _insert_attachment(request_id, completed_pdf, kind="completed_pdf", metadata=evidence)
+        audit = _insert_attachment(request_id, audit_pdf, kind="audit_pdf", metadata=evidence)
+        sql.psql(f"""
+          UPDATE signature.document_requests
+          SET completed_document_url=COALESCE({_q(completed_pdf.get('public_url') or completed_pdf.get('storage_path'))}, completed_document_url),
+              audit_url=COALESCE({_q(audit_pdf.get('public_url') or audit_pdf.get('storage_path'))}, audit_url),
+              document_hash_sha256=COALESCE({_q(args.get('original_sha256'))}, document_hash_sha256),
+              metadata=metadata || {_j({'completed_pdf_sha256': completed_pdf.get('sha256'), 'audit_pdf_sha256': audit_pdf.get('sha256'), 'visual_qa_evidence': evidence['visual_qa_evidence']})},
+              updated_at=now()
+          WHERE request_id={_q(request_id)};
+        """, user=_user())
+        event = _record_event(request_id, event_type="completed", actor_type="system", actor_ref="signature_core", payload={"completed_pdf_sha256": completed_pdf.get("sha256"), "audit_pdf_sha256": audit_pdf.get("sha256"), "approval_hashes": evidence["approval_hashes"], "visual_qa_evidence": evidence["visual_qa_evidence"]}, metadata=evidence)
+        return _ok(completed_pdf=completed, audit_pdf=audit, event=event)
+
+    except Exception as exc:
+        return _err(exc)
+
+
 def _schema(name: str, description: str, props: dict, required: list[str] | None = None) -> dict:
     return {"type": "function", "function": {"name": name, "description": description, "parameters": {"type": "object", "properties": props, "required": required or []}}}
 
@@ -613,3 +670,4 @@ registry.register(name="signature_delivery_receipt_record", toolset="signature",
 registry.register(name="signature_reminder_policy_upsert", toolset="signature", schema=_schema("signature_reminder_policy_upsert", "Create/update per-request reminder policy with cadence, next due timestamp, max attempts, and escalation settings.", {"reminder_policy_id": {"type": "string"}, "request_id": {"type": "string"}, "cadence": {"type": "string"}, "next_due_at": {"type": "string"}, "max_attempts": {"type": "integer"}, "escalation_settings": {"type": "object"}, "enabled": {"type": "boolean"}, "actor_type": {"type": "string"}, "actor_ref": {"type": "string"}, **_meta_props()}, ["request_id", "cadence", "next_due_at", "max_attempts"]), handler=_handle_reminder_policy_upsert, check_fn=_check_signature, emoji="✍️")
 registry.register(name="signature_reminder_attempt_record", toolset="signature", schema=_schema("signature_reminder_attempt_record", "Record an idempotent reminder attempt, failure details, optional next_due_at update, and matching reminder delivery receipt.", {"request_id": {"type": "string"}, "submitter_id": {"type": "string"}, "reminder_policy_id": {"type": "string"}, "channel": {"type": "string"}, "recipient": {"type": "string"}, "provider_message_id": {"type": "string"}, "status": {"type": "string", "enum": ["queued", "sent", "delivered", "failed", "bounced"]}, "error_message": {"type": "string"}, "scheduled_for": {"type": "string"}, "attempted_at": {"type": "string"}, "next_due_at": {"type": "string"}, "idempotency_key": {"type": "string"}, "actor_type": {"type": "string"}, "actor_ref": {"type": "string"}, **_meta_props()}, ["request_id", "channel"]), handler=_handle_reminder_attempt_record, check_fn=_check_signature, emoji="✍️")
 registry.register(name="signature_followup_due", toolset="signature", schema=_schema("signature_followup_due", "Run the Signature Core daily follow-up worker: find due pending signers, queue one reminder per policy window, advance next_due_at, and record owner escalations for near-expiry or repeated failures.", {"now": {"type": "string"}, "limit": {"type": "integer"}, "channel": {"type": "string", "enum": ["email", "sms", "in_app"]}, "delivery_status": {"type": "string", "enum": ["queued", "sent", "delivered", "failed", "bounced"]}, "error_message": {"type": "string"}}, []), handler=_handle_followup_due, check_fn=_check_signature, emoji="✍️")
+registry.register(name="signature_completed_pdf_record", toolset="signature", schema=_schema("signature_completed_pdf_record", "Store completed PDF and audit PDF attachment metadata with SHA-256 hashes and visual QA evidence.", {"request_id": {"type": "string"}, "completed_pdf": {"type": "object"}, "audit_pdf": {"type": "object"}, "original_sha256": {"type": "string"}, "final_sha256": {"type": "string"}, "approval_hashes": {"type": "array", "items": {"type": "string"}}, "event_chain_summary": {"type": "array", "items": {"type": "object"}}, "visual_qa_evidence": {"type": "object"}}, ["request_id", "completed_pdf", "audit_pdf"]), handler=_handle_completed_pdf_record, check_fn=_check_signature, emoji="✍️")

@@ -19,9 +19,10 @@
 4. Para rechazar, abrir modal propio y exigir motivo antes de enviar `event_type='rejected'` con `metadata.rejection_reason`.
 5. Ingestar evento en Signature Core y crear approval hash.
 6. Al primer `approved` o `rejected`, marcar workspace/quote con decisión final, mostrar ese estado y deshabilitar ambos botones; eventos posteriores no deben cambiar la decisión comercial.
-7. Generar/reemplazar el PDF descargable con una versión visiblemente firmada: sello en la primera página, signer/date/hash, página de auditoría, preservando el PDF original/hash aprobado.
-8. Registrar el PDF firmado como `signature.attachments.kind='completed_pdf'` con SHA-256 propio.
-9. Mostrar hash de aprobación, hash del PDF firmado, motivo de rechazo cuando aplique y respuesta del agente en bitácora.
+7. Generar/reemplazar el PDF descargable con una versión visiblemente firmada: todos los campos enviados se renderizan en sus rectángulos PDF configurados (`rect`/`pdf_rect` + página), se agrega certificado de completion y se preserva el hash del documento original/aprobado.
+8. Generar un audit PDF separado con hash original, hash final del PDF completado, hashes de aprobación, resumen de cadena de eventos y evidencia visual QA (`field_count` + rectángulos renderizados). El hash final no se embebe en el mismo completed PDF porque un archivo no puede contener su propio SHA-256 sin invalidarlo.
+9. Registrar el PDF firmado y audit PDF como `signature.attachments.kind in ('completed_pdf','audit_pdf')` con SHA-256 propio mediante `signature_completed_pdf_record`.
+10. Mostrar hash de aprobación, hash del PDF firmado, motivo de rechazo cuando aplique y respuesta del agente en bitácora.
 
 ## Sprint 3 — PDF/document signing requests
 1. Generar páginas `/sign/<slug>` para PDFs independientes.

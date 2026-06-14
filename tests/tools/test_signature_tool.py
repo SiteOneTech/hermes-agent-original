@@ -19,6 +19,7 @@ def test_signature_toolset_registered():
     assert "signature_reminder_policy_upsert" in tools
     assert "signature_reminder_attempt_record" in tools
     assert "signature_followup_due" in tools
+    assert "signature_completed_pdf_record" in tools
 
 
 def test_approval_hash_is_deterministic(monkeypatch):
