@@ -34,12 +34,22 @@ _YUANBAO_TARGET_RE = re.compile(r"^\s*((?:group|direct):[^:]+)\s*$")
 # Discord snowflake IDs are numeric, same regex pattern as Telegram topic targets.
 _NUMERIC_TOPIC_RE = _TELEGRAM_TOPIC_TARGET_RE
 # Platforms that address recipients by phone number and accept E.164 format
-# (with a leading '+'). Without this, "+15551234567" fails the isdigit() check
+# (with a leading '+'). Without this, "+155****4567" fails the isdigit() check
 # below and falls through to channel-name resolution, which has no way to
 # resolve a raw phone number. Keeping the '+' preserves the E.164 form that
-# downstream adapters (signal, etc.) expect.
+# downstream adapters (signal, etc.) expect. Allow '*' only for masked/redacted
+# phone placeholders that appear in safe examples and tests; real sends still
+# use digit-only E.164 values.
 _PHONE_PLATFORMS = frozenset({"photon", "signal", "sms", "whatsapp"})
-_E164_TARGET_RE = re.compile(r"^\s*\+(\d{7,15})\s*$")
+_E164_TARGET_RE = re.compile(r"^\s*\+(?=[0-9*]{7,15}\s*$)[0-9*]*\d[0-9*]*\s*$")
+# WhatsApp JIDs: group chats (<digits>@g.us), individual users
+# (<phone>@s.whatsapp.net), linked identities (<id>@lid), and broadcast /
+# newsletter chats. These are explicit native targets the bridge accepts
+# verbatim — they must NOT fall through to home-channel resolution.
+_WHATSAPP_JID_RE = re.compile(
+    r"^\s*[\w-]+@(?:g\.us|s\.whatsapp\.net|lid|broadcast|newsletter)\s*$",
+    re.IGNORECASE,
+)
 # Email addresses — a valid email like "user@domain.com" should be treated as
 # an explicit target for the email platform, not fall through to channel-name
 # resolution which has no way to resolve a raw address.
@@ -508,6 +518,12 @@ def _parse_target_ref(platform_name: str, target_ref: str):
     if platform_name == "email":
         match = _EMAIL_TARGET_RE.fullmatch(target_ref)
         if match:
+            return target_ref.strip(), None, True
+    if platform_name == "whatsapp":
+        # Native WhatsApp JIDs (group @g.us, user @s.whatsapp.net, @lid, etc.)
+        # are explicit targets — pass through verbatim. E.164 '+' numbers fall
+        # through to the _PHONE_PLATFORMS handler below.
+        if _WHATSAPP_JID_RE.fullmatch(target_ref):
             return target_ref.strip(), None, True
     if platform_name in _PHONE_PLATFORMS:
         match = _E164_TARGET_RE.fullmatch(target_ref)

@@ -1199,6 +1199,9 @@ class TestQuickSnapshot:
         (home / "config.yaml").write_text("model:\n  provider: openrouter\n")
         (home / ".env").write_text("OPENROUTER_API_KEY=test-key-123\n")
         (home / "auth.json").write_text('{"providers": {}}\n')
+        (home / "channel_aliases.json").write_text(
+            '{"whatsapp": {"120363408391911677@g.us": "general"}}\n'
+        )
         (home / "cron").mkdir()
         (home / "cron" / "jobs.json").write_text('{"jobs": []}\n')
 
@@ -1240,6 +1243,13 @@ class TestQuickSnapshot:
         from hermes_cli.backup import create_quick_snapshot
         snap_id = create_quick_snapshot(hermes_home=hermes_home)
         assert (hermes_home / "state-snapshots" / snap_id / "cron" / "jobs.json").exists()
+
+    def test_copies_channel_aliases(self, hermes_home):
+        from hermes_cli.backup import create_quick_snapshot
+        snap_id = create_quick_snapshot(hermes_home=hermes_home)
+        copied = hermes_home / "state-snapshots" / snap_id / "channel_aliases.json"
+        assert copied.exists()
+        assert "120363408391911677@g.us" in copied.read_text()
 
     def test_missing_files_skipped(self, hermes_home):
         from hermes_cli.backup import create_quick_snapshot
@@ -1576,10 +1586,11 @@ class TestRunPreUpdateBackup:
         monkeypatch.setenv("HERMES_HOME", str(root))
         # Make Path.home() point at tmp_path for anything that uses it
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        # Bust caches for hermes_cli.config + hermes_constants so they pick up HERMES_HOME
-        for mod in list(__import__("sys").modules.keys()):
-            if mod.startswith("hermes_cli.config") or mod == "hermes_constants":
-                del __import__("sys").modules[mod]
+        # Config paths are resolved dynamically from HERMES_HOME and cached by
+        # path/mtime. Do not delete modules from sys.modules here: later tests
+        # may hold references to the originally imported hermes_cli.config
+        # module, and deleting it creates a second live module that monkeypatches
+        # no longer affect.
         return root
 
     def test_backup_flag_creates_backup(self, hermes_home, capsys):
@@ -1626,11 +1637,6 @@ class TestRunPreUpdateBackup:
             "_config_version": 22,
             "updates": {"pre_update_backup": True},
         }))
-        import sys as _sys
-        for mod in list(_sys.modules.keys()):
-            if mod.startswith("hermes_cli.config"):
-                del _sys.modules[mod]
-
         from hermes_cli.main import _run_pre_update_backup
         _run_pre_update_backup(Namespace(no_backup=False, backup=False))
         out = capsys.readouterr().out
@@ -1647,12 +1653,6 @@ class TestRunPreUpdateBackup:
             "_config_version": 22,
             "updates": {"pre_update_backup": False},
         }))
-        # Ensure config module re-reads
-        import sys as _sys
-        for mod in list(_sys.modules.keys()):
-            if mod.startswith("hermes_cli.config"):
-                del _sys.modules[mod]
-
         from hermes_cli.main import _run_pre_update_backup
         _run_pre_update_backup(Namespace(no_backup=False, backup=False))
         out = capsys.readouterr().out
@@ -1667,11 +1667,6 @@ class TestRunPreUpdateBackup:
             "_config_version": 22,
             "updates": {"pre_update_backup": True},
         }))
-        import sys as _sys
-        for mod in list(_sys.modules.keys()):
-            if mod.startswith("hermes_cli.config"):
-                del _sys.modules[mod]
-
         from hermes_cli.main import _run_pre_update_backup
         _run_pre_update_backup(Namespace(no_backup=True, backup=False))
         out = capsys.readouterr().out
