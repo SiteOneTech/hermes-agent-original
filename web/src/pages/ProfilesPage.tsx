@@ -179,18 +179,62 @@ function profileModelLabel(profile: ProfileInfo): string | null {
   return profile.engine_model?.trim() || profile.model || null;
 }
 
-function profileCapabilityChips(
+function profileCapabilitySummary(
   values: string[] | undefined,
-  maxVisible = 5,
-): { visible: string[]; overflow: number; total: number } {
-  const normalized = Array.from(
+): { items: string[]; total: number } {
+  const items = Array.from(
     new Set((values ?? []).map((value) => value.trim()).filter(Boolean)),
   );
-  return {
-    visible: normalized.slice(0, maxVisible),
-    overflow: Math.max(0, normalized.length - maxVisible),
-    total: normalized.length,
-  };
+  return { items, total: items.length };
+}
+
+function ProfileCapabilityDisclosure({
+  label,
+  values,
+}: {
+  label: string;
+  values: string[] | undefined;
+}) {
+  const summary = profileCapabilitySummary(values);
+  return (
+    <details
+      data-profile-capability-list
+      className="group rounded-md border border-border/70 bg-background/35"
+    >
+      <summary
+        aria-label={`${label}: ${summary.total} configured`}
+        className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-xs hover:bg-muted/25 [&::-webkit-details-marker]:hidden"
+      >
+        <span className="font-medium uppercase tracking-wider text-muted-foreground">
+          {label}
+        </span>
+        <span className="flex items-center gap-2">
+          <Badge tone={summary.total > 0 ? "outline" : "secondary"}>
+            {summary.total}
+          </Badge>
+          <ChevronDown className="h-3.5 w-3.5 text-muted-foreground transition-transform group-open:rotate-180" />
+        </span>
+      </summary>
+
+      <div className="max-h-44 overflow-y-auto border-t border-border/70 px-3 py-2">
+        {summary.total > 0 ? (
+          <ul className="grid gap-1.5 sm:grid-cols-2">
+            {summary.items.map((item) => (
+              <li
+                key={item}
+                className="min-w-0 truncate rounded border border-border/60 bg-muted/15 px-2 py-1 font-mono text-[11px] text-foreground/90"
+                title={item}
+              >
+                {item}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <span className="text-xs text-muted-foreground/70">—</span>
+        )}
+      </div>
+    </details>
+  );
 }
 
 /**
@@ -219,7 +263,26 @@ function ProfileActionsMenu({
   onSetActive,
 }: ProfileActionsMenuProps) {
   const [open, setOpen] = useState(false);
+  const [menuPosition, setMenuPosition] = useState<{
+    left: number;
+    top: number;
+  } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  const updateMenuPosition = useCallback(() => {
+    if (typeof window === "undefined") return;
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const width = 240;
+    setMenuPosition({
+      top: rect.bottom + 4,
+      left: Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8)),
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (open) updateMenuPosition();
+  }, [open, updateMenuPosition]);
 
   useEffect(() => {
     if (!open) return;
@@ -231,8 +294,14 @@ function ProfileActionsMenu({
       if (target && !containerRef.current?.contains(target)) setOpen(false);
     };
     window.addEventListener("mousedown", onDown);
-    return () => window.removeEventListener("mousedown", onDown);
-  }, [open]);
+    window.addEventListener("resize", updateMenuPosition);
+    window.addEventListener("scroll", updateMenuPosition, true);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("resize", updateMenuPosition);
+      window.removeEventListener("scroll", updateMenuPosition, true);
+    };
+  }, [open, updateMenuPosition]);
 
   // Run the action, then collapse the menu. Toggle editors (model/description/
   // SOUL) expand the inline section below the card once the menu closes.
@@ -258,10 +327,11 @@ function ProfileActionsMenu({
         <MoreVertical className="h-4 w-4" />
       </Button>
 
-      {open && (
+      {open && menuPosition && (
         <div
           role="menu"
-          className="absolute right-0 top-full z-[120] mt-1 min-w-[220px] border border-border bg-card shadow-xl"
+          className="fixed z-[120] mt-1 min-w-[240px] border border-border bg-card shadow-xl"
+          style={{ left: menuPosition.left, top: menuPosition.top }}
         >
           {!isActive && (
             <button
@@ -1228,18 +1298,16 @@ export default function ProfilesPage() {
             const avatarUrl = profileAvatarUrl(p);
             const modelLabel = profileModelLabel(p);
             const engineLabel = profileEngineLabel(p);
-            const toolChips = profileCapabilityChips(p.toolsets, 6);
             const skillSource =
               p.assigned_skills.length > 0 ? p.assigned_skills : p.skill_names;
-            const skillChips = profileCapabilityChips(skillSource, 6);
             const skillLabel =
               p.assigned_skills.length > 0 ? "Assigned skills" : t.profiles.skills;
             return (
-              <Card key={p.name} className="h-full overflow-visible">
-                <div className="relative h-28 overflow-hidden border-b border-border bg-gradient-to-br from-primary/20 via-muted/30 to-background">
+              <Card key={p.name} className="relative overflow-hidden">
+                <div className="relative min-h-[112px] overflow-hidden border-b border-border bg-gradient-to-br from-primary/20 via-muted/30 to-background p-4">
                   <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(255,255,255,0.22),transparent_32%),radial-gradient(circle_at_80%_0%,rgba(255,255,255,0.12),transparent_28%)]" />
-                  <div className="absolute bottom-3 left-4 flex items-end gap-3">
-                    <div className="relative flex h-20 w-20 items-center justify-center overflow-hidden rounded-2xl border border-border bg-background text-lg font-semibold uppercase shadow-lg">
+                  <div className="relative flex min-w-0 items-center gap-3 pr-12">
+                    <div className="relative flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-border bg-background text-lg font-semibold uppercase shadow-lg">
                       <span className="absolute inset-0 flex items-center justify-center bg-primary/10 text-primary">
                         {profileInitials(displayName)}
                       </span>
@@ -1253,9 +1321,92 @@ export default function ProfilesPage() {
                         }}
                       />
                     </div>
+
+                    <div className="min-w-0 flex-1">
+                      <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                        <span className="min-w-0 truncate text-sm font-medium">
+                          {displayName}
+                        </span>
+
+                        {displayName !== p.name && (
+                          <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">
+                            {p.name}
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                        {active && <Badge tone="success">{L.activeBadge}</Badge>}
+                        {p.is_default && (
+                          <Badge tone="secondary">
+                            {t.profiles.defaultBadge}
+                          </Badge>
+                        )}
+                        {p.has_alias && (
+                          <Badge tone="outline">{L.aliasBadge}</Badge>
+                        )}
+                        {p.has_env && (
+                          <Badge tone="outline">{t.profiles.hasEnv}</Badge>
+                        )}
+                        {p.distribution_name && (
+                          <Badge tone="outline" className="gap-1">
+                            <Package className="h-3 w-3" />
+                            {p.distribution_name}
+                            {p.distribution_version
+                              ? `@${p.distribution_version}`
+                              : ""}
+                          </Badge>
+                        )}
+                      </div>
+
+                      {modelLabel && (
+                        <div className="mt-2 truncate text-xs text-muted-foreground">
+                          {modelLabel}
+                          {engineLabel !== "—" ? ` · ${engineLabel}` : ""}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="absolute right-3 top-3">
+                    <ProfileActionsMenu
+                      isActive={active}
+                      isDefault={p.is_default}
+                      isEditingDesc={isEditingDesc}
+                      isEditingModel={isEditingModel}
+                      isEditingSoul={isEditingSoul}
+                      isEditingVisual={isEditingVisual}
+                      settingActive={settingActive === p.name}
+                      labels={{
+                        actions: L.actions,
+                        setActive: L.setActive,
+                        editVisual: L.editVisual,
+                        editModel: L.editModel,
+                        editDescription: L.editDescription,
+                        editSoul: t.profiles.editSoul,
+                        manageSkills: L.manageSkills,
+                        openInTerminal: t.profiles.openInTerminal,
+                        rename: t.profiles.rename,
+                        delete: t.common.delete,
+                      }}
+                      onCopyCommand={() => handleCopyTerminalCommand(p.name)}
+                      onDelete={() => profileDelete.requestDelete(p.name)}
+                      onEditDescription={() => openDescEditor(p)}
+                      onEditModel={() => openModelEditor(p)}
+                      onEditSoul={() => openSoulEditor(p.name)}
+                      onEditVisual={() => openVisualEditor(p)}
+                      onManageSkills={() =>
+                        navigate(`/skills?profile=${encodeURIComponent(p.name)}`)
+                      }
+                      onRename={() => {
+                        setRenamingFrom(p.name);
+                        setRenameTo(p.name);
+                      }}
+                      onSetActive={() => handleSetActive(p.name)}
+                    />
                   </div>
                 </div>
-                <CardContent className="flex h-full flex-col gap-2 py-4">
+                <CardContent className="flex flex-col gap-3 p-4">
                   {isRenaming ? (
                     <div className="flex flex-col gap-2">
                       <Input
@@ -1311,88 +1462,6 @@ export default function ProfilesPage() {
                     </div>
                   ) : (
                     <>
-                      <div className="flex items-start gap-2">
-                        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
-                          <span className="font-medium text-sm truncate">
-                            {displayName}
-                          </span>
-
-                          {displayName !== p.name && (
-                            <span className="font-mono text-xs text-muted-foreground truncate">
-                              {p.name}
-                            </span>
-                          )}
-
-                          {active && (
-                            <Badge tone="success">{L.activeBadge}</Badge>
-                          )}
-
-                          {p.is_default && (
-                            <Badge tone="secondary">
-                              {t.profiles.defaultBadge}
-                            </Badge>
-                          )}
-
-                          {p.has_alias && (
-                            <Badge tone="outline">{L.aliasBadge}</Badge>
-                          )}
-
-                          {p.has_env && (
-                            <Badge tone="outline">{t.profiles.hasEnv}</Badge>
-                          )}
-
-                          {p.distribution_name && (
-                            <Badge tone="outline" className="gap-1">
-                              <Package className="h-3 w-3" />
-                              {p.distribution_name}
-                              {p.distribution_version
-                                ? `@${p.distribution_version}`
-                                : ""}
-                            </Badge>
-                          )}
-                        </div>
-
-                        <ProfileActionsMenu
-                          isActive={active}
-                          isDefault={p.is_default}
-                          isEditingDesc={isEditingDesc}
-                          isEditingModel={isEditingModel}
-                          isEditingSoul={isEditingSoul}
-                          isEditingVisual={isEditingVisual}
-                          settingActive={settingActive === p.name}
-                          labels={{
-                            actions: L.actions,
-                            setActive: L.setActive,
-                            editVisual: L.editVisual,
-                            editModel: L.editModel,
-                            editDescription: L.editDescription,
-                            editSoul: t.profiles.editSoul,
-                            manageSkills: L.manageSkills,
-                            openInTerminal: t.profiles.openInTerminal,
-                            rename: t.profiles.rename,
-                            delete: t.common.delete,
-                          }}
-                          onCopyCommand={() =>
-                            handleCopyTerminalCommand(p.name)
-                          }
-                          onDelete={() => profileDelete.requestDelete(p.name)}
-                          onEditDescription={() => openDescEditor(p)}
-                          onEditModel={() => openModelEditor(p)}
-                          onEditSoul={() => openSoulEditor(p.name)}
-                          onEditVisual={() => openVisualEditor(p)}
-                          onManageSkills={() =>
-                            navigate(
-                              `/skills?profile=${encodeURIComponent(p.name)}`,
-                            )
-                          }
-                          onRename={() => {
-                            setRenamingFrom(p.name);
-                            setRenameTo(p.name);
-                          }}
-                          onSetActive={() => handleSetActive(p.name)}
-                        />
-                      </div>
-
                       <div className="flex items-center gap-1.5 text-xs">
                         <span
                           className={cn(
@@ -1437,60 +1506,17 @@ export default function ProfilesPage() {
 
                       <div
                         data-profile-capabilities
-                        className="grid gap-2 rounded-lg border border-border/70 bg-muted/20 p-2 text-xs"
+                        className="grid gap-2 rounded-lg border border-border/70 bg-muted/15 p-2"
                       >
-                        <div className="grid gap-1">
-                          <span className="font-medium uppercase tracking-wider text-muted-foreground">
-                            Tools
-                          </span>
-                          <div className="flex flex-wrap gap-1">
-                            {toolChips.visible.map((toolset) => (
-                              <Badge key={toolset} tone="outline" className="font-mono">
-                                {toolset}
-                              </Badge>
-                            ))}
-                            {toolChips.overflow > 0 && (
-                              <Badge tone="secondary">+{toolChips.overflow}</Badge>
-                            )}
-                            {toolChips.total === 0 && (
-                              <span className="text-muted-foreground/70">—</span>
-                            )}
-                          </div>
-                        </div>
-
-                        <div className="grid gap-1">
-                          <span className="font-medium uppercase tracking-wider text-muted-foreground">
-                            {skillLabel}
-                          </span>
-                          <div className="flex flex-wrap gap-1">
-                            {skillChips.visible.map((skill) => (
-                              <Badge key={skill} tone="outline" className="font-mono">
-                                {skill}
-                              </Badge>
-                            ))}
-                            {skillChips.overflow > 0 && (
-                              <Badge tone="secondary">+{skillChips.overflow}</Badge>
-                            )}
-                            {skillChips.total === 0 && (
-                              <span className="text-muted-foreground/70">—</span>
-                            )}
-                          </div>
-                        </div>
+                        <ProfileCapabilityDisclosure label="Tools" values={p.toolsets} />
+                        <ProfileCapabilityDisclosure
+                          label={skillLabel}
+                          values={skillSource}
+                        />
                       </div>
 
-                      <div className="mt-auto flex flex-col gap-0.5 pt-1 text-xs text-muted-foreground">
-                        {modelLabel && (
-                          <span className="truncate">
-                            {t.profiles.model}: {modelLabel}
-                            {engineLabel !== "—" ? ` (${engineLabel})` : ""}
-                          </span>
-                        )}
-
-                        <span>
-                          {t.profiles.skills}: {p.skill_count}
-                        </span>
-
-                        <span className="font-mono truncate">{p.path}</span>
+                      <div className="pt-1 text-xs text-muted-foreground">
+                        <span className="block truncate font-mono">{p.path}</span>
                       </div>
                     </>
                   )}

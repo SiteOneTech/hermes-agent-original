@@ -15,17 +15,21 @@ def test_zeus_dashboard_custom_routes_and_branding_are_present():
     assert 'to: "/factory"' not in core_nav
 
 
-def test_profiles_page_surfaces_profile_capabilities_and_unclipped_action_menu():
+def test_profiles_page_surfaces_profile_capabilities_as_compact_disclosures():
     profiles = (ROOT / "web/src/pages/ProfilesPage.tsx").read_text(encoding="utf-8")
     api = (ROOT / "web/src/lib/api.ts").read_text(encoding="utf-8")
 
     assert '"profile-su"' in profiles
-    assert "profileCapabilityChips" in profiles
-    assert "p.toolsets" in profiles
-    assert "p.assigned_skills" in profiles
+    assert "ProfileCapabilityDisclosure" in profiles
+    assert "profileCapabilitySummary" in profiles
     assert "data-profile-capabilities" in profiles
-    assert 'className="h-full overflow-visible"' in profiles
-    assert "z-[120]" in profiles
+    assert "data-profile-capability-list" in profiles
+    assert 'aria-label={`${label}: ${summary.total} configured`}' in profiles
+    assert 'className="relative overflow-hidden"' in profiles
+    assert 'className="fixed z-[120]' in profiles
+    assert "profileCapabilityChips" not in profiles
+    assert "toolChips.visible.map" not in profiles
+    assert "skillChips.visible.map" not in profiles
     assert "toolsets: string[];" in api
     assert "assigned_skills: string[];" in api
     assert "skill_names: string[];" in api
