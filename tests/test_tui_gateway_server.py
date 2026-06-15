@@ -9,9 +9,25 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from hermes_constants import reset_hermes_home_override, set_hermes_home_override
 from hermes_cli.active_sessions import active_session_registry_snapshot
 from tui_gateway import server
+
+
+@pytest.fixture(autouse=True)
+def _disable_background_notification_poller(monkeypatch):
+    """Keep TUI gateway tests from leaking queue-draining poller threads.
+
+    Tests that cover notification delivery call ``_notification_poller_loop``
+    directly; session-creation tests only need the stop-event handle.
+    """
+    monkeypatch.setattr(
+        server,
+        "_start_notification_poller",
+        lambda _sid, _session: threading.Event(),
+    )
 
 
 def test_session_create_rejects_at_active_session_limit(monkeypatch, tmp_path):
@@ -1749,6 +1765,7 @@ def test_init_session_fires_reset_hook(monkeypatch):
 
     monkeypatch.setattr(_approval, "register_gateway_notify", lambda key, cb: None)
     monkeypatch.setattr(_approval, "load_permanent_allowlist", lambda: None)
+    monkeypatch.setattr(server, "_start_notification_poller", lambda _sid, _session: threading.Event())
 
     sid = "sid"
     try:
