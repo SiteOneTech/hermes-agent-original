@@ -5,6 +5,8 @@ import {
   useRef,
   useState,
   type ComponentType,
+  type FocusEvent,
+  type MouseEvent,
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
@@ -828,26 +830,33 @@ function SidebarNavLink({
   t,
 }: SidebarNavLinkProps) {
   const { path, label, labelKey, icon: Icon } = item;
-  const liRef = useRef<HTMLLIElement>(null);
   const [hovered, setHovered] = useState(false);
+  const [tooltipAnchor, setTooltipAnchor] = useState<HTMLElement | null>(null);
 
   const navLabel = labelKey
     ? ((t.app.nav as Record<string, string>)[labelKey] ?? label)
     : label;
+  const showTooltip = (event: MouseEvent<HTMLElement> | FocusEvent<HTMLElement>) => {
+    setHovered(true);
+    setTooltipAnchor(event.currentTarget);
+  };
+  const hideTooltip = () => {
+    setHovered(false);
+    setTooltipAnchor(null);
+  };
 
   return (
     <li
-      ref={liRef}
-      onMouseEnter={collapsed ? () => setHovered(true) : undefined}
-      onMouseLeave={collapsed ? () => setHovered(false) : undefined}
+      onMouseEnter={collapsed ? showTooltip : undefined}
+      onMouseLeave={collapsed ? hideTooltip : undefined}
     >
       <NavLink
         to={path}
         end={path === "/sessions"}
         onClick={closeMobile}
         aria-label={collapsed ? navLabel : undefined}
-        onFocus={collapsed ? () => setHovered(true) : undefined}
-        onBlur={collapsed ? () => setHovered(false) : undefined}
+        onFocus={collapsed ? showTooltip : undefined}
+        onBlur={collapsed ? hideTooltip : undefined}
         className={({ isActive }) =>
           cn(
             "group/nav relative flex items-center gap-3",
@@ -893,8 +902,8 @@ function SidebarNavLink({
         )}
       </NavLink>
 
-      {collapsed && hovered && liRef.current && (
-        <SidebarTooltip anchor={liRef.current} label={navLabel} warmRef={tooltipWarmRef} />
+      {collapsed && hovered && tooltipAnchor && (
+        <SidebarTooltip anchor={tooltipAnchor} label={navLabel} warmRef={tooltipWarmRef} />
       )}
     </li>
   );
@@ -910,6 +919,7 @@ function SidebarSystemActions({
   const navigate = useNavigate();
   const { activeAction, isBusy, isRunning, pendingAction, runAction } =
     useSystemActions();
+  const canUpdateHermes = status?.can_update_hermes === true;
 
   const items: SystemActionItem[] = [
     {
@@ -919,14 +929,16 @@ function SidebarSystemActions({
       runningLabel: t.status.restartingGateway,
       spin: true,
     },
-    {
+  ];
+  if (canUpdateHermes) {
+    items.push({
       action: "update",
       icon: Download,
       label: t.status.updateHermes,
       runningLabel: t.status.updatingHermes,
       spin: false,
-    },
-  ];
+    });
+  }
 
   const handleClick = (action: SystemAction) => {
     if (isBusy) return;
@@ -987,24 +999,31 @@ function SystemActionButton({
   tooltipWarmRef,
 }: SystemActionButtonProps) {
   const { icon: Icon, label, runningLabel, spin } = item;
-  const liRef = useRef<HTMLLIElement>(null);
   const [hovered, setHovered] = useState(false);
+  const [tooltipAnchor, setTooltipAnchor] = useState<HTMLElement | null>(null);
   const busy = isPending || isActionRunning;
   const displayLabel = isActionRunning ? runningLabel : label;
+  const showTooltip = (event: MouseEvent<HTMLElement> | FocusEvent<HTMLElement>) => {
+    setHovered(true);
+    setTooltipAnchor(event.currentTarget);
+  };
+  const hideTooltip = () => {
+    setHovered(false);
+    setTooltipAnchor(null);
+  };
 
   return (
     <li
-      ref={liRef}
-      onMouseEnter={collapsed ? () => setHovered(true) : undefined}
-      onMouseLeave={collapsed ? () => setHovered(false) : undefined}
+      onMouseEnter={collapsed ? showTooltip : undefined}
+      onMouseLeave={collapsed ? hideTooltip : undefined}
     >
       <button
         onClick={onClick}
         disabled={disabled}
         aria-busy={busy}
         aria-label={collapsed ? displayLabel : undefined}
-        onFocus={collapsed ? () => setHovered(true) : undefined}
-        onBlur={collapsed ? () => setHovered(false) : undefined}
+        onFocus={collapsed ? showTooltip : undefined}
+        onBlur={collapsed ? hideTooltip : undefined}
         type="button"
         className={cn(
           "group/action relative flex w-full items-center gap-3",
@@ -1052,8 +1071,8 @@ function SystemActionButton({
         )}
       </button>
 
-      {collapsed && hovered && liRef.current && (
-        <SidebarTooltip anchor={liRef.current} label={displayLabel} warmRef={tooltipWarmRef} />
+      {collapsed && hovered && tooltipAnchor && (
+        <SidebarTooltip anchor={tooltipAnchor} label={displayLabel} warmRef={tooltipWarmRef} />
       )}
     </li>
   );
@@ -1065,18 +1084,25 @@ function SidebarIconWithTooltip({
   label,
   tooltipWarmRef,
 }: SidebarIconWithTooltipProps) {
-  const ref = useRef<HTMLDivElement>(null);
   const [hovered, setHovered] = useState(false);
+  const [tooltipAnchor, setTooltipAnchor] = useState<HTMLElement | null>(null);
+  const showTooltip = (event: MouseEvent<HTMLDivElement>) => {
+    setHovered(true);
+    setTooltipAnchor(event.currentTarget);
+  };
+  const hideTooltip = () => {
+    setHovered(false);
+    setTooltipAnchor(null);
+  };
 
   return (
     <div
-      ref={ref}
       className={cn(
         "relative w-fit",
         collapsed && "group/icon",
       )}
-      onMouseEnter={collapsed ? () => setHovered(true) : undefined}
-      onMouseLeave={collapsed ? () => setHovered(false) : undefined}
+      onMouseEnter={collapsed ? showTooltip : undefined}
+      onMouseLeave={collapsed ? hideTooltip : undefined}
     >
       {children}
 
@@ -1087,8 +1113,8 @@ function SidebarIconWithTooltip({
         />
       )}
 
-      {collapsed && hovered && ref.current && (
-        <SidebarTooltip anchor={ref.current} label={label} warmRef={tooltipWarmRef} />
+      {collapsed && hovered && tooltipAnchor && (
+        <SidebarTooltip anchor={tooltipAnchor} label={label} warmRef={tooltipWarmRef} />
       )}
     </div>
   );
@@ -1096,8 +1122,8 @@ function SidebarIconWithTooltip({
 
 function GatewayDot({ collapsed, status, tooltipWarmRef }: GatewayDotProps) {
   const { t } = useI18n();
-  const ref = useRef<HTMLDivElement>(null);
   const [hovered, setHovered] = useState(false);
+  const [tooltipAnchor, setTooltipAnchor] = useState<HTMLElement | null>(null);
 
   const toneToColor: Record<string, string> = {
     "text-success": "bg-success",
@@ -1117,10 +1143,17 @@ function GatewayDot({ collapsed, status, tooltipWarmRef }: GatewayDotProps) {
     color = toneToColor[gw.tone] ?? "bg-muted-foreground";
     label = `${t.status.gateway} ${gw.label}`;
   }
+  const showTooltip = (event: MouseEvent<HTMLDivElement> | FocusEvent<HTMLDivElement>) => {
+    setHovered(true);
+    setTooltipAnchor(event.currentTarget);
+  };
+  const hideTooltip = () => {
+    setHovered(false);
+    setTooltipAnchor(null);
+  };
 
   return (
     <div
-      ref={ref}
       className={cn(
         "hidden lg:flex py-3 pl-[1.625rem] transition-opacity duration-300",
         collapsed ? "lg:opacity-100" : "lg:opacity-0 lg:h-0 lg:py-0 lg:overflow-hidden",
@@ -1128,18 +1161,18 @@ function GatewayDot({ collapsed, status, tooltipWarmRef }: GatewayDotProps) {
       role="status"
       aria-label={label}
       tabIndex={collapsed ? 0 : -1}
-      onMouseEnter={collapsed ? () => setHovered(true) : undefined}
-      onMouseLeave={collapsed ? () => setHovered(false) : undefined}
-      onFocus={collapsed ? () => setHovered(true) : undefined}
-      onBlur={collapsed ? () => setHovered(false) : undefined}
+      onMouseEnter={collapsed ? showTooltip : undefined}
+      onMouseLeave={collapsed ? hideTooltip : undefined}
+      onFocus={collapsed ? showTooltip : undefined}
+      onBlur={collapsed ? hideTooltip : undefined}
     >
       <span
         aria-hidden
         className={cn("h-1.5 w-1.5 rounded-full", color)}
       />
 
-      {hovered && ref.current && (
-        <SidebarTooltip anchor={ref.current} label={label} warmRef={tooltipWarmRef} />
+      {hovered && tooltipAnchor && (
+        <SidebarTooltip anchor={tooltipAnchor} label={label} warmRef={tooltipWarmRef} />
       )}
     </div>
   );
@@ -1149,11 +1182,16 @@ function SidebarTooltip({ anchor, label, warmRef }: SidebarTooltipProps) {
   const rect = anchor.getBoundingClientRect();
   const sidebar = document.getElementById("app-sidebar");
   const sidebarRight = sidebar?.getBoundingClientRect().right ?? rect.right;
-
-  const isWarm = warmRef ? Date.now() - warmRef.current < 300 : false;
+  const [isWarm, setIsWarm] = useState(false);
 
   useEffect(() => {
-    if (warmRef) warmRef.current = Date.now();
+    if (!warmRef) {
+      setIsWarm(false);
+      return;
+    }
+    const now = Date.now();
+    setIsWarm(now - warmRef.current < 300);
+    warmRef.current = now;
     return () => {
       if (warmRef) warmRef.current = Date.now();
     };
