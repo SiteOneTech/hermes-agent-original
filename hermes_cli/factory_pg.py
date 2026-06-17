@@ -5,6 +5,7 @@ route production Factory work to SQLite.
 """
 from __future__ import annotations
 
+import os
 import posixpath
 import re
 import subprocess
@@ -54,6 +55,21 @@ FACTORY_DOCUMENT_DEFINITIONS = (
     *((name, "pm_projection") for name in PM_PROJECTION_DOCUMENTS),
 )
 CRITICAL_RISK_LEVELS = {"critical", "high"}
+
+# Jean explicitly disabled Notion as a Factory workflow dependency while the
+# runtime is hardened.  The manual ``link-notion`` command remains available for
+# human PM projection, but Notion must not create reconciliation tasks, block
+# dispatch/critical readiness, or mark increment closes stale.  Re-enable only
+# deliberately via env while debugging that separate surface.
+FACTORY_NOTION_WORKFLOW_ENABLED_DEFAULT = False
+
+
+def notion_workflow_enabled() -> bool:
+    value = os.environ.get("FACTORY_NOTION_WORKFLOW_ENABLED")
+    if value is None:
+        return FACTORY_NOTION_WORKFLOW_ENABLED_DEFAULT
+    return value.strip().lower() in {"1", "true", "yes", "y", "on", "enabled"}
+
 RECONCILIATION_TASK_SPECS: dict[str, dict[str, Any]] = {
     "missing_repository_strategy": {
         "title": "G0 — Repository Strategy Gate: classify project repo/worktree path",
@@ -1273,6 +1289,8 @@ def _latest_gate_statuses(gates: list[dict[str, Any]]) -> dict[str, str]:
 
 
 def _notion_projection_issue(metadata: dict[str, Any]) -> str | None:
+    if not notion_workflow_enabled():
+        return None
     tracker_ok = bool(
         metadata.get("notion_tracker_url")
         or metadata.get("notion_tracker_page_id")
@@ -1289,7 +1307,8 @@ def reconciliation_findings(project: dict[str, Any], tasks: list[dict[str, Any]]
     """Return deterministic project-completeness anomalies for Factory reconciliation.
 
     This is intentionally objective: it inspects Factory DB state, project-local
-    artifact paths, Notion tracker metadata, gates, and task graph shape. It does
+    artifact paths, gates, and task graph shape. Notion is intentionally outside
+    the blocking workflow while the PM projection surface is isolated. It does
     not ask a worker to decide whether an incomplete project is implementation or
     administrative closure; it creates recovery work that can be executed if the
     project is resumed.
@@ -1408,7 +1427,7 @@ def ensure_reconciliation_tasks(project: dict[str, Any], findings: list[dict[str
         }
         description = (
             f"Deterministic reconciliation task generated because: {finding.get('message')}.\n\n"
-            "Do not close the project manually from UI state. Inspect Factory DB, project-local artifacts, Notion metadata, gates, and deliverable evidence; then record gates/evidence canonically."
+            "Do not close the project manually from UI state. Inspect Factory DB, project-local artifacts, gates, and deliverable evidence; then record gates/evidence canonically."
         )
         reopen_note = f"\n\n[factory-reconciler] Reopened because the canonical anomaly recurred: {code}."
         statements.append(
@@ -1817,36 +1836,63 @@ def close_task(
         raise ValueError(f"Factory task not found: {tid}")
     project_id = str(row.get("project_id") or "")
     lane_id = row.get("lane_id")
-    notion_sync_completed = _task_close_completes_notion_sync(tid, evidence_payload)
-    notion_checkpoint = _notion_increment_closure_checkpoint(
-        task_id=tid,
-        project_id=project_id,
-        lane_id=lane_id,
-        status=final_status,
-        summary=summary,
-        evidence=evidence_payload,
-        actor=actor_name,
-        queued=not notion_sync_completed,
-    )
-    if notion_sync_completed:
-        synced_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    if notion_workflow_enabled():
+        notion_sync_completed = _task_close_completes_notion_sync(tid, evidence_payload)
+        notion_checkpoint = _notion_increment_closure_checkpoint(
+            task_id=tid,
+            project_id=project_id,
+            lane_id=lane_id,
+            status=final_status,
+            summary=summary,
+            evidence=evidence_payload,
+            actor=actor_name,
+            queued=not notion_sync_completed,
+        )
+        if notion_sync_completed:
+            synced_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            project_notion_metadata = {
+                "notion_projection_stale": False,
+                "notion_sync_required": False,
+                "notion_last_increment_closure_synced_at": synced_at,
+                "notion_tracker_last_synced_at": synced_at,
+                "notion_last_increment_closure": notion_checkpoint,
+            }
+            notion_event_sql = (
+                f"""
+        INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
+        VALUES ({_q(project_id)}, {_q(lane_id)}, {_q(tid)}, {_q(actor_name)}, 'notion_increment_closure_synced', {_q(f'Post-action Notion PM projection synced by {tid}')}, {_j(notion_checkpoint)});
+                """
+            )
+        else:
+            project_notion_metadata = {
+                "notion_projection_stale": True,
+                "notion_sync_required": True,
+                "notion_last_increment_closure": notion_checkpoint,
+            }
+            notion_event_sql = (
+                f"""
+        INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
+        VALUES ({_q(project_id)}, {_q(lane_id)}, {_q(tid)}, {_q(actor_name)}, 'notion_increment_closure_checkpoint', {_q(f'Post-action Notion PM projection checkpoint queued for {tid}')}, {_j(notion_checkpoint)});
+                """
+            )
+    else:
+        notion_checkpoint = {
+            "disabled": True,
+            "reason": "factory_notion_workflow_disabled",
+            "project_id": project_id,
+            "lane_id": lane_id,
+            "task_id": tid,
+            "status": final_status,
+            "source": "factory_task_close",
+            "closed_by": actor_name,
+            "notion_sync_required": False,
+        }
         project_notion_metadata = {
+            "notion_workflow_disabled": True,
             "notion_projection_stale": False,
             "notion_sync_required": False,
-            "notion_last_increment_closure_synced_at": synced_at,
-            "notion_tracker_last_synced_at": synced_at,
-            "notion_last_increment_closure": notion_checkpoint,
         }
-        notion_event_type = "notion_increment_closure_synced"
-        notion_event_message = f"Post-action Notion PM projection synced by {tid}"
-    else:
-        project_notion_metadata = {
-            "notion_projection_stale": True,
-            "notion_sync_required": True,
-            "notion_last_increment_closure": notion_checkpoint,
-        }
-        notion_event_type = "notion_increment_closure_checkpoint"
-        notion_event_message = f"Post-action Notion PM projection checkpoint queued for {tid}"
+        notion_event_sql = ""
     sql.psql(
         f"""
         UPDATE factory.task_runs
@@ -1867,8 +1913,7 @@ def close_task(
         INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
         VALUES ({_q(project_id)}, {_q(lane_id)}, {_q(tid)}, {_q(actor_name)}, 'task_closed', {_q(f'Task {tid} closed as {final_status}')}, {_j({'status': final_status, 'evidence': evidence_payload, 'result_summary': summary})});
 
-        INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
-        VALUES ({_q(project_id)}, {_q(lane_id)}, {_q(tid)}, {_q(actor_name)}, {_q(notion_event_type)}, {_q(notion_event_message)}, {_j(notion_checkpoint)});
+        {notion_event_sql}
         """,
         user=_user(),
     )
@@ -3242,7 +3287,7 @@ def _dispatch_preflight_blockers(
     blockers: list[str] = []
     if not docs_ready:
         blockers.append("missing_or_unindexed_docs")
-    if not notion_ready:
+    if notion_workflow_enabled() and not notion_ready:
         blockers.append("missing_notion_tracker")
     return blockers
 

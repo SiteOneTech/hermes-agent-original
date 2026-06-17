@@ -52,6 +52,11 @@ class FakeSql:
         return {"AGENT_DB_NAME": "zeus_agent"}
 
 
+@pytest.fixture(autouse=True)
+def disabled_notion_workflow(monkeypatch):
+    monkeypatch.delenv("FACTORY_NOTION_WORKFLOW_ENABLED", raising=False)
+
+
 @pytest.fixture
 def fake_sql(monkeypatch):
     fake = FakeSql()
@@ -109,32 +114,30 @@ def test_link_notion_tracker_raises_on_readback_mismatch(fake_sql):
         factory_pg.link_notion_tracker("demo", page_id="37a37b39cad68146b9f2e1fdf0bdf727", url=None)
 
 
-def test_missing_notion_is_required_human_pm_projection_by_default(monkeypatch):
+def test_missing_notion_is_not_a_factory_reconciliation_blocker_by_default(monkeypatch):
     monkeypatch.setattr(factory_pg, "_project_artifact_dir", lambda project: (None, "factory/projects/funnel-core-crm-workflow"))
     project_missing = {"project_id": "funnel-core-crm-workflow", "status": "active", "metadata": {}}
     findings = factory_pg.reconciliation_findings(project_missing, tasks=[{"task_id": "t1", "status": "todo"}], pending_gates=[])
     codes = {f["code"] for f in findings}
-    assert "missing_notion_project" in codes
+    assert "missing_notion_project" not in codes
     assert "notion_pm_projection_warning" not in codes
-    notion_finding = next(f for f in findings if f["code"] == "missing_notion_project")
-    assert notion_finding["metadata"]["notion_role"] == "human_pm_projection_not_agent_truth"
 
 
-def test_missing_notion_is_still_human_projection_when_required(monkeypatch):
+def test_missing_notion_is_not_blocking_even_when_legacy_required_flag_is_set(monkeypatch):
     monkeypatch.setattr(factory_pg, "_project_artifact_dir", lambda project: (None, "factory/projects/funnel-core-crm-workflow"))
     project_missing = {"project_id": "funnel-core-crm-workflow", "status": "active", "metadata": {"notion_required": True}}
     findings = factory_pg.reconciliation_findings(project_missing, tasks=[{"task_id": "t1", "status": "todo"}], pending_gates=[])
     codes = {f["code"] for f in findings}
-    assert "missing_notion_project" in codes
+    assert "missing_notion_project" not in codes
     assert "notion_pm_projection_warning" not in codes
 
 
-def test_notion_required_string_false_does_not_suppress_mandatory_human_projection(monkeypatch):
+def test_notion_required_string_false_remains_non_blocking(monkeypatch):
     monkeypatch.setattr(factory_pg, "_project_artifact_dir", lambda project: (None, "factory/projects/funnel-core-crm-workflow"))
     project_missing = {"project_id": "funnel-core-crm-workflow", "status": "active", "metadata": {"notion_required": "false"}}
     findings = factory_pg.reconciliation_findings(project_missing, tasks=[{"task_id": "t1", "status": "todo"}], pending_gates=[])
     codes = {f["code"] for f in findings}
-    assert "missing_notion_project" in codes
+    assert "missing_notion_project" not in codes
     assert "notion_pm_projection_warning" not in codes
 
 
@@ -152,14 +155,14 @@ def test_stale_notion_string_false_is_not_treated_as_stale(monkeypatch):
     assert not any(f["code"] in {"missing_notion_project", "notion_pm_projection_warning"} for f in findings)
 
 
-def test_missing_notion_blocker_does_not_resolve_until_tracker_exists():
+def test_legacy_missing_notion_blocker_resolves_when_workflow_disabled():
     project = {"project_id": "demo", "status": "active", "metadata": {}}
     task = {
         "task_id": "demo-missing-notion",
         "status": "blocked",
         "metadata": {"reconciliation_anomaly": "missing_notion_project"},
     }
-    assert factory_pg._resolved_reconciliation_anomaly(project, task) is None
+    assert factory_pg._resolved_reconciliation_anomaly(project, task) == ("missing_notion_project", "structured_reconciliation_metadata")
 
 
 def test_legacy_projection_warning_resolves_because_missing_notion_is_now_required():
@@ -184,7 +187,7 @@ def test_notion_projection_warning_task_does_not_cover_required_notion_blocker()
     assert factory_pg._task_covers_reconciliation_anomaly(task, "missing_notion_project") is False
 
 
-def test_stale_notion_is_required_human_pm_projection_by_default(monkeypatch):
+def test_stale_notion_metadata_is_not_a_factory_reconciliation_blocker(monkeypatch):
     monkeypatch.setattr(factory_pg, "_project_artifact_dir", lambda project: (None, "factory/projects/funnel-core-crm-workflow"))
     project_stale = {
         "project_id": "funnel-core-crm-workflow",
@@ -195,7 +198,7 @@ def test_stale_notion_is_required_human_pm_projection_by_default(monkeypatch):
         },
     }
     findings = factory_pg.reconciliation_findings(project_stale, tasks=[{"task_id": "t1", "status": "todo"}], pending_gates=[])
-    assert any(f["code"] == "missing_notion_project" and f["metadata"].get("notion_issue") == "stale" for f in findings)
+    assert not any(f["code"] == "missing_notion_project" for f in findings)
 
 
 def test_linked_notion_metadata_satisfies_reconciler_for_funnel_core(monkeypatch):
@@ -212,7 +215,7 @@ def test_linked_notion_metadata_satisfies_reconciler_for_funnel_core(monkeypatch
     assert not any(f["code"] in {"missing_notion_project", "notion_pm_projection_warning"} for f in findings_linked)
 
 
-def test_critical_readiness_requires_notion_human_projection_by_default(fake_sql, monkeypatch, tmp_path):
+def test_critical_readiness_ignores_missing_notion_while_workflow_disabled(fake_sql, monkeypatch, tmp_path):
     factory_dir = tmp_path / "factory" / "projects" / "demo"
     factory_dir.mkdir(parents=True)
     monkeypatch.setattr(factory_pg, "_project", lambda project_id: {
@@ -237,10 +240,10 @@ def test_critical_readiness_requires_notion_human_projection_by_default(fake_sql
         },
     })
     fake_sql.rows_results = [[]]
-    assert any("required Notion PM tracker is missing" in finding for finding in factory_pg.critical_readiness_findings("demo"))
+    assert not any("Notion" in finding for finding in factory_pg.critical_readiness_findings("demo"))
 
 
-def test_critical_readiness_blocks_missing_notion_when_required(fake_sql, monkeypatch, tmp_path):
+def test_critical_readiness_ignores_missing_notion_even_when_required_flag_is_set(fake_sql, monkeypatch, tmp_path):
     factory_dir = tmp_path / "factory" / "projects" / "demo"
     factory_dir.mkdir(parents=True)
     monkeypatch.setattr(factory_pg, "_project", lambda project_id: {
@@ -266,7 +269,7 @@ def test_critical_readiness_blocks_missing_notion_when_required(fake_sql, monkey
         },
     })
     fake_sql.rows_results = [[]]
-    assert any("required Notion PM tracker is missing" in finding for finding in factory_pg.critical_readiness_findings("demo"))
+    assert not any("Notion" in finding for finding in factory_pg.critical_readiness_findings("demo"))
 
 
 def _commit_factory_docs(repo):
@@ -302,17 +305,17 @@ def test_cli_link_notion_uses_backend(monkeypatch, capsys):
     assert calls["kwargs"]["page_id"] == "37a37b39cad68146b9f2e1fdf0bdf727"
 
 
-def test_dispatch_preflight_blocks_implementation_without_docs_or_notion():
+def test_dispatch_preflight_blocks_implementation_without_docs_only():
     task = {"task_id": "demo-impl", "phase": "implementation", "status": "todo", "metadata": {}}
     blockers = factory_pg._dispatch_preflight_blockers(task, docs_ready=False, notion_ready=False)
     assert "missing_or_unindexed_docs" in blockers
-    assert "missing_notion_tracker" in blockers
+    assert "missing_notion_tracker" not in blockers
 
 
-def test_dispatch_preflight_blocks_notion_by_default_for_human_pm_projection():
+def test_dispatch_preflight_does_not_block_on_notion_by_default():
     task = {"task_id": "demo-impl", "phase": "implementation", "status": "todo", "metadata": {}}
-    assert factory_pg._dispatch_preflight_blockers(task, docs_ready=True, notion_ready=False, notion_required=False) == ["missing_notion_tracker"]
-    assert factory_pg._dispatch_preflight_blockers(task, docs_ready=True, notion_ready=False, notion_required=True) == ["missing_notion_tracker"]
+    assert factory_pg._dispatch_preflight_blockers(task, docs_ready=True, notion_ready=False, notion_required=False) == []
+    assert factory_pg._dispatch_preflight_blockers(task, docs_ready=True, notion_ready=False, notion_required=True) == []
 
 
 def test_dispatch_preflight_allows_when_docs_and_notion_ready():
@@ -744,7 +747,7 @@ def test_close_project_cancels_active_runs_and_records_monitor_evidence(fake_sql
     assert "monitor_evidence" in joined
 
 
-def test_close_task_records_post_action_notion_increment_checkpoint(fake_sql):
+def test_close_task_does_not_queue_notion_increment_checkpoint_when_workflow_disabled(fake_sql):
     fake_sql.statement_one_results = [
         {"project_id": "demo", "lane_id": "lane-1", "task_id": "demo-inc-0001", "status": "done"}
     ]
@@ -758,16 +761,17 @@ def test_close_task_records_post_action_notion_increment_checkpoint(fake_sql):
         reconcile=False,
     )
 
-    assert result["notion_post_action"]["queued"] is True
-    assert result["notion_post_action"]["timing"] == "post_action_increment_closure"
+    assert result["notion_post_action"]["disabled"] is True
+    assert result["notion_post_action"]["notion_sync_required"] is False
     joined = "\n".join(fake_sql.statements)
-    assert "notion_increment_closure_checkpoint" in joined
-    assert "human_pm_projection_not_agent_truth" in joined
-    assert "canonical_pre_action_docs" in joined
-    assert "post_action_increment_closure" in joined
+    assert "task_closed" in joined
+    assert "notion_increment_closure_checkpoint" not in joined
+    assert "human_pm_projection_not_agent_truth" not in joined
+    assert '"notion_workflow_disabled": true' in joined
+    assert '"notion_sync_required": false' in joined
 
 
-def test_close_task_does_not_reopen_notion_reconciliation_as_stale(fake_sql):
+def test_close_task_keeps_notion_disabled_even_for_legacy_notion_reconciliation_task(fake_sql):
     fake_sql.statement_one_results = [
         {
             "project_id": "demo",
@@ -780,18 +784,18 @@ def test_close_task_does_not_reopen_notion_reconciliation_as_stale(fake_sql):
     result = factory_pg.close_task(
         "demo-reconcile-missing-notion-project",
         status="done",
-        result_summary="Synced Notion PM projection and read back the tracker page.",
+        result_summary="Legacy Notion PM projection task closed after workflow was disabled.",
         evidence={"notion_sync_completed": True, "notion_tracker_page_id": "37e37b39-cad6-812e-a750-f19285329717"},
         actor="factory-reporter",
         reconcile=False,
     )
 
-    assert result["notion_post_action"]["queued"] is False
+    assert result["notion_post_action"]["disabled"] is True
     joined = "\n".join(fake_sql.statements)
     assert '"notion_projection_stale": false' in joined
     assert '"notion_sync_required": false' in joined
     assert "notion_increment_closure_checkpoint" not in joined
-    assert "notion_increment_closure_synced" in joined
+    assert "notion_increment_closure_synced" not in joined
 
 
 def test_factory_notion_markdown_includes_sequential_post_action_increment_closures():

@@ -152,6 +152,26 @@ def test_factory_watchdog_alerts_are_actionable_for_runtime_invariants():
     assert "cron_claimed_null_repeated" not in {alert["alert_type"] for alert in dependency_blocked_alerts}
 
 
+def test_factory_watchdog_progress_stall_alerts_are_deterministic(monkeypatch):
+    watchdog = _load_script("factory_watchdog_alerts")
+    monkeypatch.setenv("FACTORY_PROGRESS_STALLED_ROUNDS", "1")
+    payload = {
+        "projects": [{"project_id": "demo", "status": "active", "autonomous_enabled": True}],
+        "tasks": [{"project_id": "demo", "task_id": "demo-running", "status": "running"}],
+        "task_runs": [{"project_id": "demo", "task_id": "demo-running", "run_id": "run-1", "status": "running"}],
+        "gates": [],
+        "human_questions": [],
+    }
+    state = {}
+
+    assert watchdog._progress_stall_alerts(payload, state) == []
+    alerts = watchdog._progress_stall_alerts(payload, state)
+
+    assert [alert["alert_type"] for alert in alerts] == ["factory_progress_stalled"]
+    assert alerts[0]["recommended_action"] == "invoke_zeus_reasoning_supervisor_with_snapshot_and_repair_root_cause"
+    assert alerts[0]["progress_snapshot"]["task_counts"] == {"running": 1}
+
+
 def test_repo_factory_cron_scripts_run_against_backend(monkeypatch, capsys, tmp_path):
     class FakeBackend:
         def status(self):
@@ -171,6 +191,7 @@ def test_repo_factory_cron_scripts_run_against_backend(monkeypatch, capsys, tmp_
     monkeypatch.setattr(factory_pg, "record_factory_blocker_actions", lambda classified=None, **kwargs: {"classified": 0, "events_recorded": 0, "questions_created": 0})
     monkeypatch.setattr(factory_pg, "factory_watchdog_alerts", lambda payload=None, **kwargs: [])
     monkeypatch.setenv("FACTORY_WATCHDOG_STATE_PATH", str(tmp_path / "watchdog_alert_state.json"))
+    monkeypatch.setenv("FACTORY_PROGRESS_STATE_PATH", str(tmp_path / "watchdog_progress_state.json"))
 
     for name in ("factory_status_sync", "factory_reviewer_dispatch", "factory_blocker_detector"):
         module = _load_script(name)
