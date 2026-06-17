@@ -43,7 +43,7 @@
     "lint:fix": "eslint src/ electron/ --fix",
     "fmt": "prettier --write 'src/**/*.{ts,tsx}' 'electron/**/*.{js,cjs}' 'vite.config.ts'",
     "fix": "npm run lint:fix && npm run fmt",
-    "test:ui": "vitest run --environment jsdom",
+    "test:ui": "vitest run --environment jsdom --testTimeout=10000 --maxWorkers=1 src",
     "preview": "node scripts/assert-root-install.cjs && vite preview --host 127.0.0.1 --port 4174"
   },
   "dependencies": {

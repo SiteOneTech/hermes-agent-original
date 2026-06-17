@@ -425,7 +425,8 @@ export function ModelSettings({ onMainModelChanged }: ModelSettingsProps) {
             <SelectContent>
               {providerOptions.map(provider => (
                 <SelectItem key={provider.slug || 'none'} value={provider.slug || 'none'}>
-                  {provider.name}
+                  <span>{provider.name}</span>
+                  {!isProviderReady(provider) && <span className="ml-2 text-muted-foreground">set up</span>}
                 </SelectItem>
               ))}
             </SelectContent>

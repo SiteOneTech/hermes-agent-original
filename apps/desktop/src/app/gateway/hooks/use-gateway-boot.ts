@@ -101,6 +101,7 @@ export function useGatewayBoot({
     let reconnecting = false
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null
     let reconnectAttempt = 0
+    let reconnectEscalated = false
     // Surface "sign in again" once per disconnect episode, not on every backoff
     // tick — a stale OAuth ticket fails every attempt and would otherwise stack
     // identical error toasts (and their haptics). Reset on the next clean open.
@@ -171,6 +172,10 @@ export function useGatewayBoot({
         reconnecting = false
 
         if (!cancelled && !gatewayOpen()) {
+          if (bootCompleted && !reconnectEscalated && reconnectAttempt >= 6) {
+            reconnectEscalated = true
+            failDesktopBoot('Lost connection to the Hermes gateway and could not reconnect.')
+          }
           scheduleReconnect()
         }
       }
@@ -197,6 +202,7 @@ export function useGatewayBoot({
 
       clearReconnectTimer()
       reconnectAttempt = 0
+      reconnectEscalated = false
       reconnectSecondaryGateways()
 
       if (!gatewayOpen()) {
@@ -229,6 +235,7 @@ export function useGatewayBoot({
 
       if (st === 'open') {
         reconnectAttempt = 0
+        reconnectEscalated = false
         reauthNotified = false
         clearReconnectTimer()
 
