@@ -581,6 +581,157 @@ def test_resume_preflight_allows_blocked_project_with_runnable_rework():
     assert factory_pg._resume_preflight_blocker(preflight) is None
 
 
+def test_supervisor_requeues_technical_blocker_before_manual_attention(fake_sql, monkeypatch):
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: {
+        "project_id": project_id,
+        "status": "blocked",
+        "autonomous_enabled": True,
+        "metadata": {"autonomous_enabled": True},
+    })
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: [
+        {
+            "project_id": project_id,
+            "lane_id": "demo-lane",
+            "task_id": "demo-blocked-tech",
+            "title": "Fix failing UI QA",
+            "status": "blocked",
+            "retry_count": 0,
+            "result_summary": "STATE: BLOCKED — tests failed with regression",
+            "metadata": {},
+        }
+    ])
+    fake_sql.rows_results = [[], []]
+
+    result = factory_pg.supervisor_health_check("demo", repair=True)
+
+    assert result["health"] == "yellow"
+    assert result["violations"][0]["invariant"] == "RED_AUTONOMOUS_WITHOUT_RUNNABLE_WORK_OR_QUESTION"
+    assert any(repair["operation"] == "supervisor_requeue_technical_blockers" for repair in result["repairs"])
+    joined = "\n".join(fake_sql.statements)
+    assert "SET status='rework'" in joined
+    assert "manual_attention" not in joined
+
+
+def test_supervisor_moves_exhausted_blocker_to_manual_attention(fake_sql, monkeypatch):
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: {
+        "project_id": project_id,
+        "status": "blocked",
+        "autonomous_enabled": True,
+        "metadata": {"autonomous_enabled": True},
+    })
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: [
+        {
+            "project_id": project_id,
+            "lane_id": "demo-lane",
+            "task_id": "demo-blocked-tech",
+            "title": "Fix failing UI QA",
+            "status": "blocked",
+            "retry_count": factory_pg.SUPERVISOR_TECHNICAL_REWORK_MAX_RETRIES,
+            "result_summary": "STATE: BLOCKED — repeated regression after rework",
+            "metadata": {},
+        }
+    ])
+    fake_sql.rows_results = [[], []]
+
+    result = factory_pg.supervisor_health_check("demo", repair=True)
+
+    assert result["health"] == "yellow"
+    assert any(repair["operation"] == "mark_project_manual_attention" for repair in result["repairs"])
+    joined = "\n".join(fake_sql.statements)
+    assert "status='manual_attention'" in joined
+    assert "autonomous_enabled=false" in joined
+
+
+def test_supervisor_moves_existing_human_question_to_manual_attention(fake_sql, monkeypatch):
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: {
+        "project_id": project_id,
+        "status": "blocked",
+        "autonomous_enabled": True,
+        "metadata": {"autonomous_enabled": True},
+    })
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: [
+        {
+            "project_id": project_id,
+            "lane_id": "demo-lane",
+            "task_id": "demo-blocked-human",
+            "title": "Needs owner decision",
+            "status": "blocked",
+            "retry_count": 0,
+            "result_summary": "STATE: BLOCKED — owner decision required",
+            "metadata": {},
+        }
+    ])
+    fake_sql.rows_results = [[], [{"question_id": "hq-demo", "task_id": "demo-blocked-human", "status": "pending"}], []]
+
+    result = factory_pg.supervisor_health_check("demo", repair=True)
+
+    assert result["health"] == "yellow"
+    assert any(repair["operation"] == "mark_project_manual_attention" for repair in result["repairs"])
+    joined = "\n".join(fake_sql.statements)
+    assert "status='manual_attention'" in joined
+    assert "autonomous_enabled=false" in joined
+    assert "pending_human_question" in joined
+    assert "SET status='rework'" not in joined
+
+
+def test_terminal_and_manual_attention_statuses_disable_autonomy():
+    assert factory_pg._project_status_forces_autonomy_off("completed") is True
+    assert factory_pg._project_status_forces_autonomy_off("accepted") is True
+    assert factory_pg._project_status_forces_autonomy_off("manual_attention") is True
+    assert factory_pg._project_status_forces_autonomy_off("active") is False
+    assert factory_pg._project_reconcile_forces_autonomy_off("completed", "active") is True
+    assert factory_pg._project_reconcile_forces_autonomy_off("active", "completed") is True
+    assert factory_pg._project_reconcile_forces_autonomy_off("active", "blocked") is False
+
+
+def test_resume_preflight_allows_manual_attention_only_with_runnable_work():
+    assert factory_pg._resume_preflight_blocker({
+        "status": "manual_attention",
+        "task_counts": {"rework": 1},
+    }) is None
+    assert factory_pg._resume_preflight_blocker({
+        "status": "manual_attention",
+        "task_counts": {"blocked": 1},
+    }) == "manual_attention_without_runnable_work"
+
+
+def test_auto_resume_only_fires_on_new_completion_transition():
+    assert factory_pg._should_auto_resume_after_reconcile("active", "completed") is True
+    assert factory_pg._should_auto_resume_after_reconcile("blocked", "completed") is True
+    assert factory_pg._should_auto_resume_after_reconcile("completed", "completed") is False
+    assert factory_pg._should_auto_resume_after_reconcile("paused", "active") is False
+
+
+def test_reconcile_preserves_manual_attention_and_forces_autonomy_off(monkeypatch):
+    fake = FakeSql()
+    monkeypatch.setattr(factory_pg, "sql", fake)
+    monkeypatch.setattr(factory_pg, "ensure_runtime_schema", lambda: None)
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: [
+        {"project_id": project_id, "task_id": "demo-blocked", "status": "blocked"}
+    ])
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: {
+        "project_id": project_id,
+        "status": "manual_attention",
+        "autonomous_enabled": True,
+        "paused_at": "2026-06-17T00:00:00Z",
+        "metadata": {"manual_attention_required": True, "autonomous_enabled": True},
+    })
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "reconciliation_findings", lambda project, tasks, pending, gates: [])
+    monkeypatch.setattr(factory_pg, "ensure_reconciliation_tasks", lambda project, findings, tasks: [])
+    monkeypatch.setattr(factory_pg, "cancel_resolved_reconciliation_tasks", lambda project, findings, tasks: [])
+    fake.rows_results = [[]]
+
+    result = factory_pg.reconcile_project("demo")
+
+    assert result["status"] == "manual_attention"
+    joined = "\n".join(fake.statements)
+    assert "status='manual_attention'" in joined
+    assert "autonomous_enabled=false" in joined
+    assert "project_status_manual_attention" in joined
+
+
 def test_close_project_cancels_active_runs_and_records_monitor_evidence(fake_sql):
     fake_sql.rows_results = [[{"run_id": "run-1"}, {"run_id": "run-2"}]]
     fake_sql.statement_one_results = [{"gate_id": 99}]

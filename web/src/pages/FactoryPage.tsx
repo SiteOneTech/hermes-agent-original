@@ -61,6 +61,7 @@ const STATIC_FACTORY_PROJECT_STATUSES = new Set([
   "completed",
   "delivery_hold",
   "hold",
+  "manual_attention",
   "on_hold",
   "paused",
 ]);
@@ -83,6 +84,10 @@ const STATUS_COPY: Record<string, { label: string; description: string }> = {
   delivery_hold: {
     label: "En espera",
     description: "Hay una condición de entrega/PM/documentación o decisión externa que debe resolverse; no es una pausa voluntaria del operador ni debe saltarse con autonomía.",
+  },
+  manual_attention: {
+    label: "Manual",
+    description: "Requiere atención humana/supervisor fuera del slot autónomo. No bloquea el avance de otro proyecto Factory.",
   },
   paused: {
     label: "Pausado",
@@ -153,6 +158,7 @@ function workflowIdleCopy(project: FactoryProject): string {
     return "en espera por condición; sin proceso activo";
   }
   if (status === "blocked") return "bloqueado; Resolver estado decidirá reparación o decisión";
+  if (status === "manual_attention") return "requiere atención manual; no ocupa el slot autónomo";
   if (status === "paused") return "pausado por decisión del operador; sin proceso activo";
   if (status === "cancelled") return "cancelado; sin proceso activo";
   if (status === "planned" || status === "intake") return "planificado; sin ejecución activa";
@@ -165,7 +171,7 @@ function statusTone(status?: string | null): BadgeTone {
     return "success";
   }
   if (["failed", "blocked"].includes(normalized)) return "destructive";
-  if (["todo", "planned", "pending", "review_pending_human", "intake", "delivery_hold"].includes(normalized)) {
+  if (["todo", "planned", "pending", "review_pending_human", "intake", "delivery_hold", "manual_attention"].includes(normalized)) {
     return "warning";
   }
   return "secondary";

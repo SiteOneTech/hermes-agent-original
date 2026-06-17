@@ -25,6 +25,7 @@ class ProjectStatus(_StrEnum):
     PLANNED = "planned"
     ACTIVE = "active"
     BLOCKED = "blocked"
+    MANUAL_ATTENTION = "manual_attention"
     PAUSED = "paused"
     DELIVERY_HOLD = "delivery_hold"
     COMPLETED = "completed"

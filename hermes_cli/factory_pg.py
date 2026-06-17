@@ -205,6 +205,7 @@ DISPATCHABLE_PROJECT_STATUSES = factory_contracts.DISPATCHABLE_PROJECT_STATUSES
 TERMINAL_GATE_STATUSES = factory_contracts.TERMINAL_GATE_STATUSES
 BLOCKER_ACTION_CATEGORIES = {"auto_resolvable", "technical_rework", "human_question_required", "stale_orphan_state"}
 DELIVERY_HOLD_STATUS = factory_contracts.ProjectStatus.DELIVERY_HOLD.value
+MANUAL_ATTENTION_STATUS = factory_contracts.ProjectStatus.MANUAL_ATTENTION.value
 CONDITION_HOLD_STATUSES = {DELIVERY_HOLD_STATUS, "hold", "on_hold"}
 TERMINAL_PROJECT_STATUSES = {
     factory_contracts.ProjectStatus.COMPLETED.value,
@@ -214,6 +215,7 @@ TERMINAL_PROJECT_STATUSES = {
     "closed",
 }
 RESUME_RUNNABLE_TASK_STATUSES = factory_contracts.RUNNABLE_TASK_STATUSES | {"ready", "todo"}
+SUPERVISOR_TECHNICAL_REWORK_MAX_RETRIES = 2
 MANUAL_TAKEOVER_DEFAULT_TTL_MINUTES = 180
 MANUAL_TAKEOVER_MAX_TTL_MINUTES = 24 * 60
 BLOCKED_ALERT_DEFAULT_MINUTES = 60
@@ -2010,6 +2012,19 @@ def _project_autonomous_enabled(project: dict[str, Any], metadata: dict[str, Any
     return bool(project.get("autonomous_enabled") or metadata.get("autonomous_enabled"))
 
 
+def _project_status_forces_autonomy_off(status: str | None) -> bool:
+    status_value = str(status or "").lower()
+    return status_value in TERMINAL_PROJECT_STATUSES or status_value == MANUAL_ATTENTION_STATUS
+
+
+def _project_reconcile_forces_autonomy_off(old_status: str | None, new_status: str | None) -> bool:
+    return _project_status_forces_autonomy_off(old_status) or _project_status_forces_autonomy_off(new_status)
+
+
+def _should_auto_resume_after_reconcile(old_status: str | None, new_status: str | None) -> bool:
+    return str(new_status or "").lower() == "completed" and str(old_status or "").lower() != "completed"
+
+
 def _has_runnable_autonomous_work(tasks: list[dict[str, Any]]) -> bool:
     runnable_statuses = {"todo", "ready", "rework"} | IN_FLIGHT_TASK_STATUSES
     return any(str(task.get("status") or "") in runnable_statuses for task in tasks)
@@ -2069,7 +2084,9 @@ def reconcile_project(project_id: str) -> dict[str, Any]:
         tasks = _tasks(project_id)
     counts = _status_counts(tasks)
     active_runs = sql.rows(f"SELECT run_id FROM factory.task_runs WHERE project_id={_q(project_id)} AND status IN ('queued','running')", user=_user())
-    if str(project.get("status")) == "paused" or metadata.get("autonomous_enabled") is False and project.get("paused_at"):
+    if str(project.get("status") or "") == MANUAL_ATTENTION_STATUS or metadata.get("manual_attention_required"):
+        new_status = MANUAL_ATTENTION_STATUS
+    elif str(project.get("status")) == "paused" or metadata.get("autonomous_enabled") is False and project.get("paused_at"):
         new_status = "paused"
     elif active_runs or any(status in counts for status in ACTIVE_TASK_STATUSES):
         new_status = "active"
@@ -2102,23 +2119,32 @@ def reconcile_project(project_id: str) -> dict[str, Any]:
     else:
         new_status = "intake"
     finding_codes = [str(finding.get("code")) for finding in findings]
+    force_autonomy_off = _project_reconcile_forces_autonomy_off(str(project.get("status") or ""), new_status)
+    reconcile_metadata = {'reconciliation_required': bool(findings), 'reconciliation_anomalies': finding_codes}
+    if force_autonomy_off:
+        reconcile_metadata.update({
+            'autonomous_enabled': False,
+            'autonomy_disabled_reason': f'project_status_{new_status}',
+        })
+    autonomous_sql = "false" if force_autonomy_off else "autonomous_enabled"
     sql.psql(
         f"""
         UPDATE factory.projects
         SET status={_q(new_status)},
-            metadata = metadata || {_j({'reconciliation_required': bool(findings), 'reconciliation_anomalies': finding_codes})},
+            autonomous_enabled={autonomous_sql},
+            metadata = metadata || {_j(reconcile_metadata)},
             last_reconciled_at=now(), updated_at=now()
         WHERE project_id={_q(project_id)};
         UPDATE factory.lanes
-        SET status = CASE WHEN { _q(new_status) } IN ('active','completed','blocked','paused','planned','intake','delivery_hold') THEN { _q(new_status) } ELSE status END,
+        SET status = CASE WHEN { _q(new_status) } IN ('active','completed','blocked','manual_attention','paused','planned','intake','delivery_hold') THEN { _q(new_status) } ELSE status END,
             updated_at=now()
         WHERE project_id={_q(project_id)};
         INSERT INTO factory.events(project_id, actor, event_type, message, metadata)
-        VALUES ({_q(project_id)}, 'factory-reconciler', 'project_reconciled', {_q(f'Project reconciled as {new_status}')}, {_j({'task_counts': counts, 'pending_gates': len(pending_gates), 'active_runs': len(active_runs), 'anomalies': finding_codes, 'reconciliation_tasks_created': created_reconciliation_tasks, 'reconciliation_tasks_cancelled': cancelled_reconciliation_tasks})});
+        VALUES ({_q(project_id)}, 'factory-reconciler', 'project_reconciled', {_q(f'Project reconciled as {new_status}')}, {_j({'task_counts': counts, 'pending_gates': len(pending_gates), 'active_runs': len(active_runs), 'anomalies': finding_codes, 'reconciliation_tasks_created': created_reconciliation_tasks, 'reconciliation_tasks_cancelled': cancelled_reconciliation_tasks, 'autonomy_disabled': force_autonomy_off})});
         """,
         user=_user(),
     )
-    auto_resumed = _auto_resume_next_guard_queued_project(project_id) if new_status == "completed" else None
+    auto_resumed = _auto_resume_next_guard_queued_project(project_id) if _should_auto_resume_after_reconcile(str(project.get("status") or ""), new_status) else None
     return {
         "project_id": project_id,
         "status": new_status,
@@ -2187,12 +2213,13 @@ def _auto_resume_next_guard_queued_project(completed_project_id: str) -> dict[st
     """Resume the next project queued by the single-active guard after completion.
 
     Only projects explicitly paused by `_pause_other_autonomous_projects` are
-    eligible.  A project in delivery_hold/hold is never selected because the
-    query requires status='paused'.
+    eligible. Each candidate must pass the same resume preflight as the UI/CLI;
+    a blocked/manual project must not steal the autonomous slot while the next
+    runnable project waits behind it.
     """
 
     ensure_runtime_schema()
-    row = sql.statement_one(
+    rows = sql.rows(
         f"""
         SELECT project_id
         FROM factory.projects
@@ -2201,24 +2228,35 @@ def _auto_resume_next_guard_queued_project(completed_project_id: str) -> dict[st
           AND COALESCE((metadata->>'paused_by_single_active_guard')::boolean, false) IS TRUE
           AND COALESCE((metadata->>'single_active_guard_queue')::boolean, false) IS TRUE
         ORDER BY updated_at, started_at, project_id
-        LIMIT 1
+        LIMIT 10
         """,
         user=_user(),
     )
-    if not row:
-        return None
-    next_project_id = str(row["project_id"])
-    result = resume_project(next_project_id)
-    sql.psql(
-        f"""
-        INSERT INTO factory.events(project_id, actor, event_type, message, metadata)
-        VALUES ({_q(completed_project_id)}, 'factory-orchestrator', 'single_active_guard_auto_resume_next',
-                {_q(f'Auto-resumed queued Factory project {next_project_id} after active project completion')},
-                {_j({'resumed_project_id': next_project_id})});
-        """,
-        user=_user(),
-    )
-    return result
+    for row in rows:
+        next_project_id = str(row["project_id"])
+        result = control_action(next_project_id, "resume")
+        if result.get("resume_blocked") or result.get("dispatch_allowed") is False:
+            sql.psql(
+                f"""
+                INSERT INTO factory.events(project_id, actor, event_type, message, metadata)
+                VALUES ({_q(completed_project_id)}, 'factory-orchestrator', 'single_active_guard_auto_resume_skipped',
+                        {_q(f'Skipped queued Factory project {next_project_id}; resume preflight blocked')},
+                        {_j({'candidate_project_id': next_project_id, 'resume_blocked_reason': result.get('resume_blocked_reason')})});
+                """,
+                user=_user(),
+            )
+            continue
+        sql.psql(
+            f"""
+            INSERT INTO factory.events(project_id, actor, event_type, message, metadata)
+            VALUES ({_q(completed_project_id)}, 'factory-orchestrator', 'single_active_guard_auto_resume_next',
+                    {_q(f'Auto-resumed queued Factory project {next_project_id} after active project completion')},
+                    {_j({'resumed_project_id': next_project_id})});
+            """,
+            user=_user(),
+        )
+        return result
+    return None
 
 
 def resume_project(project_id: str) -> dict[str, Any]:
@@ -2230,10 +2268,13 @@ def resume_project(project_id: str) -> dict[str, Any]:
             metadata = (metadata || {_j({'autonomous_enabled': True, 'autonomy_mode': 'incremental_single_active'})})
                 - 'paused_by_single_active_guard'
                 - 'single_active_guard_queue'
-                - 'single_active_guard_paused_for',
+                - 'single_active_guard_paused_for'
+                - 'manual_attention_required'
+                - 'manual_attention_reason'
+                - 'manual_attention_blockers',
             updated_at=now()
         WHERE project_id={_q(project_id)};
-        UPDATE factory.lanes SET status='active', updated_at=now() WHERE project_id={_q(project_id)} AND status IN ('planned','paused','intake');
+        UPDATE factory.lanes SET status='active', updated_at=now() WHERE project_id={_q(project_id)} AND status IN ('planned','paused','intake','manual_attention');
         INSERT INTO factory.events(project_id, actor, event_type, message, metadata)
         VALUES ({_q(project_id)}, 'factory-orchestrator', 'autonomous_resume', 'Autonomous Factory execution resumed', {_j({'single_active_increment': True, 'single_active_project_guard': True})});
         """,
@@ -2620,6 +2661,112 @@ def record_factory_blocker_actions(classified: Optional[list[dict[str, Any]]] = 
             if not before:
                 questions_created += 1
     return {"classified": len(classified), "events_recorded": events_recorded, "questions_created": questions_created}
+
+
+def _task_retry_count(task: dict[str, Any]) -> int:
+    try:
+        return int(task.get("retry_count") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _supervisor_requeue_technical_blockers(
+    project_id: str,
+    classified: list[dict[str, Any]],
+    tasks: list[dict[str, Any]],
+    *,
+    max_retries: int = SUPERVISOR_TECHNICAL_REWORK_MAX_RETRIES,
+) -> dict[str, Any]:
+    """Turn technical blocked tasks back into executable rework when safe.
+
+    A blocked autonomous project with technical blockers and no active run is an
+    absorbing state unless the supervisor converts the classifier decision into a
+    concrete Factory task transition. Keep retries bounded so a definitive
+    blocker eventually becomes manual attention instead of monopolizing the
+    single-active slot forever.
+    """
+
+    tasks_by_id = {str(task.get("task_id") or ""): task for task in tasks}
+    requeued: list[dict[str, Any]] = []
+    exhausted: list[dict[str, Any]] = []
+    for item in classified:
+        if item.get("action_category") != "technical_rework":
+            continue
+        task_id = str(item.get("task_id") or "")
+        task = tasks_by_id.get(task_id)
+        if not task or str(task.get("status") or "") != "blocked":
+            continue
+        retry_count = _task_retry_count(task)
+        if retry_count >= max_retries:
+            exhausted.append({"task_id": task_id, "retry_count": retry_count, "max_retries": max_retries})
+            continue
+        summary = str(task.get("result_summary") or "").rstrip()
+        rework_note = (
+            "\n\n[factory-supervisor] Bloqueo técnico reabierto como rework automático "
+            f"(intento {retry_count + 1}/{max_retries}). El proyecto no requiere a Jean todavía; "
+            "el worker debe corregir la causa raíz y cerrar con evidencia."
+        )
+        sql.psql(
+            f"""
+            UPDATE factory.tasks
+            SET status='rework',
+                result_summary={_q((summary + rework_note).strip())},
+                metadata = metadata || {_j({'supervisor_rework': True, 'supervisor_rework_reason': item.get('blocker_category'), 'supervisor_rework_attempt': retry_count + 1, 'supervisor_rework_max_retries': max_retries})},
+                updated_at=now()
+            WHERE task_id={_q(task_id)} AND status='blocked';
+            INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
+            VALUES ({_q(project_id)}, {_q(task.get('lane_id'))}, {_q(task_id)}, 'factory-supervisor', 'technical_blocker_requeued',
+                    {_q('Supervisor converted technical blocker into runnable rework')},
+                    {_j({'retry_count': retry_count, 'max_retries': max_retries, 'classification': item})});
+            """,
+            user=_user(),
+        )
+        requeued.append({"task_id": task_id, "retry_count": retry_count, "next_status": "rework"})
+    return {"requeued": requeued, "exhausted": exhausted}
+
+
+def mark_project_manual_attention(project_id: str, *, reason: str, blockers: list[dict[str, Any]]) -> dict[str, Any]:
+    """Move a project out of the autonomous slot when it truly needs a person."""
+
+    ensure_runtime_schema()
+    compact_blockers = [
+        {
+            "task_id": blocker.get("task_id"),
+            "action_category": blocker.get("action_category"),
+            "requires_human": blocker.get("requires_human"),
+            "recommended_action": blocker.get("recommended_action"),
+        }
+        for blocker in blockers[:10]
+    ]
+    metadata = {
+        "autonomous_enabled": False,
+        "manual_attention_required": True,
+        "manual_attention_reason": reason,
+        "manual_attention_blockers": compact_blockers,
+        "pause_kind": "manual_attention_required",
+        "reactivation_policy": "resolve_state_preflight_before_dispatch",
+    }
+    sql.psql(
+        f"""
+        UPDATE factory.projects
+        SET status='manual_attention', autonomous_enabled=false, paused_at=now(),
+            metadata = (metadata || {_j(metadata)})
+                - 'paused_by_single_active_guard'
+                - 'single_active_guard_queue'
+                - 'single_active_guard_paused_for',
+            updated_at=now()
+        WHERE project_id={_q(project_id)};
+        UPDATE factory.lanes
+        SET status='manual_attention', updated_at=now()
+        WHERE project_id={_q(project_id)} AND status IN ('active','planned','intake','blocked','delivery_hold','paused');
+        INSERT INTO factory.events(project_id, actor, event_type, message, metadata)
+        VALUES ({_q(project_id)}, 'factory-supervisor', 'manual_attention_required',
+                {_q('Factory supervisor moved project out of autonomous slot because it needs manual attention')},
+                {_j(metadata)});
+        """,
+        user=_user(),
+    )
+    return {"project_id": project_id, "status": MANUAL_ATTENTION_STATUS, "reason": reason, "blockers": compact_blockers}
 
 
 def factory_watchdog_alerts(payload: Optional[dict[str, Any]] = None, *, blocked_minutes: int = BLOCKED_ALERT_DEFAULT_MINUTES, claimed_null_rounds: int = 0, project_id: Optional[str] = None) -> list[dict[str, Any]]:
@@ -3423,16 +3570,51 @@ def supervisor_health_check(project_id: str, *, repair: bool = True) -> dict[str
     violations: list[dict[str, Any]] = []
     repairs: list[dict[str, Any]] = []
 
-    if autonomous and str(project.get("status") or "") == DELIVERY_HOLD_STATUS and blocked_tasks and not active_runs and not pending_questions:
+    payload = {
+        "projects": [project],
+        "tasks": tasks,
+        "task_runs": active_runs,
+        "gates": [],
+        "human_questions": pending_questions,
+    }
+    no_runnable_work = not _has_runnable_autonomous_work(tasks)
+    blocked_without_runtime = autonomous and blocked_tasks and not active_runs and no_runnable_work
+    delivery_hold_blocked = str(project.get("status") or "") == DELIVERY_HOLD_STATUS and blocked_without_runtime
+    autonomous_blocked = str(project.get("status") or "") == "blocked" and blocked_without_runtime
+
+    if delivery_hold_blocked or autonomous_blocked:
+        invariant = (
+            factory_contracts.FactoryInvariant.RED_DELIVERY_HOLD_WITH_BLOCKED_WORK.value
+            if delivery_hold_blocked
+            else factory_contracts.FactoryInvariant.RED_AUTONOMOUS_WITHOUT_RUNNABLE_WORK_OR_QUESTION.value
+        )
         violations.append({
-            "invariant": factory_contracts.FactoryInvariant.RED_DELIVERY_HOLD_WITH_BLOCKED_WORK.value,
+            "invariant": invariant,
             "project_id": project_id,
             "blocked_tasks": [task.get("task_id") for task in blocked_tasks],
-            "expected_runtime_action": "repair_resolved_blocker_or_create_human_question",
+            "expected_runtime_action": "repair_requeue_or_manual_attention",
         })
         if repair:
             unblocked = clear_resolved_blockers(project_id)
             repairs.append({"operation": "clear_resolved_blockers", "result": unblocked})
+            tasks = _tasks(project_id)
+            blocked_tasks = [task for task in tasks if str(task.get("status") or "") == "blocked"]
+            payload["tasks"] = tasks
+            classified = classify_factory_blockers(payload, project_id=project_id)
+            blocker_actions = record_factory_blocker_actions(classified, payload=payload, create_questions=True)
+            repairs.append({"operation": "record_factory_blocker_actions", "result": blocker_actions})
+            if pending_questions:
+                manual = mark_project_manual_attention(project_id, reason="pending_human_question", blockers=classified)
+                repairs.append({"operation": "mark_project_manual_attention", "result": manual})
+            else:
+                human_blockers = [item for item in classified if item.get("requires_human")]
+                requeue = _supervisor_requeue_technical_blockers(project_id, classified, tasks)
+                if requeue.get("requeued"):
+                    repairs.append({"operation": "supervisor_requeue_technical_blockers", "result": requeue})
+                if human_blockers or (requeue.get("exhausted") and not requeue.get("requeued")):
+                    manual_reason = "human_question_required" if human_blockers else "technical_rework_retries_exhausted"
+                    manual = mark_project_manual_attention(project_id, reason=manual_reason, blockers=human_blockers or classified)
+                    repairs.append({"operation": "mark_project_manual_attention", "result": manual})
 
     health = "green"
     if violations and not repairs:
@@ -3459,9 +3641,11 @@ def _resume_preflight_blocker(preflight: dict[str, Any]) -> str | None:
     status_value = str(preflight.get("status") or "").lower()
     if status_value in TERMINAL_PROJECT_STATUSES:
         return f"terminal_{status_value}"
+    runnable_count = _preflight_task_count(preflight, RESUME_RUNNABLE_TASK_STATUSES)
+    if status_value == MANUAL_ATTENTION_STATUS and runnable_count <= 0:
+        return "manual_attention_without_runnable_work"
     if status_value in {"hold", "on_hold"}:
         return "condition_hold"
-    runnable_count = _preflight_task_count(preflight, RESUME_RUNNABLE_TASK_STATUSES)
     if status_value == DELIVERY_HOLD_STATUS and runnable_count <= 0:
         return "delivery_hold_without_runnable_work"
     if status_value == "blocked" and runnable_count <= 0:
