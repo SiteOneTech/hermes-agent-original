@@ -273,8 +273,9 @@ def _spawn_worker(db: Any, payload: dict[str, Any], claim: dict[str, Any]) -> di
             f"prompt = pathlib.Path({str(prompt_path)!r}).read_text(encoding='utf-8')",
             f"log_path = pathlib.Path({str(log_path)!r})",
             f"exit_path = pathlib.Path({str(exit_path)!r})",
+            "cmd = [sys.executable, '-m', 'hermes_cli.main', '--profile', " + repr(worker) + ", 'chat', '-q', prompt]",
             "with log_path.open('w', encoding='utf-8', errors='replace') as log:",
-            f"    proc = subprocess.run(['hermes', '--profile', {worker!r}, 'chat', '-q', prompt], stdout=log, stderr=subprocess.STDOUT, text=True)",
+            "    proc = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, text=True)",
             "exit_path.write_text(str(proc.returncode), encoding='utf-8')",
         ]
     )
