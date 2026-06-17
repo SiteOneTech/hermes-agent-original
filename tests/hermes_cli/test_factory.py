@@ -1,5 +1,6 @@
 import argparse
 import json
+from pathlib import Path
 
 from hermes_cli import factory
 from hermes_cli.factory_catalog import FACTORY_AGENTS, slugify
@@ -7,6 +8,7 @@ from hermes_cli.factory_catalog import FACTORY_AGENTS, slugify
 
 def test_factory_catalog_seeds_expected_agent_roster():
     agent_ids = {agent[0] for agent in FACTORY_AGENTS}
+    agent_by_id = {agent[0]: agent for agent in FACTORY_AGENTS}
     assert len(agent_ids) == 14
     assert "factory-orchestrator" in agent_ids
     assert "claude-builder" in agent_ids
@@ -15,6 +17,14 @@ def test_factory_catalog_seeds_expected_agent_roster():
     assert "openhands-builder" in agent_ids
     assert "openhands-lab" in agent_ids
     assert "quality-reviewer" in agent_ids
+    assert "terminal" in agent_by_id["factory-reporter"][4]
+    assert "factory-sandbox-kidu" in agent_by_id["qa-verifier"][5]
+    assert "factory-sandbox-kidu" in agent_by_id["devops-release"][5]
+
+
+def test_factory_sandbox_kidu_skill_is_bundled_for_assigned_profiles():
+    repo_root = Path(__file__).resolve().parents[2]
+    assert (repo_root / "skills" / "devops" / "factory-sandbox-kidu" / "SKILL.md").exists()
 
 
 def test_factory_slugify_is_stable_for_project_ids():

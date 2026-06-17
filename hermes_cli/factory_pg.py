@@ -167,7 +167,7 @@ RECONCILIATION_TASK_SPECS: dict[str, dict[str, Any]] = {
         "engine": "zeus",
         "priority": 45,
         "acceptance": [
-            "Runnable/UI deliverables have explicit planning, implementation, independent review, QA, sandbox deploy, and delivery reporting tasks.",
+            "Runnable/UI deliverables have explicit planning, implementation, independent review, QA, sandbox deploy, post-sandbox verification, and delivery reporting tasks.",
             "UI deliverables include a qa-verifier task requiring Playwright or equivalent browser evidence with desktop/mobile screenshots and console checks.",
             "Sandbox deploy tasks target Zeus-authorized sandbox surfaces, not production, unless Jean explicitly authorized production scope.",
         ],
@@ -543,21 +543,26 @@ def _task_satisfies_mandatory_category(task: dict[str, Any], category: str) -> b
     reviewer = str(task.get("reviewer_profile") or task.get("reviewer_agent_id") or "").lower()
     text = _task_text(task)
     if category == "planning":
-        return phase in {"planning", "documentation", "docs", "architecture", "research"} or owner == "implementation-planner" or any(term in text for term in ("prd", "adr", "sprint plan", "task graph", "technical blueprint"))
+        return owner == "implementation-planner" and (
+            phase in {"planning", "documentation", "docs", "architecture", "research"}
+            or any(term in text for term in ("prd", "adr", "sprint plan", "task graph", "technical blueprint"))
+        )
     if category == "implementation":
-        return phase == "implementation" or owner in {"claude-builder", "codex-builder", "openhands-builder", "claude-code-builder"} or "implement" in text
+        return owner in {"claude-builder", "claude-deepseek-builder", "codex-builder", "openhands-builder", "claude-code-builder"} and phase == "implementation"
     if category == "quality_review":
-        return phase == "review" or owner in {"quality-reviewer", "architecture-reviewer"} or reviewer in {"quality-reviewer", "architecture-reviewer"} or "independent review" in text or "quality review" in text
+        return owner == "quality-reviewer" and phase in {"review", "quality_review", "quality"}
     if category == "security_review":
-        return phase == "security" or owner == "security-reviewer" or reviewer == "security-reviewer" or "security review" in text
+        return owner == "security-reviewer" and phase == "security"
     if category == "qa_verification":
-        return phase == "qa" or owner == "qa-verifier" or any(term in text for term in ("qa", "smoke", "test gate"))
+        return owner == "qa-verifier" and phase == "qa" and any(term in text for term in ("qa", "smoke", "test gate", "verification"))
     if category == "ui_qa_verification":
-        return owner == "qa-verifier" or (phase == "qa" and any(term in text for term in ("playwright", "browser", "screenshot", "console", "visual", "mobile", "desktop")))
+        return owner == "qa-verifier" and phase == "qa" and any(term in text for term in ("playwright", "browser", "screenshot", "console", "visual", "mobile", "desktop"))
     if category == "sandbox_deploy":
-        return owner == "devops-release" or (phase in {"delivery", "deploy", "deployment", "release"} and any(term in text for term in ("sandbox", "deploy", "docker compose", "caddy", "preview url", "public url")))
+        return owner == "devops-release" and phase in {"delivery", "deploy", "deployment", "release"} and any(term in text for term in ("sandbox", "deploy", "docker compose", "caddy", "preview url", "public url"))
+    if category == "post_sandbox_verification":
+        return owner == "qa-verifier" and phase in {"qa", "delivery"} and any(term in text for term in ("post-sandbox", "post sandbox", "post-deploy", "post deploy", "public sandbox", "sandbox url", "live sandbox")) and any(term in text for term in ("playwright", "browser", "smoke", "console", "screenshot", "api", "health", "endpoint", "curl", "http", "status"))
     if category == "delivery_report":
-        return (owner == "factory-reporter" and phase in {"delivery", "reporting", "documentation"}) or any(term in text for term in ("delivery report", "delivery gate", "gate closure", "qa_report", "qa report"))
+        return owner == "factory-reporter" and phase in {"delivery", "reporting", "documentation"} and any(term in text for term in ("delivery report", "delivery gate", "gate closure", "qa_report", "qa report"))
     return False
 
 
@@ -569,16 +574,51 @@ def _mandatory_phase_categories(project: dict[str, Any]) -> list[str]:
     categories.append("ui_qa_verification" if _project_requires_ui_delivery(project) else "qa_verification")
     if _metadata_bool(metadata, "security_required"):
         categories.append("security_review")
-    categories.extend(["sandbox_deploy", "delivery_report"])
+    categories.extend(["sandbox_deploy", "post_sandbox_verification", "delivery_report"])
     return categories
 
 
 def _missing_mandatory_phase_categories(project: dict[str, Any], tasks: list[dict[str, Any]]) -> list[str]:
-    return [
-        category
-        for category in _mandatory_phase_categories(project)
-        if not any(_task_satisfies_mandatory_category(task, category) for task in tasks)
-    ]
+    """Return mandatory categories not covered by distinct Factory tasks.
+
+    The contract requires explicit phases, not one keyword-stuffed task that
+    pretends to cover planning, build, QA, deploy, post-sandbox verification,
+    and report at once. Use bipartite matching so coverage is order-independent:
+    if a post-sandbox task appears before a normal QA task, the matcher can
+    still assign each category to a distinct task.
+    """
+
+    categories = _mandatory_phase_categories(project)
+    task_keys: dict[int, str] = {
+        index: f"{task.get('task_id') or task.get('id') or 'task'}:{index}"
+        for index, task in enumerate(tasks)
+    }
+    candidates: dict[str, list[str]] = {
+        category: [
+            task_keys[index]
+            for index, task in enumerate(tasks)
+            if _task_satisfies_mandatory_category(task, category)
+        ]
+        for category in categories
+    }
+    task_to_category: dict[str, str] = {}
+
+    def _try_match(category: str, seen_tasks: set[str]) -> bool:
+        for task_key in candidates.get(category, []):
+            if task_key in seen_tasks:
+                continue
+            seen_tasks.add(task_key)
+            previous_category = task_to_category.get(task_key)
+            if previous_category is None or _try_match(previous_category, seen_tasks):
+                task_to_category[task_key] = category
+                return True
+        return False
+
+    for category in categories:
+        _try_match(category, set())
+
+    matched_categories = set(task_to_category.values())
+    return [category for category in categories if category not in matched_categories]
 
 
 def _authorized_sandbox_hosts(metadata: dict[str, Any]) -> list[str]:
@@ -626,6 +666,44 @@ def _delivery_url_from_evidence(evidence: dict[str, Any]) -> str:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return ""
+
+
+def _evidence_url_from_keys(evidence: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        extracted = _evidence_url_from_value(evidence.get(key))
+        if extracted:
+            return extracted
+    return ""
+
+
+def _evidence_urls_by_key(evidence: dict[str, Any], *keys: str) -> dict[str, str]:
+    urls: dict[str, str] = {}
+    for key in keys:
+        value = evidence.get(key)
+        extracted = _evidence_url_from_value(value)
+        if extracted:
+            urls[key] = extracted
+    return urls
+
+
+def _evidence_url_from_value(value: Any) -> str:
+    if isinstance(value, str) and value.strip().lower().startswith(("http://", "https://")):
+        return value.strip()
+    if isinstance(value, dict):
+        for nested_key in ("url", "href", "target", "target_url", "checked_url", "health_url", "endpoint"):
+            nested = value.get(nested_key)
+            if isinstance(nested, str) and nested.strip().lower().startswith(("http://", "https://")):
+                return nested.strip()
+    return ""
+
+
+def _url_host(value: str) -> str:
+    parsed = urlparse(value or "")
+    return parsed.netloc.lower().split(":", 1)[0]
+
+
+def _same_url_host(a: str, b: str) -> bool:
+    return bool(_url_host(a) and _url_host(a) == _url_host(b))
 
 
 def _evidence_status_passed(value: Any) -> bool:
@@ -763,6 +841,43 @@ def _delivery_evidence_findings(project: dict[str, Any], evidence: dict[str, Any
         sandbox_root = _authorized_project_sandbox_root(project)
         deploy_path = _path_string(evidence.get("sandbox_deploy_path") or evidence.get("deploy_path"))
         compose_path = _path_string(evidence.get("docker_compose_path") or evidence.get("compose_path"))
+        public_check_urls = _evidence_urls_by_key(
+            evidence,
+            "health_url",
+            "api_smoke_url",
+            "api_health_smoke_url",
+            "sandbox_public_smoke_url",
+            "public_url_smoke_url",
+            "sandbox_smoke_url",
+            "public_smoke_url",
+        )
+        smoke_status_url_keys = {
+            "sandbox_public_smoke": ("sandbox_public_smoke_url", "public_smoke_url", "sandbox_smoke_url"),
+            "public_url_smoke": ("public_url_smoke_url", "public_smoke_url"),
+            "sandbox_smoke": ("sandbox_smoke_url", "public_smoke_url"),
+            "health_check": ("health_url",),
+            "api_smoke": ("api_smoke_url",),
+            "api_health_smoke": ("api_health_smoke_url", "health_url"),
+        }
+        passed_public_smokes = 0
+        for status_key, url_keys in smoke_status_url_keys.items():
+            if not _evidence_status_passed(evidence.get(status_key)):
+                continue
+            passed_public_smokes += 1
+            if status_key == "api_smoke":
+                status_url = _evidence_url_from_keys(evidence, *url_keys)
+            else:
+                status_url = _evidence_url_from_value(evidence.get(status_key)) or _evidence_url_from_keys(evidence, *url_keys)
+            if not status_url:
+                findings.append(f"{status_key} evidence must include a public same-host URL")
+            else:
+                public_check_urls.setdefault(f"{status_key}_url", status_url)
+        if not passed_public_smokes:
+            findings.append("sandbox_public_smoke/public_url_smoke must be passed against the public sandbox URL")
+        if sandbox_url:
+            for key, value in public_check_urls.items():
+                if not _same_url_host(value, sandbox_url):
+                    findings.append(f"{key} must target the same public sandbox host as sandbox_url")
         if not deploy_path:
             findings.append(f"sandbox_deploy_path under {sandbox_root} is required")
         elif not _path_under_root(deploy_path, sandbox_root):
@@ -775,7 +890,20 @@ def _delivery_evidence_findings(project: dict[str, Any], evidence: dict[str, Any
             findings.append("docker_compose_path must point to a Docker Compose file")
 
     if requires_ui:
-        if not (_evidence_status_passed(evidence.get("playwright_smoke")) or _evidence_status_passed(evidence.get("browser_smoke"))):
+        playwright_passed = _evidence_status_passed(evidence.get("playwright_smoke"))
+        browser_passed = _evidence_status_passed(evidence.get("browser_smoke"))
+        playwright_url = _evidence_url_from_keys(evidence, "playwright_url")
+        browser_url = _evidence_url_from_keys(evidence, "browser_smoke_url", "verified_url", "validated_url", "qa_url")
+        for key, value in _evidence_urls_by_key(evidence, "playwright_url", "browser_smoke_url", "verified_url", "validated_url", "qa_url").items():
+            if sandbox_url and not _same_url_host(value, sandbox_url):
+                findings.append(f"{key} must target the same public sandbox host as sandbox_url")
+        if not (playwright_url or browser_url):
+            findings.append("playwright_url/browser_smoke_url for the public sandbox URL is required")
+        if playwright_passed and not playwright_url:
+            findings.append("playwright_smoke evidence must include playwright_url on the public sandbox host")
+        if browser_passed and not browser_url:
+            findings.append("browser_smoke evidence must include browser_smoke_url/verified_url on the public sandbox host")
+        if not (playwright_passed or browser_passed):
             findings.append("playwright_smoke or equivalent browser_smoke must be passed")
         if not _non_empty_path(_screenshot_evidence_path(evidence, "desktop")):
             findings.append("desktop_screenshot evidence path is required")
@@ -1239,7 +1367,7 @@ def reconciliation_findings(project: dict[str, Any], tasks: list[dict[str, Any]]
             "Factory task graph is missing mandatory canonical phases for runnable/UI sandbox delivery",
             missing_categories=missing_phase_categories,
             required_categories=_mandatory_phase_categories(project),
-            contract="planning -> implementation -> independent review -> QA/browser -> authorized sandbox deploy -> delivery report",
+            contract="planning -> implementation -> independent review -> QA/browser -> authorized sandbox deploy -> post-sandbox browser/API verification -> delivery report",
         )
 
     if pending_gates:

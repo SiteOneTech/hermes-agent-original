@@ -751,6 +751,10 @@ def _complete_ui_delivery_evidence():
         "sandbox_deploy_path": "/srv/factory/projects/demo",
         "docker_compose_path": "/srv/factory/projects/demo/docker-compose.yml",
         "health_url": "https://demo.kidu.app/health",
+        "sandbox_public_smoke": "passed",
+        "public_smoke_url": "https://demo.kidu.app/health",
+        "browser_smoke_url": "https://demo.kidu.app/",
+        "playwright_url": "https://demo.kidu.app/",
         "playwright_smoke": "passed",
         "browser_smoke": "passed",
         "desktop_screenshot": "factory/projects/demo/evidence/desktop.png",
@@ -776,6 +780,8 @@ def test_ui_delivery_gate_blocks_without_required_sandbox_playwright_evidence(fa
 
     message = str(exc.value)
     assert "sandbox_url" in message
+    assert "sandbox_public_smoke" in message
+    assert "browser_smoke_url" in message
     assert "playwright_smoke" in message
     assert "desktop_screenshot" in message
     assert "mobile_screenshot" in message
@@ -820,7 +826,7 @@ def test_reconciliation_requires_canonical_ui_phase_contract(monkeypatch):
 
     finding = next(f for f in findings if f["code"] == "missing_mandatory_factory_phases")
     missing = set(finding["metadata"]["missing_categories"])
-    assert {"planning", "quality_review", "ui_qa_verification", "sandbox_deploy", "delivery_report"}.issubset(missing)
+    assert {"planning", "quality_review", "ui_qa_verification", "sandbox_deploy", "post_sandbox_verification", "delivery_report"}.issubset(missing)
 
 
 def test_reconciliation_accepts_canonical_ui_phase_contract(monkeypatch):
@@ -832,12 +838,68 @@ def test_reconciliation_accepts_canonical_ui_phase_contract(monkeypatch):
         {"task_id": "demo-review", "title": "Independent quality review", "phase": "review", "status": "done", "owner_profile": "quality-reviewer"},
         {"task_id": "demo-ui-qa", "title": "Playwright browser QA with desktop/mobile screenshots", "phase": "qa", "status": "done", "owner_profile": "qa-verifier"},
         {"task_id": "demo-deploy", "title": "Deploy to authorized Kidu sandbox", "phase": "delivery", "status": "done", "owner_profile": "devops-release"},
+        {"task_id": "demo-post-sandbox-qa", "title": "Post-sandbox Playwright browser smoke against public sandbox URL with console screenshots", "phase": "qa", "status": "done", "owner_profile": "qa-verifier"},
         {"task_id": "demo-report", "title": "Delivery report and gate closure", "phase": "delivery", "status": "done", "owner_profile": "factory-reporter"},
     ]
 
     findings = factory_pg.reconciliation_findings(project, tasks=tasks, pending_gates=[], gates=[])
 
     assert not any(f["code"] == "missing_mandatory_factory_phases" for f in findings)
+
+
+def test_reconciliation_accepts_claude_deepseek_builder_as_implementation(monkeypatch):
+    monkeypatch.setattr(factory_pg, "_project_artifact_dir", lambda project: (None, "factory/projects/demo"))
+    project = _ui_project()
+    tasks = [
+        {"task_id": "demo-plan", "title": "PRD ADR sprint task graph", "phase": "planning", "status": "done", "owner_profile": "implementation-planner"},
+        {"task_id": "demo-impl", "title": "Implement UI", "phase": "implementation", "status": "done", "owner_profile": "claude-deepseek-builder"},
+        {"task_id": "demo-review", "title": "Independent quality review", "phase": "review", "status": "done", "owner_profile": "quality-reviewer"},
+        {"task_id": "demo-ui-qa", "title": "Playwright browser QA with desktop/mobile screenshots", "phase": "qa", "status": "done", "owner_profile": "qa-verifier"},
+        {"task_id": "demo-deploy", "title": "Deploy to authorized Kidu sandbox", "phase": "delivery", "status": "done", "owner_profile": "devops-release"},
+        {"task_id": "demo-post-sandbox-qa", "title": "Post-sandbox Playwright browser smoke against public sandbox URL with console screenshots", "phase": "qa", "status": "done", "owner_profile": "qa-verifier"},
+        {"task_id": "demo-report", "title": "Delivery report and gate closure", "phase": "delivery", "status": "done", "owner_profile": "factory-reporter"},
+    ]
+
+    findings = factory_pg.reconciliation_findings(project, tasks=tasks, pending_gates=[], gates=[])
+
+    assert not any(f["code"] == "missing_mandatory_factory_phases" for f in findings)
+
+
+def test_phase_contract_requires_distinct_ui_qa_and_post_sandbox_tasks(monkeypatch):
+    monkeypatch.setattr(factory_pg, "_project_artifact_dir", lambda project: (None, "factory/projects/demo"))
+    project = _ui_project()
+    tasks = [
+        {"task_id": "demo-plan", "title": "PRD ADR sprint task graph", "phase": "planning", "status": "done", "owner_profile": "implementation-planner"},
+        {"task_id": "demo-impl", "title": "Implement UI", "phase": "implementation", "status": "done", "owner_profile": "codex-builder"},
+        {"task_id": "demo-review", "title": "Independent quality review", "phase": "review", "status": "done", "owner_profile": "quality-reviewer"},
+        {"task_id": "demo-deploy", "title": "Deploy to authorized Kidu sandbox", "phase": "delivery", "status": "done", "owner_profile": "devops-release"},
+        {"task_id": "demo-post-sandbox-qa", "title": "Post-sandbox Playwright browser smoke against public sandbox URL with console screenshots", "phase": "qa", "status": "done", "owner_profile": "qa-verifier"},
+        {"task_id": "demo-report", "title": "Delivery report and gate closure", "phase": "delivery", "status": "done", "owner_profile": "factory-reporter"},
+    ]
+
+    findings = factory_pg.reconciliation_findings(project, tasks=tasks, pending_gates=[], gates=[])
+
+    finding = next(f for f in findings if f["code"] == "missing_mandatory_factory_phases")
+    assert "post_sandbox_verification" in set(finding["metadata"]["missing_categories"])
+
+
+def test_phase_contract_distinct_qa_tasks_are_order_independent(monkeypatch):
+    monkeypatch.setattr(factory_pg, "_project_artifact_dir", lambda project: (None, "factory/projects/demo"))
+    project = _ui_project()
+    tasks = [
+        {"task_id": "demo-plan", "title": "PRD ADR sprint task graph", "phase": "planning", "status": "done", "owner_profile": "implementation-planner"},
+        {"task_id": "demo-impl", "title": "Implement UI", "phase": "implementation", "status": "done", "owner_profile": "codex-builder"},
+        {"task_id": "demo-review", "title": "Independent quality review", "phase": "review", "status": "done", "owner_profile": "quality-reviewer"},
+        {"task_id": "demo-deploy", "title": "Deploy to authorized Kidu sandbox", "phase": "delivery", "status": "done", "owner_profile": "devops-release"},
+        {"task_id": "demo-post-sandbox-qa", "title": "Post-sandbox Playwright browser smoke against public sandbox URL with console screenshots", "phase": "qa", "status": "done", "owner_profile": "qa-verifier"},
+        {"task_id": "demo-ui-qa", "title": "Playwright browser QA with desktop/mobile screenshots", "phase": "qa", "status": "done", "owner_profile": "qa-verifier"},
+        {"task_id": "demo-report", "title": "Delivery report and gate closure", "phase": "delivery", "status": "done", "owner_profile": "factory-reporter"},
+    ]
+
+    findings = factory_pg.reconciliation_findings(project, tasks=tasks, pending_gates=[], gates=[])
+
+    assert not any(f["code"] == "missing_mandatory_factory_phases" for f in findings)
+
 
 def test_phase_reconciliation_not_suppressed_by_regular_playwright_task(monkeypatch):
     monkeypatch.setattr(factory_pg, "_project_artifact_dir", lambda project: (None, "factory/projects/demo"))
@@ -851,7 +913,182 @@ def test_phase_reconciliation_not_suppressed_by_regular_playwright_task(monkeypa
 
     finding = next(f for f in findings if f["code"] == "missing_mandatory_factory_phases")
     missing = set(finding["metadata"]["missing_categories"])
-    assert {"planning", "quality_review", "sandbox_deploy", "delivery_report"}.issubset(missing)
+    assert {"planning", "quality_review", "sandbox_deploy", "post_sandbox_verification", "delivery_report"}.issubset(missing)
+
+
+def test_phase_contract_rejects_keyword_stuffed_planner_task(monkeypatch):
+    monkeypatch.setattr(factory_pg, "_project_artifact_dir", lambda project: (None, "factory/projects/demo"))
+    project = _ui_project()
+    tasks = [
+        {
+            "task_id": "demo-all-in-one",
+            "title": "PRD ADR implementation independent review Playwright browser screenshot console sandbox deploy delivery report",
+            "phase": "planning",
+            "status": "done",
+            "owner_profile": "implementation-planner",
+        },
+    ]
+
+    findings = factory_pg.reconciliation_findings(project, tasks=tasks, pending_gates=[], gates=[])
+
+    finding = next(f for f in findings if f["code"] == "missing_mandatory_factory_phases")
+    missing = set(finding["metadata"]["missing_categories"])
+    assert {"implementation", "quality_review", "ui_qa_verification", "sandbox_deploy", "post_sandbox_verification", "delivery_report"}.issubset(missing)
+
+
+def test_ui_delivery_gate_requires_public_url_smoke_and_same_browser_host(fake_sql, monkeypatch):
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: _ui_project())
+    fake_sql.rows_results = [[]]
+    evidence = _complete_ui_delivery_evidence()
+    evidence.pop("sandbox_public_smoke")
+    evidence.pop("browser_smoke_url")
+    evidence["playwright_url"] = "https://other.kidu.app/"
+
+    with pytest.raises(ValueError) as exc:
+        factory_pg.record_gate("demo", "delivery", "passed", reviewer="qa", evidence=evidence)
+
+    message = str(exc.value)
+    assert "sandbox_public_smoke" in message
+    assert "same public sandbox host" in message
+
+
+def test_ui_delivery_gate_rejects_unpaired_passed_browser_smoke_url(fake_sql, monkeypatch):
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: _ui_project())
+    fake_sql.rows_results = [[]]
+    evidence = _complete_ui_delivery_evidence()
+    evidence["playwright_smoke"] = "failed"
+    evidence["playwright_url"] = "https://demo.kidu.app/"
+    evidence["browser_smoke"] = "passed"
+    evidence["browser_smoke_url"] = "https://example.com/"
+
+    with pytest.raises(ValueError) as exc:
+        factory_pg.record_gate("demo", "delivery", "passed", reviewer="qa", evidence=evidence)
+
+    message = str(exc.value)
+    assert "browser_smoke_url" in message
+    assert "same public sandbox host" in message
+
+
+def test_reconciliation_accepts_api_post_sandbox_verification(monkeypatch):
+    monkeypatch.setattr(factory_pg, "_project_artifact_dir", lambda project: (None, "factory/projects/api-demo"))
+    project = {
+        "project_id": "api-demo",
+        "repo_path": "/repo",
+        "risk_level": "medium",
+        "metadata": {"runnable_deliverable": True, "delivery_target": "sandbox", "deliverable_type": "api"},
+    }
+    tasks = [
+        {"task_id": "plan", "title": "PRD ADR sprint task graph", "phase": "planning", "status": "done", "owner_profile": "implementation-planner"},
+        {"task_id": "impl", "title": "Implement API", "phase": "implementation", "status": "done", "owner_profile": "codex-builder"},
+        {"task_id": "review", "title": "Quality review", "phase": "review", "status": "done", "owner_profile": "quality-reviewer"},
+        {"task_id": "qa", "title": "QA smoke verification", "phase": "qa", "status": "done", "owner_profile": "qa-verifier"},
+        {"task_id": "deploy", "title": "Deploy API to authorized sandbox", "phase": "delivery", "status": "done", "owner_profile": "devops-release"},
+        {"task_id": "post", "title": "Post-sandbox API health endpoint HTTP status smoke against public sandbox URL", "phase": "qa", "status": "done", "owner_profile": "qa-verifier"},
+        {"task_id": "report", "title": "Delivery report and gate closure", "phase": "delivery", "status": "done", "owner_profile": "factory-reporter"},
+    ]
+
+    findings = factory_pg.reconciliation_findings(project, tasks=tasks, pending_gates=[], gates=[])
+
+    assert not any(f["code"] == "missing_mandatory_factory_phases" for f in findings)
+
+
+def test_delivery_gate_requires_health_url_same_host_for_health_check(fake_sql, monkeypatch):
+    project = _ui_project()
+    project["metadata"]["ui_deliverable"] = False
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    fake_sql.rows_results = [[]]
+    evidence = {
+        "sandbox_url": "https://demo.kidu.app/",
+        "sandbox_deploy_path": "/srv/factory/projects/demo",
+        "docker_compose_path": "/srv/factory/projects/demo/docker-compose.yml",
+        "health_check": "passed",
+        "health_url": "https://example.com/health",
+    }
+
+    with pytest.raises(ValueError) as exc:
+        factory_pg.record_gate("demo", "delivery", "passed", reviewer="qa", evidence=evidence)
+
+    message = str(exc.value)
+    assert "health_url" in message
+    assert "same public sandbox host" in message
+
+
+def test_delivery_gate_rejects_public_smoke_without_explicit_url(fake_sql, monkeypatch):
+    project = _ui_project()
+    project["metadata"]["ui_deliverable"] = False
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    fake_sql.rows_results = [[]]
+    evidence = {
+        "sandbox_url": "https://demo.kidu.app/",
+        "sandbox_deploy_path": "/srv/factory/projects/demo",
+        "docker_compose_path": "/srv/factory/projects/demo/docker-compose.yml",
+        "sandbox_public_smoke": "passed",
+    }
+
+    with pytest.raises(ValueError) as exc:
+        factory_pg.record_gate("demo", "delivery", "passed", reviewer="qa", evidence=evidence)
+
+    assert "sandbox_public_smoke evidence must include" in str(exc.value)
+
+
+def test_delivery_gate_rejects_api_smoke_without_explicit_url(fake_sql, monkeypatch):
+    project = _ui_project()
+    project["metadata"]["ui_deliverable"] = False
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    fake_sql.rows_results = [[]]
+    evidence = {
+        "sandbox_url": "https://demo.kidu.app/",
+        "sandbox_deploy_path": "/srv/factory/projects/demo",
+        "docker_compose_path": "/srv/factory/projects/demo/docker-compose.yml",
+        "health_check": "passed",
+        "health_url": "https://demo.kidu.app/health",
+        "api_smoke": "passed",
+    }
+
+    with pytest.raises(ValueError) as exc:
+        factory_pg.record_gate("demo", "delivery", "passed", reviewer="qa", evidence=evidence)
+
+    assert "api_smoke evidence must include" in str(exc.value)
+
+
+def test_delivery_gate_rejects_nested_api_smoke_url_without_explicit_api_smoke_url(fake_sql, monkeypatch):
+    project = _ui_project()
+    project["metadata"]["ui_deliverable"] = False
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    fake_sql.rows_results = [[]]
+    evidence = {
+        "sandbox_url": "https://demo.kidu.app/",
+        "sandbox_deploy_path": "/srv/factory/projects/demo",
+        "docker_compose_path": "/srv/factory/projects/demo/docker-compose.yml",
+        "health_check": "passed",
+        "health_url": "https://demo.kidu.app/health",
+        "api_smoke": {"status": "passed", "url": "https://demo.kidu.app/api/health"},
+    }
+
+    with pytest.raises(ValueError) as exc:
+        factory_pg.record_gate("demo", "delivery", "passed", reviewer="qa", evidence=evidence)
+
+    assert "api_smoke evidence must include" in str(exc.value)
+
+
+def test_delivery_gate_rejects_nested_public_smoke_url_on_wrong_host(fake_sql, monkeypatch):
+    project = _ui_project()
+    project["metadata"]["ui_deliverable"] = False
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    fake_sql.rows_results = [[]]
+    evidence = {
+        "sandbox_url": "https://demo.kidu.app/",
+        "sandbox_deploy_path": "/srv/factory/projects/demo",
+        "docker_compose_path": "/srv/factory/projects/demo/docker-compose.yml",
+        "sandbox_public_smoke": {"status": "passed", "url": "https://example.com/health"},
+    }
+
+    with pytest.raises(ValueError) as exc:
+        factory_pg.record_gate("demo", "delivery", "passed", reviewer="qa", evidence=evidence)
+
+    message = str(exc.value)
+    assert "sandbox_public_smoke_url" in message
+    assert "same public sandbox host" in message
 
 
 def test_ui_delivery_gate_ignores_custom_sandbox_host_without_explicit_authorization(fake_sql, monkeypatch):
