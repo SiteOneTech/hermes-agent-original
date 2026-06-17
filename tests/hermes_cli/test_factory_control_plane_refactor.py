@@ -488,6 +488,37 @@ def test_orchestrator_prompt_injects_g1_docs_and_common_skill():
     assert "/repo/.worktrees/demo/t1/factory/projects/demo/PRD.md" in prompt
 
 
+def test_orchestrator_prompt_injects_ui_sandbox_delivery_contract():
+    script = Path(__file__).resolve().parents[2] / "scripts" / "factory" / "factory_orchestrator_tick.py"
+    spec = importlib.util.spec_from_file_location("factory_orchestrator_tick_ui_contract_test", script)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    payload = {
+        "projects": [{
+            "project_id": "demo",
+            "name": "Demo UI",
+            "repo_path": "/repo",
+            "metadata": {"artifact_dir": "factory/projects/demo", "ui_deliverable": True, "delivery_target": "sandbox"},
+            "document_status": [],
+        }],
+        "tasks": [],
+        "gates": [],
+    }
+    claim = {"run_id": "run-1", "run_type": "implementation", "task": {"project_id": "demo", "task_id": "t1", "title": "QA UI", "phase": "qa", "owner_profile": "qa-verifier", "engine": "zeus", "worktree_path": "/repo/.worktrees/demo/t1"}}
+
+    prompt = module._task_prompt(payload, claim)
+
+    assert "Factory entrega en sandbox funcional" in prompt
+    assert "kidu.app" in prompt
+    assert "Playwright o browser smoke" in prompt
+    assert "desktop screenshot" in prompt
+    assert "mobile screenshot" in prompt
+    assert "console_error_check" in prompt
+    assert "QA_REPORT.md" in prompt
+    assert "contexto de DB no confiable" in prompt
+
+
 def test_dispatch_preflight_exempts_reconciliation_tasks():
     task = {"task_id": "demo-reconcile-missing-notion-project", "phase": "documentation", "status": "todo",
             "metadata": {"factory_reconciliation_task": True, "reconciliation_anomaly": "missing_notion_project"}}
@@ -683,3 +714,195 @@ def test_effective_exit_code_final_done_overrides_nonzero_exit():
 
 def test_effective_exit_code_final_blocked_forces_failure():
     assert factory_pg._effective_exit_code(0, "STATE: DONE earlier\nSTATE: BLOCKED") != 0
+
+def _ui_project(tmp_path=None):
+    metadata = {
+        "ui_deliverable": True,
+        "runnable_deliverable": True,
+        "delivery_target": "sandbox",
+        "notion_tracker_page_id": "37a37b39-cad6-8146-b9f2-e1fdf0bdf727",
+        "repo_strategy": {
+            "repo_scope": "zeus_only",
+            "work_intent": "maintain_existing_project",
+            "primary_repo": "/repo",
+            "base_branch": "main",
+            "branch_prefix": "factory/demo",
+        },
+        "required_docs_waived": True,
+        "required_docs_waived_authorized_by": "Jean",
+        "required_docs_waived_reason": "unit test isolates UI delivery contract",
+        "repo_commit_waived": True,
+        "repo_commit_waived_authorized_by": "Jean",
+        "repo_commit_waived_reason": "unit test isolates UI delivery contract",
+    }
+    if tmp_path is not None:
+        metadata["artifact_dir"] = "factory/projects/demo"
+    return {
+        "project_id": "demo",
+        "repo_path": str(tmp_path) if tmp_path is not None else "/repo",
+        "risk_level": "medium",
+        "metadata": metadata,
+    }
+
+
+def _complete_ui_delivery_evidence():
+    return {
+        "sandbox_url": "https://demo.kidu.app/",
+        "sandbox_deploy_path": "/srv/factory/projects/demo",
+        "docker_compose_path": "/srv/factory/projects/demo/docker-compose.yml",
+        "health_url": "https://demo.kidu.app/health",
+        "playwright_smoke": "passed",
+        "browser_smoke": "passed",
+        "desktop_screenshot": "factory/projects/demo/evidence/desktop.png",
+        "mobile_screenshot": "factory/projects/demo/evidence/mobile.png",
+        "console_error_check": {"status": "passed", "errors": 0},
+        "core_flow_interaction": "passed",
+        "qa_report_path": "factory/projects/demo/QA_REPORT.md",
+        "evidence_paths": [
+            "factory/projects/demo/evidence/desktop.png",
+            "factory/projects/demo/evidence/mobile.png",
+            "factory/projects/demo/QA_REPORT.md",
+        ],
+    }
+
+
+def test_ui_delivery_gate_blocks_without_required_sandbox_playwright_evidence(fake_sql, monkeypatch):
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: _ui_project())
+    fake_sql.rows_results = [[]]
+    fake_sql.statement_one_results = [{"gate_id": 43, "project_id": "demo", "status": "passed", "timestamp": "now"}]
+
+    with pytest.raises(ValueError) as exc:
+        factory_pg.record_gate("demo", "delivery", "passed", reviewer="qa", evidence={"tests": "passed"})
+
+    message = str(exc.value)
+    assert "sandbox_url" in message
+    assert "playwright_smoke" in message
+    assert "desktop_screenshot" in message
+    assert "mobile_screenshot" in message
+    assert "console_error_check" in message
+    assert "core_flow_interaction" in message
+    assert "QA_REPORT.md" in message
+    assert "evidence_paths" in message
+
+
+def test_ui_delivery_gate_rejects_non_authorized_sandbox_url(fake_sql, monkeypatch):
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: _ui_project())
+    fake_sql.rows_results = [[]]
+    evidence = _complete_ui_delivery_evidence()
+    evidence["sandbox_url"] = "https://example.com/demo"
+
+    with pytest.raises(ValueError, match="authorized sandbox"):
+        factory_pg.record_gate("demo", "delivery", "passed", reviewer="qa", evidence=evidence)
+
+
+def test_ui_delivery_gate_passes_with_complete_authorized_sandbox_playwright_evidence(fake_sql, monkeypatch):
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: _ui_project())
+    fake_sql.rows_results = [[]]
+    fake_sql.statement_one_results = [{"gate_id": 44, "project_id": "demo", "status": "passed", "timestamp": "now"}]
+
+    result = factory_pg.record_gate("demo", "delivery", "passed", reviewer="qa", evidence=_complete_ui_delivery_evidence())
+
+    assert result["gate_id"] == 44
+    joined = "\n".join(fake_sql.statements)
+    assert "demo.kidu.app" in joined
+    assert "desktop.png" in joined
+    assert "mobile.png" in joined
+
+
+def test_reconciliation_requires_canonical_ui_phase_contract(monkeypatch):
+    monkeypatch.setattr(factory_pg, "_project_artifact_dir", lambda project: (None, "factory/projects/demo"))
+    project = _ui_project()
+    tasks = [
+        {"task_id": "demo-impl", "title": "Implement UI", "phase": "implementation", "status": "todo", "owner_profile": "codex-builder"},
+    ]
+
+    findings = factory_pg.reconciliation_findings(project, tasks=tasks, pending_gates=[], gates=[])
+
+    finding = next(f for f in findings if f["code"] == "missing_mandatory_factory_phases")
+    missing = set(finding["metadata"]["missing_categories"])
+    assert {"planning", "quality_review", "ui_qa_verification", "sandbox_deploy", "delivery_report"}.issubset(missing)
+
+
+def test_reconciliation_accepts_canonical_ui_phase_contract(monkeypatch):
+    monkeypatch.setattr(factory_pg, "_project_artifact_dir", lambda project: (None, "factory/projects/demo"))
+    project = _ui_project()
+    tasks = [
+        {"task_id": "demo-plan", "title": "Finalize PRD ADR sprint task graph", "phase": "planning", "status": "done", "owner_profile": "implementation-planner"},
+        {"task_id": "demo-impl", "title": "Implement UI", "phase": "implementation", "status": "done", "owner_profile": "codex-builder", "reviewer_profile": "quality-reviewer"},
+        {"task_id": "demo-review", "title": "Independent quality review", "phase": "review", "status": "done", "owner_profile": "quality-reviewer"},
+        {"task_id": "demo-ui-qa", "title": "Playwright browser QA with desktop/mobile screenshots", "phase": "qa", "status": "done", "owner_profile": "qa-verifier"},
+        {"task_id": "demo-deploy", "title": "Deploy to authorized Kidu sandbox", "phase": "delivery", "status": "done", "owner_profile": "devops-release"},
+        {"task_id": "demo-report", "title": "Delivery report and gate closure", "phase": "delivery", "status": "done", "owner_profile": "factory-reporter"},
+    ]
+
+    findings = factory_pg.reconciliation_findings(project, tasks=tasks, pending_gates=[], gates=[])
+
+    assert not any(f["code"] == "missing_mandatory_factory_phases" for f in findings)
+
+def test_phase_reconciliation_not_suppressed_by_regular_playwright_task(monkeypatch):
+    monkeypatch.setattr(factory_pg, "_project_artifact_dir", lambda project: (None, "factory/projects/demo"))
+    project = _ui_project()
+    tasks = [
+        {"task_id": "demo-impl", "title": "Implement UI", "phase": "implementation", "status": "todo", "owner_profile": "codex-builder"},
+        {"task_id": "demo-ui-qa", "title": "Playwright QA smoke", "phase": "qa", "status": "todo", "owner_profile": "qa-verifier"},
+    ]
+
+    findings = factory_pg.reconciliation_findings(project, tasks=tasks, pending_gates=[], gates=[])
+
+    finding = next(f for f in findings if f["code"] == "missing_mandatory_factory_phases")
+    missing = set(finding["metadata"]["missing_categories"])
+    assert {"planning", "quality_review", "sandbox_deploy", "delivery_report"}.issubset(missing)
+
+
+def test_ui_delivery_gate_ignores_custom_sandbox_host_without_explicit_authorization(fake_sql, monkeypatch):
+    project = _ui_project()
+    project["metadata"]["authorized_sandbox_hosts"] = ["example.com"]
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    fake_sql.rows_results = [[]]
+    evidence = _complete_ui_delivery_evidence()
+    evidence["sandbox_url"] = "https://example.com/demo"
+
+    with pytest.raises(ValueError, match="authorized sandbox"):
+        factory_pg.record_gate("demo", "delivery", "passed", reviewer="qa", evidence=evidence)
+
+
+def test_ui_delivery_gate_blocks_sandbox_paths_outside_authorized_project_root(fake_sql, monkeypatch):
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: _ui_project())
+    fake_sql.rows_results = [[]]
+    evidence = _complete_ui_delivery_evidence()
+    evidence["sandbox_deploy_path"] = "/var/www/prod"
+    evidence["docker_compose_path"] = "/etc/docker-compose.yml"
+
+    with pytest.raises(ValueError) as exc:
+        factory_pg.record_gate("demo", "delivery", "passed", reviewer="qa", evidence=evidence)
+
+    message = str(exc.value)
+    assert "/srv/factory/projects/demo" in message
+    assert "docker_compose_path" in message
+
+
+def test_ui_delivery_gate_requires_evidence_paths_cover_desktop_mobile_and_qa_report(fake_sql, monkeypatch):
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: _ui_project())
+    fake_sql.rows_results = [[]]
+    evidence = _complete_ui_delivery_evidence()
+    evidence["evidence_paths"] = ["factory/projects/demo/evidence/desktop.png"]
+
+    with pytest.raises(ValueError) as exc:
+        factory_pg.record_gate("demo", "delivery", "passed", reviewer="qa", evidence=evidence)
+
+    message = str(exc.value)
+    assert "evidence_paths" in message
+    assert "mobile_screenshot" in message
+    assert "QA_REPORT.md" in message
+
+def test_ui_delivery_gate_blocks_path_traversal_outside_authorized_project_root(fake_sql, monkeypatch):
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: _ui_project())
+    fake_sql.rows_results = [[]]
+    evidence = _complete_ui_delivery_evidence()
+    evidence["sandbox_deploy_path"] = "/srv/factory/projects/demo/../../prod"
+    evidence["docker_compose_path"] = "/srv/factory/projects/demo/../../prod/docker-compose.yml"
+
+    with pytest.raises(ValueError) as exc:
+        factory_pg.record_gate("demo", "delivery", "passed", reviewer="qa", evidence=evidence)
+
+    assert "/srv/factory/projects/demo" in str(exc.value)

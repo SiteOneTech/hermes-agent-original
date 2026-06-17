@@ -5,7 +5,7 @@ route production Factory work to SQLite.
 """
 from __future__ import annotations
 
-import os
+import posixpath
 import re
 import subprocess
 import time
@@ -13,6 +13,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 from hermes_cli import agent_core_sql as sql
 from hermes_cli import factory_contracts
@@ -156,6 +157,19 @@ RECONCILIATION_TASK_SPECS: dict[str, dict[str, Any]] = {
             "Factory DB contains pending implementation/QA/security/delivery tasks that cover the remaining objective.",
             "Task graph is derived from project artifacts and deliverable evidence, not from UI state alone.",
             "Each generated task has owner, reviewer, phase, acceptance criteria, and evidence requirements.",
+        ],
+    },
+    "missing_mandatory_factory_phases": {
+        "title": "R3b — Reconciliation: enforce canonical Factory phase contract",
+        "phase": "planning",
+        "owner": "implementation-planner",
+        "reviewer": "factory-orchestrator",
+        "engine": "zeus",
+        "priority": 45,
+        "acceptance": [
+            "Runnable/UI deliverables have explicit planning, implementation, independent review, QA, sandbox deploy, and delivery reporting tasks.",
+            "UI deliverables include a qa-verifier task requiring Playwright or equivalent browser evidence with desktop/mobile screenshots and console checks.",
+            "Sandbox deploy tasks target Zeus-authorized sandbox surfaces, not production, unless Jean explicitly authorized production scope.",
         ],
     },
     "pending_effective_gates": {
@@ -462,6 +476,324 @@ def _metadata_bool(metadata: dict[str, Any], key: str) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "y", "required", "mandatory"}
     return bool(value)
+
+
+_UI_DELIVERABLE_TYPES = {
+    "ui",
+    "web",
+    "website",
+    "landing_page",
+    "frontend",
+    "web_app",
+    "browser_app",
+    "dashboard",
+    "spa",
+}
+_RUNNABLE_DELIVERABLE_TYPES = _UI_DELIVERABLE_TYPES | {"api", "backend", "service", "app", "worker", "integration"}
+_DEFAULT_AUTHORIZED_SANDBOX_HOSTS = ("kidu.app", "*.kidu.app")
+
+
+def _metadata_text_values(metadata: dict[str, Any], *keys: str) -> set[str]:
+    values: set[str] = set()
+    for key in keys:
+        value = metadata.get(key)
+        if isinstance(value, str):
+            values.add(value.strip().lower().replace("-", "_"))
+        elif isinstance(value, (list, tuple, set)):
+            for item in value:
+                if isinstance(item, str):
+                    values.add(item.strip().lower().replace("-", "_"))
+    return {value for value in values if value}
+
+
+def _project_requires_ui_delivery(project: dict[str, Any]) -> bool:
+    metadata = _metadata(project)
+    if any(_metadata_bool(metadata, key) for key in ("ui_deliverable", "requires_ui_qa", "browser_deliverable", "frontend_deliverable")):
+        return True
+    deliverable_types = _metadata_text_values(metadata, "deliverable_type", "deliverable_types", "project_type", "surface", "surfaces")
+    return bool(deliverable_types & _UI_DELIVERABLE_TYPES)
+
+
+def _project_requires_sandbox_delivery(project: dict[str, Any]) -> bool:
+    metadata = _metadata(project)
+    if _project_requires_ui_delivery(project):
+        return True
+    if any(_metadata_bool(metadata, key) for key in ("runnable_deliverable", "sandbox_required", "requires_sandbox_delivery")):
+        return True
+    if str(metadata.get("delivery_target") or "").strip().lower().replace("-", "_") == "sandbox":
+        return True
+    deliverable_types = _metadata_text_values(metadata, "deliverable_type", "deliverable_types", "project_type", "surface", "surfaces")
+    return bool(deliverable_types & _RUNNABLE_DELIVERABLE_TYPES)
+
+
+def _task_text(task: dict[str, Any]) -> str:
+    fields = ("task_id", "title", "description", "phase", "owner_profile", "reviewer_profile", "engine")
+    return "\n".join(str(task.get(key) or "") for key in fields).lower()
+
+
+def _task_counts_for_phase_contract(task: dict[str, Any]) -> bool:
+    return str(task.get("status") or "") not in {"cancelled", "superseded"}
+
+
+def _task_satisfies_mandatory_category(task: dict[str, Any], category: str) -> bool:
+    if not _task_counts_for_phase_contract(task):
+        return False
+    phase = str(task.get("phase") or "").lower().replace("-", "_")
+    owner = str(task.get("owner_profile") or task.get("owner_agent_id") or "").lower()
+    reviewer = str(task.get("reviewer_profile") or task.get("reviewer_agent_id") or "").lower()
+    text = _task_text(task)
+    if category == "planning":
+        return phase in {"planning", "documentation", "docs", "architecture", "research"} or owner == "implementation-planner" or any(term in text for term in ("prd", "adr", "sprint plan", "task graph", "technical blueprint"))
+    if category == "implementation":
+        return phase == "implementation" or owner in {"claude-builder", "codex-builder", "openhands-builder", "claude-code-builder"} or "implement" in text
+    if category == "quality_review":
+        return phase == "review" or owner in {"quality-reviewer", "architecture-reviewer"} or reviewer in {"quality-reviewer", "architecture-reviewer"} or "independent review" in text or "quality review" in text
+    if category == "security_review":
+        return phase == "security" or owner == "security-reviewer" or reviewer == "security-reviewer" or "security review" in text
+    if category == "qa_verification":
+        return phase == "qa" or owner == "qa-verifier" or any(term in text for term in ("qa", "smoke", "test gate"))
+    if category == "ui_qa_verification":
+        return owner == "qa-verifier" or (phase == "qa" and any(term in text for term in ("playwright", "browser", "screenshot", "console", "visual", "mobile", "desktop")))
+    if category == "sandbox_deploy":
+        return owner == "devops-release" or (phase in {"delivery", "deploy", "deployment", "release"} and any(term in text for term in ("sandbox", "deploy", "docker compose", "caddy", "preview url", "public url")))
+    if category == "delivery_report":
+        return (owner == "factory-reporter" and phase in {"delivery", "reporting", "documentation"}) or any(term in text for term in ("delivery report", "delivery gate", "gate closure", "qa_report", "qa report"))
+    return False
+
+
+def _mandatory_phase_categories(project: dict[str, Any]) -> list[str]:
+    if not _project_requires_sandbox_delivery(project):
+        return []
+    metadata = _metadata(project)
+    categories = ["planning", "implementation", "quality_review"]
+    categories.append("ui_qa_verification" if _project_requires_ui_delivery(project) else "qa_verification")
+    if _metadata_bool(metadata, "security_required"):
+        categories.append("security_review")
+    categories.extend(["sandbox_deploy", "delivery_report"])
+    return categories
+
+
+def _missing_mandatory_phase_categories(project: dict[str, Any], tasks: list[dict[str, Any]]) -> list[str]:
+    return [
+        category
+        for category in _mandatory_phase_categories(project)
+        if not any(_task_satisfies_mandatory_category(task, category) for task in tasks)
+    ]
+
+
+def _authorized_sandbox_hosts(metadata: dict[str, Any]) -> list[str]:
+    raw_hosts = metadata.get("authorized_sandbox_hosts") or metadata.get("sandbox_authorized_hosts") or metadata.get("allowed_sandbox_hosts")
+    hosts: list[str] = []
+    custom_authorized_by = (
+        metadata.get("authorized_sandbox_hosts_authorized_by")
+        or metadata.get("sandbox_authorized_hosts_authorized_by")
+        or metadata.get("allowed_sandbox_hosts_authorized_by")
+        or metadata.get("sandbox_host_authorized_by")
+    )
+    custom_authorization_reason = (
+        metadata.get("authorized_sandbox_hosts_reason")
+        or metadata.get("sandbox_authorized_hosts_reason")
+        or metadata.get("allowed_sandbox_hosts_reason")
+        or metadata.get("sandbox_host_authorization_reason")
+    )
+    custom_hosts_authorized = bool(custom_authorized_by and str(custom_authorization_reason or "").strip())
+    if custom_hosts_authorized and isinstance(raw_hosts, str):
+        hosts.extend(part.strip().lower() for part in raw_hosts.split(",") if part.strip())
+    elif custom_hosts_authorized and isinstance(raw_hosts, (list, tuple, set)):
+        hosts.extend(str(part).strip().lower() for part in raw_hosts if str(part).strip())
+    for host in _DEFAULT_AUTHORIZED_SANDBOX_HOSTS:
+        if host not in hosts:
+            hosts.append(host)
+    return hosts
+
+
+def _host_matches_authorized_sandbox(host: str, authorized_hosts: list[str]) -> bool:
+    clean = host.strip().lower().split(":", 1)[0]
+    for allowed in authorized_hosts:
+        allowed = allowed.strip().lower()
+        if allowed.startswith("*."):
+            suffix = allowed[1:]
+            if clean.endswith(suffix) and clean != suffix.lstrip("."):
+                return True
+        elif clean == allowed:
+            return True
+    return False
+
+
+def _delivery_url_from_evidence(evidence: dict[str, Any]) -> str:
+    for key in ("sandbox_url", "preview_url", "public_url", "delivery_url"):
+        value = evidence.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _evidence_status_passed(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value == 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "passed", "pass", "ok", "success", "succeeded", "clean", "done"}
+    if isinstance(value, dict):
+        for key in ("errors", "error_count", "console_errors", "critical_errors"):
+            if key in value:
+                try:
+                    if int(value.get(key) or 0) > 0:
+                        return False
+                except (TypeError, ValueError):
+                    return False
+        return any(_evidence_status_passed(value.get(key)) for key in ("passed", "status", "result", "state", "ok"))
+    return False
+
+
+def _non_empty_path(value: Any) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, dict):
+        return any(_non_empty_path(value.get(key)) for key in ("path", "url", "file", "artifact"))
+    return False
+
+
+def _path_string(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        for key in ("path", "file", "artifact", "url"):
+            item = value.get(key)
+            if isinstance(item, str) and item.strip():
+                return item.strip()
+    return ""
+
+
+def _authorized_project_sandbox_root(project: dict[str, Any]) -> str:
+    project_id = str(project.get("project_id") or "").strip() or "<project>"
+    return f"/srv/factory/projects/{project_id}"
+
+
+def _path_under_root(path: str, root: str) -> bool:
+    if not path.strip() or not root.strip():
+        return False
+    clean = posixpath.normpath(path.strip())
+    root_clean = posixpath.normpath(root.strip())
+    if not clean.startswith("/") or not root_clean.startswith("/"):
+        return False
+    return clean == root_clean or clean.startswith(root_clean + "/")
+
+
+def _evidence_path_strings(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    if isinstance(value, dict):
+        values: list[str] = []
+        for item in value.values():
+            values.extend(_evidence_path_strings(item))
+        return values
+    if isinstance(value, (list, tuple, set)):
+        values: list[str] = []
+        for item in value:
+            values.extend(_evidence_path_strings(item))
+        return values
+    return []
+
+
+def _evidence_paths_present(evidence: dict[str, Any]) -> bool:
+    value = evidence.get("evidence_paths") or evidence.get("artifacts")
+    return bool(_evidence_path_strings(value))
+
+
+def _missing_ui_evidence_path_labels(evidence: dict[str, Any]) -> list[str]:
+    paths = _evidence_path_strings(evidence.get("evidence_paths") or evidence.get("artifacts"))
+    lowered = [path.lower() for path in paths]
+    desktop = str(_screenshot_evidence_path(evidence, "desktop") or "").strip().lower()
+    mobile = str(_screenshot_evidence_path(evidence, "mobile") or "").strip().lower()
+    qa_report = str(evidence.get("qa_report_path") or evidence.get("qa_report") or evidence.get("QA_REPORT.md") or "").strip()
+    qa_report_lower = qa_report.lower()
+    missing: list[str] = []
+    if not desktop or not any(path == desktop or "desktop" in path for path in lowered):
+        missing.append("desktop_screenshot")
+    if not mobile or not any(path == mobile or "mobile" in path for path in lowered):
+        missing.append("mobile_screenshot")
+    if not qa_report_lower or not any(path == qa_report_lower or "qa_report.md" in path for path in lowered):
+        missing.append("QA_REPORT.md")
+    return missing
+
+
+def _console_error_check_passed(evidence: dict[str, Any]) -> bool:
+    if "console_error_check" in evidence:
+        return _evidence_status_passed(evidence.get("console_error_check"))
+    for key in ("console_errors", "console_error_count", "browser_console_errors"):
+        if key in evidence:
+            try:
+                return int(evidence.get(key) or 0) == 0
+            except (TypeError, ValueError):
+                return False
+    return False
+
+
+def _screenshot_evidence_path(evidence: dict[str, Any], viewport: str) -> Any:
+    direct = evidence.get(f"{viewport}_screenshot")
+    if direct:
+        return direct
+    screenshots = evidence.get("screenshots")
+    if isinstance(screenshots, dict):
+        return screenshots.get(viewport)
+    return None
+
+
+def _delivery_evidence_findings(project: dict[str, Any], evidence: dict[str, Any]) -> list[str]:
+    metadata = _metadata(project)
+    findings: list[str] = []
+    requires_sandbox = _project_requires_sandbox_delivery(project)
+    requires_ui = _project_requires_ui_delivery(project)
+    if not requires_sandbox and not requires_ui:
+        return findings
+
+    sandbox_url = _delivery_url_from_evidence(evidence)
+    if not sandbox_url:
+        findings.append("sandbox_url public authorized sandbox URL is required")
+    else:
+        parsed = urlparse(sandbox_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            findings.append("sandbox_url must be an http(s) public authorized sandbox URL")
+        elif not _host_matches_authorized_sandbox(parsed.netloc, _authorized_sandbox_hosts(metadata)):
+            findings.append("sandbox_url must use an authorized sandbox host (*.kidu.app by default)")
+
+    if requires_sandbox:
+        sandbox_root = _authorized_project_sandbox_root(project)
+        deploy_path = _path_string(evidence.get("sandbox_deploy_path") or evidence.get("deploy_path"))
+        compose_path = _path_string(evidence.get("docker_compose_path") or evidence.get("compose_path"))
+        if not deploy_path:
+            findings.append(f"sandbox_deploy_path under {sandbox_root} is required")
+        elif not _path_under_root(deploy_path, sandbox_root):
+            findings.append(f"sandbox_deploy_path must be under authorized sandbox root {sandbox_root}")
+        if not compose_path:
+            findings.append("docker_compose_path is required for runnable sandbox delivery unless explicitly waived")
+        elif not _path_under_root(compose_path, sandbox_root):
+            findings.append(f"docker_compose_path must be under authorized sandbox root {sandbox_root}")
+        elif Path(compose_path).name not in {"docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"}:
+            findings.append("docker_compose_path must point to a Docker Compose file")
+
+    if requires_ui:
+        if not (_evidence_status_passed(evidence.get("playwright_smoke")) or _evidence_status_passed(evidence.get("browser_smoke"))):
+            findings.append("playwright_smoke or equivalent browser_smoke must be passed")
+        if not _non_empty_path(_screenshot_evidence_path(evidence, "desktop")):
+            findings.append("desktop_screenshot evidence path is required")
+        if not _non_empty_path(_screenshot_evidence_path(evidence, "mobile")):
+            findings.append("mobile_screenshot evidence path is required")
+        if not _console_error_check_passed(evidence):
+            findings.append("console_error_check must be present and clean")
+        if not _evidence_status_passed(evidence.get("core_flow_interaction") or evidence.get("core_flow_result")):
+            findings.append("core_flow_interaction must be passed")
+        qa_report = evidence.get("qa_report_path") or evidence.get("qa_report") or evidence.get("QA_REPORT.md")
+        if not (_non_empty_path(qa_report) and "QA_REPORT.md" in str(qa_report)):
+            findings.append("QA_REPORT.md path is required")
+        missing_path_labels = _missing_ui_evidence_path_labels(evidence)
+        if missing_path_labels:
+            findings.append("evidence_paths must include " + ", ".join(missing_path_labels))
+        if not _evidence_paths_present(evidence):
+            findings.append("evidence_paths must list screenshots, QA report, and other verification artifacts")
+    return findings
 
 
 def _waiver_explicitly_authorized(metadata: dict[str, Any], waiver_key: str) -> bool:
@@ -790,6 +1122,10 @@ def _task_covers_reconciliation_anomaly(task: dict[str, Any], code: str) -> bool
         return "commit" in text or "uncommitted" in text or "git" in text or "checkpoint" in text
     if code == "missing_task_graph":
         return "task graph" in text or "task-graph" in text or "canonical task" in text or "task graph recovery" in text
+    if code == "missing_mandatory_factory_phases":
+        if not _is_reconciliation_task(task):
+            return False
+        return "mandatory phase" in text or "phase contract" in text or "canonical factory phase" in text or "playwright" in text or "sandbox deploy" in text
     if code == "pending_effective_gates":
         return str(task.get("phase") or "").lower() in {"review", "qa", "security"} or "gate" in text
     if code == "deliverable_unverified":
@@ -895,6 +1231,16 @@ def reconciliation_findings(project: dict[str, Any], tasks: list[dict[str, Any]]
     non_reconciliation_tasks = [task for task in tasks if not _is_reconciliation_task(task)]
     if not non_reconciliation_tasks:
         add("missing_task_graph", "Factory DB has no canonical non-reconciliation task graph for this project")
+    missing_phase_categories = _missing_mandatory_phase_categories(project, non_reconciliation_tasks)
+    has_phase_reconciliation_coverage = any(_task_covers_reconciliation_anomaly(task, "missing_mandatory_factory_phases") for task in tasks)
+    if missing_phase_categories and not has_phase_reconciliation_coverage:
+        add(
+            "missing_mandatory_factory_phases",
+            "Factory task graph is missing mandatory canonical phases for runnable/UI sandbox delivery",
+            missing_categories=missing_phase_categories,
+            required_categories=_mandatory_phase_categories(project),
+            contract="planning -> implementation -> independent review -> QA/browser -> authorized sandbox deploy -> delivery report",
+        )
 
     if pending_gates:
         add(
@@ -1027,13 +1373,12 @@ def cancel_resolved_reconciliation_tasks(project: dict[str, Any], findings: list
     return resolved
 
 
-def critical_readiness_findings(project_id: str) -> list[str]:
+def critical_readiness_findings(project_id: str, *, gate_evidence: Optional[dict[str, Any]] = None) -> list[str]:
     project = _project(project_id)
     if not project:
         return [f"project {project_id} is not visible in Agent Core Postgres"]
     risk = str(project.get("risk_level") or "").lower()
-    if risk not in CRITICAL_RISK_LEVELS:
-        return []
+    critical_project = risk in CRITICAL_RISK_LEVELS
 
     findings: list[str] = []
     raw_metadata = project.get("metadata")
@@ -1042,43 +1387,47 @@ def critical_readiness_findings(project_id: str) -> list[str]:
     artifact_dir = metadata.get("artifact_dir") or f"factory/projects/{project_id}"
     factory_dir = Path(repo_path).expanduser() / str(artifact_dir) if repo_path else None
 
-    notion_issue = _notion_projection_issue(metadata)
-    strategy = _repository_strategy(project)
-    if not factory_contracts.repository_strategy_is_complete(strategy):
-        missing = ", ".join(strategy.get("missing_fields") or ["repo_scope"])
-        findings.append(f"missing G0 repository strategy metadata: {missing}")
-    if notion_issue:
-        findings.append(f"required Notion PM tracker is {notion_issue}")
+    if critical_project:
+        notion_issue = _notion_projection_issue(metadata)
+        strategy = _repository_strategy(project)
+        if not factory_contracts.repository_strategy_is_complete(strategy):
+            missing = ", ".join(strategy.get("missing_fields") or ["repo_scope"])
+            findings.append(f"missing G0 repository strategy metadata: {missing}")
+        if notion_issue:
+            findings.append(f"required Notion PM tracker is {notion_issue}")
 
-    if not factory_dir or not factory_dir.is_dir():
-        findings.append(f"missing project-local factory documentation directory: {artifact_dir}")
-    else:
-        document_blockers = [] if _required_docs_explicitly_waived(metadata) else _g1_document_blockers(project)
-        if document_blockers:
-            findings.append(
-                "g1 documentary readiness blockers: "
-                + ", ".join(f"{row['file_name']}({','.join(key for key in ('exists', 'indexed', 'committed', 'validated', 'reviewed') if not row.get(key))})" for row in document_blockers)
-            )
-        if repo_path and not _repo_commit_explicitly_waived(metadata):
-            uncommitted_paths = _uncommitted_project_artifacts(Path(repo_path), str(artifact_dir))
-            if uncommitted_paths:
-                findings.append("uncommitted project-local factory artifacts: " + ", ".join(uncommitted_paths))
+        if not factory_dir or not factory_dir.is_dir():
+            findings.append(f"missing project-local factory documentation directory: {artifact_dir}")
+        else:
+            document_blockers = [] if _required_docs_explicitly_waived(metadata) else _g1_document_blockers(project)
+            if document_blockers:
+                findings.append(
+                    "g1 documentary readiness blockers: "
+                    + ", ".join(f"{row['file_name']}({','.join(key for key in ('exists', 'indexed', 'committed', 'validated', 'reviewed') if not row.get(key))})" for row in document_blockers)
+                )
+            if repo_path and not _repo_commit_explicitly_waived(metadata):
+                uncommitted_paths = _uncommitted_project_artifacts(Path(repo_path), str(artifact_dir))
+                if uncommitted_paths:
+                    findings.append("uncommitted project-local factory artifacts: " + ", ".join(uncommitted_paths))
 
-    self_approved = sql.rows(
-        f"""
-        SELECT task_id, title, owner_profile, reviewer_profile
-        FROM factory.tasks
-        WHERE project_id={_q(project_id)}
-          AND owner_profile IS NOT NULL
-          AND owner_profile = reviewer_profile
-        ORDER BY task_id
-        """,
-        user=_user(),
-    )
-    if self_approved:
-        findings.append(f"{len(self_approved)} task(s) have no independent reviewer")
-    if metadata.get("dashboard_visible") is False:
-        findings.append("project is explicitly hidden from dashboard")
+        self_approved = sql.rows(
+            f"""
+            SELECT task_id, title, owner_profile, reviewer_profile
+            FROM factory.tasks
+            WHERE project_id={_q(project_id)}
+              AND owner_profile IS NOT NULL
+              AND owner_profile = reviewer_profile
+            ORDER BY task_id
+            """,
+            user=_user(),
+        )
+        if self_approved:
+            findings.append(f"{len(self_approved)} task(s) have no independent reviewer")
+        if metadata.get("dashboard_visible") is False:
+            findings.append("project is explicitly hidden from dashboard")
+
+    if gate_evidence is not None:
+        findings.extend(_delivery_evidence_findings(project, gate_evidence))
     return findings
 
 
@@ -1110,7 +1459,7 @@ def record_gate(project_id: str, gate_type: str, status: str, *, lane_id: Option
     if gate in {"delivery", "critical_readiness"}:
         gate_evidence.setdefault("document_status_snapshot", _document_status_snapshot(project_id))
     if gate in {"delivery", "critical_readiness"} and state == "passed":
-        blockers = critical_readiness_findings(project_id)
+        blockers = critical_readiness_findings(project_id, gate_evidence=gate_evidence)
         if blockers:
             raise ValueError("critical readiness gate blocked: " + "; ".join(blockers))
 
