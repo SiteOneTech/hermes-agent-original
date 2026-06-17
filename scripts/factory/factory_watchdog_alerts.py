@@ -1,22 +1,23 @@
 #!/usr/bin/env python3
-"""Factory watchdog notifier.
+"""Factory watchdog and autonomous repair launcher.
 
-Script-only cron target. It stays silent when there are no unsuppressed alerts;
-non-empty stdout is a concise human-facing alert suitable for origin/Telegram
-delivery.
-
-The watchdog is deterministic. It does not implement product work. It computes
-objective workflow alerts and progress fingerprints; when progress stalls, it
-alerts Zeus/Jean with enough evidence for a reasoning supervisor to inspect and
-repair the root cause.
+Script-only cron target. It stays silent when there are no human-required
+conditions. Deterministic checks compute workflow alerts and progress
+fingerprints; repairable conditions launch an autonomous Hermes reasoning
+supervisor with a prepared prompt and audit files. Jean is notified only when the
+reasoning supervisor explicitly reports ``SUPERVISOR_STATUS: NEEDS_HUMAN`` or
+when the repair machinery itself fails repeatedly.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
+import textwrap
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -25,9 +26,23 @@ REPO = Path(__file__).resolve().parents[2]
 if REPO.exists() and str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
+SUPERVISOR_STATUSES = {"RESOLVED", "NO_ACTION", "NEEDS_HUMAN", "FAILED"}
+AUTOREPAIR_ALERT_TYPES = {
+    "autonomous_project_blocked_too_long",
+    "blocked_without_human_question",
+    "delivery_hold_autoresolvable_blocked_work",
+    "orphan_inflight_without_active_run",
+    "cron_claimed_null_repeated",
+    "factory_progress_stalled",
+}
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _iso_now() -> str:
+    return _now().isoformat().replace("+00:00", "Z")
 
 
 def _home() -> Path:
@@ -48,6 +63,13 @@ def _progress_state_path() -> Path:
     if override:
         return Path(override).expanduser()
     return _home() / "factory" / "watchdog_progress_state.json"
+
+
+def _supervisor_runs_dir() -> Path:
+    override = os.environ.get("FACTORY_SUPERVISOR_RUNS_DIR")
+    if override:
+        return Path(override).expanduser()
+    return _home() / "factory" / "watchdog_supervisor_runs"
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -87,7 +109,7 @@ def _unsuppressed(alerts: list[dict[str, Any]], state: dict[str, Any], suppress_
 
 
 def _render(alerts: list[dict[str, Any]]) -> str:
-    lines = ["🏭 Factory watchdog — acción requerida", ""]
+    lines = ["🏭 Factory supervisor — Jean action required", ""]
     for alert in alerts:
         lines.append(f"- {alert.get('alert_type')} · {alert.get('severity')}")
         if alert.get("project_id"):
@@ -99,10 +121,14 @@ def _render(alerts: list[dict[str, Any]]) -> str:
             lines.append(f"  - Rondas sin progreso medible: {alert.get('same_rounds')}")
         if alert.get("progress_fingerprint"):
             lines.append(f"  - Fingerprint: {str(alert.get('progress_fingerprint'))[:16]}")
-        if alert.get("recommended_action"):
-            lines.append(f"  - Acción: {alert.get('recommended_action')}")
+        if alert.get("supervisor_run_id"):
+            lines.append(f"  - Supervisor run: {alert.get('supervisor_run_id')}")
+        if alert.get("supervisor_output_path"):
+            lines.append(f"  - Log: {alert.get('supervisor_output_path')}")
+        if alert.get("jean_question"):
+            lines.append(f"  - Pregunta para Jean: {alert.get('jean_question')}")
     lines.append("")
-    lines.append("Zeus debe resolver automáticamente los casos rutinarios. Si esta alerta llegó a Jean, es porque el watchdog detectó un bloqueo persistente, una pregunta humana pendiente, una anomalía de runtime o estancamiento determinístico sin progreso medible.")
+    lines.append("No se enviará ruido periódico: el watchdog intenta reparar primero. Esta notificación significa que el supervisor razonador pidió una decisión humana o la autorreparación falló repetidamente.")
     return "\n".join(lines)
 
 
@@ -241,7 +267,7 @@ def _progress_stall_alerts(payload: dict[str, Any], state: dict[str, Any]) -> li
         projects_state[pid] = {
             "fingerprint": fingerprint,
             "same_rounds": same_rounds,
-            "last_checked_at": _now().isoformat().replace("+00:00", "Z"),
+            "last_checked_at": _iso_now(),
             "snapshot": snapshot,
         }
         if same_rounds >= threshold:
@@ -254,9 +280,329 @@ def _progress_stall_alerts(payload: dict[str, Any], state: dict[str, Any]) -> li
                 "same_rounds": same_rounds,
                 "progress_fingerprint": fingerprint,
                 "progress_snapshot": snapshot,
-                "recommended_action": "invoke_zeus_reasoning_supervisor_with_snapshot_and_repair_root_cause",
+                "supervisor_action": "launch_reasoning_supervisor",
             })
     return alerts
+
+
+def _project_scoped_payload(payload: dict[str, Any], project_id: str | None) -> dict[str, Any]:
+    if not project_id:
+        return payload
+    scoped: dict[str, Any] = {}
+    for key, value in payload.items():
+        if isinstance(value, list):
+            scoped[key] = [
+                item for item in value
+                if not isinstance(item, dict) or str(item.get("project_id") or project_id) == project_id
+            ]
+        else:
+            scoped[key] = value
+    return scoped
+
+
+def _supervisor_group_key(alerts: list[dict[str, Any]]) -> str:
+    project_id = next((str(alert.get("project_id")) for alert in alerts if alert.get("project_id")), "global")
+    safe_project = re.sub(r"[^a-zA-Z0-9_.-]+", "-", project_id)[:80] or "global"
+    return safe_project
+
+
+def _supervisor_fingerprint(alerts: list[dict[str, Any]], payload: dict[str, Any]) -> str:
+    relevant = {
+        "alerts": alerts,
+        "project_payload": _project_scoped_payload(payload, next((str(a.get("project_id")) for a in alerts if a.get("project_id")), None)),
+    }
+    return hashlib.sha256(json.dumps(relevant, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")).hexdigest()
+
+
+def _hermes_bin() -> str:
+    override = os.environ.get("FACTORY_SUPERVISOR_HERMES_BIN")
+    if override:
+        return override
+    repo_bin = REPO / "venv" / "bin" / "hermes"
+    if repo_bin.exists():
+        return str(repo_bin)
+    found = shutil.which("hermes")
+    if found:
+        return found
+    raise RuntimeError("Cannot launch Factory reasoning supervisor: hermes binary not found")
+
+
+def _build_supervisor_prompt(group_id: str, alerts: list[dict[str, Any]], payload: dict[str, Any]) -> str:
+    project_id = next((str(alert.get("project_id")) for alert in alerts if alert.get("project_id")), None)
+    context_payload = _project_scoped_payload(payload, project_id)
+    context_json = json.dumps(
+        {
+            "triggered_at": _iso_now(),
+            "group_id": group_id,
+            "project_id": project_id,
+            "alerts": alerts,
+            "factory_status_payload": context_payload,
+        },
+        ensure_ascii=False,
+        indent=2,
+        default=str,
+    )
+    return textwrap.dedent(
+        f"""
+        [Workspace::v1: /home/jean/Projects/hermes-agent-original]
+        Eres Zeus actuando como SUPERVISOR AUTÓNOMO del Software Factory de SitioUno.
+
+        El watchdog determinístico detectó una condición reparable. Jean NO quiere recibir alertas repetidas para esto: debes razonar, inspeccionar estado real, reparar lo que sea canónico y solo pedir intervención humana si realmente hay una decisión de negocio/producto, credencial física, acceso externo, pago, llamada a terceros, o algo que no puedas resolver con herramientas.
+
+        REGLAS DURAS:
+        - No respondas con un plan sin actuar. Usa herramientas reales.
+        - Sigue systematic-debugging: diagnostica raíz antes de cambiar.
+        - Puedes operar el control-plane Factory: leer status, logs, runs, DB, corregir estados huérfanos, relanzar tick, resolver blockers canónicos, ajustar perfiles/herramientas de Factory si la raíz es runtime/config.
+        - No hagas trabajo de producto manual fuera del Factory salvo que sea estrictamente reparación del runtime/control-plane. El producto debe seguir fluyendo por tareas Factory.
+        - Notion está desactivado/no-bloqueante para Factory hasta que Jean lo reactive explícitamente.
+        - Si una tarea está parada por falta de tool/skill/perfil, corrige la configuración canónica del perfil o la matriz, verifica, y deja evidencia.
+        - Si hay una pregunta humana pendiente o una decisión real de Jean, no inventes: deja una pregunta concreta.
+        - Antes de cerrar, verifica con comandos reales que el bloqueo o estancamiento cambió, o explica por qué no pudo cambiar.
+
+        CONTEXTO DETERMINÍSTICO DEL WATCHDOG:
+        ```json
+        {context_json}
+        ```
+
+        FORMATO FINAL OBLIGATORIO — las últimas líneas deben incluir exactamente una de estas:
+        SUPERVISOR_STATUS: RESOLVED
+        SUPERVISOR_STATUS: NO_ACTION
+        SUPERVISOR_STATUS: NEEDS_HUMAN
+        SUPERVISOR_STATUS: FAILED
+
+        También incluye:
+        SUPERVISOR_SUMMARY: <una línea concreta con lo que hiciste/verificaste>
+
+        Si y solo si usas NEEDS_HUMAN, incluye:
+        JEAN_QUESTION: <pregunta exacta y accionable para Jean>
+        """
+    ).strip()
+
+
+def _is_pid_running(pid: Any) -> bool:
+    try:
+        pid_int = int(pid)
+    except Exception:
+        return False
+    if pid_int <= 0:
+        return False
+    try:
+        os.kill(pid_int, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except Exception:
+        return False
+
+
+def _parse_supervisor_output(text: str) -> dict[str, str | None]:
+    status: str | None = None
+    summary: str | None = None
+    jean_question: str | None = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        upper = stripped.upper()
+        if upper.startswith("SUPERVISOR_STATUS:"):
+            candidate = stripped.split(":", 1)[1].strip().split()[0].upper() if ":" in stripped else ""
+            if candidate in SUPERVISOR_STATUSES:
+                status = candidate
+        elif upper.startswith("SUPERVISOR_SUMMARY:"):
+            summary = stripped.split(":", 1)[1].strip() if ":" in stripped else ""
+        elif upper.startswith("JEAN_QUESTION:"):
+            jean_question = stripped.split(":", 1)[1].strip() if ":" in stripped else ""
+    return {"status": status, "summary": summary, "jean_question": jean_question}
+
+
+def _read_exit_code(path: Path | None) -> int | None:
+    if not path or not path.exists():
+        return None
+    try:
+        return int(path.read_text(encoding="utf-8").strip())
+    except Exception:
+        return None
+
+
+def _completion_alert(group_id: str, entry: dict[str, Any]) -> dict[str, Any] | None:
+    status = str(entry.get("status") or "")
+    exit_code = entry.get("exit_code")
+    failure_threshold = int(os.environ.get("FACTORY_SUPERVISOR_FAILURE_ALERTS", "2"))
+    if status in {"RESOLVED", "NO_ACTION"}:
+        return None
+    if status == "NEEDS_HUMAN":
+        return {
+            "alert_key": f"factory:supervisor:{group_id}:{entry.get('run_id')}:needs-human",
+            "alert_type": "factory_reasoning_supervisor_needs_human",
+            "severity": "high",
+            "project_id": entry.get("project_id"),
+            "message": entry.get("summary") or "Factory reasoning supervisor needs Jean input.",
+            "jean_question": entry.get("jean_question") or "Supervisor requested Jean input but did not provide a question; inspect the run log.",
+            "supervisor_run_id": entry.get("run_id"),
+            "supervisor_output_path": entry.get("output_path"),
+        }
+    if status == "FAILED" or (exit_code is not None and int(exit_code) != 0):
+        failures = int(entry.get("failure_count") or 1)
+        if failures < failure_threshold:
+            return None
+        return {
+            "alert_key": f"factory:supervisor:{group_id}:{entry.get('run_id')}:failed:{failures}",
+            "alert_type": "factory_reasoning_supervisor_failed",
+            "severity": "high",
+            "project_id": entry.get("project_id"),
+            "message": f"Factory reasoning supervisor failed {failures} time(s) while trying to auto-repair; inspect log before asking Jean for product decisions.",
+            "supervisor_run_id": entry.get("run_id"),
+            "supervisor_output_path": entry.get("output_path"),
+        }
+    return None
+
+
+def _refresh_supervisor_runs(state: dict[str, Any]) -> list[dict[str, Any]]:
+    alerts: list[dict[str, Any]] = []
+    runs = state.setdefault("supervisor_runs", {})
+    for group_id, entry in list(runs.items()):
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("completed_notified"):
+            continue
+        if entry.get("status") in SUPERVISOR_STATUSES:
+            alert = _completion_alert(group_id, entry)
+            if alert:
+                alerts.append(alert)
+            entry["completed_notified"] = True
+            continue
+        if _is_pid_running(entry.get("pid")):
+            continue
+        output_path = Path(str(entry.get("output_path") or "")) if entry.get("output_path") else None
+        exit_path = Path(str(entry.get("exit_path") or "")) if entry.get("exit_path") else None
+        output_text = ""
+        if output_path and output_path.exists():
+            try:
+                output_text = output_path.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                output_text = ""
+        parsed = _parse_supervisor_output(output_text)
+        exit_code = _read_exit_code(exit_path)
+        status = parsed.get("status") or ("FAILED" if exit_code not in (0, None) else "FAILED")
+        previous_failures = int(entry.get("failure_count") or 0)
+        entry.update({
+            "status": status,
+            "summary": parsed.get("summary"),
+            "jean_question": parsed.get("jean_question"),
+            "exit_code": exit_code,
+            "completed_at": _iso_now(),
+        })
+        if status == "FAILED":
+            entry["failure_count"] = previous_failures + 1
+        alert = _completion_alert(group_id, entry)
+        if alert:
+            alerts.append(alert)
+        entry["completed_notified"] = True
+    return alerts
+
+
+def _supervisor_recently_launched(entry: dict[str, Any], fingerprint: str) -> bool:
+    if entry.get("fingerprint") != fingerprint:
+        return False
+    if _is_pid_running(entry.get("pid")):
+        return True
+    if entry.get("status") == "NEEDS_HUMAN":
+        return True
+    launched_at = _parse_dt(entry.get("started_at"))
+    cooldown = int(os.environ.get("FACTORY_SUPERVISOR_REPAIR_COOLDOWN_MINUTES", "30"))
+    if launched_at and (_now() - launched_at).total_seconds() < cooldown * 60:
+        return True
+    return False
+
+
+def _write_supervisor_runner(run_dir: Path, prompt_path: Path, output_path: Path, exit_path: Path) -> Path:
+    profile = os.environ.get("FACTORY_SUPERVISOR_PROFILE", "default")
+    toolsets = os.environ.get("FACTORY_SUPERVISOR_TOOLSETS", "terminal,file,factory,cronjob,session_search,skills,web")
+    skills = os.environ.get("FACTORY_SUPERVISOR_SKILLS", "software-factory-orchestration,systematic-debugging,hermes-agent")
+    hermes = _hermes_bin()
+    runner = run_dir / "run_supervisor.sh"
+    runner.write_text(
+        "#!/usr/bin/env bash\n"
+        "set +e\n"
+        f"cd {shlex_quote(str(REPO))}\n"
+        f"PROMPT=$(cat {shlex_quote(str(prompt_path))})\n"
+        f"{shlex_quote(hermes)} --profile {shlex_quote(profile)} chat -Q --source factory_watchdog_supervisor --max-turns 90 -t {shlex_quote(toolsets)} -s {shlex_quote(skills)} -q \"$PROMPT\" > {shlex_quote(str(output_path))} 2>&1\n"
+        "code=$?\n"
+        f"printf '%s\n' \"$code\" > {shlex_quote(str(exit_path))}\n"
+        "exit $code\n",
+        encoding="utf-8",
+    )
+    runner.chmod(0o700)
+    return runner
+
+
+def shlex_quote(value: str) -> str:
+    import shlex
+
+    return shlex.quote(value)
+
+
+def _launch_reasoning_supervisor(group_id: str, alerts: list[dict[str, Any]], payload: dict[str, Any], state: dict[str, Any]) -> None:
+    if os.environ.get("FACTORY_AUTOREPAIR_ENABLED", "1").strip().lower() in {"0", "false", "no", "off"}:
+        return
+    runs = state.setdefault("supervisor_runs", {})
+    fingerprint = _supervisor_fingerprint(alerts, payload)
+    existing = runs.get(group_id) if isinstance(runs.get(group_id), dict) else {}
+    if _supervisor_recently_launched(existing, fingerprint):
+        return
+
+    project_id = next((str(alert.get("project_id")) for alert in alerts if alert.get("project_id")), None)
+    run_id = f"fsup-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{group_id}-{fingerprint[:8]}"
+    run_dir = _supervisor_runs_dir() / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    prompt_path = run_dir / "prompt.md"
+    output_path = run_dir / "output.log"
+    exit_path = run_dir / "exit_code.txt"
+    prompt_path.write_text(_build_supervisor_prompt(group_id, alerts, payload), encoding="utf-8")
+    runner = _write_supervisor_runner(run_dir, prompt_path, output_path, exit_path)
+    proc = subprocess.Popen(
+        ["bash", str(runner)],
+        cwd=str(REPO),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    runs[group_id] = {
+        "run_id": run_id,
+        "project_id": project_id,
+        "fingerprint": fingerprint,
+        "alert_types": [alert.get("alert_type") for alert in alerts],
+        "alert_keys": [alert.get("alert_key") for alert in alerts],
+        "pid": proc.pid,
+        "started_at": _iso_now(),
+        "prompt_path": str(prompt_path),
+        "output_path": str(output_path),
+        "exit_path": str(exit_path),
+        "runner_path": str(runner),
+        "status": "running",
+        "failure_count": int(existing.get("failure_count") or 0),
+    }
+
+
+def _alert_requires_direct_human(alert: dict[str, Any]) -> bool:
+    if alert.get("requires_human") is True:
+        return True
+    alert_type = str(alert.get("alert_type") or "")
+    return alert_type in {"human_question_pending", "factory_reasoning_supervisor_needs_human"}
+
+
+def _route_repairable_alerts(alerts: list[dict[str, Any]], payload: dict[str, Any], state: dict[str, Any]) -> list[dict[str, Any]]:
+    human_alerts = _refresh_supervisor_runs(state)
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for alert in alerts:
+        if _alert_requires_direct_human(alert) or str(alert.get("alert_type") or "") not in AUTOREPAIR_ALERT_TYPES:
+            human_alerts.append(alert)
+            continue
+        grouped.setdefault(_supervisor_group_key([alert]), []).append(alert)
+    for group_id, group_alerts in grouped.items():
+        _launch_reasoning_supervisor(group_id, group_alerts, payload, state)
+    return human_alerts
 
 
 def main() -> None:
@@ -278,9 +624,11 @@ def main() -> None:
     _write_json(progress_state_path, progress_state)
     state_path = _state_path()
     state = _read_json(state_path)
-    send = _unsuppressed(alerts, state, suppress)
-    state["last_checked_at"] = _now().isoformat().replace("+00:00", "Z")
+    human_alerts = _route_repairable_alerts(alerts, payload, state)
+    send = _unsuppressed(human_alerts, state, suppress)
+    state["last_checked_at"] = _iso_now()
     state["last_alert_count"] = len(alerts)
+    state["last_human_alert_count"] = len(human_alerts)
     _write_json(state_path, state)
     if send:
         print(_render(send))

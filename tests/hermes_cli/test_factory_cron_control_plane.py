@@ -168,8 +168,76 @@ def test_factory_watchdog_progress_stall_alerts_are_deterministic(monkeypatch):
     alerts = watchdog._progress_stall_alerts(payload, state)
 
     assert [alert["alert_type"] for alert in alerts] == ["factory_progress_stalled"]
-    assert alerts[0]["recommended_action"] == "invoke_zeus_reasoning_supervisor_with_snapshot_and_repair_root_cause"
+    assert alerts[0]["supervisor_action"] == "launch_reasoning_supervisor"
     assert alerts[0]["progress_snapshot"]["task_counts"] == {"running": 1}
+
+
+def test_factory_watchdog_launches_reasoning_supervisor_instead_of_notifying(monkeypatch, tmp_path):
+    watchdog = _load_script("factory_watchdog_alerts")
+    launched = []
+
+    class FakePopen:
+        pid = 4242
+
+        def __init__(self, args, **kwargs):
+            launched.append({"args": args, "kwargs": kwargs})
+
+    monkeypatch.setattr(watchdog.subprocess, "Popen", FakePopen)
+    monkeypatch.setenv("FACTORY_SUPERVISOR_RUNS_DIR", str(tmp_path / "supervisor-runs"))
+    monkeypatch.setenv("FACTORY_SUPERVISOR_HERMES_BIN", "/bin/true")
+    payload = {
+        "projects": [{"project_id": "demo", "status": "active", "autonomous_enabled": True}],
+        "tasks": [{"project_id": "demo", "task_id": "demo-running", "status": "running"}],
+        "task_runs": [],
+        "gates": [],
+        "human_questions": [],
+    }
+    alert = {
+        "alert_key": "factory:demo:progress-stalled:abc",
+        "alert_type": "factory_progress_stalled",
+        "project_id": "demo",
+        "message": "no measurable progress",
+    }
+    state = {}
+
+    human_alerts = watchdog._route_repairable_alerts([alert], payload, state)
+
+    assert human_alerts == []
+    assert len(launched) == 1
+    entry = state["supervisor_runs"]["demo"]
+    assert entry["status"] == "running"
+    prompt = Path(entry["prompt_path"]).read_text(encoding="utf-8")
+    assert "SUPERVISOR_STATUS: NEEDS_HUMAN" in prompt
+    assert "Jean NO quiere recibir alertas repetidas" in prompt
+
+
+def test_factory_watchdog_notifies_only_when_supervisor_needs_human(monkeypatch, tmp_path):
+    watchdog = _load_script("factory_watchdog_alerts")
+    output = tmp_path / "output.log"
+    exit_code = tmp_path / "exit_code.txt"
+    output.write_text(
+        "Investigated.\nSUPERVISOR_STATUS: NEEDS_HUMAN\nSUPERVISOR_SUMMARY: Need owner decision.\nJEAN_QUESTION: ¿Autorizas cambiar el alcance?\n",
+        encoding="utf-8",
+    )
+    exit_code.write_text("0\n", encoding="utf-8")
+    monkeypatch.setattr(watchdog, "_is_pid_running", lambda pid: False)
+    state = {
+        "supervisor_runs": {
+            "demo": {
+                "run_id": "fsup-demo",
+                "project_id": "demo",
+                "pid": 999999,
+                "output_path": str(output),
+                "exit_path": str(exit_code),
+                "status": "running",
+            }
+        }
+    }
+
+    alerts = watchdog._refresh_supervisor_runs(state)
+
+    assert [alert["alert_type"] for alert in alerts] == ["factory_reasoning_supervisor_needs_human"]
+    assert alerts[0]["jean_question"] == "¿Autorizas cambiar el alcance?"
 
 
 def test_repo_factory_cron_scripts_run_against_backend(monkeypatch, capsys, tmp_path):
