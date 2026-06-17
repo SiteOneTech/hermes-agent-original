@@ -229,11 +229,16 @@ class TestWebServerEndpoints:
         except ImportError:
             pytest.skip("fastapi/starlette not installed")
 
+        import hermes_constants
         import hermes_state
         from hermes_constants import get_hermes_home
         from hermes_cli.web_server import app, _SESSION_HEADER_NAME, _SESSION_TOKEN
 
         monkeypatch.setattr(hermes_state, "DEFAULT_DB_PATH", get_hermes_home() / "state.db")
+        # Keep default endpoint expectations independent from whether the test
+        # runner itself is containerized. Dedicated tests below opt into the
+        # managed/container branch explicitly.
+        monkeypatch.setattr(hermes_constants, "is_container", lambda: False)
 
         self.client = TestClient(app)
         self.client.headers[_SESSION_HEADER_NAME] = _SESSION_TOKEN
