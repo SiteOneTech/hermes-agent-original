@@ -14,6 +14,12 @@ After a customer pays for a SitioUno runtime agent and Jean authorizes deploy, S
 
 This workflow is intentionally agent-first. Routine onboarding, guidance, and first-week enablement should be handled by specialized agents. Jean is only escalated for deploy authorization, pricing/commercial exceptions, legal/financial risk, or unusual customer commitments.
 
+## 1.1. Live onboarding scope expansion — activation hold
+
+The next requested scope is documented in `SOFI_ONBOARDING_LIVE_BRIEF.md`: **Sofi Onboarding Live**, a voice/SMS/web experience where the client receives a secure link and sees the onboarding template being filled in real time during the call.
+
+This is not active implementation yet. It is an initialization brief prepared for a later Factory activation, after Jean confirms the current operation is finished. Until then, do not resume autonomous execution, create a worktree, open a branch, or dispatch workers for the live onboarding scope.
+
 ## 2. Entry gate
 
 Onboarding starts only when all are true:
@@ -174,7 +180,7 @@ Escalation policy:
 
 ## 9. Non-goals
 
-- No public customer dashboard is required for onboarding PMV.
+- The original PMV did not require a public customer dashboard. The future `SOFI_ONBOARDING_LIVE_BRIEF.md` scope supersedes that for the next phase by adding a secure customer-facing live onboarding UI, but only after explicit activation.
 - No deploy automation is performed by Sophie.
 - No secret collection over chat.
 - No human intervention for routine usage guidance.

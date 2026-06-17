@@ -33,6 +33,10 @@ A first production-shaped capability exists: runtime agents can inherit a shared
 8. Zeus dashboard for agents.
 9. Ticket ingestion/management from runtime agents.
 
+## Future scope — Sofi Onboarding Live
+
+`SOFI_ONBOARDING_LIVE_BRIEF.md` defines the next onboarding product layer: Sofi calls the new client, sends a secure SMS link, guides the session by voice, updates a visual web onboarding template in real time, generates an internal briefing, and later calls back to guide channel activation. This future scope stays on activation hold until Jean explicitly authorizes Factory execution.
+
 ## PMV acceptance criteria
 - Factory project created and documented.
 - Runtime repo contains implementation and tests for shared-secret pack inheritance.

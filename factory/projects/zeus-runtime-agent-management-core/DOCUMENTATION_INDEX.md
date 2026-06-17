@@ -23,6 +23,7 @@ status: draft-ready
 | SPRINT_PLAN.md | Sprint plan | yes | yes |
 | TASK_GRAPH.md | Task graph/dependencies | yes | yes |
 | ONBOARDING_WORKFLOW.md | Sophie post-payment conversational onboarding and actuation workflow | yes | yes |
+| SOFI_ONBOARDING_LIVE_BRIEF.md | Activation-hold initialization brief for Sofi Onboarding live voice/SMS/web onboarding | yes | no |
 | RUNTIME_MANAGEMENT_FLOW.md | PMV flow from ready onboarding report to managed-agent registry, deployment run, health, and supervision status | yes | yes |
 | TRACKER.md | Status tracker | yes | yes |
 | DOCUMENTATION_INDEX.md | G1 index and status | yes | yes |
@@ -44,3 +45,6 @@ status: draft-ready
 - propagation_repo: `SiteOneTech/sitiouno-agent-runtime`
 - branch_prefix: `factory/zeus-runtime-agent-management-core/`
 - worktree_policy: `per_deliverable`
+
+## Activation holds
+- `SOFI_ONBOARDING_LIVE_BRIEF.md` is prepared as a future Factory scope pack only. Do not resume, dispatch, branch, create worktrees, deploy, or initialize implementation until Jean explicitly confirms the current Factory operation is finished and authorizes activation.

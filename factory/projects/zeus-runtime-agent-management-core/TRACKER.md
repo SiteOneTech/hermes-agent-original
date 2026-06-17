@@ -16,6 +16,8 @@ status: draft-ready
 - Bael smoke: pending after shared project and sync implementation.
 - Sophie onboarding intake: merged in `hermes-agent-original` main.
 - Runtime management PMV: implementation branch in progress for managed-agent registry, deployment runs, health, and status tools.
+- Sofi Onboarding Live: initialization brief added under activation hold; not started, no branch/worktree/dispatch until Jean confirms.
+- Factory DB S00 planning record: `zeus-runtime-agent-management-core-s00-sofi-onboarding-live-initialization-` closed as `done` with evidence for docs-only brief capture; this is not implementation activation.
 
 ## Risks
 - Shared API key blast radius if SendGrid key is abused.
@@ -25,3 +27,8 @@ status: draft-ready
 
 ## Next checkpoint
 After runtime management PMV: run focused tests, live Agent Core smoke, independent review, merge to `hermes-agent-original` main, then keep full deploy automation and Infisical shared-project activation as separate operational increments.
+
+## Future activation queue
+- `SOFI_ONBOARDING_LIVE_BRIEF.md` captures the full voice/SMS/web live onboarding scope for Sofi Onboarding.
+- Activation condition: Jean confirms the current Factory operation is finished and explicitly asks Zeus to activate this scope.
+- First runnable increment after activation should be `S01 Functional model + schema design`; do not create implementation worktrees before that confirmation.
