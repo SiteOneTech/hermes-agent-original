@@ -22,6 +22,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import psutil
+
 REPO = Path(__file__).resolve().parents[2]
 if REPO.exists() and str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
@@ -384,17 +386,7 @@ def _is_pid_running(pid: Any) -> bool:
         pid_int = int(pid)
     except Exception:
         return False
-    if pid_int <= 0:
-        return False
-    try:
-        os.kill(pid_int, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except Exception:
-        return False
+    return pid_int > 0 and psutil.pid_exists(pid_int)
 
 
 def _parse_supervisor_output(text: str) -> dict[str, str | None]:
