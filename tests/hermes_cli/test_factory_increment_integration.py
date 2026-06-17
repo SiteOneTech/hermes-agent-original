@@ -182,6 +182,26 @@ def test_next_runnable_task_blocks_dependency_not_integrated(fake_sql, monkeypat
     assert "increment_dependency_integration_blocked" in "\n".join(fake_sql.statements)
 
 
+def test_next_runnable_task_prioritizes_doc_repair_over_product_rework(fake_sql, monkeypatch):
+    rework = {"project_id": "demo", "task_id": "task-qa", "status": "rework", "phase": "qa-security", "dependencies": []}
+    doc_repair = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "demo-reconcile-unvalidated-required-docs",
+        "status": "todo",
+        "phase": "documentation",
+        "dependencies": [],
+        "metadata": {"factory_reconciliation_task": True, "reconciliation_anomaly": "unvalidated_required_docs"},
+    }
+    delivery = {"project_id": "demo", "lane_id": "lane", "task_id": "task-delivery", "status": "todo", "phase": "delivery", "dependencies": []}
+    fake_sql.rows_results = [[rework, doc_repair, delivery], [delivery, doc_repair]]
+    fake_sql.one_results = [{"project_id": "demo", "metadata": {}}]
+
+    result = factory_pg._next_runnable_task("demo")
+
+    assert result["task_id"] == "demo-reconcile-unvalidated-required-docs"
+
+
 def _git(path, *args):
     return subprocess.run(["git", "-C", str(path), *args], text=True, capture_output=True, check=True)
 

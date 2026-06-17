@@ -151,8 +151,21 @@ RECONCILIATION_TASK_SPECS: dict[str, dict[str, Any]] = {
             "Builder context points at DOCUMENTATION_INDEX.md before implementation starts.",
         ],
     },
+    "unvalidated_required_docs": {
+        "title": "R2c — Reconciliation: validate and independently review required Factory docs",
+        "phase": "documentation",
+        "owner": "factory-reporter",
+        "reviewer": "quality-reviewer",
+        "engine": "zeus",
+        "priority": 36,
+        "acceptance": [
+            "Every required G1 document exists, is indexed, committed, validated, and reviewed or has an explicit Jean-authorized waiver.",
+            "DOCUMENTATION_INDEX.md uses canonical machine-readable status markers such as `validated: yes` and `reviewed: yes` after real review, not vague prose.",
+            "Product execution, QA, sandbox, and delivery tasks remain blocked until the document_status snapshot has zero G1 blockers.",
+        ],
+    },
     "uncommitted_project_artifacts": {
-        "title": "R2c — Reconciliation: commit project-local Factory artifacts",
+        "title": "R2d — Reconciliation: commit project-local Factory artifacts",
         "phase": "documentation",
         "owner": "factory-reporter",
         "reviewer": "factory-orchestrator",
@@ -1372,6 +1385,15 @@ def reconciliation_findings(project: dict[str, Any], tasks: list[dict[str, Any]]
                 missing_from_index=missing_from_index,
                 artifact_dir=artifact_dir,
             )
+        document_blockers = _g1_document_blockers(project)
+        if document_blockers and not _required_docs_explicitly_waived(metadata):
+            add(
+                "unvalidated_required_docs",
+                "Required Factory methodology documents are present but not fully validated/reviewed",
+                blocking_documents=[row.get("file_name") for row in document_blockers],
+                blocker_details=document_blockers,
+                artifact_dir=artifact_dir,
+            )
 
     repo_path = str(project.get("repo_path") or "").strip()
     if repo_path and factory_dir is not None and factory_dir.is_dir() and not _repo_commit_explicitly_waived(metadata):
@@ -2431,8 +2453,9 @@ def _candidate_dependencies_integrated(project_id: str, candidate: dict[str, Any
 
 def _next_runnable_task(project_id: str) -> dict[str, Any] | None:
     tasks = _tasks(project_id)
-    if _has_active_increment(tasks):
+    if _has_in_flight_increment(tasks):
         return None
+    active_rework_exists = any(str(task.get("status") or "") == "rework" for task in tasks)
     terminal = ",".join(_q(s) for s in TERMINAL_TASK_STATUSES)
     candidates = sql.rows(
         f"""
@@ -2450,6 +2473,8 @@ def _next_runnable_task(project_id: str) -> dict[str, Any] | None:
     project = _project(project_id) or {"project_id": project_id, "metadata": {}}
     for row in candidates:
         candidate = _normalize(row)
+        if active_rework_exists and not (_is_reconciliation_task(candidate) or str(candidate.get("phase") or "").lower() in {"documentation", "planning"} or str(candidate.get("phase") or "").lower().startswith(("g0", "g1"))):
+            continue
         if _candidate_dependencies_integrated(project_id, candidate, tasks, project):
             return candidate
     return None
@@ -3612,6 +3637,45 @@ def _is_implementation_dispatch_task(task: dict[str, Any]) -> bool:
     return phase == "implementation" or any(term in text for term in ("implementation", "implement", "builder", "claude-code"))
 
 
+def _is_docs_first_gated_dispatch_task(task: dict[str, Any]) -> bool:
+    """Return True for product execution work that must wait for G1 readiness.
+
+    G0/G1/documentation/reconciliation tasks are allowed to run precisely to
+    create or repair the docs. Product execution, QA/security, sandbox delivery,
+    and final delivery reporting must not start while required docs are missing
+    or unvalidated, otherwise agents either guess from incomplete context or
+    ship contracts detached from the canonical plan.
+    """
+
+    if _is_reconciliation_task(task) or _is_runtime_bootstrap_repair_task(task):
+        return False
+    phase = str(task.get("phase") or "").strip().lower()
+    if phase.startswith(("g0", "g1")) or phase in {"documentation", "planning"}:
+        return False
+    text = "\n".join(str(task.get(key) or "") for key in ("task_id", "title", "description", "engine", "owner_profile")).lower()
+    gated_phase = phase.startswith(("implementation", "qa", "security", "delivery", "deploy", "release"))
+    gated_text = any(
+        term in text
+        for term in (
+            "implementation",
+            "implement",
+            "builder",
+            "claude-code",
+            "codex",
+            "qa",
+            "quality",
+            "security review",
+            "playwright",
+            "browser qa",
+            "sandbox",
+            "deploy",
+            "delivery report",
+            "release",
+        )
+    )
+    return gated_phase or gated_text
+
+
 def _dispatch_preflight_blockers(
     task: dict[str, Any],
     *,
@@ -3620,9 +3684,9 @@ def _dispatch_preflight_blockers(
     notion_required: bool = False,
     docs_first_waived: bool = False,
 ) -> list[str]:
-    """Return docs-first blockers for a candidate implementation dispatch."""
+    """Return docs-first blockers for a candidate product execution dispatch."""
 
-    if not _is_implementation_dispatch_task(task):
+    if not _is_docs_first_gated_dispatch_task(task):
         return []
     if _is_reconciliation_task(task) or _is_runtime_bootstrap_repair_task(task) or docs_first_waived:
         return []
@@ -3648,8 +3712,8 @@ def _record_dispatch_preflight_denied(project_id: str, task: dict[str, Any], blo
         f"""
         INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
         VALUES ({_q(project_id)}, {_q(task.get('lane_id'))}, {_q(task.get('task_id'))}, {_q(worker)}, 'dispatch_preflight_denied',
-                'Implementation dispatch denied until Factory docs/index/Notion gates are ready',
-                {_j({'blockers': blockers, 'runtime_contract': 'docs_first_factory_dispatch'})});
+                'Product execution dispatch denied until Factory docs/index/Notion gates are ready',
+                {_j({'blockers': blockers, 'runtime_contract': 'docs_first_factory_product_execution_dispatch'})});
         """,
         user=_user(),
     )
@@ -4112,9 +4176,12 @@ def force_tick(project_id: Optional[str] = None) -> dict[str, Any]:
         reconciled = [reconcile_project(row["project_id"]) for row in sql.rows("SELECT project_id FROM factory.projects ORDER BY updated_at", user=_user())]
     claimed = claim_next_review(project_id, worker="factory-force-tick")
     if not claimed:
-        claimed = claim_next_rework(project_id, worker="factory-force-tick")
-    if not claimed:
+        # Documentation/reconciliation repair has priority over product rework
+        # when docs-first gates are red. Otherwise a failed QA/rework loop can
+        # keep executing against invalid methodology context.
         claimed = claim_next_task(project_id, worker="factory-force-tick")
+    if not claimed:
+        claimed = claim_next_rework(project_id, worker="factory-force-tick")
     return {"monitor": monitor, "unblocked": unblocked, "reconciled": reconciled, "claimed": claimed}
 
 

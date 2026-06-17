@@ -305,11 +305,22 @@ def test_cli_link_notion_uses_backend(monkeypatch, capsys):
     assert calls["kwargs"]["page_id"] == "37a37b39cad68146b9f2e1fdf0bdf727"
 
 
-def test_dispatch_preflight_blocks_implementation_without_docs_only():
-    task = {"task_id": "demo-impl", "phase": "implementation", "status": "todo", "metadata": {}}
-    blockers = factory_pg._dispatch_preflight_blockers(task, docs_ready=False, notion_ready=False)
-    assert "missing_or_unindexed_docs" in blockers
-    assert "missing_notion_tracker" not in blockers
+def test_dispatch_preflight_blocks_product_execution_without_docs():
+    cases = [
+        {"task_id": "demo-impl", "phase": "implementation", "status": "todo", "metadata": {}},
+        {"task_id": "demo-qa", "phase": "qa-security", "title": "Tests Playwright QA and security review", "status": "todo", "metadata": {}},
+        {"task_id": "demo-deploy", "phase": "delivery", "title": "Sandbox deployment on Kidu", "status": "todo", "metadata": {}},
+        {"task_id": "demo-report", "phase": "delivery-report", "title": "Delivery report", "status": "todo", "metadata": {}},
+    ]
+    for task in cases:
+        blockers = factory_pg._dispatch_preflight_blockers(task, docs_ready=False, notion_ready=False)
+        assert "missing_or_unindexed_docs" in blockers, task
+        assert "missing_notion_tracker" not in blockers
+
+
+def test_dispatch_preflight_allows_g1_document_tasks_to_repair_docs():
+    task = {"task_id": "demo-g1-prd", "phase": "G1-product", "title": "Product requirements", "status": "todo", "metadata": {}}
+    assert factory_pg._dispatch_preflight_blockers(task, docs_ready=False, notion_ready=False) == []
 
 
 def test_dispatch_preflight_does_not_block_on_notion_by_default():
@@ -423,6 +434,24 @@ def test_document_status_does_not_treat_negated_review_words_as_reviewed(tmp_pat
     assert prd["validated"] is True
     assert prd["reviewed"] is False
     assert prd["blocking"] is True
+
+
+def test_reconciler_creates_task_for_unvalidated_required_docs(tmp_path):
+    factory_dir = tmp_path / "factory" / "projects" / "demo"
+    factory_dir.mkdir(parents=True)
+    for name in factory_pg.G1_BLOCKING_DOCUMENTS:
+        (factory_dir / name).write_text(f"# {name}\nvalidated: yes\nnot reviewed yet\n", encoding="utf-8")
+    (factory_dir / "DOCUMENTATION_INDEX.md").write_text(
+        "\n".join(f"- `{name}` — validated: yes; not reviewed yet" for name in factory_pg.G1_BLOCKING_DOCUMENTS),
+        encoding="utf-8",
+    )
+    _commit_factory_docs(tmp_path)
+    project = {"project_id": "demo", "repo_path": str(tmp_path), "metadata": {"artifact_dir": "factory/projects/demo"}}
+
+    findings = factory_pg.reconciliation_findings(project, tasks=[{"task_id": "demo-t1", "status": "todo"}], pending_gates=[])
+
+    finding = next(row for row in findings if row["code"] == "unvalidated_required_docs")
+    assert "PRD.md" in finding["metadata"]["blocking_documents"]
 
 
 def test_status_payload_includes_document_status(fake_sql, monkeypatch):
