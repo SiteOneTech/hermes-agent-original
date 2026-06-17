@@ -8,7 +8,9 @@ from __future__ import annotations
 import os
 import posixpath
 import re
+import shutil
 import subprocess
+import tempfile
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -215,6 +217,11 @@ RECONCILIATION_TASK_SPECS: dict[str, dict[str, Any]] = {
     },
 }
 TERMINAL_TASK_STATUSES = factory_contracts.TERMINAL_TASK_STATUSES
+POSITIVE_TERMINAL_TASK_STATUSES = {
+    factory_contracts.TaskStatus.DONE.value,
+    factory_contracts.TaskStatus.VERIFIED.value,
+    factory_contracts.TaskStatus.ACCEPTED.value,
+}
 IN_FLIGHT_TASK_STATUSES = factory_contracts.IN_FLIGHT_TASK_STATUSES
 ACTIVE_TASK_STATUSES = factory_contracts.ACTIVE_TASK_STATUSES
 DISPATCHABLE_PROJECT_STATUSES = factory_contracts.DISPATCHABLE_PROJECT_STATUSES
@@ -1611,6 +1618,13 @@ def record_gate(project_id: str, gate_type: str, status: str, *, lane_id: Option
         blockers = critical_readiness_findings(project_id, gate_evidence=gate_evidence)
         if blockers:
             raise ValueError("critical readiness gate blocked: " + "; ".join(blockers))
+    if task_id and state == "passed":
+        try:
+            integration_evidence = _integrate_increment_to_base(str(task_id), actor=reviewer or "factory-orchestrator", final_status="done")
+        except IncrementIntegrationError as exc:
+            raise ValueError(f"increment integration failed before gate pass for {task_id}: {exc}") from exc
+        if integration_evidence.get("increment_integration_required") is not False:
+            gate_evidence["increment_integration"] = integration_evidence
 
     row = sql.statement_one(f"""
       INSERT INTO factory.gates (project_id, lane_id, task_id, gate_type, status, reviewer, evidence, notes, timestamp)
@@ -1787,6 +1801,248 @@ def _task_close_completes_notion_sync(task_id: str, evidence: dict[str, Any]) ->
     )
 
 
+class IncrementIntegrationError(RuntimeError):
+    """Raised when a Factory increment cannot be merged into its base branch."""
+
+
+def _run_git(repo_or_worktree: Path, args: list[str], *, timeout: int = 120) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "-C", str(repo_or_worktree), *args],
+        text=True,
+        capture_output=True,
+        timeout=timeout,
+        check=False,
+    )
+
+
+def _git_stdout(repo_or_worktree: Path, args: list[str], *, timeout: int = 120) -> str:
+    result = _run_git(repo_or_worktree, args, timeout=timeout)
+    if result.returncode != 0:
+        raise IncrementIntegrationError(
+            f"git {' '.join(args)} failed: {(result.stderr or result.stdout).strip()[-1000:]}"
+        )
+    return result.stdout.strip()
+
+
+def _resolve_git_ref(repo_path: Path, branch: str) -> tuple[str, str]:
+    """Resolve a local or remote branch to (ref, commit)."""
+
+    candidates = [branch]
+    if not branch.startswith("origin/"):
+        candidates.append(f"origin/{branch}")
+    for ref in candidates:
+        result = _run_git(repo_path, ["rev-parse", "--verify", f"{ref}^{{commit}}"], timeout=30)
+        if result.returncode == 0:
+            return ref, result.stdout.strip()
+    raise IncrementIntegrationError(f"increment branch not found in repo: {branch}")
+
+
+def _task_integration_waived(task: dict[str, Any]) -> bool:
+    metadata = _metadata(task)
+    if not metadata.get("increment_integration_waived"):
+        return False
+    authorizer = str(metadata.get("increment_integration_waived_authorized_by") or "").strip().lower()
+    reason = str(metadata.get("increment_integration_waived_reason") or "").strip()
+    return authorizer in {"jean", "jean garcía", "jean garcia"} and bool(reason)
+
+
+def _increment_integration_required(task: dict[str, Any], project: dict[str, Any], final_status: str) -> bool:
+    if str(final_status or "").lower() not in POSITIVE_TERMINAL_TASK_STATUSES:
+        return False
+    if _is_reconciliation_task(task) or _is_runtime_bootstrap_repair_task(task) or _task_integration_waived(task):
+        return False
+    branch = str(task.get("branch") or "").strip()
+    worktree_path = str(task.get("worktree_path") or "").strip()
+    if not branch or not worktree_path:
+        return False
+    strategy = factory_contracts.repository_strategy_from_project(project)
+    base_branch = str(strategy.get("base_branch") or project.get("base_branch") or "main").strip() or "main"
+    return branch not in {base_branch, f"origin/{base_branch}"}
+
+
+def _increment_integration_metadata(
+    *,
+    status: str,
+    task: dict[str, Any],
+    project: dict[str, Any],
+    branch: str,
+    source_ref: str,
+    branch_commit: str,
+    base_branch: str,
+    base_commit_before: str,
+    base_commit_after: str,
+    method: str,
+    actor: str,
+) -> dict[str, Any]:
+    return {
+        "increment_integration_status": status,
+        "increment_integration_required": True,
+        "increment_integrated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "increment_integrated_by": actor,
+        "increment_integration_method": method,
+        "increment_branch": branch,
+        "increment_source_ref": source_ref,
+        "increment_branch_commit": branch_commit,
+        "increment_base_branch": base_branch,
+        "increment_base_commit_before": base_commit_before,
+        "increment_base_commit_after": base_commit_after,
+        "repo_path": str(project.get("repo_path") or ""),
+        "runtime_contract": "factory_increment_merge_to_origin_base_before_terminal",
+    }
+
+
+def _record_increment_integration_result(
+    task: dict[str, Any],
+    project: dict[str, Any],
+    metadata: dict[str, Any],
+    *,
+    actor: str,
+    failed: bool = False,
+    error: str | None = None,
+) -> None:
+    payload = dict(metadata)
+    if error:
+        payload["increment_integration_error"] = error[-2000:]
+    event_type = "increment_integration_failed" if failed else "increment_integrated"
+    status_update = {**payload, "increment_integration_status": "failed" if failed else payload.get("increment_integration_status", "integrated")}
+    sql.psql(
+        f"""
+        UPDATE factory.tasks
+        SET metadata = metadata || {_j(status_update)}, updated_at=now()
+        WHERE task_id={_q(task.get('task_id'))};
+        INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
+        VALUES ({_q(project.get('project_id') or task.get('project_id'))}, {_q(task.get('lane_id'))}, {_q(task.get('task_id'))}, {_q(actor)}, {_q(event_type)}, {_q('Factory increment integration ' + ('failed' if failed else 'completed'))}, {_j(status_update)});
+        """,
+        user=_user(),
+    )
+
+
+def _integrate_increment_to_base(task_id: str, *, actor: str = "factory-orchestrator", final_status: str = "done") -> dict[str, Any]:
+    """Merge a completed increment branch into origin/<base_branch> before closure.
+
+    This is the canonical Factory increment boundary: work happens in an
+    isolated branch/worktree, but the increment is not terminal until its branch
+    is contained in the origin base branch. Dependent increments therefore start
+    from the latest product state instead of isolated contracts.
+    """
+
+    task = _normalize(sql.one(f"SELECT * FROM factory.tasks WHERE task_id={_q(task_id)}", user=_user()) or {})
+    if not task:
+        return {"increment_integration_status": "skipped", "increment_integration_required": False, "reason": "task_not_found_precheck"}
+    if str(final_status or "").lower() not in POSITIVE_TERMINAL_TASK_STATUSES:
+        return {"increment_integration_status": "skipped", "increment_integration_required": False, "reason": "non_positive_terminal_status"}
+    if _is_reconciliation_task(task) or _is_runtime_bootstrap_repair_task(task) or _task_integration_waived(task):
+        return {"increment_integration_status": "skipped", "increment_integration_required": False, "reason": "administrative_or_waived_task"}
+    branch = str(task.get("branch") or "").strip()
+    worktree_path = str(task.get("worktree_path") or "").strip()
+    if not branch or not worktree_path:
+        return {"increment_integration_status": "skipped", "increment_integration_required": False, "reason": "missing_branch_or_worktree"}
+    project_id = str(task.get("project_id") or "")
+    project = _project(project_id) or {}
+    if not project:
+        raise IncrementIntegrationError(f"Factory project not found for task: {task_id}")
+    if not _increment_integration_required(task, project, final_status):
+        return {"increment_integration_status": "skipped", "increment_integration_required": False}
+
+    strategy = factory_contracts.repository_strategy_from_project(project)
+    repo_raw = str(strategy.get("primary_repo_path") or project.get("repo_path") or "").strip()
+    if not repo_raw:
+        raise IncrementIntegrationError("project repository path is required for increment integration")
+    repo_path = Path(repo_raw).expanduser()
+    if not repo_path.exists():
+        raise IncrementIntegrationError(f"project repository path does not exist: {repo_path}")
+    inside = _run_git(repo_path, ["rev-parse", "--is-inside-work-tree"], timeout=30)
+    if inside.returncode != 0:
+        raise IncrementIntegrationError(f"project repository path is not a git worktree: {repo_path}")
+
+    branch = str(task.get("branch") or "").strip()
+    base_branch = str(strategy.get("base_branch") or project.get("base_branch") or "main").strip() or "main"
+    fetch_base = _run_git(repo_path, ["fetch", "origin", base_branch], timeout=120)
+    if fetch_base.returncode != 0:
+        raise IncrementIntegrationError(f"git fetch origin {base_branch} failed: {(fetch_base.stderr or fetch_base.stdout).strip()[-1000:]}")
+    _run_git(repo_path, ["fetch", "origin", f"{branch}:refs/remotes/origin/{branch}"], timeout=120)
+    # A local branch may exist even if the remote branch is not present yet; do
+    # not fail solely on the branch fetch. _resolve_git_ref below is the source
+    # of truth.
+    source_ref, branch_commit = _resolve_git_ref(repo_path, branch)
+    base_ref = f"origin/{base_branch}"
+    base_commit_before = _git_stdout(repo_path, ["rev-parse", "--verify", f"{base_ref}^{{commit}}"], timeout=30)
+
+    ancestor = _run_git(repo_path, ["merge-base", "--is-ancestor", branch_commit, base_ref], timeout=30)
+    if ancestor.returncode == 0:
+        metadata = _increment_integration_metadata(
+            status="integrated",
+            task=task,
+            project=project,
+            branch=branch,
+            source_ref=source_ref,
+            branch_commit=branch_commit,
+            base_branch=base_branch,
+            base_commit_before=base_commit_before,
+            base_commit_after=base_commit_before,
+            method="already_ancestor",
+            actor=actor,
+        )
+        _record_increment_integration_result(task, project, metadata, actor=actor)
+        return metadata
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="factory-integration-"))
+    shutil.rmtree(temp_dir, ignore_errors=True)
+    worktree_added = False
+    try:
+        add = _run_git(repo_path, ["worktree", "add", "--detach", str(temp_dir), base_ref], timeout=120)
+        if add.returncode != 0:
+            raise IncrementIntegrationError(f"git worktree add failed: {(add.stderr or add.stdout).strip()[-1000:]}")
+        worktree_added = True
+        merge = _run_git(
+            temp_dir,
+            ["merge", "--no-ff", source_ref, "-m", f"Merge Factory increment {task_id} into {base_branch}"],
+            timeout=180,
+        )
+        if merge.returncode != 0:
+            raise IncrementIntegrationError(f"git merge failed: {(merge.stderr or merge.stdout).strip()[-2000:]}")
+        diff_check = _run_git(temp_dir, ["diff", "--check"], timeout=60)
+        if diff_check.returncode != 0:
+            raise IncrementIntegrationError(f"git diff --check failed: {(diff_check.stderr or diff_check.stdout).strip()[-2000:]}")
+        push = _run_git(temp_dir, ["push", "origin", f"HEAD:{base_branch}"], timeout=180)
+        if push.returncode != 0:
+            raise IncrementIntegrationError(f"git push failed: {(push.stderr or push.stdout).strip()[-2000:]}")
+        after_fetch = _run_git(repo_path, ["fetch", "origin", base_branch], timeout=120)
+        if after_fetch.returncode != 0:
+            raise IncrementIntegrationError(f"post-push fetch failed: {(after_fetch.stderr or after_fetch.stdout).strip()[-1000:]}")
+        base_commit_after = _git_stdout(repo_path, ["rev-parse", "--verify", f"{base_ref}^{{commit}}"], timeout=30)
+        metadata = _increment_integration_metadata(
+            status="integrated",
+            task=task,
+            project=project,
+            branch=branch,
+            source_ref=source_ref,
+            branch_commit=branch_commit,
+            base_branch=base_branch,
+            base_commit_before=base_commit_before,
+            base_commit_after=base_commit_after,
+            method="merge_no_ff_push_origin",
+            actor=actor,
+        )
+        _record_increment_integration_result(task, project, metadata, actor=actor)
+        return metadata
+    except IncrementIntegrationError as exc:
+        failure_metadata = {
+            "increment_integration_required": True,
+            "increment_integration_status": "failed",
+            "increment_branch": branch,
+            "increment_base_branch": base_branch,
+            "runtime_contract": "factory_increment_merge_to_origin_base_before_terminal",
+        }
+        _record_increment_integration_result(task, project, failure_metadata, actor=actor, failed=True, error=str(exc))
+        raise
+    finally:
+        if worktree_added:
+            _run_git(repo_path, ["worktree", "remove", "--force", str(temp_dir)], timeout=60)
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 def close_task(
     task_id: str,
     *,
@@ -1810,6 +2066,13 @@ def close_task(
         raise ValueError("result_summary is required")
     actor_name = str(actor or "factory-orchestrator").strip() or "factory-orchestrator"
     evidence_payload = dict(evidence or {})
+    if final_status in POSITIVE_TERMINAL_TASK_STATUSES:
+        try:
+            integration_evidence = _integrate_increment_to_base(tid, actor=actor_name, final_status=final_status)
+        except IncrementIntegrationError as exc:
+            raise ValueError(f"increment integration failed for {tid}: {exc}") from exc
+        if integration_evidence.get("increment_integration_required") is not False:
+            evidence_payload["increment_integration"] = integration_evidence
     evidence_state = "not_required" if final_status in {"cancelled", "superseded"} else "present"
     run_status = "cancelled" if final_status in {"cancelled", "superseded"} else "succeeded"
     metadata = {
@@ -2091,6 +2354,81 @@ def _has_in_flight_increment(tasks: list[dict[str, Any]]) -> bool:
     return any(str(t.get("status") or "") in IN_FLIGHT_TASK_STATUSES for t in tasks)
 
 
+def _dependency_increment_integrated(dep_task: dict[str, Any], project: dict[str, Any]) -> bool:
+    """Return True only when a terminal dependency is integrated to origin base.
+
+    This is a dispatch-side fail-safe for legacy/manual status changes. The
+    terminal transition path should already integrate, but the next increment
+    must still verify the base branch contains dependency work before starting.
+    """
+
+    dep_status = str(dep_task.get("status") or "")
+    if not _increment_integration_required(dep_task, project, dep_status):
+        return True
+    metadata = _metadata(dep_task)
+    if metadata.get("increment_integration_status") == "integrated":
+        return True
+    strategy = factory_contracts.repository_strategy_from_project(project)
+    repo_raw = str(strategy.get("primary_repo_path") or project.get("repo_path") or "").strip()
+    if not repo_raw:
+        return False
+    repo_path = Path(repo_raw).expanduser()
+    if not repo_path.exists():
+        return False
+    branch = str(dep_task.get("branch") or "").strip()
+    base_branch = str(strategy.get("base_branch") or project.get("base_branch") or "main").strip() or "main"
+    try:
+        _run_git(repo_path, ["fetch", "origin", base_branch], timeout=120)
+        source_ref, branch_commit = _resolve_git_ref(repo_path, branch)
+        base_ref = f"origin/{base_branch}"
+        base_commit = _git_stdout(repo_path, ["rev-parse", "--verify", f"{base_ref}^{{commit}}"], timeout=30)
+        ancestor = _run_git(repo_path, ["merge-base", "--is-ancestor", branch_commit, base_ref], timeout=30)
+    except Exception:
+        return False
+    if ancestor.returncode != 0:
+        return False
+    evidence = _increment_integration_metadata(
+        status="integrated",
+        task=dep_task,
+        project=project,
+        branch=branch,
+        source_ref=source_ref,
+        branch_commit=branch_commit,
+        base_branch=base_branch,
+        base_commit_before=base_commit,
+        base_commit_after=base_commit,
+        method="legacy_ancestor_detected_dispatch_guard",
+        actor="factory-dispatcher",
+    )
+    _record_increment_integration_result(dep_task, project, evidence, actor="factory-dispatcher")
+    return True
+
+
+def _candidate_dependencies_integrated(project_id: str, candidate: dict[str, Any], tasks: list[dict[str, Any]], project: dict[str, Any]) -> bool:
+    deps_value = candidate.get("dependencies")
+    dependencies = deps_value if isinstance(deps_value, list) else []
+    if not dependencies:
+        return True
+    by_id = {str(task.get("task_id") or ""): task for task in tasks}
+    blocked: list[str] = []
+    for dep_id in [str(dep or "").strip() for dep in dependencies if str(dep or "").strip()]:
+        dep_task = by_id.get(dep_id)
+        if dep_task and not _dependency_increment_integrated(dep_task, project):
+            blocked.append(dep_id)
+    if not blocked:
+        return True
+    sql.psql(
+        f"""
+        INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
+        VALUES ({_q(project_id)}, {_q(candidate.get('lane_id'))}, {_q(candidate.get('task_id'))}, 'factory-dispatcher', 'increment_dependency_integration_blocked',
+                'Dispatch blocked because terminal dependencies are not integrated into origin base branch',
+                {_j({'blocked_dependencies': blocked, 'runtime_contract': 'factory_increment_merge_to_origin_base_before_dependent_dispatch'})});
+        """,
+        user=_user(),
+    )
+    return False
+
+
 def _next_runnable_task(project_id: str) -> dict[str, Any] | None:
     tasks = _tasks(project_id)
     if _has_active_increment(tasks):
@@ -2106,11 +2444,15 @@ def _next_runnable_task(project_id: str) -> dict[str, Any] | None:
             WHERE dep NOT IN (SELECT task_id FROM factory.tasks WHERE project_id={_q(project_id)} AND status IN ({terminal}))
           )
         ORDER BY priority, created_at
-        LIMIT 1
         """,
         user=_user(),
     )
-    return _normalize(candidates[0]) if candidates else None
+    project = _project(project_id) or {"project_id": project_id, "metadata": {}}
+    for row in candidates:
+        candidate = _normalize(row)
+        if _candidate_dependencies_integrated(project_id, candidate, tasks, project):
+            return candidate
+    return None
 
 
 def reconcile_project(project_id: str) -> dict[str, Any]:
@@ -3457,10 +3799,20 @@ def _effective_exit_code(exit_code: int, output_summary: str) -> int:
 def mark_run_finished(run_id: str, *, exit_code: int, output_summary: str = "") -> None:
     ensure_runtime_schema()
     effective_exit_code = _effective_exit_code(exit_code, output_summary)
-    run_row = _normalize(sql.one(f"SELECT metadata FROM factory.task_runs WHERE run_id={_q(run_id)}", user=_user()) or {})
+    run_row = _normalize(sql.one(f"SELECT task_id, metadata FROM factory.task_runs WHERE run_id={_q(run_id)}", user=_user()) or {})
     metadata_value = run_row.get("metadata")
     metadata: dict[str, Any] = metadata_value if isinstance(metadata_value, dict) else {}
     run_type = str(metadata.get("run_type") or "implementation")
+    if run_type == "review" and effective_exit_code == 0:
+        task_id = str(run_row.get("task_id") or "").strip()
+        try:
+            integration_evidence = _integrate_increment_to_base(task_id, actor="factory-reviewer", final_status="done")
+        except IncrementIntegrationError as exc:
+            effective_exit_code = 1
+            output_summary = (output_summary.rstrip() + "\n\n" if output_summary.strip() else "") + f"Increment integration failed before terminal close: {exc}"
+        else:
+            if integration_evidence.get("increment_integration_required") is not False:
+                output_summary = (output_summary.rstrip() + "\n\n" if output_summary.strip() else "") + "Increment integration completed: " + str(integration_evidence)
     if run_type == "review":
         status_value = "done" if effective_exit_code == 0 else "rework"
         evidence_status = "present"

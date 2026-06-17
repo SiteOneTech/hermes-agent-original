@@ -243,16 +243,34 @@ def _prepare_worktree(payload: dict[str, Any], claim: dict[str, Any]) -> dict[st
             return {"ready": True, "reason": "worktree_exists", "repo_path": str(repo_path), "branch": branch, "worktree_path": str(worktree_path), "cwd": str(worktree_path)}
         return {"ready": False, "reason": "worktree_path_exists_not_git", "repo_path": str(repo_path), "worktree_path": str(worktree_path), "cwd": str(repo_path)}
     worktree_path.parent.mkdir(parents=True, exist_ok=True)
+    fetch = subprocess.run(
+        ["git", "-C", str(repo_path), "fetch", "origin", base_branch],
+        text=True,
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
+    base_ref = base_branch
+    if fetch.returncode == 0:
+        remote_probe = subprocess.run(
+            ["git", "-C", str(repo_path), "rev-parse", "--verify", f"origin/{base_branch}^{{commit}}"],
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+        if remote_probe.returncode == 0:
+            base_ref = f"origin/{base_branch}"
     add = subprocess.run(
-        ["git", "-C", str(repo_path), "worktree", "add", "-B", branch, str(worktree_path), base_branch],
+        ["git", "-C", str(repo_path), "worktree", "add", "-B", branch, str(worktree_path), base_ref],
         text=True,
         capture_output=True,
         timeout=60,
         check=False,
     )
     if add.returncode != 0:
-        return {"ready": False, "reason": "git_worktree_add_failed", "repo_path": str(repo_path), "branch": branch, "worktree_path": str(worktree_path), "stdout": add.stdout[-500:], "stderr": add.stderr[-500:], "cwd": str(repo_path)}
-    return {"ready": True, "reason": "worktree_created", "repo_path": str(repo_path), "branch": branch, "worktree_path": str(worktree_path), "cwd": str(worktree_path)}
+        return {"ready": False, "reason": "git_worktree_add_failed", "repo_path": str(repo_path), "branch": branch, "base_ref": base_ref, "worktree_path": str(worktree_path), "stdout": add.stdout[-500:], "stderr": add.stderr[-500:], "cwd": str(repo_path)}
+    return {"ready": True, "reason": "worktree_created", "repo_path": str(repo_path), "branch": branch, "base_ref": base_ref, "worktree_path": str(worktree_path), "cwd": str(worktree_path)}
 
 
 def _spawn_worker(db: Any, payload: dict[str, Any], claim: dict[str, Any]) -> dict[str, Any]:
