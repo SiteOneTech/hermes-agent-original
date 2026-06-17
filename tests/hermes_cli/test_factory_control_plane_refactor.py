@@ -545,6 +545,42 @@ def test_dispatch_docs_first_waived_requires_authorizer_and_reason():
     }) is True
 
 
+def test_resume_preflight_blocks_blocked_project_without_runnable_work():
+    preflight = {
+        "status": "blocked",
+        "task_counts": {
+            "blocked": 3,
+            "done": 40,
+        },
+    }
+
+    assert factory_pg._resume_preflight_blocker(preflight) == "blocked_without_runnable_work"
+
+
+def test_resume_preflight_blocks_paused_project_with_only_blocked_work():
+    preflight = {
+        "status": "paused",
+        "task_counts": {
+            "blocked": 3,
+            "done": 40,
+        },
+    }
+
+    assert factory_pg._resume_preflight_blocker(preflight) == "blocked_without_runnable_work"
+
+
+def test_resume_preflight_allows_blocked_project_with_runnable_rework():
+    preflight = {
+        "status": "blocked",
+        "task_counts": {
+            "blocked": 1,
+            "rework": 1,
+        },
+    }
+
+    assert factory_pg._resume_preflight_blocker(preflight) is None
+
+
 def test_close_project_cancels_active_runs_and_records_monitor_evidence(fake_sql):
     fake_sql.rows_results = [[{"run_id": "run-1"}, {"run_id": "run-2"}]]
     fake_sql.statement_one_results = [{"gate_id": 99}]

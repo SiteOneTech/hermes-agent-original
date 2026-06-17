@@ -3461,8 +3461,13 @@ def _resume_preflight_blocker(preflight: dict[str, Any]) -> str | None:
         return f"terminal_{status_value}"
     if status_value in {"hold", "on_hold"}:
         return "condition_hold"
-    if status_value == DELIVERY_HOLD_STATUS and _preflight_task_count(preflight, RESUME_RUNNABLE_TASK_STATUSES) <= 0:
+    runnable_count = _preflight_task_count(preflight, RESUME_RUNNABLE_TASK_STATUSES)
+    if status_value == DELIVERY_HOLD_STATUS and runnable_count <= 0:
         return "delivery_hold_without_runnable_work"
+    if status_value == "blocked" and runnable_count <= 0:
+        return "blocked_without_runnable_work"
+    if status_value == "paused" and _preflight_task_count(preflight, {"blocked"}) > 0 and runnable_count <= 0:
+        return "blocked_without_runnable_work"
     return None
 
 
