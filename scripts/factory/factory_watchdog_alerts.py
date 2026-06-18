@@ -102,8 +102,24 @@ def _unsuppressed(alerts: list[dict[str, Any]], state: dict[str, Any], suppress_
     out: list[dict[str, Any]] = []
     for alert in alerts:
         key = str(alert.get("alert_key") or alert.get("alert_type") or "unknown")
+        try:
+            alert_suppress_minutes = int(alert.get("suppress_minutes") or suppress_minutes)
+        except Exception:
+            alert_suppress_minutes = suppress_minutes
         last_sent = _parse_dt(sent.get(key))
-        if last_sent and (now - last_sent).total_seconds() < suppress_minutes * 60:
+        if not last_sent:
+            legacy_prefixes = alert.get("legacy_alert_key_prefixes")
+            if isinstance(legacy_prefixes, list):
+                legacy_times = [
+                    parsed
+                    for sent_key, sent_value in sent.items()
+                    if any(str(sent_key).startswith(str(prefix)) for prefix in legacy_prefixes)
+                    for parsed in [_parse_dt(sent_value)]
+                    if parsed
+                ]
+                if legacy_times:
+                    last_sent = max(legacy_times)
+        if last_sent and (now - last_sent).total_seconds() < alert_suppress_minutes * 60:
             continue
         sent[key] = now.isoformat().replace("+00:00", "Z")
         out.append(alert)
@@ -419,7 +435,7 @@ def _read_exit_code(path: Path | None) -> int | None:
 def _completion_alert(group_id: str, entry: dict[str, Any]) -> dict[str, Any] | None:
     status = str(entry.get("status") or "")
     exit_code = entry.get("exit_code")
-    failure_threshold = int(os.environ.get("FACTORY_SUPERVISOR_FAILURE_ALERTS", "2"))
+    failure_threshold = int(os.environ.get("FACTORY_SUPERVISOR_FAILURE_ALERTS", "5"))
     if status in {"RESOLVED", "NO_ACTION"}:
         return None
     if status == "NEEDS_HUMAN":
@@ -438,13 +454,15 @@ def _completion_alert(group_id: str, entry: dict[str, Any]) -> dict[str, Any] | 
         if failures < failure_threshold:
             return None
         return {
-            "alert_key": f"factory:supervisor:{group_id}:{entry.get('run_id')}:failed:{failures}",
+            "alert_key": f"factory:supervisor:{group_id}:failed",
             "alert_type": "factory_reasoning_supervisor_failed",
             "severity": "high",
             "project_id": entry.get("project_id"),
             "message": f"Factory reasoning supervisor failed {failures} time(s) while trying to auto-repair; inspect log before asking Jean for product decisions.",
             "supervisor_run_id": entry.get("run_id"),
             "supervisor_output_path": entry.get("output_path"),
+            "suppress_minutes": int(os.environ.get("FACTORY_SUPERVISOR_FAILURE_NOTIFY_COOLDOWN_MINUTES", "360")),
+            "legacy_alert_key_prefixes": [f"factory:supervisor:{group_id}:fsup-"],
         }
     return None
 
@@ -512,13 +530,17 @@ def _write_supervisor_runner(run_dir: Path, prompt_path: Path, output_path: Path
     toolsets = os.environ.get("FACTORY_SUPERVISOR_TOOLSETS", "terminal,file,factory,cronjob,session_search,skills,web")
     skills = os.environ.get("FACTORY_SUPERVISOR_SKILLS", "software-factory-orchestration,systematic-debugging,hermes-agent")
     hermes = _hermes_bin()
+    supervisor_query = (
+        "Lee y sigue exactamente el prompt/contexto del supervisor Factory guardado en "
+        f"{prompt_path}. Usa la herramienta read_file para cargarlo completo antes de actuar. "
+        "No le preguntes a Jean salvo que ese prompt y la evidencia demuestren una decisión humana real."
+    )
     runner = run_dir / "run_supervisor.sh"
     runner.write_text(
         "#!/usr/bin/env bash\n"
         "set +e\n"
         f"cd {shlex_quote(str(REPO))}\n"
-        f"PROMPT=$(cat {shlex_quote(str(prompt_path))})\n"
-        f"{shlex_quote(hermes)} --profile {shlex_quote(profile)} chat -Q --source factory_watchdog_supervisor --max-turns 90 -t {shlex_quote(toolsets)} -s {shlex_quote(skills)} -q \"$PROMPT\" > {shlex_quote(str(output_path))} 2>&1\n"
+        f"{shlex_quote(hermes)} --profile {shlex_quote(profile)} chat -Q --source factory_watchdog_supervisor --max-turns 90 -t {shlex_quote(toolsets)} -s {shlex_quote(skills)} -q {shlex_quote(supervisor_query)} > {shlex_quote(str(output_path))} 2>&1\n"
         "code=$?\n"
         f"printf '%s\n' \"$code\" > {shlex_quote(str(exit_path))}\n"
         "exit $code\n",
