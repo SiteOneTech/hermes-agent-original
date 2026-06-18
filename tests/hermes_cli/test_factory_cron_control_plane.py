@@ -102,6 +102,24 @@ def test_factory_blocker_classifier_preserves_actionable_human_question():
     assert classified["human_options"] == ["APPROVED", "HOLD", "REJECTED"]
 
 
+def test_planning_tasks_are_not_validation_blockers_from_contract_metadata():
+    task = {
+        "task_id": "demo-planning",
+        "title": "Commercial landing redesign and corrected contact",
+        "phase": "planning",
+        "status": "superseded",
+        "owner_profile": "implementation-planner",
+        "reviewer_profile": "quality-reviewer",
+        "metadata": {
+            "evidence": {
+                "new_contract": "planning -> implementation -> quality_review -> ui_qa_verification -> sandbox_deploy",
+            }
+        },
+    }
+
+    assert factory_pg._is_validation_task(task) is False
+
+
 def test_record_factory_blocker_actions_lets_sql_one_add_limit(monkeypatch):
     monkeypatch.setattr(factory_pg, "_SCHEMA_READY", True)
     one_queries = []

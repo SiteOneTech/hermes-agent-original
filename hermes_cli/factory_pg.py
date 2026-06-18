@@ -772,13 +772,19 @@ def _is_validation_task(task: dict[str, Any]) -> bool:
     if _is_reconciliation_task(task) or _is_runtime_bootstrap_repair_task(task):
         return False
     phase = str(task.get("phase") or "").lower().replace("-", "_")
+    validation_phases = {"qa", "qa_security", "security", "security_review", "quality", "quality_review", "review"}
+    if phase in validation_phases:
+        return True
     owner = str(task.get("owner_profile") or task.get("owner_agent_id") or "").lower()
     reviewer = str(task.get("reviewer_profile") or task.get("reviewer_agent_id") or "").lower()
-    text = _task_text(task)
+    # Do not scan metadata here: planning tasks can mention future
+    # quality_review/QA phases in their contract metadata without themselves
+    # being validation tasks. Only user-facing task fields should decide this.
+    visible_text = "\n".join(str(task.get(key) or "") for key in ("title", "description", "result_summary")).lower()
     validation_people = {"qa-verifier", "quality-reviewer", "security-reviewer"}
     if owner in validation_people or reviewer in validation_people:
-        return any(term in text for term in ("qa", "quality", "security", "playwright", "browser", "test", "review", "smoke", "screenshot", "console"))
-    return phase in {"qa", "qa_security", "security", "security_review", "quality", "quality_review", "review"}
+        return any(term in visible_text for term in ("qa", "quality", "security", "playwright", "browser", "test", "review", "smoke", "screenshot", "console"))
+    return False
 
 
 def _validation_task_readiness_findings(project_id: str) -> list[str]:
