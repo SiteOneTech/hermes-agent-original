@@ -454,6 +454,52 @@ def test_reconciler_creates_task_for_unvalidated_required_docs(tmp_path):
     assert "PRD.md" in finding["metadata"]["blocking_documents"]
 
 
+def test_reconciler_does_not_cancel_product_validation_task_with_reconciliation_text(fake_sql):
+    project = {"project_id": "demo", "metadata": {}}
+    findings = []
+    tasks = [
+        {
+            "project_id": "demo",
+            "task_id": "demo-qa-security",
+            "status": "blocked",
+            "phase": "qa-security",
+            "title": "Tests Playwright QA and security review",
+            "result_summary": "Blocked until unvalidated_required_docs reconciliation is resolved.",
+            "metadata": {"reconciliation_anomaly": "unvalidated_required_docs"},
+        },
+        {
+            "project_id": "demo",
+            "task_id": "demo-reconcile-unvalidated-required-docs",
+            "status": "todo",
+            "phase": "documentation",
+            "title": "R2c — Reconciliation: validate docs",
+            "metadata": {"factory_reconciliation_task": True, "reconciliation_anomaly": "unvalidated_required_docs"},
+        },
+    ]
+
+    resolved = factory_pg.cancel_resolved_reconciliation_tasks(project, findings, tasks)
+
+    assert resolved == [{"task_id": "demo-reconcile-unvalidated-required-docs", "code": "unvalidated_required_docs", "source": "structured_reconciliation_metadata"}]
+    joined = "\n".join(fake_sql.statements)
+    assert "demo-reconcile-unvalidated-required-docs" in joined
+    assert "demo-qa-security" not in joined.split("demo-reconcile-unvalidated-required-docs")[0]
+
+
+def test_delivery_readiness_blocks_cancelled_qa_security_task(monkeypatch):
+    project = {"project_id": "demo", "name": "Security QR scanner", "risk_level": "medium", "metadata": {"delivery_target": "sandbox", "ui_deliverable": True}}
+    tasks = [
+        {"project_id": "demo", "task_id": "demo-qa-security", "status": "cancelled", "phase": "qa-security", "title": "Tests Playwright QA and security review", "owner_profile": "qa-verifier", "reviewer_profile": "security-reviewer", "metadata": {}},
+        {"project_id": "demo", "task_id": "demo-deploy", "status": "done", "phase": "delivery", "title": "Sandbox deployment", "owner_profile": "devops-release", "metadata": {}},
+    ]
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_delivery_evidence_findings", lambda project_arg, evidence: [])
+
+    findings = factory_pg.critical_readiness_findings("demo", gate_evidence={"sandbox_url": "https://demo.kidu.app/"})
+
+    assert any("demo-qa-security" in item and "cancelled" in item for item in findings)
+
+
 def test_status_payload_includes_document_status(fake_sql, monkeypatch):
     fake_sql.rows_results = [
         [{"project_id": "demo", "status": "active", "repo_path": None, "metadata": {}}],

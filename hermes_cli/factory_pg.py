@@ -564,6 +564,44 @@ def _project_requires_sandbox_delivery(project: dict[str, Any]) -> bool:
     return bool(deliverable_types & _RUNNABLE_DELIVERABLE_TYPES)
 
 
+def _project_requires_security_review(project: dict[str, Any]) -> bool:
+    """Infer whether security review is mandatory.
+
+    Security is not optional for products handling URLs, auth, payments, QR
+    scanners, public browser surfaces, or any explicitly security-sensitive
+    domain. Metadata may opt in, but absence of metadata must not let obvious
+    anti-phishing/security products skip the gate.
+    """
+
+    metadata = _metadata(project)
+    if any(_metadata_bool(metadata, key) for key in ("security_required", "requires_security_review", "threat_model_required")):
+        return True
+    text = "\n".join(str(project.get(key) or "") for key in ("project_id", "name", "summary", "description")).lower()
+    text += "\n" + "\n".join(str(metadata.get(key) or "") for key in ("project_name", "deliverable_type", "project_type", "domain", "surface")).lower()
+    security_terms = (
+        "security",
+        "seguridad",
+        "phishing",
+        "anti-phishing",
+        "qr",
+        "scanner",
+        "url",
+        "redirect",
+        "ssrf",
+        "auth",
+        "oauth",
+        "login",
+        "payment",
+        "pago",
+        "invoice",
+        "signature",
+        "public",
+        "browser",
+        "sandbox",
+    )
+    return any(term in text for term in security_terms)
+
+
 def _task_text(task: dict[str, Any]) -> str:
     fields = ("task_id", "title", "description", "phase", "owner_profile", "reviewer_profile", "engine")
     return "\n".join(str(task.get(key) or "") for key in fields).lower()
@@ -590,11 +628,11 @@ def _task_satisfies_mandatory_category(task: dict[str, Any], category: str) -> b
     if category == "quality_review":
         return owner == "quality-reviewer" and phase in {"review", "quality_review", "quality"}
     if category == "security_review":
-        return owner == "security-reviewer" and phase == "security"
+        return (owner == "security-reviewer" or reviewer == "security-reviewer") and phase in {"security", "security_review", "qa_security", "implementation_security", "qa"}
     if category == "qa_verification":
-        return owner == "qa-verifier" and phase == "qa" and any(term in text for term in ("qa", "smoke", "test gate", "verification"))
+        return owner == "qa-verifier" and phase in {"qa", "qa_security", "delivery"} and any(term in text for term in ("qa", "smoke", "test gate", "verification", "playwright", "browser"))
     if category == "ui_qa_verification":
-        return owner == "qa-verifier" and phase == "qa" and any(term in text for term in ("playwright", "browser", "screenshot", "console", "visual", "mobile", "desktop"))
+        return owner == "qa-verifier" and phase in {"qa", "qa_security", "delivery"} and any(term in text for term in ("playwright", "browser", "screenshot", "console", "visual", "mobile", "desktop"))
     if category == "sandbox_deploy":
         return owner == "devops-release" and phase in {"delivery", "deploy", "deployment", "release"} and any(term in text for term in ("sandbox", "deploy", "docker compose", "caddy", "preview url", "public url"))
     if category == "post_sandbox_verification":
@@ -610,7 +648,7 @@ def _mandatory_phase_categories(project: dict[str, Any]) -> list[str]:
     metadata = _metadata(project)
     categories = ["planning", "implementation", "quality_review"]
     categories.append("ui_qa_verification" if _project_requires_ui_delivery(project) else "qa_verification")
-    if _metadata_bool(metadata, "security_required"):
+    if _project_requires_security_review(project):
         categories.append("security_review")
     categories.extend(["sandbox_deploy", "post_sandbox_verification", "delivery_report"])
     return categories
@@ -657,6 +695,51 @@ def _missing_mandatory_phase_categories(project: dict[str, Any], tasks: list[dic
 
     matched_categories = set(task_to_category.values())
     return [category for category in categories if category not in matched_categories]
+
+
+def _is_validation_task(task: dict[str, Any]) -> bool:
+    if _is_reconciliation_task(task) or _is_runtime_bootstrap_repair_task(task):
+        return False
+    phase = str(task.get("phase") or "").lower().replace("-", "_")
+    owner = str(task.get("owner_profile") or task.get("owner_agent_id") or "").lower()
+    reviewer = str(task.get("reviewer_profile") or task.get("reviewer_agent_id") or "").lower()
+    text = _task_text(task)
+    validation_people = {"qa-verifier", "quality-reviewer", "security-reviewer"}
+    if owner in validation_people or reviewer in validation_people:
+        return any(term in text for term in ("qa", "quality", "security", "playwright", "browser", "test", "review", "smoke", "screenshot", "console"))
+    return phase in {"qa", "qa_security", "security", "security_review", "quality", "quality_review", "review"}
+
+
+def _validation_task_readiness_findings(project_id: str) -> list[str]:
+    """Find unresolved/cancelled QA, quality, or security tasks.
+
+    Delivery and final reporting must fail closed when a validation task exists
+    but is cancelled, blocked, still in progress, or awaiting review. A cancelled
+    QA/security task is not harmless administrative cleanup unless it explicitly
+    names a superseding validation task that is positively terminal.
+    """
+
+    tasks = _tasks(project_id)
+    by_id = {str(task.get("task_id") or ""): task for task in tasks}
+    findings: list[str] = []
+    positive = set(POSITIVE_TERMINAL_TASK_STATUSES)
+    open_statuses = {"todo", "ready", "claimed", "running", "review_ready", "review_running", "rework", "blocked"}
+    for task in tasks:
+        if not _is_validation_task(task):
+            continue
+        status = str(task.get("status") or "").lower()
+        task_id = str(task.get("task_id") or "")
+        title = str(task.get("title") or task_id)
+        metadata = _metadata(task)
+        superseded_by = str(metadata.get("superseded_by_task") or metadata.get("replacement_task_id") or "").strip()
+        if status == "cancelled":
+            replacement = by_id.get(superseded_by)
+            if replacement and str(replacement.get("status") or "").lower() in positive and _is_validation_task(replacement):
+                continue
+            findings.append(f"validation task {task_id} ({title}) is cancelled without a completed superseding QA/security task")
+        elif status in open_statuses or status not in positive:
+            findings.append(f"validation task {task_id} ({title}) is not complete; status={status or 'unknown'}")
+    return findings
 
 
 def _authorized_sandbox_hosts(metadata: dict[str, Any]) -> list[str]:
@@ -1259,7 +1342,7 @@ def _uncommitted_project_artifacts(repo_path: Path, artifact_dir: str) -> list[s
 
 def _is_reconciliation_task(task: dict[str, Any]) -> bool:
     metadata = _metadata(task)
-    if metadata.get("factory_reconciliation_task") or metadata.get("reconciliation_anomaly"):
+    if metadata.get("factory_reconciliation_task"):
         return True
     text = "\n".join(str(task.get(key) or "") for key in ("task_id", "title", "description", "phase")).lower()
     return "reconciliation" in text or "reconciliación" in text
@@ -1512,6 +1595,8 @@ def cancel_resolved_reconciliation_tasks(project: dict[str, Any], findings: list
     for task in tasks:
         if str(task.get("status") or "") in TERMINAL_TASK_STATUSES:
             continue
+        if not _is_reconciliation_task(task):
+            continue
         anomaly = _task_reconciliation_anomaly(task)
         if not anomaly:
             continue
@@ -1605,6 +1690,7 @@ def critical_readiness_findings(project_id: str, *, gate_evidence: Optional[dict
             findings.append("project is explicitly hidden from dashboard")
 
     if gate_evidence is not None:
+        findings.extend(_validation_task_readiness_findings(project_id))
         findings.extend(_delivery_evidence_findings(project, gate_evidence))
     return findings
 
@@ -2481,8 +2567,15 @@ def _next_runnable_task(project_id: str) -> dict[str, Any] | None:
     project = _project(project_id) or {"project_id": project_id, "metadata": {}}
     for row in candidates:
         candidate = _normalize(row)
-        if active_rework_exists and not (_is_reconciliation_task(candidate) or str(candidate.get("phase") or "").lower() in {"documentation", "planning"} or str(candidate.get("phase") or "").lower().startswith(("g0", "g1"))):
+        phase = str(candidate.get("phase") or "").lower().replace("-", "_")
+        text = _task_text(candidate)
+        if active_rework_exists and not (_is_reconciliation_task(candidate) or phase in {"documentation", "planning"} or phase.startswith(("g0", "g1"))):
             continue
+        if phase.startswith(("delivery", "deploy", "release")) or "delivery report" in text or "final" in text:
+            validation_blockers = _validation_task_readiness_findings(project_id)
+            if validation_blockers and not _is_validation_task(candidate):
+                _record_dispatch_preflight_denied(project_id, candidate, ["unresolved_validation_tasks", *validation_blockers], worker="factory-dispatcher")
+                continue
         if _candidate_dependencies_integrated(project_id, candidate, tasks, project):
             return candidate
     return None
