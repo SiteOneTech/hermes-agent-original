@@ -943,6 +943,14 @@ def _path_string(value: Any) -> str:
 
 
 def _authorized_project_sandbox_root(project: dict[str, Any]) -> str:
+    metadata = _metadata(project)
+    root = str(metadata.get("authorized_sandbox_root") or metadata.get("sandbox_deploy_root") or "").strip()
+    authorizer = metadata.get("authorized_sandbox_root_authorized_by") or metadata.get("sandbox_deploy_root_authorized_by")
+    reason = metadata.get("authorized_sandbox_root_reason") or metadata.get("sandbox_deploy_root_reason")
+    if root and authorizer and reason:
+        clean = posixpath.normpath(root)
+        if clean.startswith("/srv/factory/projects/"):
+            return clean
     project_id = str(project.get("project_id") or "").strip() or "<project>"
     return f"/srv/factory/projects/{project_id}"
 
@@ -1080,8 +1088,11 @@ def _delivery_evidence_findings(project: dict[str, Any], evidence: dict[str, Any
             findings.append(f"sandbox_deploy_path under {sandbox_root} is required")
         elif not _path_under_root(deploy_path, sandbox_root):
             findings.append(f"sandbox_deploy_path must be under authorized sandbox root {sandbox_root}")
+        static_site_delivery = _evidence_status_passed(evidence.get("static_site_delivery")) or _metadata_bool(metadata, "static_site_delivery")
+        static_site_reason = str(evidence.get("static_site_delivery_reason") or metadata.get("static_site_delivery_reason") or "").strip()
         if not compose_path:
-            findings.append("docker_compose_path is required for runnable sandbox delivery unless explicitly waived")
+            if not (static_site_delivery and static_site_reason):
+                findings.append("docker_compose_path is required for runnable sandbox delivery unless explicitly waived")
         elif not _path_under_root(compose_path, sandbox_root):
             findings.append(f"docker_compose_path must be under authorized sandbox root {sandbox_root}")
         elif Path(compose_path).name not in {"docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"}:

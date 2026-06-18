@@ -120,6 +120,41 @@ def test_planning_tasks_are_not_validation_blockers_from_contract_metadata():
     assert factory_pg._is_validation_task(task) is False
 
 
+def test_static_site_delivery_allows_authorized_root_and_no_compose():
+    project = {
+        "project_id": "demo-static",
+        "metadata": {
+            "ui_deliverable": True,
+            "requires_ui_qa": True,
+            "delivery_target": "sandbox",
+            "authorized_sandbox_root": "/srv/factory/projects/kidu-site",
+            "authorized_sandbox_root_authorized_by": "jean",
+            "authorized_sandbox_root_reason": "canonical Kidu root static public surface",
+        },
+    }
+    evidence = {
+        "sandbox_url": "https://kidu.app/",
+        "sandbox_deploy_path": "/srv/factory/projects/kidu-site/site",
+        "static_site_delivery": True,
+        "static_site_delivery_reason": "static site served by Caddy; Docker Compose not applicable",
+        "sandbox_public_smoke": {"status": "passed", "url": "https://kidu.app/"},
+        "browser_smoke": {"status": "passed", "url": "https://kidu.app/"},
+        "browser_smoke_url": "https://kidu.app/",
+        "desktop_screenshot": "qa/screenshots/desktop-dark-es.png",
+        "mobile_screenshot": "qa/screenshots/mobile-dark-es.png",
+        "console_error_check": {"passed": True, "console_errors": 0},
+        "core_flow_interaction": "passed",
+        "qa_report_path": "factory/projects/demo-static/QA_REPORT.md",
+        "evidence_paths": [
+            "qa/screenshots/desktop-dark-es.png",
+            "qa/screenshots/mobile-dark-es.png",
+            "factory/projects/demo-static/QA_REPORT.md",
+        ],
+    }
+
+    assert factory_pg._delivery_evidence_findings(project, evidence) == []
+
+
 def test_record_factory_blocker_actions_lets_sql_one_add_limit(monkeypatch):
     monkeypatch.setattr(factory_pg, "_SCHEMA_READY", True)
     one_queries = []
