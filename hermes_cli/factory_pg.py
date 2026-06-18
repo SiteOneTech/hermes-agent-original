@@ -1959,6 +1959,14 @@ def _integrate_increment_to_base(task_id: str, *, actor: str = "factory-orchestr
     worktree_path = str(task.get("worktree_path") or "").strip()
     if not branch or not worktree_path:
         return {"increment_integration_status": "skipped", "increment_integration_required": False, "reason": "missing_branch_or_worktree"}
+    worktree = Path(worktree_path).expanduser()
+    if not worktree.exists():
+        raise IncrementIntegrationError(f"increment worktree does not exist: {worktree}")
+    worktree_status = _run_git(worktree, ["status", "--porcelain=v1"], timeout=30)
+    if worktree_status.returncode != 0:
+        raise IncrementIntegrationError(f"increment worktree status failed: {(worktree_status.stderr or worktree_status.stdout).strip()[-1000:]}")
+    if (worktree_status.stdout or "").strip():
+        raise IncrementIntegrationError("increment worktree has uncommitted changes; commit/push the increment branch before recording a passed gate or terminal status")
     project_id = str(task.get("project_id") or "")
     project = _project(project_id) or {}
     if not project:

@@ -206,6 +206,44 @@ def _git(path, *args):
     return subprocess.run(["git", "-C", str(path), *args], text=True, capture_output=True, check=True)
 
 
+def test_integrate_increment_to_base_rejects_dirty_worktree_before_gate(fake_sql, monkeypatch, tmp_path):
+    origin = tmp_path / "origin.git"
+    repo = tmp_path / "repo"
+    worktree = tmp_path / "worktrees" / "task-1"
+    subprocess.run(["git", "init", "--bare", str(origin)], text=True, capture_output=True, check=True)
+    subprocess.run(["git", "clone", str(origin), str(repo)], text=True, capture_output=True, check=True)
+    _git(repo, "config", "user.email", "factory@example.test")
+    _git(repo, "config", "user.name", "Factory Test")
+    (repo / "README.md").write_text("base\n", encoding="utf-8")
+    _git(repo, "add", "README.md")
+    _git(repo, "commit", "-m", "base")
+    _git(repo, "branch", "-M", "main")
+    _git(repo, "push", "origin", "main")
+    _git(repo, "worktree", "add", "-b", "factory/demo/task-1", str(worktree), "main")
+    (worktree / "feature.txt").write_text("uncommitted feature\n", encoding="utf-8")
+
+    task = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "task-1",
+        "status": "claimed",
+        "branch": "factory/demo/task-1",
+        "worktree_path": str(worktree),
+        "metadata": {},
+    }
+    project = {
+        "project_id": "demo",
+        "repo_path": str(repo),
+        "base_branch": "main",
+        "metadata": {"repo_strategy": {"primary_repo_path": str(repo), "base_branch": "main"}},
+    }
+    fake_sql.one_results = [task]
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+
+    with pytest.raises(factory_pg.IncrementIntegrationError, match="uncommitted changes"):
+        factory_pg._integrate_increment_to_base("task-1", actor="qa", final_status="done")
+
+
 def test_integrate_increment_to_base_merges_and_pushes_real_git_repo(fake_sql, monkeypatch, tmp_path):
     origin = tmp_path / "origin.git"
     repo = tmp_path / "repo"
@@ -226,6 +264,7 @@ def test_integrate_increment_to_base_merges_and_pushes_real_git_repo(fake_sql, m
     _git(repo, "push", "origin", "factory/demo/task-1")
     feature_commit = _git(repo, "rev-parse", "HEAD").stdout.strip()
     _git(repo, "checkout", "main")
+    _git(repo, "worktree", "add", str(worktree), "factory/demo/task-1")
 
     task = {
         "project_id": "demo",
