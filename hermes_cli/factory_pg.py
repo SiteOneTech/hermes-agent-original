@@ -272,6 +272,62 @@ _BLOCKER_AUTO_KEYWORDS = (
 _SCHEMA_READY = False
 
 
+def _human_decision_details_from_text(text: str) -> tuple[str | None, list[str]]:
+    """Extract an actionable Jean question from blocker prose when present.
+
+    Workers often write the real owner decision in the task result, while the
+    deterministic blocker classifier only knows that a task is human-blocked.
+    Preserve the concrete question/options so watchdog notifications do not
+    degrade into generic "Recommended action" messages.
+    """
+
+    raw = str(text or "")
+    if not raw.strip():
+        return None, []
+
+    lines = [line.strip().strip("|").strip() for line in raw.splitlines()]
+    lines = [line for line in lines if line]
+    upper_lines = [line.upper() for line in lines]
+
+    for line in lines:
+        if line.upper().startswith("JEAN_QUESTION:"):
+            question = line.split(":", 1)[1].strip()
+            return (question or None), []
+
+    option_tokens = ("APPROVED", "HOLD", "REJECTED")
+    found_options = [token for token in option_tokens if token in raw.upper()]
+    options = found_options if len(found_options) >= 2 else []
+
+    # Prefer explicit decision blocks. Keep them short enough for notifications.
+    trigger_indices = [
+        idx
+        for idx, upper in enumerate(upper_lines)
+        if "JEAN MUST DECIDE" in upper
+        or "DECISIÓN DE JEAN" in upper
+        or "DECISION DE JEAN" in upper
+        or "JEAN, ¿CUÁL ES TU DECISIÓN" in upper
+        or "JEAN, CUAL ES TU DECISION" in upper
+    ]
+    if trigger_indices:
+        idx = trigger_indices[0]
+        window = lines[idx : idx + 8]
+        option_lines = [
+            line
+            for line in window
+            if any(token in line.upper() for token in option_tokens)
+        ]
+        if option_lines:
+            return " ".join(option_lines)[:900], options
+
+    for line, upper in zip(lines, upper_lines):
+        if all(token in upper for token in option_tokens):
+            return line[:900], options
+
+    if options:
+        return "Jean debe decidir: " + " / ".join(options), options
+    return None, []
+
+
 def _user() -> str:
     return sql.runtime_env().get("FACTORY_DB_RUNTIME_USER", "factory_runtime")
 
@@ -3038,7 +3094,9 @@ def classify_factory_blocker(task: dict[str, Any], *, payload: Optional[dict[str
     """Classify a blocked/stuck Factory task into the runtime action taxonomy."""
 
     payload = payload or {}
+    raw_text = "\n".join(str(task.get(key) or "") for key in ("title", "description", "result_summary"))
     text = _task_blocker_text(task)
+    human_question, human_options = _human_decision_details_from_text(raw_text)
     status_value = str(task.get("status") or "")
     task_id = str(task.get("task_id") or "")
     active_task_ids = _active_run_task_ids(payload)
@@ -3054,7 +3112,7 @@ def classify_factory_blocker(task: dict[str, Any], *, payload: Optional[dict[str
         blocker_category = "resolved_gate_or_routine_decision"
         recommended_action = "run_orchestrator_unblock_or_record_gate"
         requires_human = False
-    elif any(keyword in text for keyword in _BLOCKER_HUMAN_KEYWORDS):
+    elif human_question or any(keyword in text for keyword in _BLOCKER_HUMAN_KEYWORDS):
         action_category = "human_question_required"
         blocker_category = "external_or_owner_decision"
         recommended_action = "create_human_question_and_notify_owner"
@@ -3084,6 +3142,8 @@ def classify_factory_blocker(task: dict[str, Any], *, payload: Optional[dict[str
         "alert_key": alert_key,
         "updated_at": task.get("updated_at"),
         "result_summary": task.get("result_summary"),
+        "human_question": human_question,
+        "human_options": human_options,
     }
 
 
@@ -3149,10 +3209,11 @@ def record_factory_blocker_actions(classified: Optional[list[dict[str, Any]]] = 
         events_recorded += 1
         if create_questions and item.get("requires_human"):
             question_id = "hq-" + uuid.uuid5(uuid.NAMESPACE_URL, f"factory:{task_id}:human-question").hex[:16]
-            question = (
+            question = str(item.get("human_question") or "").strip() or (
                 f"Factory project {project_id} requires a human decision for task {task_id}: "
                 f"{item.get('title') or 'blocked task'}. Recommended action: {item.get('recommended_action')}."
             )
+            question_options = item.get("human_options") if isinstance(item.get("human_options"), list) else []
             before = sql.one(
                 f"SELECT question_id FROM factory.human_questions WHERE question_id={_q(question_id)} OR (task_id={_q(task_id)} AND status='pending')",
                 user=_user(),
@@ -3160,8 +3221,11 @@ def record_factory_blocker_actions(classified: Optional[list[dict[str, Any]]] = 
             sql.psql(
                 f"""
                 INSERT INTO factory.human_questions(question_id, project_id, task_id, severity, question, options, asked_via, status, metadata)
-                VALUES ({_q(question_id)}, {_q(project_id)}, {_q(task_id)}, 'high', {_q(question)}, '[]'::jsonb, 'factory_watchdog', 'pending', {_j({'alert_key': item.get('alert_key'), 'classification': compact})})
-                ON CONFLICT (question_id) DO NOTHING;
+                VALUES ({_q(question_id)}, {_q(project_id)}, {_q(task_id)}, 'high', {_q(question)}, {_j(question_options)}, 'factory_watchdog', 'pending', {_j({'alert_key': item.get('alert_key'), 'classification': compact, 'human_question_source': 'blocker_result_summary' if item.get('human_question') else 'classifier_fallback'})})
+                ON CONFLICT (question_id) DO UPDATE SET
+                  question=CASE WHEN factory.human_questions.status='pending' THEN EXCLUDED.question ELSE factory.human_questions.question END,
+                  options=CASE WHEN factory.human_questions.status='pending' THEN EXCLUDED.options ELSE factory.human_questions.options END,
+                  metadata=factory.human_questions.metadata || EXCLUDED.metadata;
                 INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
                 SELECT {_q(project_id)}, {_q(item.get('lane_id'))}, {_q(task_id)}, 'factory-blocker-detector', 'human_question_created', {_q('Created human question for indispensable Factory blocker')}, {_j({'question_id': question_id, 'alert_key': item.get('alert_key')})}
                 WHERE NOT EXISTS (
@@ -3294,10 +3358,12 @@ def factory_watchdog_alerts(payload: Optional[dict[str, Any]] = None, *, blocked
             continue
         tasks_by_project.setdefault(str(task.get("project_id")), []).append(task)
     pending_questions_by_project: dict[str, int] = {}
+    pending_question_rows_by_project: dict[str, list[dict[str, Any]]] = {}
     for question in payload.get("human_questions", []):
         if str(question.get("status") or "") == "pending":
             pid = str(question.get("project_id") or "")
             pending_questions_by_project[pid] = pending_questions_by_project.get(pid, 0) + 1
+            pending_question_rows_by_project.setdefault(pid, []).append(question)
 
     alerts: list[dict[str, Any]] = []
     for pid, project in projects.items():
@@ -3339,6 +3405,21 @@ def factory_watchdog_alerts(payload: Optional[dict[str, Any]] = None, *, blocked
                 "message": f"Autonomous Factory project {pid} is in delivery_hold with blocked work and no human question; supervisor must repair or escalate.",
                 "blocked_tasks": [task.get("task_id") for task in blocked_tasks],
                 "recommended_action": "supervisor_repair_then_force_tick",
+            })
+        for question in pending_question_rows_by_project.get(pid, []):
+            question_id = str(question.get("question_id") or "")
+            question_text = str(question.get("question") or "").strip()
+            alerts.append({
+                "alert_key": f"factory:{pid}:{question_id}:human-question-pending",
+                "alert_type": "human_question_pending",
+                "severity": str(question.get("severity") or "high"),
+                "project_id": pid,
+                "task_id": question.get("task_id"),
+                "question_id": question_id,
+                "message": question_text or f"Factory project {pid} has a pending human question.",
+                "jean_question": question_text,
+                "requires_human": True,
+                "options": question.get("options") or [],
             })
 
     for item in classify_factory_blockers(payload, project_id=project_id):

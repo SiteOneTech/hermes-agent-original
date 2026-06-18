@@ -66,6 +66,40 @@ def test_factory_blocker_classifier_covers_blocked_and_orphan_tasks():
     assert classified["demo-t2"]["recommended_action"] == "repair_orphan_inflight_state"
 
 
+def test_factory_blocker_classifier_preserves_actionable_human_question():
+    payload = {
+        "projects": [{"project_id": "demo", "status": "active", "autonomous_enabled": True}],
+        "tasks": [
+            {
+                "project_id": "demo",
+                "lane_id": "demo-hybrid",
+                "task_id": "demo-delivery",
+                "title": "Delivery report",
+                "status": "blocked",
+                "result_summary": """
+                Producción: HOLD — decisión de Jean requerida
+
+                Jean must decide:
+                - APPROVED: proceed to production
+                - HOLD: maintain sandbox only
+                - REJECTED: specify rework scope
+                """,
+            }
+        ],
+        "task_runs": [],
+        "gates": [],
+        "human_questions": [],
+    }
+
+    [classified] = factory_pg.classify_factory_blockers(payload)
+
+    assert classified["action_category"] == "human_question_required"
+    assert classified["requires_human"] is True
+    assert "APPROVED" in classified["human_question"]
+    assert "HOLD" in classified["human_question"]
+    assert classified["human_options"] == ["APPROVED", "HOLD", "REJECTED"]
+
+
 def test_record_factory_blocker_actions_lets_sql_one_add_limit(monkeypatch):
     monkeypatch.setattr(factory_pg, "_SCHEMA_READY", True)
     one_queries = []
@@ -91,6 +125,8 @@ def test_record_factory_blocker_actions_lets_sql_one_add_limit(monkeypatch):
                 "recommended_action": "create_human_question_and_notify_owner",
                 "requires_human": True,
                 "alert_key": "factory:demo:demo-blocked:human_question_required",
+                "human_question": "APPROVED / HOLD / REJECTED?",
+                "human_options": ["APPROVED", "HOLD", "REJECTED"],
             }
         ],
         payload={"projects": [], "tasks": [], "task_runs": [], "gates": [], "human_questions": []},
@@ -101,6 +137,8 @@ def test_record_factory_blocker_actions_lets_sql_one_add_limit(monkeypatch):
     assert one_queries[0].startswith("SELECT question_id FROM factory.human_questions WHERE question_id='hq-")
     assert "OR (task_id='demo-blocked' AND status='pending')" in one_queries[0]
     assert len(psql_calls) == 2
+    assert "APPROVED / HOLD / REJECTED?" in psql_calls[1]
+    assert '["APPROVED", "HOLD", "REJECTED"]' in psql_calls[1]
 
 
 def test_factory_watchdog_alerts_are_actionable_for_runtime_invariants():
@@ -137,6 +175,28 @@ def test_factory_watchdog_alerts_are_actionable_for_runtime_invariants():
     }
     runnable_alerts = factory_pg.factory_watchdog_alerts(runnable_payload, claimed_null_rounds=3)
     assert {alert["alert_type"] for alert in runnable_alerts} == {"cron_claimed_null_repeated"}
+
+    pending_question_payload = {
+        "projects": [{"project_id": "demo", "status": "active", "autonomous_enabled": True}],
+        "tasks": [{"project_id": "demo", "task_id": "demo-blocked", "status": "blocked"}],
+        "task_runs": [],
+        "gates": [],
+        "human_questions": [
+            {
+                "project_id": "demo",
+                "task_id": "demo-blocked",
+                "question_id": "hq-demo",
+                "status": "pending",
+                "severity": "high",
+                "question": "APPROVED / HOLD / REJECTED?",
+                "options": ["APPROVED", "HOLD", "REJECTED"],
+            }
+        ],
+    }
+    pending_alerts = factory_pg.factory_watchdog_alerts(pending_question_payload)
+    human_alert = next(alert for alert in pending_alerts if alert["alert_type"] == "human_question_pending")
+    assert human_alert["jean_question"] == "APPROVED / HOLD / REJECTED?"
+    assert human_alert["options"] == ["APPROVED", "HOLD", "REJECTED"]
 
     dependency_blocked_payload = {
         "projects": [{"project_id": "demo", "status": "active", "autonomous_enabled": True}],
