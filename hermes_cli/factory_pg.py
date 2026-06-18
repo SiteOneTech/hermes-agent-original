@@ -782,7 +782,7 @@ def _is_validation_task(task: dict[str, Any]) -> bool:
     # being validation tasks. Only user-facing task fields should decide this.
     visible_text = "\n".join(str(task.get(key) or "") for key in ("title", "description", "result_summary")).lower()
     validation_people = {"qa-verifier", "quality-reviewer", "security-reviewer"}
-    if owner in validation_people or reviewer in validation_people:
+    if owner in validation_people:
         return any(term in visible_text for term in ("qa", "quality", "security", "playwright", "browser", "test", "review", "smoke", "screenshot", "console"))
     return False
 
