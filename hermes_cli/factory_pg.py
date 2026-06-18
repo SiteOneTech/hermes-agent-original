@@ -277,8 +277,8 @@ def _human_decision_details_from_text(text: str) -> tuple[str | None, list[str]]
 
     Workers often write the real owner decision in the task result, while the
     deterministic blocker classifier only knows that a task is human-blocked.
-    Preserve the concrete question/options so watchdog notifications do not
-    degrade into generic "Recommended action" messages.
+    Preserve the concrete question/options and a preview URL so watchdog
+    notifications do not degrade into generic "Recommended action" messages.
     """
 
     raw = str(text or "")
@@ -288,11 +288,26 @@ def _human_decision_details_from_text(text: str) -> tuple[str | None, list[str]]
     lines = [line.strip().strip("|").strip() for line in raw.splitlines()]
     lines = [line for line in lines if line]
     upper_lines = [line.upper() for line in lines]
+    urls: list[str] = []
+    for url in re.findall(r"https?://[^\s)`>]+", raw):
+        clean = url.rstrip(".,;:)]}'\"")
+        if clean and clean not in urls:
+            urls.append(clean)
+    preview_url = next((url for url in urls if "kidu.app" in url or "sandbox" in url.lower() or "/previews/" in url), None)
+    preview_url = preview_url or (urls[0] if urls else None)
+
+    def with_preview(question: str | None) -> str | None:
+        clean_question = str(question or "").strip()
+        if not clean_question:
+            return None
+        if preview_url and preview_url not in clean_question:
+            return f"{clean_question} Preview: {preview_url}"
+        return clean_question
 
     for line in lines:
         if line.upper().startswith("JEAN_QUESTION:"):
             question = line.split(":", 1)[1].strip()
-            return (question or None), []
+            return with_preview(question), []
 
     option_tokens = ("APPROVED", "HOLD", "REJECTED")
     found_options = [token for token in option_tokens if token in raw.upper()]
@@ -317,14 +332,14 @@ def _human_decision_details_from_text(text: str) -> tuple[str | None, list[str]]
             if any(token in line.upper() for token in option_tokens)
         ]
         if option_lines:
-            return " ".join(option_lines)[:900], options
+            return with_preview(" ".join(option_lines)[:900]), options
 
     for line, upper in zip(lines, upper_lines):
         if all(token in upper for token in option_tokens):
-            return line[:900], options
+            return with_preview(line[:900]), options
 
     if options:
-        return "Jean debe decidir: " + " / ".join(options), options
+        return with_preview("Jean debe decidir: " + " / ".join(options)), options
     return None, []
 
 

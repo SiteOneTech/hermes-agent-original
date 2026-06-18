@@ -77,6 +77,7 @@ def test_factory_blocker_classifier_preserves_actionable_human_question():
                 "title": "Delivery report",
                 "status": "blocked",
                 "result_summary": """
+                Preview: https://kidu.app/
                 Producción: HOLD — decisión de Jean requerida
 
                 Jean must decide:
@@ -97,6 +98,7 @@ def test_factory_blocker_classifier_preserves_actionable_human_question():
     assert classified["requires_human"] is True
     assert "APPROVED" in classified["human_question"]
     assert "HOLD" in classified["human_question"]
+    assert "Preview: https://kidu.app/" in classified["human_question"]
     assert classified["human_options"] == ["APPROVED", "HOLD", "REJECTED"]
 
 
