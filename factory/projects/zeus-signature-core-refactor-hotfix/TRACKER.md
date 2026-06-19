@@ -3,8 +3,8 @@
 Project: zeus-signature-core-refactor-hotfix
 Owner: Jean García / SitioUno
 Created: 2026-06-12T18:09:47-04:00
-Last updated: 2026-06-18T22:45:47-04:00
-Status: IN PROGRESS — T14R integrated security rework completed locally; T14 security review + T15 release readiness pending
+Last updated: 2026-06-18T22:54:01-04:00
+Status: IN PROGRESS — T14R integrated security rework completed; T14 security review re-run is running; T15 release readiness pending
 Validated: yes
 Reviewed: yes
 
@@ -27,8 +27,8 @@ Reviewed: yes
 | T11 — Send final signed copies + hash validation | done | `factory/.../t11-final-copy-hash-distribution` | `4c7aad7a3` | qa ✓ |
 | T12 — Protected private signature dashboard metrics | done | `factory/.../t12-protected-private-signature-dashboard-metrics` | `2ddc75f40` | qa ✓ |
 | T13 — End-to-end QA (mobile/desktop PDF/DB reminders) | done | — | — | qa ✓ |
-| T14R — Integrated security rework before T14 rerun | done | `factory/.../t14r-main-security-rework` | branch HEAD | local tests ✓ |
-| T14 — Security and privacy review | todo | — | — | — |
+| T14R — Integrated security rework before T14 rerun | done | `factory/.../t14r-main-security-rework` | `fc6431770` + docs follow-up | local tests ✓ |
+| T14 — Security and privacy review | running | — | — | security review re-run started |
 | T15 — Release readiness + runtime propagation decision | todo | — | — | — |
 
 

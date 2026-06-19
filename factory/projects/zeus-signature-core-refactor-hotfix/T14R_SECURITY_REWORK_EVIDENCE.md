@@ -47,7 +47,7 @@ Recorded: 2026-06-18T22:45:47-04:00
    - direct/wrong-token artifact download denied: `test_protected_download_rejects_direct_and_wrong_artifact_token`
    - `/user/signatures/` without session denied: `test_signature_dashboard_requires_otp_session`
 5. T14 rerun readiness:
-   - T14 remains pending in `TRACKER.md`; T14R evidence and tests are now committed-ready for Zeus/orchestrator to re-run/re-queue T14 after branch push.
+   - Factory DB task close/reconcile re-queued T14; `hermes factory status zeus-signature-core-refactor-hotfix --json` showed `zeus-signature-core-refactor-hotfix-t14-security-and-privacy-review` as `running` after T14R close.
 
 ## Verification executed
 
