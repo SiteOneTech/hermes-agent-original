@@ -3,7 +3,7 @@
 Project: zeus-signature-core-refactor-hotfix
 Task: T14 — Security and privacy review
 Profile: security-reviewer
-Run: run-1781404166-a3f32c5b; rework recheck run-1781405484-ca368168
+Run: run-1781404166-a3f32c5b; rework recheck run-1781405484-ca368168; integrated rerun run-1781837606-4c045066
 Date: 2026-06-13
 Verdict: BLOCKED — security gate must not pass until rework below is integrated and re-verified.
 
@@ -297,3 +297,198 @@ RESULT: Security gate blocked with concrete S1/S2/S3 findings and rework list
 RISK: high — OTP/token bypass in core tool path; public final artifact route
 BLOCKER: integrate security hardening and scoped artifact access before T15 release readiness
 NEXT_ACTION: builder/rework owner creates a single integration branch with T07+T10+T11+T12 protections, adds negative tests, then requeues T14 security review
+
+---
+
+## Integrated T14R Re-review — run-1781837606-4c045066
+
+Date: 2026-06-18T22:58:17-04:00
+Reviewer: security-reviewer
+Task: zeus-signature-core-refactor-hotfix-t14-security-and-privacy-review
+Re-reviewed dependency branch/worktree:
+
+- `/home/jean/workspace/.worktrees/zeus-signature-core-refactor-hotfix/t14r-main-security-rework`
+- Branch: `factory/zeus-signature-core-refactor-hotfix/t14r-main-security-rework`
+- Local HEAD: `5e31e4d07da6d2b60f58c1ee9afb2dba5bfc5165`
+- Remote code commit: `fc643177040d7aa57ffd5390710e6660ab567729`
+- Local HEAD differs from remote only in project docs (`T14R_SECURITY_REWORK_EVIDENCE.md`, `TRACKER.md`), not runtime code.
+
+### G1 / Canonical docs consulted in this rerun
+
+- `factory/projects/zeus-signature-core-refactor-hotfix/DOCUMENTATION_INDEX.md`
+- `factory/projects/zeus-signature-core-refactor-hotfix/TASK_GRAPH.md`
+- `factory/projects/zeus-signature-core-refactor-hotfix/SECURITY_GATES.md`
+- `factory/projects/zeus-signature-core-refactor-hotfix/TECHNICAL_BLUEPRINT.md`
+- `factory/projects/zeus-signature-core-refactor-hotfix/QA_REPORT_T13.md`
+- `factory/projects/zeus-signature-core-refactor-hotfix/T14R_SECURITY_REWORK_EVIDENCE.md`
+- `factory/projects/zeus-signature-core-refactor-hotfix/SECURITY_REVIEW.md`
+- Runtime files inspected: `tools/signature_tool.py`, `tools/signature_pdf.py`, `scripts/runtime/delivery_document_actions.py`, `scripts/runtime/publish_delivery_sandbox.py`, `scripts/runtime/ingest_delivery_events.py`.
+- Tests inspected: `tests/tools/test_signature_tool.py`, `tests/test_publish_delivery_sandbox_document_actions.py`.
+
+### Verification commands run in rerun
+
+```bash
+cd /home/jean/workspace/.worktrees/zeus-signature-core-refactor-hotfix/t14r-main-security-rework
+
+git status --short --branch
+# ## factory/zeus-signature-core-refactor-hotfix/t14r-main-security-rework
+
+git rev-parse HEAD
+# 5e31e4d07da6d2b60f58c1ee9afb2dba5bfc5165
+
+git rev-parse origin/factory/zeus-signature-core-refactor-hotfix/t14r-main-security-rework
+# fc643177040d7aa57ffd5390710e6660ab567729
+
+git diff --stat origin/factory/zeus-signature-core-refactor-hotfix/t14r-main-security-rework..HEAD
+# 2 project-doc files changed; no runtime-code files changed.
+
+git diff --stat main...HEAD -- tools/signature_tool.py scripts/runtime/publish_delivery_sandbox.py scripts/runtime/delivery_document_actions.py tests/tools/test_signature_tool.py tests/test_publish_delivery_sandbox_document_actions.py factory/projects/zeus-signature-core-refactor-hotfix
+# 7 files changed, 1262 insertions(+), 24 deletions(-)
+
+python -m pytest tests/tools/test_signature_tool.py tests/test_delivery_document_actions.py tests/test_publish_delivery_sandbox_document_actions.py tests/gateway/test_webhook_signature_rate_limit.py -q
+# 23 passed in 1.45s
+
+python -m compileall tools/signature_tool.py tools/signature_pdf.py scripts/runtime/publish_delivery_sandbox.py scripts/runtime/delivery_document_actions.py scripts/runtime/ingest_delivery_events.py
+# exit_code=0
+
+hermes factory gate record zeus-signature-core-refactor-hotfix security failed --task-id zeus-signature-core-refactor-hotfix-t14-security-and-privacy-review --reviewer security-reviewer --notes "..." --json
+# {"gate_id": 561, "project_id": "zeus-signature-core-refactor-hotfix", "status": "failed"}
+```
+
+Additional static/proof command run with DB calls mocked, no `factory.*` writes and no live signature DB writes:
+
+```bash
+python - <<'PY'
+# Mocked call into tools.signature_tool._handle_approval_hash_create with
+# request_id + submitter_id only; intentionally no signer_token, no OTP fields.
+# Output observed:
+# approval_without_signer_token_or_otp_ok= True
+# request_status= completed
+# required_schema_contains_only_request_id= True
+# signature_recipient_action_record_present= False
+PY
+```
+
+Static control checks observed:
+
+- `signature_approval_required_only_request_id=True`
+- `signature_recipient_action_record_present=False`
+- `signature_tool_requires_signer_token_string=False`
+- `signature_tool_requires_otp_verified_string=False`
+- `nginx_download_proxy=True`
+- `nginx_download_try_files_absent_in_block=True`
+- `protected_download_handler_present=True`
+- `private_dashboard_session_gate_present=True`
+- `pyproject_direct_pymupdf=False`
+- `pyproject_direct_docuseal_opensign=False`
+- Current top-level `package-lock.json`: no `ua-parser-js` / no `AGPL-3.0` matches found in this T14R worktree.
+
+### Rerun findings
+
+#### BLOCKER S1R — Core Signature tool still allows approval/completion without recipient-bound signer token or OTP
+
+Severity: High / release blocker
+
+Evidence:
+
+- `tools/signature_tool.py:279-343` implements `_handle_approval_hash_create` without validating signer token possession, OTP verification, OTP challenge id, or recipient binding.
+- `tools/signature_tool.py:971` registers `signature_approval_hash_create` with required schema `['request_id']` only.
+- No `signature_recipient_action_record` tool exists in `tools/signature_tool.py`.
+- Static proof with mocked DB calls returned:
+  - `approval_without_signer_token_or_otp_ok=True`
+  - `request_status=completed`
+  - `required_schema_contains_only_request_id=True`
+  - `signature_recipient_action_record_present=False`
+
+Impact:
+
+A private/admin tool caller, compromised agent flow, or any profile accidentally granted the `signature` toolset can create an approval hash and move a single-required-signer request to `completed` without proving possession of the opaque signer token and without OTP evidence. T14R improved the public sandbox OTP flow, but the canonical Signature Core tool path remains weaker than the public route and therefore violates the Security Gates requirement that sign/approve/reject fail closed without OTP.
+
+Required fix before T15/release:
+
+1. Add a recipient-bound action path to the core Signature tool layer, or harden `signature_approval_hash_create` directly.
+2. Require and verify at least:
+   - `signer_token` matched against `signature.submitters.token_hash_sha256` for the same `request_id`/`submitter_id`;
+   - `otp_verified=True` plus non-empty `otp_challenge_id` or a server-side OTP verification artifact produced by the trusted public-event worker;
+   - action type allowed for the submitter role;
+   - request not expired/cancelled/completed before accepting the action.
+3. Add negative tests at `tools/signature_tool.py` level:
+   - approval/sign/reject without OTP => reject;
+   - wrong signer token => reject;
+   - signer token for another request/submitter => reject;
+   - direct `signature_approval_hash_create` cannot complete a request unless recipient-bound OTP evidence is present.
+
+#### PASS P1R — Public document action route now fails closed for direct sensitive actions
+
+Evidence:
+
+- `scripts/runtime/delivery_document_actions.py:24-38` defines `unlock`, `approved`, `rejected`, and `signed` as OTP-required; comments remain the only direct-post action.
+- `scripts/runtime/publish_delivery_sandbox.py:1127-1181` verifies document-action OTP and stamps `otp_verified`, `otp_challenge_id`, channel id, and target hash into event metadata before queuing.
+- `scripts/runtime/publish_delivery_sandbox.py:1184-1221` rejects sensitive actions without an OTP action session or OTP verification.
+- Focused tests passed, including:
+  - `test_generated_server_rejects_signed_action_without_otp_session`
+  - `test_generated_server_rejects_wrong_signer_token_for_document_action`
+
+Caveat: this pass applies to the public sandbox route only. It does not mitigate S1R because the core `signature_approval_hash_create` tool remains callable without equivalent proof.
+
+#### PASS P2R — Final artifact `/download/` is no longer static-public in T14R
+
+Evidence:
+
+- `scripts/runtime/publish_delivery_sandbox.py:71-80` proxies `/download/` to the event server instead of serving static files with `try_files`.
+- `scripts/runtime/publish_delivery_sandbox.py:936-1018` normalizes download paths, denies traversal, requires either a private dashboard OTP session or a scoped HMAC artifact token, returns `401` for direct access, `403` for wrong token, sends `Cache-Control: private, no-store`, and audits `artifact_downloaded`.
+- Focused tests passed:
+  - `test_generated_nginx_downloads_are_not_public_static_files`
+  - `test_protected_download_rejects_direct_and_wrong_artifact_token`
+
+#### PASS P3R — Private `/user/signatures/` dashboard is session-gated
+
+Evidence:
+
+- `scripts/runtime/publish_delivery_sandbox.py:703-708` redirects unauthenticated `/user/signatures/` requests to `/user/login`.
+- Focused tests passed:
+  - `test_signature_dashboard_requires_otp_session`
+  - `test_signature_dashboard_renders_protected_metrics_and_status`
+
+#### PASS P4R — Multi-signer completion algorithm handles required signer aggregation and optional viewers
+
+Evidence:
+
+- `tools/signature_tool.py:90-118` derives completion from all required signer/approver submitters only; optional viewers do not block.
+- Focused tests passed:
+  - `test_parallel_multi_signer_stays_partial_until_all_required_complete`
+  - `test_optional_viewer_does_not_block_completion`
+  - `test_approval_hash_create_updates_request_to_partial_for_remaining_required_signers`
+
+Caveat: aggregate completion semantics are improved, but S1R remains because the direct core approval path lacks recipient-bound OTP/token enforcement.
+
+### License / AGPL rerun result
+
+- No evidence found of copied DocuSeal/OpenSign code or schema in runtime code or `db/modules/signature/*.sql`; code references are descriptive/product-pattern references only.
+- Project docs still correctly require pattern-only use for DocuSeal/OpenSign/PyMuPDF: `PATTERN_ANALYSIS.md`, `ADRS.md`, `SECURITY_GATES.md`.
+- Direct dependency scan of `pyproject.toml` found no direct `pymupdf`, `fitz`, `docuseal`, `opensign`, `pdf-lib`, `pdfjs`, `signature_pad`, or `signature-pad` dependency.
+- Current top-level `package-lock.json` in the T14R worktree has no `ua-parser-js` / `AGPL-3.0` match.
+- `tools/signature_pdf.py` still lazily imports `fitz`/PyMuPDF. PyMuPDF is not pinned as a direct dependency here, but remains a commercial-runtime license risk if the sandbox/runtime image includes it. Production/commercial use needs a licensing decision or a permissive fallback.
+
+### Rerun security gate decision
+
+Result: BLOCKED
+
+T14R fixed the previous public `/download/` exposure and added/verified OTP/session controls on the public sandbox and private dashboard routes. However, the security gate still cannot pass because the canonical core Signature tool path can complete approval/signature state without recipient-bound signer token and OTP proof.
+
+Minimum rework before rerun/T15:
+
+1. Harden or replace `signature_approval_hash_create` so it fails closed without signer-token + OTP evidence.
+2. Add tool-layer negative tests for missing OTP, wrong token, cross-request/cross-submitter token reuse, and direct completion bypass.
+3. Keep the already-improved public `/download/`, `/api/document-actions/*`, and `/user/signatures/` protections.
+4. Document PyMuPDF production licensing/fallback decision before any commercial runtime propagation.
+
+STATE: BLOCKED
+PROFILE: security-reviewer
+FILES_CHANGED: factory/projects/zeus-signature-core-refactor-hotfix/SECURITY_REVIEW.md
+COMMANDS_RUN: see Integrated T14R Re-review section above
+FACTORY_DB: gate recorded via sanctioned `hermes factory gate record`; `security` gate failed with `gate_id=561`; wrapped `factory_gate_record` helper also returned a docker/psql execution error, so canonical CLI evidence is the gate record above
+RESULT: Security gate remains blocked on S1R core tool OTP/token bypass
+RISK: high
+BLOCKER: core Signature approval/sign path must enforce recipient-bound signer token + OTP before release readiness
+NEXT_ACTION: builder/rework owner hardens core signature tool path and adds negative tests, then requeues T14
