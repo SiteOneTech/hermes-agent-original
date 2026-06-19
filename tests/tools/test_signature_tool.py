@@ -4,6 +4,7 @@ import json
 
 import toolsets
 from tools import signature_tool
+from tools.registry import registry
 
 
 def _loads(result: str) -> dict:
@@ -158,6 +159,122 @@ def test_approval_hash_create_rejects_wrong_signer_token(monkeypatch):
 
     assert result["error"]
     assert "signer_token" in result["error"]
+
+
+def test_approval_hash_create_rejects_terminal_request_before_mutations(monkeypatch):
+    writes = []
+
+    def fake_one(query, *, user=None):
+        if "FROM signature.document_requests" in query:
+            return {"request_id": "req-terminal", "status": "completed"}
+        if "FROM signature.submitters" in query:
+            return {
+                "submitter_id": "sub-terminal",
+                "request_id": "req-terminal",
+                "role": "signer",
+                "required": True,
+                "status": "pending",
+                "token_hash_sha256": signature_tool._sha256_text("recipient-token"),
+            }
+        return None
+
+    monkeypatch.setattr(signature_tool.sql, "one", fake_one)
+    monkeypatch.setattr(signature_tool.sql, "rows", lambda *a, **k: [])
+    monkeypatch.setattr(
+        signature_tool.sql,
+        "statement_one",
+        lambda *a, **k: writes.append(a[0]) or (_ for _ in ()).throw(AssertionError("write must not run")),
+    )
+    monkeypatch.setattr(
+        signature_tool.sql,
+        "psql",
+        lambda *a, **k: writes.append(a[0]) or (_ for _ in ()).throw(AssertionError("status update must not run")),
+    )
+
+    result = _loads(signature_tool._handle_approval_hash_create({
+        "request_id": "req-terminal",
+        "submitter_id": "sub-terminal",
+        "signer_token": "recipient-token",
+        "otp_verified": True,
+        "otp_challenge_id": "challenge-terminal",
+    }))
+
+    assert result["error"]
+    assert "terminal" in result["error"]
+    assert "completed" in result["error"]
+    assert writes == []
+
+
+def test_approval_hash_create_rejects_caller_declared_privileged_bypass(monkeypatch):
+    request = {"request_id": "req-priv", "status": "sent"}
+    writes = []
+
+    def fake_one(query, *, user=None):
+        if "FROM signature.document_requests" in query:
+            return request
+        return None
+
+    monkeypatch.setattr(signature_tool.sql, "one", fake_one)
+    monkeypatch.setattr(signature_tool.sql, "rows", lambda *a, **k: [])
+    monkeypatch.setattr(
+        signature_tool.sql,
+        "statement_one",
+        lambda *a, **k: writes.append(a[0]) or (_ for _ in ()).throw(AssertionError("approval insert must not run")),
+    )
+    monkeypatch.setattr(
+        signature_tool.sql,
+        "psql",
+        lambda *a, **k: writes.append(a[0]) or (_ for _ in ()).throw(AssertionError("status update must not run")),
+    )
+
+    result = _loads(signature_tool._handle_approval_hash_create({
+        "request_id": "req-priv",
+        "internal_completion": True,
+        "privileged_completion": True,
+        "actor_type": "agent",
+        "actor_ref": "normal-tool-caller",
+    }))
+
+    assert result["error"]
+    assert "signer_token" in result["error"]
+    assert writes == []
+
+
+def test_signature_approval_hash_schema_does_not_expose_privileged_bypass_args():
+    entry = registry.get_entry("signature_approval_hash_create")
+    assert entry is not None
+    props = entry.schema["function"]["parameters"]["properties"]
+
+    assert "internal_completion" not in props
+    assert "privileged_completion" not in props
+
+
+def test_event_record_rejects_terminal_signed_event_before_event_write(monkeypatch):
+    writes = []
+
+    def fake_one(query, *, user=None):
+        if "FROM signature.document_requests" in query:
+            return {"request_id": "req-terminal", "status": "declined"}
+        return None
+
+    monkeypatch.setattr(signature_tool.sql, "one", fake_one)
+    monkeypatch.setattr(
+        signature_tool.sql,
+        "statement_one",
+        lambda *a, **k: writes.append(a[0]) or (_ for _ in ()).throw(AssertionError("event insert must not run")),
+    )
+
+    result = _loads(signature_tool._handle_event_record({
+        "request_id": "req-terminal",
+        "submitter_id": "sub-1",
+        "event_type": "signed",
+        "actor_type": "customer",
+    }))
+
+    assert result["error"]
+    assert "terminal" in result["error"]
+    assert "declined" in result["error"]
+    assert writes == []
 
 
 def test_parallel_multi_signer_stays_partial_until_all_required_complete():

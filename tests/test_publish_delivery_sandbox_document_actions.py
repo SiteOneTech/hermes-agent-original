@@ -87,7 +87,7 @@ def test_generated_server_rejects_wrong_signer_token_for_document_action(tmp_pat
     assert response["error"] == "invalid_document_action"
 
 
-def test_generated_server_queue_otp_uses_document_action_message(tmp_path):
+def test_generated_server_queue_otp_omits_plaintext_code_and_message(tmp_path):
     server = _server_module(tmp_path)
     server._queue_otp(
         {
@@ -100,15 +100,142 @@ def test_generated_server_queue_otp_uses_document_action_message(tmp_path):
             "deliverable_id": "quote-1",
             "token_ref": "abc...",
             "message": "Código para aprobar: 123456",
+            "message_template": "document_action_otp",
+            "message_context": {"action": "aprobar", "document": "quote-1"},
         },
         "123456",
     )
 
     outbox = server._outbox_path().read_text(encoding="utf-8").splitlines()
+    assert "123456" not in outbox[-1]
+    assert "Código para aprobar" not in outbox[-1]
     payload = json.loads(outbox[-1])
-    assert payload["message"] == "Código para aprobar: 123456"
+    assert "message" not in payload
+    assert "otp" not in payload
+    assert "otp_code" not in payload
     assert payload["purpose"] == "document_action"
     assert payload["event_type"] == "approved"
+    assert payload["message_template"] == "document_action_otp"
+    assert payload["message_context"] == {"action": "aprobar", "document": "quote-1"}
+    assert payload["dispatch_ref"]
+
+
+def test_generated_server_document_action_challenge_state_omits_plaintext_message_and_otp(tmp_path):
+    server = _server_module(tmp_path)
+    token = "D" * 24
+    workspace = server.PUBLIC_DIR / "w" / token
+    workspace.mkdir(parents=True)
+    (workspace / "workspace.json").write_text(json.dumps({"deliverable_id": "quote-1"}), encoding="utf-8")
+
+    challenge_id = server._create_document_action_challenge(
+        {
+            "token": token,
+            "deliverable_id": "quote-1",
+            "event_type": "approved",
+            "metadata": {"quote_id": "quote-1", "quote_number": "Q-1"},
+        },
+        {"channel_id": "email", "target": "client@example.com"},
+    )
+
+    state_text = server._state_path().read_text(encoding="utf-8")
+    assert challenge_id in state_text
+    assert "Tu código" not in state_text
+    assert "Expira en 10 minutos" not in state_text
+    assert "otp_hash" in state_text
+
+    outbox_text = server._outbox_path().read_text(encoding="utf-8")
+    assert "Tu código" not in outbox_text
+    assert "Expira en 10 minutos" not in outbox_text
+
+
+def test_generated_server_rejects_terminal_document_action_before_otp_outbox(tmp_path):
+    server = _server_module(tmp_path)
+    token = "T" * 24
+    workspace = server.PUBLIC_DIR / "w" / token
+    workspace.mkdir(parents=True)
+    (workspace / "workspace.json").write_text(
+        json.dumps({"deliverable_id": "quote-terminal", "status": "completed"}),
+        encoding="utf-8",
+    )
+    private = server.USER_DATA_DIR / "workspace-recipients"
+    private.mkdir(parents=True)
+    (private / f"{token}.json").write_text(
+        json.dumps({"recipient": {"channel_id": "email", "target": "client@example.com"}, "status": "completed"}),
+        encoding="utf-8",
+    )
+    handler = _FakeJsonPostHandler({
+        "token": token,
+        "deliverable_id": "quote-terminal",
+        "event_type": "signed",
+        "metadata": {"quote_id": "quote-terminal"},
+    })
+
+    server._handle_document_action_request_otp(handler)
+
+    assert handler.status == 409
+    response = json.loads(handler.wfile.getvalue().split(b"\r\n\r\n")[-1] or handler.wfile.getvalue())
+    assert response["error"] == "terminal_document_status"
+    assert not server._outbox_path().exists()
+
+
+def test_generated_server_revalidates_terminal_status_before_verified_action_queue(tmp_path):
+    server = _server_module(tmp_path)
+    token = "V" * 24
+    workspace = server.PUBLIC_DIR / "w" / token
+    workspace.mkdir(parents=True)
+    (workspace / "workspace.json").write_text(json.dumps({"deliverable_id": "quote-verify"}), encoding="utf-8")
+    private = server.USER_DATA_DIR / "workspace-recipients"
+    private.mkdir(parents=True)
+    (private / f"{token}.json").write_text(
+        json.dumps({"recipient": {"channel_id": "email", "target": "client@example.com"}}),
+        encoding="utf-8",
+    )
+    challenge_id = server._create_document_action_challenge(
+        {"token": token, "deliverable_id": "quote-verify", "event_type": "signed", "metadata": {"quote_id": "quote-verify"}},
+        {"channel_id": "email", "target": "client@example.com"},
+    )
+    state = server._load_state()
+    state["challenges"][challenge_id]["otp_hash"] = server._hash(f"{challenge_id}:123456")
+    server._save_state(state)
+    (workspace / "workspace.json").write_text(json.dumps({"deliverable_id": "quote-verify", "status": "expired"}), encoding="utf-8")
+    handler = _FakeJsonPostHandler({"challenge_id": challenge_id, "otp": "123456"})
+
+    server._handle_document_action_verify_otp(handler)
+
+    assert handler.status == 409
+    response = json.loads(handler.wfile.getvalue().split(b"\r\n\r\n")[-1] or handler.wfile.getvalue())
+    assert response["error"] == "terminal_document_status"
+    assert not server._audit_path().exists()
+
+
+def test_generated_server_document_action_unlock_session_rejects_terminal_workspace_action(tmp_path):
+    server = _server_module(tmp_path)
+    token = "U" * 24
+    workspace = server.PUBLIC_DIR / "w" / token
+    workspace.mkdir(parents=True)
+    (workspace / "workspace.json").write_text(
+        json.dumps({"deliverable_id": "quote-unlock", "status": "cancelled", "metadata": {"action_policy": "otp_unlock"}}),
+        encoding="utf-8",
+    )
+    action_token = server._create_document_action_session(
+        token=token,
+        deliverable_id="quote-unlock",
+        recipient={"channel_id": "email", "target": "client@example.com"},
+    )
+    handler = _FakeJsonPostHandler({
+        "token": token,
+        "deliverable_id": "quote-unlock",
+        "event_type": "approved",
+        "action_token": action_token,
+        "metadata": {"quote_id": "quote-unlock"},
+    })
+
+    server._handle_document_action(handler)
+
+    assert handler.status == 409
+    response = json.loads(handler.wfile.getvalue().split(b"\r\n\r\n")[-1] or handler.wfile.getvalue())
+    assert response["error"] == "terminal_document_status"
+    assert not server._audit_path().exists()
 
 
 def test_generated_server_document_action_unlock_session_gates_workspace_actions(tmp_path):
