@@ -492,3 +492,189 @@ RESULT: Security gate remains blocked on S1R core tool OTP/token bypass
 RISK: high
 BLOCKER: core Signature approval/sign path must enforce recipient-bound signer token + OTP before release readiness
 NEXT_ACTION: builder/rework owner hardens core signature tool path and adds negative tests, then requeues T14
+
+---
+
+## T14R2 Re-review — run-1781839591-423c94a0
+
+Date: 2026-06-18T23:32:26-04:00
+Reviewer: security-reviewer
+Task: zeus-signature-core-refactor-hotfix-t14-security-and-privacy-review
+Re-reviewed dependency branch/worktree:
+
+- `/home/jean/workspace/.worktrees/zeus-signature-core-refactor-hotfix/t14r2-core-approval-token-otp`
+- Branch: `factory/zeus-signature-core-refactor-hotfix/t14r2-core-approval-token-otp`
+- HEAD: `509c133bf7bb80041d76d9098739661d8b1ec48d`
+
+### G1 / canonical docs consulted in this rerun
+
+- `factory/projects/zeus-signature-core-refactor-hotfix/DOCUMENTATION_INDEX.md`
+- `factory/projects/zeus-signature-core-refactor-hotfix/REQUIREMENTS_ANALYSIS.md`
+- `factory/projects/zeus-signature-core-refactor-hotfix/PATTERN_ANALYSIS.md`
+- `factory/projects/zeus-signature-core-refactor-hotfix/ADRS.md`
+- `factory/projects/zeus-signature-core-refactor-hotfix/TECHNICAL_BLUEPRINT.md`
+- `factory/projects/zeus-signature-core-refactor-hotfix/TASK_GRAPH.md`
+- `factory/projects/zeus-signature-core-refactor-hotfix/SECURITY_GATES.md`
+- `factory/projects/zeus-signature-core-refactor-hotfix/QA_GATES.md`
+- `factory/projects/zeus-signature-core-refactor-hotfix/QA_REPORT.md`
+- `factory/projects/zeus-signature-core-refactor-hotfix/T14R_SECURITY_REWORK_EVIDENCE.md`
+- `factory/projects/zeus-signature-core-refactor-hotfix/T14R2_CORE_APPROVAL_OTP_TOKEN_HARDENING_EVIDENCE.md`
+- Runtime files inspected: `tools/signature_tool.py`, `tools/signature_pdf.py`, `scripts/runtime/delivery_document_actions.py`, `scripts/runtime/publish_delivery_sandbox.py`, `scripts/runtime/ingest_delivery_events.py`, `db/modules/signature/000001_signature_schema.sql`, `db/modules/signature/000002_signature_security_rework.sql`.
+- Tests inspected: `tests/tools/test_signature_tool.py`, `tests/test_publish_delivery_sandbox_document_actions.py`.
+
+### Verification commands run in rerun
+
+```bash
+cd /home/jean/workspace/.worktrees/zeus-signature-core-refactor-hotfix/t14r2-core-approval-token-otp
+
+git status --short && git rev-parse HEAD && git branch --show-current
+# clean worktree
+# HEAD=509c133bf7bb80041d76d9098739661d8b1ec48d
+# BRANCH=factory/zeus-signature-core-refactor-hotfix/t14r2-core-approval-token-otp
+
+python -m pytest tests/tools/test_signature_tool.py tests/tools/test_signature_pdf.py tests/test_delivery_document_actions.py tests/test_publish_delivery_sandbox_document_actions.py tests/test_delivery_event_ingest.py tests/test_user_dashboard_otp_dispatcher.py tests/test_commerce_workspace_surface.py -q
+# 48 passed in 2.72s
+
+python -m compileall tools/signature_tool.py tools/signature_pdf.py scripts/runtime/publish_delivery_sandbox.py scripts/runtime/delivery_document_actions.py scripts/runtime/ingest_delivery_events.py
+# exit_code=0
+
+git grep -n -i -E 'docuseal|opensign|pymupdf|agpl' -- tools db/modules/signature scripts/runtime pyproject.toml factory/projects/zeus-signature-core-refactor-hotfix | cat
+# Runtime/code hits: descriptive comments in tools/signature_tool.py and lazy `fitz` error in tools/signature_pdf.py.
+# DB schema hits: none under db/modules/signature.
+# Project docs hits: expected pattern/license-risk documentation in ADRS/PATTERN/SECURITY/QA docs.
+```
+
+Additional static checks run:
+
+```bash
+signature_tool_requires_signer_token=true
+signature_tool_requires_otp_verified=true
+signature_tool_authorizes_before_insert=true
+protected_download_handler=true
+private_dashboard_route=true
+document_action_otp_endpoint=true
+otp_outbox_message_field=true
+direct_pymupdf_pyproject=false
+direct_docuseal_pyproject=false
+direct_opensign_pyproject=false
+```
+
+### Rerun findings
+
+#### PASS P1R2 — Core approval path now requires submitter-bound signer token + OTP proof before approval insert
+
+Evidence:
+
+- `tools/signature_tool.py:131-154` adds `_authorize_approval_completion()` before any approval insert/status update. Public/customer completions require `submitter_id`, raw `signer_token` matching `signature.submitters.token_hash_sha256`, and OTP proof (`otp_verified` plus `otp_challenge_id`/`otp_session_id`/`otp_verification_id`).
+- `tools/signature_tool.py:346-355` calls `_authorize_approval_completion()` before constructing/inserting the approval.
+- `tools/signature_tool.py:1036` updates the tool schema/description with `signer_token`, OTP evidence, and privileged-completion fields.
+- Focused tests passed:
+  - `test_approval_hash_create_rejects_request_id_only`
+  - `test_approval_hash_create_rejects_submitter_without_otp`
+  - `test_approval_hash_create_rejects_wrong_signer_token`
+  - `test_parallel_multi_signer_stays_partial_until_all_required_complete`
+  - `test_optional_viewer_does_not_block_completion`
+  - `test_approval_hash_create_updates_request_to_partial_for_remaining_required_signers`
+
+#### PASS P2R2 — Public action route, protected final artifact route, and private dashboard controls remain present
+
+Evidence:
+
+- `scripts/runtime/delivery_document_actions.py:24-38` keeps `unlock`, `approved`, `rejected`, and `signed` as OTP-required; comments remain the only direct post.
+- `scripts/runtime/publish_delivery_sandbox.py:1084-1181` implements document-action OTP request/verification and queues sensitive events only after OTP validation.
+- `scripts/runtime/publish_delivery_sandbox.py:1184-1221` rejects direct sensitive actions without OTP/action session.
+- `scripts/runtime/publish_delivery_sandbox.py:972-1018` protects `/download/` with private `/user/` session or scoped artifact HMAC token and emits `artifact_downloaded` audit events.
+- `tests/test_publish_delivery_sandbox_document_actions.py` passed direct/wrong-token artifact denial, signed-without-OTP denial, wrong signer token denial, and unauthenticated `/user/signatures/` redirect checks.
+
+#### BLOCKER S1R2 — Core approval path still does not fail closed for cancelled/completed terminal request status
+
+Severity: High / release blocker
+
+Evidence:
+
+- `SECURITY_GATES.md` requires expired/cancelled/completed requests to reject actions.
+- `_authorize_approval_completion()` validates signer token and OTP proof but does not receive or inspect request lifecycle status.
+- `_derive_request_lifecycle()` returns `completed=True` immediately when `current_status == "completed"` and can still derive `completed` for a `cancelled` request when all required submitters become complete; there is no pre-insert reject for terminal statuses before `INSERT INTO signature.approvals`.
+- `tests/tools/test_signature_tool.py` includes negative tests for missing token/OTP and wrong token, but no negative tests for approving/signing after `completed`, `cancelled`, `expired`, or `declined` request status.
+
+Impact:
+
+A stale/replayed signer token + OTP proof, or any internal caller with an old payload, can still append approval/sign events and update request state after cancellation/completion instead of hard-failing. This violates the explicit Security Gate fail-closed rule for terminal statuses.
+
+Required fix before gate pass:
+
+1. Add a pre-insert lifecycle guard in `_handle_approval_hash_create()` before `_authorize_approval_completion()` or immediately after loading `request`.
+2. Reject `status IN ('completed','cancelled','expired','declined')` unless a separately reviewed admin-only void/reopen operation is being performed.
+3. Add regression tests proving approval/sign/reject fails for completed, cancelled, expired, and declined requests and does not insert approvals/events.
+
+#### BLOCKER S2R2 — OTP plaintext is persisted in the public event outbox
+
+Severity: High / release blocker unless explicitly waived with a different OTP delivery architecture
+
+Evidence:
+
+- `SECURITY_GATES.md` requires OTP hashes only and no plaintext code persistence.
+- `scripts/runtime/publish_delivery_sandbox.py:541-557` writes `otp_outbox.jsonl` with a `message` field that contains the OTP (`challenge.get("message")` or default text including `{otp}`).
+- `scripts/runtime/publish_delivery_sandbox.py:736-745` and `1056-1080` correctly store `otp_hash` in challenge state, but `_queue_otp()` persists the plaintext delivery message for dispatcher pickup.
+- Static check result: `otp_outbox_message_field=true`.
+- The outbox file is in the public event server writable `EVENT_DIR`; unlike `user_auth_state.json`, `_queue_otp()` does not set owner-only permissions or a purge-on-dispatch contract in this code path.
+
+Impact:
+
+If the public sandbox container, mounted event directory, logs/backups, or dispatcher handoff is exposed, valid OTP values can be recovered from `otp_outbox.jsonl` during the OTP TTL and possibly after, depending on retention. This directly contradicts the project’s OTP hash-only requirement.
+
+Required fix before gate pass:
+
+1. Stop persisting plaintext OTP in the public sandbox. Preferred: move OTP generation/sending to the trusted dispatcher or use an encrypted one-time handoff that the public server cannot read back.
+2. If a transition design keeps a handoff file, make it explicitly temporary, owner-only (`0600`), encrypted or sealed to the dispatcher, and purged after dispatch; then update `SECURITY_GATES.md`/ADR if Jean accepts that exception.
+3. Add regression/static tests proving no plaintext OTP appears in durable state/outbox/log files.
+
+#### BLOCKER S3R2 — Privileged OTP bypass is caller-declared, not enforced by a trusted runtime boundary
+
+Severity: Medium/High / release blocker unless the tool schema is restricted to a proven trusted caller
+
+Evidence:
+
+- `tools/signature_tool.py:101-105` treats `internal_completion=true` or `privileged_completion=true` plus caller-supplied `actor_type in {'system','agent','adapter','owner'}` as a bypass for signer token + OTP proof.
+- `tools/signature_tool.py:141-142` returns from `_authorize_approval_completion()` on that bypass path before token/OTP validation.
+- The fields are exposed in the public `signature_approval_hash_create` tool schema at `tools/signature_tool.py:1036`; the reviewed code does not bind this bypass to a server-side principal, capability token, DB role, or non-model internal API.
+
+Impact:
+
+Any model/tool caller that can invoke `signature_approval_hash_create` can self-declare `actor_type='agent'` with `internal_completion=true` and bypass the OTP/signer-token requirement. This weakens the T14R2 fix unless the signature toolset is guaranteed to be available only to a trusted internal runtime and the bypass path is hidden from public/customer profiles.
+
+Required fix before gate pass:
+
+1. Remove privileged bypass fields from the model-facing tool schema, or split privileged completion into a separate non-public internal API/tool gated by server-side identity.
+2. If retained, verify an unforgeable trusted runtime signal, not just caller-supplied `actor_type`.
+3. Add a negative test proving untrusted/public/customer/tool callers cannot set `internal_completion` to bypass signer token + OTP.
+
+### License / AGPL rerun result
+
+- No evidence found of copied DocuSeal/OpenSign code or schema in `tools/`, `scripts/runtime/`, or `db/modules/signature/`.
+- Project docs correctly document DocuSeal/OpenSign/PyMuPDF as pattern/license-risk sources only: `PATTERN_ANALYSIS.md`, `ADRS.md`, `SECURITY_GATES.md`, `QA_REPORT_T13.md`, `QUALITY_REVIEW.md`.
+- Direct dependency checks found `direct_pymupdf_pyproject=false`, `direct_docuseal_pyproject=false`, and `direct_opensign_pyproject=false`.
+- `tools/signature_pdf.py` still lazily imports `fitz`/PyMuPDF. PyMuPDF is not a direct pinned dependency in `pyproject.toml`, but commercial runtime propagation still needs either a PyMuPDF commercial license/waiver or a permissive fallback before T15 production decision.
+
+### T14R2 security gate decision
+
+Result: BLOCKED
+
+T14R2 resolved the previous direct core approval bypass for normal public/customer completions and preserved the protected `/download/`, `/api/document-actions/*`, and `/user/signatures/` controls. The security gate still cannot pass because terminal request statuses do not fail closed before approval insertion, OTP plaintext is durably queued in the public outbox, and the privileged-completion bypass is only caller-declared.
+
+Minimum rework before rerun/T15:
+
+1. Reject approval/sign/reject for terminal request statuses before approval/event insertion and add negative tests.
+2. Remove durable plaintext OTP from the public event outbox or obtain/document an explicit accepted exception with encryption, purge, and permission controls.
+3. Remove or server-side-gate the `internal_completion`/`privileged_completion` bypass so it cannot be model/tool-caller forged.
+4. Preserve the already-passing token/OTP normal path, protected artifact route, private dashboard, and AGPL/license documentation.
+
+STATE: BLOCKED
+PROFILE: security-reviewer
+FILES_CHANGED: factory/projects/zeus-signature-core-refactor-hotfix/SECURITY_REVIEW.md
+COMMANDS_RUN: see T14R2 Re-review section above
+FACTORY_DB: gate recorded via sanctioned `hermes factory gate record`; `security` gate failed with `gate_id=567`
+RESULT: Security gate remains blocked on terminal-status fail-closed, plaintext OTP outbox, and caller-declared privileged bypass
+RISK: high
+BLOCKER: resolve S1R2/S2R2/S3R2 before T15 release readiness/runtime propagation
+NEXT_ACTION: builder/rework owner patches Signature Core approval lifecycle guard + OTP handoff + privileged bypass boundary, adds negative tests, then requeues T14
