@@ -17,7 +17,9 @@ Reviewed: yes — initial Zeus Factory orchestrator review; independent quality/
 | signature_pad — https://github.com/szimek/signature_pad | MIT, ~12k stars, active, 0 dependencies | Smooth canvas signatures, mobile/desktop support, high-DPI resize guidance, SVG/PNG export | Strong candidate for signer UI if JS dependency fits repo. |
 | pdf-lib — https://pdf-lib.js.org / https://www.npmjs.com/package/pdf-lib | MIT, mature npm library | Create/modify PDFs, fill forms, flatten, draw text/images/SVG, browser/Node compatible | Useful for browser/Node field prep or form manipulation; not enough alone for secure server workflow. |
 | PDF.js — https://github.com/mozilla/pdf.js | Apache-2.0, Mozilla, ~53k stars | HTML5 PDF rendering, browser viewer, npm `pdfjs-dist`, extensible overlay approach | Preferred viewer foundation for responsive field placement/signing UI. |
-| PyMuPDF — https://github.com/pymupdf/PyMuPDF | AGPL/commercial, ~10k stars, installed in document-worker runtime | Fast rendering, coordinate extraction, annotations, text/image insertion, OCR, form read/fill | Good technical fit for server stamping/render QA; licensing must be handled for commercial distribution. |
+| pypdf — https://pypdf.readthedocs.io/ | BSD-3-Clause, pure Python | Read/write/merge PDFs, page overlays, metadata, form helpers | Commercial-runtime-safe server PDF mutation base. Use with ReportLab overlays for visible stamps/certificates. |
+| ReportLab — https://www.reportlab.com/opensource/ | BSD-style open source toolkit | Generate PDF overlay pages, text, shapes, certificate pages | Pair with pypdf for visible Signature Core stamp/certificate generation without paid/commercial PyMuPDF licensing. |
+| PyMuPDF — https://github.com/pymupdf/PyMuPDF | AGPL/commercial, ~10k stars, installed in document-worker runtime | Fast rendering, coordinate extraction, annotations, text/image insertion, OCR, form read/fill | Research/dev fallback only. Do not make it required for proprietary client runtime distribution. |
 
 ## Patterns to Adopt
 

@@ -3,7 +3,11 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from pypdf import PdfReader
+from reportlab.pdfgen import canvas
+
 from tools import signature_pdf
+from tools.signature_pdf import sha256_file, stamp_signed_pdf
 
 
 class FakeRect:
@@ -72,6 +76,8 @@ def test_stamp_signed_pdf_renders_all_configured_fields_and_returns_audit_attach
     input_pdf = tmp_path / "input.pdf"
     output_pdf = tmp_path / "completed.pdf"
     audit_pdf = tmp_path / "audit.pdf"
+    # Intentionally not a real PDF: this forces the R&D PyMuPDF fallback path so
+    # the legacy fake-fitz test still validates configured field rendering.
     input_pdf.write_bytes(b"original pdf bytes")
 
     result = signature_pdf.stamp_signed_pdf(
@@ -95,6 +101,7 @@ def test_stamp_signed_pdf_renders_all_configured_fields_and_returns_audit_attach
         ],
     )
 
+    assert result["pdf_backend"] == "pymupdf-rd-fallback"
     assert result["original_sha256"] == signature_pdf.sha256_file(input_pdf)
     assert result["final_sha256"] == signature_pdf.sha256_file(output_pdf)
     assert result["audit_sha256"] == signature_pdf.sha256_file(audit_pdf)
@@ -151,3 +158,38 @@ def test_completed_pdf_record_stores_completed_and_audit_attachments(monkeypatch
     assert "audit_pdf" in joined
     assert "completed_document_url" in joined
     assert events and events[0][1]["event_type"] == "completed"
+
+
+def _sample_pdf(path: Path) -> None:
+    c = canvas.Canvas(str(path), pagesize=(612, 792))
+    c.setFont("Helvetica", 12)
+    c.drawString(72, 720, "Contrato de prueba SitioUno")
+    c.save()
+
+
+def test_stamp_signed_pdf_uses_open_stack_and_adds_audit_page(tmp_path: Path):
+    input_pdf = tmp_path / "input.pdf"
+    output_pdf = tmp_path / "signed.pdf"
+    _sample_pdf(input_pdf)
+
+    document_hash = sha256_file(input_pdf)
+    result = stamp_signed_pdf(
+        input_pdf=input_pdf,
+        output_pdf=output_pdf,
+        request_id="req-test-1",
+        source_id="quote-test-1",
+        signer="Jean García",
+        signed_at="2026-06-19T12:00:00+00:00",
+        approval_hash="a" * 64,
+        document_hash=document_hash,
+        event_id="evt-test-1",
+    )
+
+    assert result["pdf_backend"] == "pypdf-reportlab"
+    assert output_pdf.exists()
+    assert result["signed_sha256"] == sha256_file(output_pdf)
+    reader = PdfReader(str(output_pdf))
+    assert len(reader.pages) == 2
+    extracted = "\n".join(page.extract_text() or "" for page in reader.pages)
+    assert "FIRMADO DIGITALMENTE" in extracted
+    assert "Certificado de aprobación" in extracted

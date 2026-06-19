@@ -58,8 +58,8 @@ Reviewed: yes — initial Zeus Factory orchestrator review; independent quality/
 
 ## ADR-007 — Use Research Patterns, Not AGPL Code
 
-**Decision:** DocuSeal/OpenSign/PyMuPDF are analyzed for patterns; no AGPL code/schema is copied. MIT/Apache libraries are preferred for embedded dependencies. PyMuPDF usage in commercial derivative runtime requires licensing review or fallback.
+**Decision:** DocuSeal/OpenSign/PyMuPDF are analyzed for patterns; no AGPL code/schema is copied. Commercial/runtime PDF stamping must use the open permissive stack `pypdf` (BSD-3-Clause) + `reportlab` (BSD-style) or original SitioUno code. PyMuPDF/fitz is allowed only as a research/dev fallback while this project remains R&D; it must not be the required dependency for proprietary client runtime distribution.
 
-**Rationale:** Protect SitioUno commercial roadmap.
+**Rationale:** Jean decided no paid commercial PDF licenses. R&D may use open/distributable software, but SitioUno runtime must avoid license traps and paid commercial licensing obligations.
 
-**Consequences:** Builders must create original implementation and record dependency/license decisions.
+**Consequences:** Builders must prefer the `signature` extra (`pypdf==6.12.2`, `reportlab==4.5.1`) for Signature Core PDF output, keep PyMuPDF as optional fallback only, and verify final signed PDF generation without `fitz` before commercial runtime propagation.

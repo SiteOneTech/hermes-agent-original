@@ -14,3 +14,7 @@ Reviewed: yes — initial Zeus Factory orchestrator review; independent quality/
 - Captured G0 repository strategy.
 - Completed external pattern research for DocuSeal, OpenSign, signature_pad, pdf-lib, PDF.js, and PyMuPDF.
 - Seeded G1 document pack, task graph, QA/security gates, and delivery report.
+
+## 2026-06-19
+
+- Resolved PDF licensing decision: no paid/commercial PyMuPDF license path; commercial runtime must use permissive/open PDF stamping (`pypdf` + `reportlab`) or original SitioUno code. PyMuPDF remains allowed only as an R&D fallback while not distributed as a proprietary runtime requirement.

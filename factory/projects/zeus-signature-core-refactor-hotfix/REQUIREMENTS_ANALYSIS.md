@@ -121,7 +121,7 @@ Reviewed: yes — initial Zeus Factory orchestrator review; independent quality/
 - **Mobile UX:** sign comfortably on phone; no tiny controls, white-on-white selects, or canvas scaling bugs.
 - **Traceability:** every state transition auditable and persisted.
 - **Testability:** unit tests, integration smoke, browser mobile/desktop QA, PDF visual QA.
-- **Licensing:** do not copy AGPL project code/schema. Use permissive libraries where possible; if PyMuPDF AGPL is used in commercial runtime, confirm licensing strategy.
+- **Licensing:** do not copy AGPL project code/schema. Commercial runtime PDF stamping uses permissive/open dependencies (`pypdf` + `reportlab`) or original SitioUno implementation. PyMuPDF/fitz is only an R&D fallback and must not be required for proprietary client runtime distribution.
 
 ## Acceptance Criteria
 

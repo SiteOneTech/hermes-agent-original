@@ -981,6 +981,52 @@ def test_effective_exit_code_final_done_overrides_nonzero_exit():
 def test_effective_exit_code_final_blocked_forces_failure():
     assert factory_pg._effective_exit_code(0, "STATE: DONE earlier\nSTATE: BLOCKED") != 0
 
+
+def test_monitor_runs_finalizes_stale_final_marker_without_exit_file(fake_sql, tmp_path, monkeypatch):
+    log = tmp_path / "worker.log"
+    log.write_text("work finished\nSTATE: DONE\n", encoding="utf-8")
+    fake_sql.rows_results = [[{
+        "run_id": "run-zombie-done",
+        "status": "running",
+        "process_id": -1,
+        "log_path": str(log),
+        "metadata": {"exit_path": str(tmp_path / "missing-exit.txt")},
+    }]]
+    finished: list[tuple[str, int, str]] = []
+    monkeypatch.setattr(factory_pg, "_final_marker_stall_seconds", lambda: 0.0)
+    monkeypatch.setattr(factory_pg, "mark_run_finished", lambda run_id, *, exit_code, output_summary="": finished.append((run_id, exit_code, output_summary)))
+
+    result = factory_pg.monitor_runs()
+
+    assert result["finished"] == 1
+    assert result["finalized_from_stale_semantic_marker"] == 1
+    assert finished and finished[0][0] == "run-zombie-done"
+    assert finished[0][1] == 0
+    assert "final semantic marker" in finished[0][2]
+
+
+def test_monitor_runs_marks_dead_worker_without_exit_file_as_failure(fake_sql, tmp_path, monkeypatch):
+    log = tmp_path / "worker.log"
+    log.write_text("worker died before final marker\n", encoding="utf-8")
+    fake_sql.rows_results = [[{
+        "run_id": "run-dead-no-exit",
+        "status": "running",
+        "process_id": -1,
+        "log_path": str(log),
+        "metadata": {"exit_path": str(tmp_path / "missing-exit.txt")},
+    }]]
+    finished: list[tuple[str, int, str]] = []
+    monkeypatch.setattr(factory_pg, "mark_run_finished", lambda run_id, *, exit_code, output_summary="": finished.append((run_id, exit_code, output_summary)))
+
+    result = factory_pg.monitor_runs()
+
+    assert result["finished"] == 1
+    assert result["finalized_dead_without_exit"] == 1
+    assert finished and finished[0][0] == "run-dead-no-exit"
+    assert finished[0][1] != 0
+    assert "no exit_code.txt" in finished[0][2]
+
+
 def _ui_project(tmp_path=None):
     metadata = {
         "ui_deliverable": True,

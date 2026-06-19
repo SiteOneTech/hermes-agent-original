@@ -9,6 +9,7 @@ import os
 import posixpath
 import re
 import shutil
+import signal
 import subprocess
 import tempfile
 import time
@@ -4066,6 +4067,17 @@ _SEMANTIC_DONE_MARKERS = ("STATE: DONE", "STATE:DONE")
 _SEMANTIC_BLOCKED_MARKERS = ("STATE: BLOCKED", "STATE:BLOCKED")
 _SEMANTIC_IN_PROGRESS_MARKERS = ("STATE: IN_PROGRESS", "STATE:IN_PROGRESS")
 _SEMANTIC_MARKERS = _SEMANTIC_DONE_MARKERS + _SEMANTIC_BLOCKED_MARKERS + _SEMANTIC_IN_PROGRESS_MARKERS
+_FINAL_MARKER_STALL_SECONDS_DEFAULT = 90.0
+
+
+def _final_marker_stall_seconds() -> float:
+    raw = os.environ.get("FACTORY_FINAL_MARKER_STALL_SECONDS")
+    if raw is None:
+        return _FINAL_MARKER_STALL_SECONDS_DEFAULT
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return _FINAL_MARKER_STALL_SECONDS_DEFAULT
 
 
 def _final_semantic_state(text: str) -> Optional[str]:
@@ -4096,6 +4108,85 @@ def _read_worker_output_summary(log_path: str | Path, *, tail_chars: int = 4000)
     if final_marker_line and final_marker_line not in tail:
         return "Final semantic state marker:\n" + final_marker_line + "\n\nLog tail:\n" + tail
     return tail
+
+
+def _process_is_alive(process_id: Any) -> bool:
+    try:
+        pid = int(process_id)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+    try:
+        import psutil  # type: ignore[import-not-found]
+
+        proc = psutil.Process(pid)
+        return proc.is_running() and proc.status() != psutil.STATUS_ZOMBIE
+    except Exception:
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+
+
+def _terminate_process_tree(process_id: Any, *, timeout_seconds: float = 3.0) -> dict[str, Any]:
+    """Best-effort stop for a worker that already emitted a final marker.
+
+    Factory workers are a wrapper plus nested ``hermes chat`` child. If the
+    model already emitted the final semantic marker and the log has gone quiet,
+    keeping the process alive only blocks the dispatcher. Stop the tree so the
+    DB state remains the single truth. Failures are returned as metadata.
+    """
+
+    try:
+        pid = int(process_id)
+    except (TypeError, ValueError):
+        return {"terminated": False, "reason": "invalid_pid", "pid": process_id}
+    if pid <= 0:
+        return {"terminated": False, "reason": "invalid_pid", "pid": pid}
+    try:
+        import psutil  # type: ignore[import-not-found]
+
+        root = psutil.Process(pid)
+        processes = root.children(recursive=True) + [root]
+        for proc in processes:
+            try:
+                proc.terminate()
+            except psutil.NoSuchProcess:
+                pass
+        gone, alive = psutil.wait_procs(processes, timeout=timeout_seconds)
+        for proc in alive:
+            try:
+                proc.kill()
+            except psutil.NoSuchProcess:
+                pass
+        return {
+            "terminated": True,
+            "pid": pid,
+            "terminated_pids": [proc.pid for proc in gone],
+            "killed_pids": [proc.pid for proc in alive],
+        }
+    except Exception as exc:
+        try:
+            os.kill(pid, signal.SIGTERM)
+            return {"terminated": True, "pid": pid, "fallback": "sigterm", "error": str(exc)}
+        except Exception as kill_exc:
+            return {"terminated": False, "pid": pid, "error": str(kill_exc), "psutil_error": str(exc)}
+
+
+def _log_semantic_state_and_age(log_path: str | Path) -> tuple[Optional[str], str, Optional[float]]:
+    path = Path(log_path)
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return None, "Worker log unreadable", None
+    state = _final_semantic_state(text)
+    try:
+        age_seconds = max(0.0, time.time() - path.stat().st_mtime)
+    except Exception:
+        age_seconds = None
+    return state, _read_worker_output_summary(path), age_seconds
 
 
 def _effective_exit_code(exit_code: int, output_summary: str) -> int:
@@ -4225,27 +4316,70 @@ def monitor_runs() -> dict[str, Any]:
     running = _normalize_rows(sql.rows("SELECT * FROM factory.task_runs WHERE status='running' ORDER BY started_at", user=_user()))
     checked = 0
     finished = 0
+    finalized_from_marker = 0
+    finalized_dead_without_exit = 0
     for run in running:
         checked += 1
         metadata = run.get("metadata") if isinstance(run.get("metadata"), dict) else {}
         exit_path = metadata.get("exit_path")
-        if not exit_path:
-            continue
-        path = Path(str(exit_path)).expanduser()
-        if not path.exists():
-            continue
-        try:
-            exit_code = int(path.read_text(encoding="utf-8").strip() or "1")
-        except Exception:
-            exit_code = 1
         log_path = str(run.get("log_path") or "")
         summary = ""
+        exit_file_exists = False
+        if exit_path:
+            path = Path(str(exit_path)).expanduser()
+            exit_file_exists = path.exists()
+            if exit_file_exists:
+                try:
+                    exit_code = int(path.read_text(encoding="utf-8").strip() or "1")
+                except Exception:
+                    exit_code = 1
+                if log_path and Path(log_path).exists():
+                    summary = _read_worker_output_summary(log_path)
+                mark_run_finished(run["run_id"], exit_code=exit_code, output_summary=summary)
+                finished += 1
+                continue
+
+        process_alive = _process_is_alive(run.get("process_id"))
         if log_path and Path(log_path).exists():
-            summary = _read_worker_output_summary(log_path)
-        mark_run_finished(run["run_id"], exit_code=exit_code, output_summary=summary)
-        finished += 1
+            state, summary, log_age = _log_semantic_state_and_age(log_path)
+            stall_seconds = _final_marker_stall_seconds()
+            if state and (not process_alive or (log_age is not None and log_age >= stall_seconds)):
+                termination = _terminate_process_tree(run.get("process_id")) if process_alive else {"terminated": False, "reason": "process_not_alive"}
+                age_text = "unknown" if log_age is None else f"{log_age:.1f}"
+                monitor_note = (
+                    "\n\nFactory monitor finalized this run from a final semantic marker "
+                    f"(state={state}, log_age_seconds={age_text}, threshold_seconds={stall_seconds:.1f}, "
+                    f"exit_file_exists={exit_file_exists}, process_alive={process_alive}, termination={termination})."
+                )
+                mark_run_finished(
+                    run["run_id"],
+                    exit_code=0 if state == "done" else 1,
+                    output_summary=(summary or "Worker emitted final semantic marker") + monitor_note,
+                )
+                finished += 1
+                finalized_from_marker += 1
+                continue
+
+        if not process_alive:
+            if not summary and log_path and Path(log_path).exists():
+                summary = _read_worker_output_summary(log_path)
+            if not summary:
+                summary = "Worker process exited without an exit_code.txt file"
+            monitor_note = (
+                "\n\nFactory monitor synthesized a failure because the worker process is not alive "
+                f"and no exit_code.txt was available (run_id={run.get('run_id')}, pid={run.get('process_id')})."
+            )
+            mark_run_finished(run["run_id"], exit_code=1, output_summary=summary + monitor_note)
+            finished += 1
+            finalized_dead_without_exit += 1
     repaired = _repair_orphan_in_flight_tasks()
-    return {"checked": checked, "finished": finished, "orphan_inflight_repaired": len(repaired)}
+    return {
+        "checked": checked,
+        "finished": finished,
+        "orphan_inflight_repaired": len(repaired),
+        "finalized_from_stale_semantic_marker": finalized_from_marker,
+        "finalized_dead_without_exit": finalized_dead_without_exit,
+    }
 
 
 def update_run_metadata(run_id: str, metadata: dict[str, Any]) -> None:
