@@ -87,4 +87,5 @@ Before any implementation task, a worker must read this index first, then:
 - `DELIVERY_REPORT.md`
 - `DB_TASKS.md`
 - `T14R_SECURITY_REWORK_EVIDENCE.md`
+- `T14R2_CORE_APPROVAL_OTP_TOKEN_HARDENING_EVIDENCE.md`
 

@@ -45,7 +45,7 @@ def test_approval_hash_is_deterministic(monkeypatch):
 
     def fake_rows(query, *, user=None):
         if "FROM signature.submitters" in query:
-            return [{"submitter_id": "sub-1", "role": "approver", "required": True, "status": "approved"}]
+            return [{"submitter_id": "sub-1", "role": "approver", "required": True, "status": "approved", "token_hash_sha256": signature_tool._sha256_text("recipient-token")}]
         return []
 
     monkeypatch.setattr(signature_tool.sql, "one", fake_one)
@@ -64,6 +64,10 @@ def test_approval_hash_is_deterministic(monkeypatch):
         "user_agent": "pytest",
         "signed_at": "2026-06-01T00:00:00Z",
         "actor_ref": "jean@example.test",
+        "signer_token": "recipient-token",
+        "otp_verified": True,
+        "otp_challenge_id": "challenge-1",
+        "otp_channel_id": "email",
     }
     first = _loads(signature_tool._handle_approval_hash_create(args))
     second = _loads(signature_tool._handle_approval_hash_create(args))
@@ -78,6 +82,82 @@ def test_request_create_requires_submitters():
     result = _loads(signature_tool._handle_request_create({"title": "No signers"}))
     assert result["error"]
     assert "submitters" in result["error"]
+
+
+def test_approval_hash_create_rejects_request_id_only(monkeypatch):
+    monkeypatch.setattr(
+        signature_tool.sql,
+        "one",
+        lambda query, *, user=None: {"request_id": "req-only", "status": "sent"}
+        if "FROM signature.document_requests" in query
+        else None,
+    )
+    monkeypatch.setattr(signature_tool.sql, "statement_one", lambda *a, **k: (_ for _ in ()).throw(AssertionError("approval insert must not run")))
+
+    result = _loads(signature_tool._handle_approval_hash_create({"request_id": "req-only"}))
+
+    assert result["error"]
+    assert "signer_token" in result["error"]
+
+
+def test_approval_hash_create_rejects_submitter_without_otp(monkeypatch):
+    request = {"request_id": "req-no-otp", "status": "sent"}
+    submitter = {
+        "submitter_id": "sub-1",
+        "request_id": "req-no-otp",
+        "role": "signer",
+        "required": True,
+        "status": "pending",
+        "token_hash_sha256": signature_tool._sha256_text("recipient-token"),
+    }
+
+    def fake_one(query, *, user=None):
+        if "FROM signature.document_requests" in query:
+            return request
+        if "FROM signature.submitters" in query:
+            return submitter
+        return None
+
+    monkeypatch.setattr(signature_tool.sql, "one", fake_one)
+    monkeypatch.setattr(signature_tool.sql, "statement_one", lambda *a, **k: (_ for _ in ()).throw(AssertionError("approval insert must not run")))
+
+    result = _loads(signature_tool._handle_approval_hash_create({"request_id": "req-no-otp", "submitter_id": "sub-1", "signer_token": "recipient-token"}))
+
+    assert result["error"]
+    assert "OTP proof" in result["error"]
+
+
+def test_approval_hash_create_rejects_wrong_signer_token(monkeypatch):
+    request = {"request_id": "req-wrong-token", "status": "sent"}
+    submitter = {
+        "submitter_id": "sub-1",
+        "request_id": "req-wrong-token",
+        "role": "signer",
+        "required": True,
+        "status": "pending",
+        "token_hash_sha256": signature_tool._sha256_text("recipient-token"),
+    }
+
+    def fake_one(query, *, user=None):
+        if "FROM signature.document_requests" in query:
+            return request
+        if "FROM signature.submitters" in query:
+            return submitter
+        return None
+
+    monkeypatch.setattr(signature_tool.sql, "one", fake_one)
+    monkeypatch.setattr(signature_tool.sql, "statement_one", lambda *a, **k: (_ for _ in ()).throw(AssertionError("approval insert must not run")))
+
+    result = _loads(signature_tool._handle_approval_hash_create({
+        "request_id": "req-wrong-token",
+        "submitter_id": "sub-1",
+        "signer_token": "wrong-token",
+        "otp_verified": True,
+        "otp_challenge_id": "challenge-1",
+    }))
+
+    assert result["error"]
+    assert "signer_token" in result["error"]
 
 
 def test_parallel_multi_signer_stays_partial_until_all_required_complete():
@@ -123,8 +203,8 @@ def test_approval_hash_create_updates_request_to_partial_for_remaining_required_
         "expires_at": None,
     }
     submitters = [
-        {"submitter_id": "sub-1", "role": "signer", "required": True, "status": "pending"},
-        {"submitter_id": "sub-2", "role": "signer", "required": True, "status": "pending"},
+        {"submitter_id": "sub-1", "role": "signer", "required": True, "status": "pending", "token_hash_sha256": signature_tool._sha256_text("recipient-token")},
+        {"submitter_id": "sub-2", "role": "signer", "required": True, "status": "pending", "token_hash_sha256": signature_tool._sha256_text("other-token")},
     ]
     statements = []
 
@@ -155,7 +235,14 @@ def test_approval_hash_create_updates_request_to_partial_for_remaining_required_
     monkeypatch.setattr(signature_tool.sql, "statement_one", fake_statement_one)
     monkeypatch.setattr(signature_tool.sql, "psql", lambda query, *a, **k: statements.append(query))
 
-    result = _loads(signature_tool._handle_approval_hash_create({"request_id": "req-2", "submitter_id": "sub-1"}))
+    result = _loads(signature_tool._handle_approval_hash_create({
+        "request_id": "req-2",
+        "submitter_id": "sub-1",
+        "signer_token": "recipient-token",
+        "otp_verified": True,
+        "otp_challenge_id": "challenge-2",
+        "otp_channel_id": "email",
+    }))
 
     assert result["ok"] is True
     assert result["request_status"] == "partially_signed"
