@@ -3,8 +3,8 @@
 Project: zeus-signature-core-refactor-hotfix
 Owner: Jean García / SitioUno
 Created: 2026-06-12T18:09:47-04:00
-Last updated: 2026-06-18T23:23:43-04:00
-Status: IN PROGRESS — T14R2 core approval OTP/token hardening completed locally; T14 security review requeue + T15 release readiness pending
+Last updated: 2026-06-19T00:22:27-04:00
+Status: RELEASE HOLD — T14 security passed; T15 release readiness decision completed with delivery/critical_readiness failed pending sandbox/runtime evidence
 Validated: yes
 Reviewed: yes
 
@@ -27,10 +27,11 @@ Reviewed: yes
 | T11 — Send final signed copies + hash validation | done | `factory/.../t11-final-copy-hash-distribution` | `4c7aad7a3` | qa ✓ |
 | T12 — Protected private signature dashboard metrics | done | `factory/.../t12-protected-private-signature-dashboard-metrics` | `2ddc75f40` | qa ✓ |
 | T13 — End-to-end QA (mobile/desktop PDF/DB reminders) | done | — | — | qa ✓ |
-| T14R — Integrated security rework before T14 rerun | done | `factory/.../t14r-main-security-rework` | branch HEAD | local tests ✓ |
-| T14R2 — Core approval OTP token hardening | done | `factory/.../t14r2-core-approval-token-otp` | branch HEAD | 48 focused tests + compileall ✓ |
-| T14 — Security and privacy review | todo | — | — | — |
-| T15 — Release readiness + runtime propagation decision | todo | — | — | — |
+| T14R — Integrated security rework before T14 rerun | done | `factory/.../t14r-main-security-rework` | `fc6431770` | implementation ✓ |
+| T14R2 — Core approval OTP token hardening | done | `factory/.../t14r2-core-approval-token-otp` | `509c133bf` | implementation ✓ |
+| T14R3 — Terminal state, OTP outbox, privileged bypass hardening | done | `factory/.../t14r3-terminal-otp-privileged-hardening` | `d4d1d572` | implementation ✓ |
+| T14 — Security and privacy review | done | — | — | security ✓ gates 572/573 |
+| T15 — Release readiness + runtime propagation decision | done / HOLD | `factory/.../t15-release-readiness-runtime-propagation` | branch HEAD | delivery ✗ gate 575; critical_readiness ✗ gate 574 |
 
 
 
@@ -43,10 +44,10 @@ Reviewed: yes
 | architecture | PASSED | factory-orchestrator |
 | functional | PASSED | factory-orchestrator |
 | quality | PASSED | factory-orchestrator |
-| implementation | FAILED | claude-builder |
-| critical_readiness | PENDING | factory-orchestrator |
-| delivery | PENDING | factory-orchestrator |
-| security | PENDING | factory-orchestrator |
+| implementation | PASSED latest T14R3 gate 570; older failed gates superseded | claude-builder |
+| security | PASSED gates 572/573 | security-reviewer / factory-orchestrator |
+| critical_readiness | FAILED/HOLD gate 574 | devops-release |
+| delivery | FAILED/HOLD gate 575 | devops-release |
 
 
 ## Notion PM Projection

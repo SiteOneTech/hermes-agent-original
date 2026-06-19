@@ -43,7 +43,7 @@ Reviewed: yes — initial Zeus Factory orchestrator review; independent quality/
 | `SECURITY_GATES.md` | Security criteria | present / validated / reviewed |
 | `QA_REPORT.md` | QA lifecycle evidence | seeded / pending implementation |
 | `SECURITY_REVIEW.md` | Security lifecycle evidence | seeded / pending implementation |
-| `DELIVERY_REPORT.md` | Delivery lifecycle evidence | seeded / pending implementation |
+| `DELIVERY_REPORT.md` | Delivery lifecycle evidence | updated / T15 release HOLD decision |
 
 ## Builder Entry Instructions
 
