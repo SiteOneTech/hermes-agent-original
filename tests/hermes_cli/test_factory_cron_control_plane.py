@@ -128,6 +128,32 @@ def test_factory_blocker_classifier_rejects_unactionable_legacy_human_fallback()
     assert classified["human_question"] is None
 
 
+def test_factory_blocker_classifier_treats_internal_signer_token_rework_as_technical():
+    payload = {
+        "projects": [{"project_id": "demo", "status": "active", "autonomous_enabled": True}],
+        "tasks": [
+            {
+                "project_id": "demo",
+                "lane_id": "demo-hybrid",
+                "task_id": "demo-security",
+                "title": "Signature security review",
+                "status": "blocked",
+                "result_summary": "S1: signature_approval_hash_create can complete request without recipient-bound signer_token + OTP. Add negative tests and rework the route.",
+            }
+        ],
+        "task_runs": [],
+        "gates": [],
+        "human_questions": [],
+    }
+
+    [classified] = factory_pg.classify_factory_blockers(payload)
+
+    assert classified["action_category"] == "technical_rework"
+    assert classified["blocker_category"] == "technical"
+    assert classified["requires_human"] is False
+    assert classified["human_question"] is None
+
+
 def test_planning_tasks_are_not_validation_blockers_from_contract_metadata():
     task = {
         "task_id": "demo-planning",

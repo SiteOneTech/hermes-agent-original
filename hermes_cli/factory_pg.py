@@ -264,9 +264,15 @@ _BLOCKER_HUMAN_DECISION_KEYWORDS = (
     "human decision", "decisión humana", "jean debe", "jean needs", "owner decision", "business decision",
     "legal approval", "customer approval",
 )
-_BLOCKER_EXTERNAL_OWNER_KEYWORDS = (
-    "api key", "token", "password", "credential", "secret", "2fa", "mfa",
-    "access denied", "permission denied", "403", "401", "billing", "payment method",
+_BLOCKER_EXTERNAL_OWNER_PHRASES = (
+    # Keep these specific. Generic words such as "token", "secret", or
+    # "credential" appear in normal security engineering tasks (for example
+    # signer_token enforcement) and must not become Jean interruptions unless
+    # the worker states a concrete owner/external dependency.
+    "api key", "api token", "access token", "oauth token", "github token",
+    "provider token", "external credential", "missing credential", "missing secret",
+    "external secret", "password reset", "2fa", "mfa", "access denied",
+    "permission denied", "403", "401", "billing", "payment method",
 )
 _BLOCKER_AUTO_KEYWORDS = (
     "run pytest", "run tests", "correr pytest", "correr tests", "aprobación para correr", "approval to run",
@@ -3152,7 +3158,7 @@ def classify_factory_blocker(task: dict[str, Any], *, payload: Optional[dict[str
         blocker_category = "external_or_owner_decision"
         recommended_action = "create_human_question_and_notify_owner"
         requires_human = True
-    elif any(keyword in text for keyword in _BLOCKER_EXTERNAL_OWNER_KEYWORDS):
+    elif any(keyword in text for keyword in _BLOCKER_EXTERNAL_OWNER_PHRASES):
         action_category = "human_question_required"
         blocker_category = "external_or_owner_decision"
         recommended_action = "create_human_question_and_notify_owner"
