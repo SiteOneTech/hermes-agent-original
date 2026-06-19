@@ -705,7 +705,27 @@ def _task_satisfies_mandatory_category(task: dict[str, Any], category: str) -> b
             or any(term in text for term in ("prd", "adr", "sprint plan", "task graph", "technical blueprint"))
         )
     if category == "implementation":
-        return owner in {"claude-builder", "claude-deepseek-builder", "codex-builder", "openhands-builder", "claude-code-builder"} and phase == "implementation"
+        builder_owners = {"claude-builder", "claude-deepseek-builder", "codex-builder", "openhands-builder", "claude-code-builder"}
+        ui_impl_phases = {"implementation", "ui", "ux", "ui_design", "frontend_design", "visual_design", "design_system", "prototype"}
+        if owner == "ux-ui-designer":
+            if any(term in text for term in ("backend-only", "backend only", "no interface", "without interface", "sin interfaz")):
+                return False
+            return phase in ui_impl_phases and any(
+                term in text
+                for term in (
+                    "ui",
+                    "ux",
+                    "frontend",
+                    "interface",
+                    "design",
+                    "prototype",
+                    "open design",
+                    "opendesign",
+                    "responsive",
+                    "visual",
+                )
+            )
+        return owner in builder_owners and phase == "implementation"
     if category == "quality_review":
         return owner == "quality-reviewer" and phase in {"review", "quality_review", "quality"}
     if category == "security_review":
