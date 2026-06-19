@@ -31,7 +31,7 @@ Reviewed: yes
 | T14R2 — Core approval OTP token hardening | done | `factory/.../t14r2-core-approval-token-otp` | `509c133bf` | implementation ✓ |
 | T14R3 — Terminal state, OTP outbox, privileged bypass hardening | done | `factory/.../t14r3-terminal-otp-privileged-hardening` | `d4d1d572` | implementation ✓ |
 | T14 — Security and privacy review | done | — | — | security ✓ gates 572/573 |
-| T15 — Release readiness + runtime propagation decision | done / HOLD | `factory/.../t15-release-readiness-runtime-propagation` | branch HEAD | delivery ✗ gate 575; critical_readiness ✗ gate 574 |
+| T15 — Release readiness + runtime propagation decision | done / HOLD | `factory/.../t15-release-readiness-runtime-propagation` | branch HEAD | delivery ✗ gate 577; critical_readiness ✗ gate 576 |
 
 
 
@@ -46,8 +46,8 @@ Reviewed: yes
 | quality | PASSED | factory-orchestrator |
 | implementation | PASSED latest T14R3 gate 570; older failed gates superseded | claude-builder |
 | security | PASSED gates 572/573 | security-reviewer / factory-orchestrator |
-| critical_readiness | FAILED/HOLD gate 574 | devops-release |
-| delivery | FAILED/HOLD gate 575 | devops-release |
+| critical_readiness | FAILED/HOLD gate 576 | devops-release |
+| delivery | FAILED/HOLD gate 577 | devops-release |
 
 
 ## Notion PM Projection

@@ -137,8 +137,8 @@ Latest Factory DB gates at T15 decision:
 - `573` — `security` passed, reviewer `factory-orchestrator`, task T14.
 - `572` — `security` passed, reviewer `security-reviewer`, task T14.
 - `570` — `implementation` passed, reviewer `claude-builder`, task T14R3.
-- `575` — `delivery` failed, reviewer `devops-release`, task T15. Recorded by this T15 run.
-- `574` — `critical_readiness` failed, reviewer `devops-release`, task T15. Recorded by this T15 run.
+- `577` — `delivery` failed, reviewer `devops-release`, task T15. Recorded by this T15 run after report branch push.
+- `576` — `critical_readiness` failed, reviewer `devops-release`, task T15. Recorded by this T15 run after report branch push.
 
 The failed T15 gates are intentional HOLD gates. They prevent an unsafe delivery pass while runtime/sandbox evidence is incomplete.
 
@@ -201,7 +201,7 @@ Do not propagate now. When Jean/orchestrator lifts HOLD:
 
 - Code/security hardening is already merged to Zeus fork `origin/main` and CI is green.
 - This T15 report branch was pushed for review/evidence preservation after local diff validation.
-- Do **not** merge this T15 report branch or propagate to `sitiouno-agent-runtime` as a release pass while gates `574` and `575` are failed.
+- Do **not** merge this T15 report branch or propagate to `sitiouno-agent-runtime` as a release pass while gates `576` and `577` are failed.
 - Merge/push to runtime is deferred to a follow-up authorized propagation increment after HOLD is lifted.
 
 ## Final state
