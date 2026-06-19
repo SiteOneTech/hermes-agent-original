@@ -87,6 +87,73 @@ def _completion_status_for_submitter(submitter: dict[str, Any] | None) -> str:
     return "approved"
 
 
+_TRUSTED_INTERNAL_ACTOR_TYPES = {"system", "agent", "adapter", "owner"}
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() in {"true", "1", "yes", "on"}
+
+
+def _is_internal_privileged_completion(args: dict[str, Any]) -> bool:
+    """Internal-only completion path: explicit privileged flag + trusted actor."""
+    if not (_truthy(args.get("internal_completion")) or _truthy(args.get("privileged_completion"))):
+        return False
+    return str(args.get("actor_type") or "").strip().lower() in _TRUSTED_INTERNAL_ACTOR_TYPES
+
+
+def _has_otp_proof(args: dict[str, Any]) -> bool:
+    """OTP proof requires otp_verified plus challenge/session evidence."""
+    if not _truthy(args.get("otp_verified")):
+        return False
+    return bool(args.get("otp_challenge_id") or args.get("otp_session_id") or args.get("otp_verification_id"))
+
+
+def _resolve_submitter(request_id: str, submitter_id: str) -> dict[str, Any] | None:
+    submitter = sql.one(
+        f"SELECT * FROM signature.submitters WHERE submitter_id={_q(submitter_id)} AND request_id={_q(request_id)}",
+        user=_user(),
+    )
+    if submitter:
+        return submitter
+    for row in sql.rows(
+        f"SELECT * FROM signature.submitters WHERE request_id={_q(request_id)} ORDER BY signing_order, created_at",
+        user=_user(),
+    ):
+        if str(row.get("submitter_id")) == str(submitter_id):
+            return row
+    return None
+
+
+def _authorize_approval_completion(request_id: str, args: dict[str, Any]) -> dict[str, Any] | None:
+    """Guard public/customer approval completion before any approval is inserted.
+
+    Public/customer-facing completions must present a submitter-bound raw
+    signer_token that hashes to signature.submitters.token_hash_sha256 AND OTP
+    proof (otp_verified plus a challenge/session id). The only bypass is an
+    explicit internal privileged path (internal_completion/privileged_completion
+    driven by a trusted system/agent/adapter/owner actor).
+    """
+    submitter_id = str(args.get("submitter_id") or "").strip()
+    if _is_internal_privileged_completion(args):
+        return _resolve_submitter(request_id, submitter_id) if submitter_id else None
+    if not submitter_id:
+        raise ValueError("public approval completion requires submitter_id and a submitter-bound signer_token")
+    submitter = _resolve_submitter(request_id, submitter_id)
+    if not submitter:
+        raise ValueError("submitter not found for signer_token validation")
+    signer_token = args.get("signer_token")
+    token_hash = submitter.get("token_hash_sha256")
+    if not signer_token or not token_hash or _sha256_text(str(signer_token)) != str(token_hash):
+        raise ValueError("signer_token does not match the submitter token_hash_sha256")
+    if not _has_otp_proof(args):
+        raise ValueError("OTP proof (otp_verified plus challenge/session evidence) is required")
+    return submitter
+
+
 def _derive_request_lifecycle(request: dict[str, Any], submitters: list[dict[str, Any]]) -> dict[str, Any]:
     """Derive aggregate request status from required signer/approver obligations.
 
@@ -284,6 +351,7 @@ def _handle_approval_hash_create(args: dict, **_kwargs) -> str:
         request = sql.one(f"SELECT * FROM signature.document_requests WHERE request_id={_q(request_id)}", user=_user())
         if not request:
             raise ValueError("request not found")
+        submitter = _authorize_approval_completion(request_id, args)
         approval_id = args.get("approval_id") or _slug("signature-approval", f"{request_id}-{args.get('submitter_id') or args.get('actor_ref') or 'approval'}")
         context = {
             "request_id": request_id,
@@ -301,9 +369,6 @@ def _handle_approval_hash_create(args: dict, **_kwargs) -> str:
             "metadata": args.get("metadata") or {},
         }
         approval_hash = args.get("approval_hash") or _sha256_text(_canonical_json(context))
-        submitter = None
-        if args.get("submitter_id"):
-            submitter = sql.one(f"SELECT * FROM signature.submitters WHERE submitter_id={_q(args.get('submitter_id'))}", user=_user())
         submitter_status = _completion_status_for_submitter(submitter)
         approval = sql.statement_one(f"""
           INSERT INTO signature.approvals (approval_id, request_id, submitter_id, source_type, source_id, approval_context, signature_text, signature_image_sha256, document_hash_sha256, approval_hash, ip_address, user_agent, signed_at, metadata)
@@ -968,7 +1033,7 @@ registry.register(name="signature_template_upsert", toolset="signature", schema=
 registry.register(name="signature_request_create", toolset="signature", schema=_schema("signature_request_create", "Create a document/signature request with opaque signer links and field snapshots.", {"request_id": {"type": "string"}, "template_id": {"type": "string"}, "source_type": {"type": "string"}, "source_id": {"type": "string"}, "title": {"type": "string"}, "status": {"type": "string"}, "document_url": {"type": "string"}, "fields": {"type": "array", "items": {"type": "object"}}, "submitters": {"type": "array", "items": {"type": "object"}}, "preferences": {"type": "object"}, "expires_at": {"type": "string"}, "actor_ref": {"type": "string"}, **_meta_props()}, ["title", "submitters"]), handler=_handle_request_create, check_fn=_check_signature, emoji="✍️")
 registry.register(name="signature_request_get", toolset="signature", schema=_schema("signature_request_get", "Read a signature request with submitters, audit events, and approvals.", {"request_id": {"type": "string"}}, ["request_id"]), handler=_handle_request_get, check_fn=_check_signature, emoji="✍️")
 registry.register(name="signature_event_record", toolset="signature", schema=_schema("signature_event_record", "Append an audit event to a signature request with a chained event hash.", {"request_id": {"type": "string"}, "submitter_id": {"type": "string"}, "event_type": {"type": "string"}, "actor_type": {"type": "string"}, "actor_ref": {"type": "string"}, "ip_address": {"type": "string"}, "user_agent": {"type": "string"}, "event_payload": {"type": "object"}, **_meta_props()}, ["request_id", "event_type"]), handler=_handle_event_record, check_fn=_check_signature, emoji="✍️")
-registry.register(name="signature_approval_hash_create", toolset="signature", schema=_schema("signature_approval_hash_create", "Create a canonical approval record and SHA-256 approval hash for a signed/approved document.", {"approval_id": {"type": "string"}, "request_id": {"type": "string"}, "submitter_id": {"type": "string"}, "source_type": {"type": "string"}, "source_id": {"type": "string"}, "signature_text": {"type": "string"}, "signature_image_sha256": {"type": "string"}, "document_hash_sha256": {"type": "string"}, "approval_hash": {"type": "string"}, "ip_address": {"type": "string"}, "user_agent": {"type": "string"}, "signed_at": {"type": "string"}, "actor_type": {"type": "string"}, "actor_ref": {"type": "string"}, **_meta_props()}, ["request_id"]), handler=_handle_approval_hash_create, check_fn=_check_signature, emoji="✍️")
+registry.register(name="signature_approval_hash_create", toolset="signature", schema=_schema("signature_approval_hash_create", "Create a canonical approval record and SHA-256 approval hash for a signed/approved document. Public/customer completions require a submitter-bound raw signer_token (hashing to signature.submitters.token_hash_sha256) plus OTP proof (otp_verified with otp_challenge_id/otp_session_id); only an explicit internal privileged path (internal_completion/privileged_completion by a trusted system/agent/adapter/owner actor_type) may bypass these.", {"approval_id": {"type": "string"}, "request_id": {"type": "string"}, "submitter_id": {"type": "string"}, "signer_token": {"type": "string", "description": "Raw per-submitter signing token; must hash to signature.submitters.token_hash_sha256 for public/customer completions."}, "otp_verified": {"type": "boolean", "description": "True when the submitter passed an OTP challenge."}, "otp_challenge_id": {"type": "string"}, "otp_session_id": {"type": "string"}, "otp_verification_id": {"type": "string"}, "otp_channel_id": {"type": "string"}, "internal_completion": {"type": "boolean", "description": "Internal privileged completion path; requires trusted actor_type (system/agent/adapter/owner)."}, "privileged_completion": {"type": "boolean", "description": "Alias for internal_completion; requires trusted actor_type."}, "source_type": {"type": "string"}, "source_id": {"type": "string"}, "signature_text": {"type": "string"}, "signature_image_sha256": {"type": "string"}, "document_hash_sha256": {"type": "string"}, "approval_hash": {"type": "string"}, "ip_address": {"type": "string"}, "user_agent": {"type": "string"}, "signed_at": {"type": "string"}, "actor_type": {"type": "string"}, "actor_ref": {"type": "string"}, **_meta_props()}, ["request_id"]), handler=_handle_approval_hash_create, check_fn=_check_signature, emoji="✍️")
 registry.register(name="signature_delivery_receipt_record", toolset="signature", schema=_schema("signature_delivery_receipt_record", "Record an idempotent invitation, OTP, reminder, or final-copy delivery receipt with provider status/failure details.", {"request_id": {"type": "string"}, "submitter_id": {"type": "string"}, "receipt_type": {"type": "string", "enum": ["invitation", "otp", "reminder", "final_copy"]}, "channel": {"type": "string"}, "recipient": {"type": "string"}, "provider_message_id": {"type": "string"}, "status": {"type": "string", "enum": ["queued", "sent", "delivered", "failed", "bounced"]}, "error_message": {"type": "string"}, "delivered_at": {"type": "string"}, "idempotency_key": {"type": "string"}, "actor_type": {"type": "string"}, "actor_ref": {"type": "string"}, **_meta_props()}, ["request_id", "receipt_type", "channel"]), handler=_handle_delivery_receipt_record, check_fn=_check_signature, emoji="✍️")
 registry.register(name="signature_reminder_policy_upsert", toolset="signature", schema=_schema("signature_reminder_policy_upsert", "Create/update per-request reminder policy with cadence, next due timestamp, max attempts, and escalation settings.", {"reminder_policy_id": {"type": "string"}, "request_id": {"type": "string"}, "cadence": {"type": "string"}, "next_due_at": {"type": "string"}, "max_attempts": {"type": "integer"}, "escalation_settings": {"type": "object"}, "enabled": {"type": "boolean"}, "actor_type": {"type": "string"}, "actor_ref": {"type": "string"}, **_meta_props()}, ["request_id", "cadence", "next_due_at", "max_attempts"]), handler=_handle_reminder_policy_upsert, check_fn=_check_signature, emoji="✍️")
 registry.register(name="signature_reminder_attempt_record", toolset="signature", schema=_schema("signature_reminder_attempt_record", "Record an idempotent reminder attempt, failure details, optional next_due_at update, and matching reminder delivery receipt.", {"request_id": {"type": "string"}, "submitter_id": {"type": "string"}, "reminder_policy_id": {"type": "string"}, "channel": {"type": "string"}, "recipient": {"type": "string"}, "provider_message_id": {"type": "string"}, "status": {"type": "string", "enum": ["queued", "sent", "delivered", "failed", "bounced"]}, "error_message": {"type": "string"}, "scheduled_for": {"type": "string"}, "attempted_at": {"type": "string"}, "next_due_at": {"type": "string"}, "idempotency_key": {"type": "string"}, "actor_type": {"type": "string"}, "actor_ref": {"type": "string"}, **_meta_props()}, ["request_id", "channel"]), handler=_handle_reminder_attempt_record, check_fn=_check_signature, emoji="✍️")

@@ -3,8 +3,8 @@
 Project: zeus-signature-core-refactor-hotfix
 Owner: Jean García / SitioUno
 Created: 2026-06-12T18:09:47-04:00
-Last updated: 2026-06-18T22:45:47-04:00
-Status: IN PROGRESS — T14R integrated security rework completed locally; T14 security review + T15 release readiness pending
+Last updated: 2026-06-18T23:23:43-04:00
+Status: IN PROGRESS — T14R2 core approval OTP/token hardening completed locally; T14 security review requeue + T15 release readiness pending
 Validated: yes
 Reviewed: yes
 
@@ -28,6 +28,7 @@ Reviewed: yes
 | T12 — Protected private signature dashboard metrics | done | `factory/.../t12-protected-private-signature-dashboard-metrics` | `2ddc75f40` | qa ✓ |
 | T13 — End-to-end QA (mobile/desktop PDF/DB reminders) | done | — | — | qa ✓ |
 | T14R — Integrated security rework before T14 rerun | done | `factory/.../t14r-main-security-rework` | branch HEAD | local tests ✓ |
+| T14R2 — Core approval OTP token hardening | done | `factory/.../t14r2-core-approval-token-otp` | branch HEAD | 48 focused tests + compileall ✓ |
 | T14 — Security and privacy review | todo | — | — | — |
 | T15 — Release readiness + runtime propagation decision | todo | — | — | — |
 
