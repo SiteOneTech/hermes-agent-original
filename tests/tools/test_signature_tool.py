@@ -43,7 +43,13 @@ def test_approval_hash_is_deterministic(monkeypatch):
             return {"signature_event_id": len(inserted), "event_hash": "event-hash"}
         return {}
 
+    def fake_rows(query, *, user=None):
+        if "FROM signature.submitters" in query:
+            return [{"submitter_id": "sub-1", "role": "approver", "required": True, "status": "approved"}]
+        return []
+
     monkeypatch.setattr(signature_tool.sql, "one", fake_one)
+    monkeypatch.setattr(signature_tool.sql, "rows", fake_rows)
     monkeypatch.setattr(signature_tool.sql, "statement_one", fake_statement_one)
     monkeypatch.setattr(signature_tool.sql, "psql", lambda *a, **k: None)
 
@@ -72,3 +78,150 @@ def test_request_create_requires_submitters():
     result = _loads(signature_tool._handle_request_create({"title": "No signers"}))
     assert result["error"]
     assert "submitters" in result["error"]
+
+
+def test_parallel_multi_signer_stays_partial_until_all_required_complete():
+    request = {"status": "sent", "decline_blocks": True, "expires_at": None, "signing_mode": "parallel"}
+    submitters = [
+        {"role": "signer", "required": True, "status": "signed", "signing_order": 1},
+        {"role": "approver", "required": True, "status": "pending", "signing_order": 1},
+    ]
+
+    partial = signature_tool._derive_request_lifecycle(request, submitters)
+    submitters[1]["status"] = "approved"
+    complete = signature_tool._derive_request_lifecycle(request, submitters)
+
+    assert partial["status"] == "partially_signed"
+    assert partial["completed"] is False
+    assert complete["status"] == "completed"
+    assert complete["completed"] is True
+
+
+def test_optional_viewer_does_not_block_completion():
+    request = {"status": "sent", "decline_blocks": True, "expires_at": None}
+    submitters = [
+        {"role": "signer", "required": True, "status": "signed"},
+        {"role": "viewer", "required": False, "status": "pending"},
+    ]
+
+    state = signature_tool._derive_request_lifecycle(request, submitters)
+
+    assert state["status"] == "completed"
+    assert state["completed"] is True
+
+
+def test_approval_hash_create_updates_request_to_partial_for_remaining_required_signers(monkeypatch):
+    request = {
+        "request_id": "req-2",
+        "source_type": "quote",
+        "source_id": "quote-2",
+        "title": "Quote 2",
+        "document_url": "https://example.test/doc.pdf",
+        "document_hash_sha256": "doc-hash",
+        "status": "sent",
+        "decline_blocks": True,
+        "expires_at": None,
+    }
+    submitters = [
+        {"submitter_id": "sub-1", "role": "signer", "required": True, "status": "pending"},
+        {"submitter_id": "sub-2", "role": "signer", "required": True, "status": "pending"},
+    ]
+    statements = []
+
+    def fake_one(query, *, user=None):
+        if "FROM signature.document_requests" in query:
+            return request
+        if "FROM signature.submitters" in query and "submitter_id" in query:
+            return submitters[0]
+        if "event_hash FROM signature.events" in query:
+            return {"event_hash": "prev-hash"}
+        return None
+
+    def fake_rows(query, *, user=None):
+        if "FROM signature.submitters" in query:
+            return [{**submitters[0], "status": "signed"}, submitters[1]]
+        return []
+
+    def fake_statement_one(query, *, user=None):
+        statements.append(query)
+        if "INSERT INTO signature.approvals" in query:
+            return {"approval_id": "approval-2", "approval_hash": "stored"}
+        if "INSERT INTO signature.events" in query:
+            return {"signature_event_id": len(statements), "event_hash": "event-hash"}
+        return {}
+
+    monkeypatch.setattr(signature_tool.sql, "one", fake_one)
+    monkeypatch.setattr(signature_tool.sql, "rows", fake_rows)
+    monkeypatch.setattr(signature_tool.sql, "statement_one", fake_statement_one)
+    monkeypatch.setattr(signature_tool.sql, "psql", lambda query, *a, **k: statements.append(query))
+
+    result = _loads(signature_tool._handle_approval_hash_create({"request_id": "req-2", "submitter_id": "sub-1"}))
+
+    assert result["ok"] is True
+    assert result["request_status"] == "partially_signed"
+    joined = "\n".join(statements)
+    assert "status='completed'" not in joined
+    assert "status='partially_signed'" in joined
+
+
+def test_final_copies_registers_receipts_for_each_signer_and_escalates_failures(monkeypatch):
+    request = {
+        "request_id": "req-1",
+        "status": "completed",
+        "completed_document_url": "https://example.test/final.pdf",
+        "audit_url": "https://example.test/audit.pdf",
+        "document_hash_sha256": "o" * 64,
+        "metadata": {"completed_pdf_sha256": "f" * 64, "audit_pdf_sha256": "a" * 64},
+    }
+    submitters = [
+        {"submitter_id": "sub-1", "role": "signer", "name": "Jean", "email": "jean@example.test", "phone": None, "metadata": {}},
+        {"submitter_id": "sub-2", "role": "approver", "name": "Maria", "email": None, "phone": "+155****0002", "metadata": {"final_copy_channel": "sms"}},
+        {"submitter_id": "viewer-1", "role": "viewer", "name": "Viewer", "email": "viewer@example.test", "phone": None, "metadata": {}},
+    ]
+    statements = []
+    events = []
+
+    def fake_one(query, *, user=None):
+        if "FROM signature.document_requests" in query:
+            return request
+        return None
+
+    def fake_rows(query, *, user=None):
+        assert "FROM signature.submitters" in query
+        return submitters
+
+    def fake_statement_one(query, *, user=None):
+        statements.append(query)
+        if "INSERT INTO signature.delivery_receipts" in query:
+            return {"delivery_receipt_id": len(statements), "status": "stored"}
+        if "INSERT INTO signature.events" in query:
+            return {"event_hash": "event"}
+        return {}
+
+    monkeypatch.setattr(signature_tool.sql, "one", fake_one)
+    monkeypatch.setattr(signature_tool.sql, "rows", fake_rows)
+    monkeypatch.setattr(signature_tool.sql, "statement_one", fake_statement_one)
+    monkeypatch.setattr(signature_tool, "_record_event", lambda *args, **kwargs: events.append((args, kwargs)) or {"event_hash": "event"})
+
+    result = _loads(signature_tool._handle_final_copies_send({
+        "request_id": "req-1",
+        "delivery_results": [
+            {"submitter_id": "sub-1", "status": "sent", "channel": "email", "provider_message_id": "mail-1"},
+            {"submitter_id": "sub-2", "status": "failed", "channel": "sms", "error": "carrier rejected"},
+        ],
+        "certificate_summary": {"certificate_id": "cert-1"},
+        "approval_hashes": ["p" * 64],
+    }))
+
+    assert result["ok"] is True
+    assert len(result["deliveries"]) == 2
+    assert {item["submitter_id"] for item in result["deliveries"]} == {"sub-1", "sub-2"}
+    assert result["deliveries"][0]["validation_summary"]["final_document_sha256"] == "f" * 64
+    assert result["retry_actions"] == [{"submitter_id": "sub-2", "channel": "sms", "recipient": "+155****0002", "reason": "carrier rejected"}]
+    joined = "\n".join(statements)
+    assert joined.count("INSERT INTO signature.delivery_receipts") == 2
+    assert "final_copy" in joined
+    assert "final_document_sha256" in joined
+    assert any(event[1]["event_type"] == "final_copy_sent" for event in events)
+    assert any(event[1]["event_type"] == "final_copy_failed" for event in events)
+    assert any(event[1]["event_type"] == "owner_escalation" for event in events)

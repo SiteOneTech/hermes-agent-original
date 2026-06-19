@@ -69,8 +69,14 @@ NGINX_CONF = r'''server {
   }
 
   location /download/ {
-    autoindex off;
-    try_files $uri =404;
+    proxy_pass http://delivery-sandbox-events:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Authorization $http_authorization;
+    proxy_set_header Cookie $http_cookie;
   }
 
   location /w/ {
@@ -601,6 +607,60 @@ def _login_page(message: str | None = None, challenge_id: str | None = None) -> 
     return _layout(f"{AGENT_NAME} User - Login", body)
 
 
+def _signature_dashboard_data() -> dict[str, Any]:
+    path = USER_DATA_DIR / "signature_dashboard.json"
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+    return {
+        "summary": {
+            "active": 0,
+            "pending": 0,
+            "expiring": 0,
+            "completed": 0,
+            "declined": 0,
+            "reminders": 0,
+            "copy_receipts": 0,
+            "hash_status": "unknown",
+        },
+        "processes": [],
+    }
+
+
+def _signature_dashboard_page(session: dict[str, Any]) -> str:
+    data = _signature_dashboard_data()
+    summary = data.get("summary") if isinstance(data.get("summary"), dict) else {}
+    processes = data.get("processes") if isinstance(data.get("processes"), list) else []
+    cards = [
+        ("Activas", summary.get("active", 0), "Solicitudes en curso"),
+        ("Pendientes", summary.get("pending", 0), "Firmantes por completar"),
+        ("Por vencer", summary.get("expiring", 0), "Requieren atención"),
+        ("Completadas", summary.get("completed", 0), "Finalizadas"),
+        ("Declinadas", summary.get("declined", 0), "Rechazadas"),
+        ("Recordatorios", summary.get("reminders", 0), "Intentos registrados"),
+        ("Copias", summary.get("copy_receipts", 0), "Recibos de copia final"),
+        ("Hash", summary.get("hash_status", "unknown"), "Estado de validación"),
+    ]
+    metric_html = "".join(
+        f"<div class='metric'><span class='icon'>✍️</span><span class='eyebrow'>{_e(label)}</span><strong>{_e(value)}</strong><p class='muted'>{_e(note)}</p></div>"
+        for label, value, note in cards
+    )
+    rows = "".join(
+        f"<tr><td>{_e(item.get('title') or item.get('request_id') or 'Firma')}</td><td>{_e(item.get('status') or 'unknown')}</td><td>{_e(item.get('pending_signers', 0))}</td><td>{_e(item.get('expires_at') or '—')}</td><td>{_e(item.get('hash_status') or 'unknown')}</td></tr>"
+        for item in processes if isinstance(item, dict)
+    )
+    body = f"""
+    <section class="hero"><span class="eyebrow">{_e(session.get('user_id'))}</span><h1>Dashboard de firmas</h1><p class="muted">Métricas privadas de Signature Core protegidas por la sesión OTP temporal del dashboard.</p><div class="hero-actions"><a class="button secondary" href="/user/">Volver</a><a class="button secondary" href="/user/logout">Cerrar sesión</a></div></section>
+    <section class="grid">{metric_html}</section>
+    <section class="card" style="margin-top:14px"><span class="eyebrow">Procesos</span><h2>Estado de solicitudes</h2><table><thead><tr><th>Proceso</th><th>Estado</th><th>Pendientes</th><th>Vence</th><th>Hash</th></tr></thead><tbody>{rows or '<tr><td colspan="5">Sin procesos de firma registrados.</td></tr>'}</tbody></table></section>
+    """
+    return _layout(f"{AGENT_NAME} User - Firmas", body)
+
+
 def _dashboard_page(session: dict[str, Any]) -> str:
     cfg = _dashboard_config()
     metrics = cfg.get("metrics") or []
@@ -614,6 +674,8 @@ def _dashboard_page(session: dict[str, Any]) -> str:
         f"<a class='module-card {'primary' if mod.get('primary') else ''}' href='{_e(mod.get('href') or '#')}'><div class='module-top'><span class='icon'>{_e(mod.get('icon') or '◦')}</span><span class='status {_e(mod.get('status') or 'planned')}'>{_e(mod.get('status_label') or mod.get('status') or 'planned')}</span></div><span class='eyebrow'>{_e(mod.get('kind') or 'módulo')}</span><h3>{_e(mod.get('title'))}</h3><p class='muted'>{_e(mod.get('description'))}</p><p class='caption'>{_e(mod.get('metric') or '')}</p></a>"
         for mod in modules
     )
+    signature_card = "<a class='module-card primary' href='/user/signatures/'><div class='module-top'><span class='icon'>✍️</span><span class='status active'>activo</span></div><span class='eyebrow'>módulo privado</span><h3>Firmas</h3><p class='muted'>Métricas de solicitudes, firmantes, recordatorios, copias y hashes.</p><p class='caption'>Protegido por sesión OTP</p></a>"
+    module_html = signature_card + module_html
     decision_html = "".join(f"<p>• <strong>{_e(d.get('title'))}</strong>: {_e(d.get('summary'))}</p>" for d in decisions)
     body = f"""
     <section class="hero"><span class="eyebrow">{_e(cfg.get('display_name') or session.get('user_id'))}</span><h1>Mapa del agente</h1><p class="muted">Vista ejecutiva de lo que el agente puede operar por chat: agenda, CRM, cotizaciones, invoices, documentos firmados, ventas, productos y módulos especializados como Fitness Coach. No es una UI de gestión pesada: es un panel claro para mostrar capacidades, métricas y accesos protegidos.</p><div class="hero-actions"><a class="button" href="/w/VtV636xEVsdDGmzSHys6vrko/coach/">Abrir Fitness Coach</a><a class="button secondary" href="/user/logout">Cerrar sesión</a></div></section>
@@ -637,6 +699,13 @@ def _handle_user_get(handler: BaseHTTPRequestHandler, path: str, query: dict[str
             _redirect(handler, "/user/login")
             return
         _html_response(handler, 200, _dashboard_page(session))
+        return
+    if path in {"/user/signatures", "/user/signatures/"}:
+        session = _session_from_request(handler)
+        if not session:
+            _redirect(handler, "/user/login")
+            return
+        _html_response(handler, 200, _signature_dashboard_page(session))
         return
     _json_response(handler, 404, {"ok": False, "error": "not_found"})
 
@@ -862,6 +931,91 @@ def _read_json_body(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
 
 def _document_event_token_ref(token: str) -> str:
     return token[:10] + "..." if len(token) > 10 else token
+
+
+def _safe_download_relative_path(path: str) -> str | None:
+    if not path.startswith("/download/"):
+        return None
+    relative = path[len("/download/"):].strip("/")
+    if not relative:
+        return None
+    candidate = Path(relative)
+    if candidate.is_absolute() or any(part in {"..", ""} for part in candidate.parts):
+        return None
+    return "/".join(candidate.parts)
+
+
+def _artifact_access_token(workspace_token: str, relative_path: str) -> str:
+    normalized = "/".join(Path(str(relative_path).strip("/")).parts)
+    return hmac.new(_secret(), f"download:{workspace_token}:{normalized}".encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _download_artifact_token(handler: BaseHTTPRequestHandler, query: dict[str, list[str]]) -> str:
+    value = (query.get("artifact_token") or query.get("token") or [""])[0]
+    if value:
+        return value.strip()
+    header = handler.headers.get("X-Artifact-Token", "").strip()
+    if header:
+        return header
+    bearer = _bearer_token(handler)
+    return bearer
+
+
+def _path_is_under(child: Path, parent: Path) -> bool:
+    try:
+        child.resolve().relative_to(parent.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _handle_protected_download(handler: BaseHTTPRequestHandler, path: str, query: dict[str, list[str]]) -> None:
+    relative = _safe_download_relative_path(path)
+    if not relative:
+        _json_response(handler, 404, {"ok": False, "error": "not_found"})
+        return
+    artifact_root = PUBLIC_DIR / "download"
+    artifact_path = artifact_root / relative
+    if not _path_is_under(artifact_path, artifact_root):
+        _json_response(handler, 403, {"ok": False, "error": "invalid_download_path"})
+        return
+
+    # Private dashboard sessions may inspect artifacts. Public final-copy links
+    # require a scoped artifact token generated from the workspace token and the
+    # artifact path. A raw workspace/signer token is not accepted as authorization.
+    if not _session_from_request(handler):
+        parts = relative.split("/", 1)
+        workspace_token = parts[0] if parts else ""
+        supplied = _download_artifact_token(handler, query)
+        if not supplied:
+            _json_response(handler, 401, {"ok": False, "error": "artifact_authorization_required"})
+            return
+        expected = _artifact_access_token(workspace_token, relative)
+        if not hmac.compare_digest(supplied, expected):
+            _json_response(handler, 403, {"ok": False, "error": "invalid_artifact_token"})
+            return
+
+    if not artifact_path.is_file():
+        _json_response(handler, 404, {"ok": False, "error": "not_found"})
+        return
+    body = artifact_path.read_bytes()
+    handler.send_response(200)
+    handler.send_header("Content-Type", "application/pdf" if artifact_path.suffix.lower() == ".pdf" else "application/octet-stream")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.send_header("Cache-Control", "private, no-store")
+    handler.send_header("X-Content-Type-Options", "nosniff")
+    handler.end_headers()
+    handler.wfile.write(body)
+    _audit({
+        "event_type": "artifact_downloaded",
+        "deliverable_id": relative.split("/", 1)[0],
+        "actor_type": "customer" if not _session_from_request(handler) else "user",
+        "actor_ref": "scoped_artifact_token" if not _session_from_request(handler) else "user_session",
+        "ip_address": handler.client_address[0] if handler.client_address else None,
+        "user_agent": handler.headers.get("User-Agent"),
+        "metadata": {"download_path": relative},
+        "status": "delivered",
+    })
 
 
 def _validate_document_action_payload(payload: dict[str, Any]) -> tuple[str, str, str, dict[str, Any]] | None:
@@ -1245,6 +1399,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
             else:
                 _json_response(self, 401, {"ok": False, "error": "unauthenticated"})
+            return
+        if path.startswith("/download/"):
+            _handle_protected_download(self, path, query)
             return
         if path.startswith("/user"):
             _handle_user_get(self, path, query)
