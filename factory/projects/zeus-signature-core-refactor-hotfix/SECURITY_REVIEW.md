@@ -3,9 +3,9 @@
 Project: zeus-signature-core-refactor-hotfix
 Task: T14 — Security and privacy review
 Profile: security-reviewer
-Run: run-1781404166-a3f32c5b; rework recheck run-1781405484-ca368168; integrated rerun run-1781837606-4c045066
-Date: 2026-06-13
-Verdict: BLOCKED — security gate must not pass until rework below is integrated and re-verified.
+Run: run-1781404166-a3f32c5b; rework recheck run-1781405484-ca368168; integrated rerun run-1781837606-4c045066; T14R3 final rerun run-1781841489-a8c0e4c0
+Date: 2026-06-19
+Verdict: PASSED — security gate approved for the integrated T14R3/main state. Production propagation remains HOLD for T15 release decision and PyMuPDF/commercial-runtime licensing/fallback decision if `fitz` is included.
 
 ## Scope Reviewed
 
@@ -678,3 +678,212 @@ RESULT: Security gate remains blocked on terminal-status fail-closed, plaintext 
 RISK: high
 BLOCKER: resolve S1R2/S2R2/S3R2 before T15 release readiness/runtime propagation
 NEXT_ACTION: builder/rework owner patches Signature Core approval lifecycle guard + OTP handoff + privileged bypass boundary, adds negative tests, then requeues T14
+
+---
+
+## T14R3 Final Security Re-review — run-1781841489-a8c0e4c0
+
+Date: 2026-06-19T00:02:12-04:00
+Reviewer: security-reviewer
+Task: zeus-signature-core-refactor-hotfix-t14-security-and-privacy-review
+Decision: PASSED
+
+Re-reviewed integrated dependency branch/worktree:
+
+- `/home/jean/workspace/.worktrees/zeus-signature-core-refactor-hotfix/t14r3-terminal-otp-privileged-hardening`
+- Branch: `factory/zeus-signature-core-refactor-hotfix/t14r3-terminal-otp-privileged-hardening`
+- HEAD: `d4d1d57240d5accdc48cc92ef47c7b7db9785be4`
+- Integration proof: `git merge-base --is-ancestor HEAD origin/main` returned `HEAD_is_ancestor_of_origin_main=yes`; this is the T14R3 code state merged into `origin/main` via merge commit `1a29da5c0c2853b90739fecfcbbddf6091cf42ba`.
+
+### G1 / canonical docs consulted in this final rerun
+
+- `factory/projects/zeus-signature-core-refactor-hotfix/DOCUMENTATION_INDEX.md`
+- `factory/projects/zeus-signature-core-refactor-hotfix/REQUIREMENTS_ANALYSIS.md`
+- `factory/projects/zeus-signature-core-refactor-hotfix/PATTERN_ANALYSIS.md`
+- `factory/projects/zeus-signature-core-refactor-hotfix/ADRS.md`
+- `factory/projects/zeus-signature-core-refactor-hotfix/TECHNICAL_BLUEPRINT.md`
+- `factory/projects/zeus-signature-core-refactor-hotfix/TASK_GRAPH.md`
+- `factory/projects/zeus-signature-core-refactor-hotfix/SECURITY_GATES.md`
+- `factory/projects/zeus-signature-core-refactor-hotfix/QA_GATES.md`
+- `factory/projects/zeus-signature-core-refactor-hotfix/QA_REPORT.md`
+- `factory/projects/zeus-signature-core-refactor-hotfix/SECURITY_REVIEW.md`
+- `factory/projects/zeus-signature-core-refactor-hotfix/T14R3_TERMINAL_OTP_PRIVILEGED_HARDENING_EVIDENCE.md`
+
+Runtime files inspected:
+
+- `tools/signature_tool.py`
+- `tools/signature_pdf.py`
+- `scripts/runtime/delivery_document_actions.py`
+- `scripts/runtime/publish_delivery_sandbox.py`
+- `scripts/runtime/ingest_delivery_events.py`
+- `db/modules/signature/000001_signature_schema.sql`
+- `db/modules/signature/000002_signature_security_rework.sql`
+
+Tests inspected:
+
+- `tests/tools/test_signature_tool.py`
+- `tests/tools/test_signature_pdf.py`
+- `tests/test_delivery_document_actions.py`
+- `tests/test_publish_delivery_sandbox_document_actions.py`
+- `tests/test_delivery_event_ingest.py`
+- `tests/test_user_dashboard_otp_dispatcher.py`
+- `tests/test_commerce_workspace_surface.py`
+
+### Verification commands run in final rerun
+
+```bash
+cd /home/jean/workspace/.worktrees/zeus-signature-core-refactor-hotfix/t14r3-terminal-otp-privileged-hardening
+
+git status --short --branch
+# ## factory/zeus-signature-core-refactor-hotfix/t14r3-terminal-otp-privileged-hardening
+
+git rev-parse HEAD
+# d4d1d57240d5accdc48cc92ef47c7b7db9785be4
+
+git branch --show-current
+# factory/zeus-signature-core-refactor-hotfix/t14r3-terminal-otp-privileged-hardening
+
+git merge-base --is-ancestor HEAD origin/main && echo 'HEAD_is_ancestor_of_origin_main=yes' || echo 'HEAD_is_ancestor_of_origin_main=no'
+# HEAD_is_ancestor_of_origin_main=yes
+
+python -m pytest tests/tools/test_signature_tool.py tests/tools/test_signature_pdf.py tests/test_delivery_document_actions.py tests/test_publish_delivery_sandbox_document_actions.py tests/test_delivery_event_ingest.py tests/test_user_dashboard_otp_dispatcher.py tests/test_commerce_workspace_surface.py -q
+# 56 passed in 3.28s
+
+python -m compileall tools/signature_tool.py tools/signature_pdf.py scripts/runtime/publish_delivery_sandbox.py scripts/runtime/delivery_document_actions.py scripts/runtime/ingest_delivery_events.py
+# exit_code=0
+
+python static evidence probe
+# approval_schema_requires_signer_token=True
+# approval_schema_requires_otp_verified=True
+# approval_schema_exposes_internal_completion=False
+# approval_schema_exposes_privileged_completion=False
+# terminal_guard_exists=True
+# outbox_writes_message_field=False
+# outbox_writes_otp_field=False
+# outbox_has_template_context=True
+# download_audits_artifact=True
+# user_signatures_route=True
+# direct_pymupdf_pyproject=False
+# direct_docuseal_pyproject=False
+# direct_opensign_pyproject=False
+
+package-lock scan
+# package-lock.json: AGPL=False, ua-parser-js=False, bytes=674678
+# web/package-lock.json: absent
+```
+
+Note: `signature_approval_hash_create` keeps only `request_id` in the JSON-schema `required` array for compatibility, but the handler now fail-closes before mutation unless `submitter_id`, matching `signer_token`, and OTP proof are present. This was accepted because runtime enforcement and negative tests prove fail-closed behavior; no privileged bypass fields are exposed in the model-facing schema.
+
+### Final findings
+
+#### PASS P1R3 — Core Signature tool path now enforces recipient-bound token + OTP and terminal-status fail-closed behavior
+
+Evidence:
+
+- `tools/signature_tool.py:74-75` defines terminal request statuses (`completed`, `cancelled`, `expired`, `declined`) and sensitive signature event types.
+- `tools/signature_tool.py:104-107` raises on terminal status before sensitive mutation.
+- `tools/signature_tool.py:133-154` requires `submitter_id`, raw `signer_token` matching `signature.submitters.token_hash_sha256`, and OTP proof (`otp_verified` plus challenge/session/verification id). Caller-supplied privileged/internal flags are intentionally ignored.
+- `tools/signature_tool.py:351-360` loads the request and calls `_raise_if_terminal_request()` before `_authorize_approval_completion()` and before any approval insert/status update/event write.
+- `tools/signature_tool.py:324-335` also blocks direct sensitive `signature_event_record` writes on terminal requests before the chained event insert.
+- Negative tests passed:
+  - `test_approval_hash_create_rejects_request_id_only`
+  - `test_approval_hash_create_rejects_submitter_without_otp`
+  - `test_approval_hash_create_rejects_wrong_signer_token`
+  - `test_approval_hash_create_rejects_terminal_request_before_mutations`
+  - `test_approval_hash_create_rejects_caller_declared_privileged_bypass`
+  - `test_signature_approval_hash_schema_does_not_expose_privileged_bypass_args`
+  - `test_event_record_rejects_terminal_signed_event_before_event_write`
+
+#### PASS P2R3 — Public document action routes require OTP for sensitive actions and recheck terminal state
+
+Evidence:
+
+- `scripts/runtime/delivery_document_actions.py:24-26` keeps `unlock`, `approved`, `rejected`, and `signed` in the OTP-required set; direct comments remain the low-risk comment-only path.
+- `scripts/runtime/publish_delivery_sandbox.py:1140-1156` rejects terminal document status before OTP request.
+- `scripts/runtime/publish_delivery_sandbox.py:1187-1214` revalidates terminal status after OTP verification and before queuing the verified action event.
+- `scripts/runtime/publish_delivery_sandbox.py:1248-1274` rejects terminal workspace actions before direct/unlocked action queueing, and rejects sensitive actions without unlock/OTP.
+- Negative tests passed:
+  - `test_generated_server_rejects_signed_action_without_otp_session`
+  - `test_generated_server_rejects_wrong_signer_token_for_document_action`
+  - `test_generated_server_rejects_terminal_document_action_before_otp_outbox`
+  - `test_generated_server_revalidates_terminal_status_before_verified_action_queue`
+  - `test_generated_server_document_action_unlock_session_rejects_terminal_workspace_action`
+
+#### PASS P3R3 — OTP outbox no longer persists plaintext OTP or plaintext delivery message
+
+Evidence:
+
+- `scripts/runtime/publish_delivery_sandbox.py:555-574` writes outbox payload with `dispatch_ref`, channel/target metadata, `target_hash`, `message_template`, and `message_context`; the outbox payload no longer includes `otp` or plaintext `message` fields.
+- `scripts/runtime/publish_delivery_sandbox.py:1088-1137` keeps `otp_hash` in challenge state and queues only template/context metadata for dispatch.
+- Static probe results: `outbox_writes_message_field=False`, `outbox_writes_otp_field=False`, `outbox_has_template_context=True`.
+- Negative tests passed:
+  - `test_generated_server_queue_otp_omits_plaintext_code_and_message`
+  - `test_generated_server_document_action_challenge_state_omits_plaintext_message_and_otp`
+
+#### PASS P4R3 — Final artifact download route is scoped/protected and audited
+
+Evidence:
+
+- `scripts/runtime/publish_delivery_sandbox.py:994-1017` normalizes download paths, denies traversal, and requires either a private `/user/` session or a scoped artifact HMAC token. Direct unauthenticated `/download/...` returns `401`; wrong artifact token returns `403`.
+- `scripts/runtime/publish_delivery_sandbox.py:1018-1035` returns `Cache-Control: private, no-store`, `X-Content-Type-Options: nosniff`, and emits an `artifact_downloaded` audit event.
+- `scripts/runtime/publish_delivery_sandbox.py:1471-1473` routes `/download/` through `_handle_protected_download()` instead of static NGINX `try_files` serving.
+- Tests passed:
+  - `test_generated_nginx_downloads_are_not_public_static_files`
+  - `test_protected_download_rejects_direct_and_wrong_artifact_token`
+
+#### PASS P5R3 — Private Signature dashboard remains session-gated
+
+Evidence:
+
+- `scripts/runtime/publish_delivery_sandbox.py:720-725` redirects unauthenticated `/user/signatures/` requests to `/user/login` and renders metrics only after `_session_from_request()` succeeds.
+- Test passed: `test_signature_dashboard_requires_otp_session`.
+
+#### PASS P6R3 — Multi-signer completion and optional viewer semantics remain safe
+
+Evidence:
+
+- `tools/signature_tool.py:157-180` derives completion from required signer/approver submitters only; optional viewers do not block completion, and all required obligations must complete before `completed`.
+- Tests passed:
+  - `test_parallel_multi_signer_stays_partial_until_all_required_complete`
+  - `test_optional_viewer_does_not_block_completion`
+  - `test_approval_hash_create_updates_request_to_partial_for_remaining_required_signers`
+
+### License / AGPL final result
+
+- No evidence found of copied DocuSeal/OpenSign code or schema in `tools/`, `scripts/runtime/`, or `db/modules/signature/`.
+- Signature project docs explicitly document DocuSeal/OpenSign/PyMuPDF as pattern/license-risk sources only: `PATTERN_ANALYSIS.md`, `ADRS.md`, and `SECURITY_GATES.md`.
+- Direct dependency/static checks found:
+  - `direct_pymupdf_pyproject=False`
+  - `direct_docuseal_pyproject=False`
+  - `direct_opensign_pyproject=False`
+  - `package-lock.json: AGPL=False, ua-parser-js=False`
+  - `web/package-lock.json: absent`
+- `tools/signature_pdf.py` still lazily imports `fitz`/PyMuPDF when stamping is executed. PyMuPDF is not pinned as a direct dependency here, but commercial production/runtime propagation must either use an appropriate PyMuPDF commercial license/waiver or switch to a permissive fallback. This is documented and should be handled in T15 release readiness; it is not a blocker for this T14 security gate because no AGPL code/schema copy or new direct AGPL dependency was found in the reviewed increment.
+
+### Residual production hardening notes — not T14 blockers
+
+- OTP rate limiting is present in the sandbox event server, but production multi-replica deployment should move OTP/rate-limit state to Agent Core DB or another shared store.
+- `signature_request_get` can return signer/PII metadata to privileged tool callers; keep the `signature` toolset private/admin-only and do not expose it to public/customer-facing profiles.
+- Production remains HOLD until T15 release readiness decides runtime propagation, artifact storage scope, and PyMuPDF licensing/fallback.
+
+### Final security gate decision
+
+Result: PASSED
+
+All prior T14R2 release-blocking findings were rechecked against the integrated T14R3 branch merged into `origin/main`:
+
+1. Terminal request statuses now fail closed before approval/sign/reject mutations.
+2. OTP outbox/challenge state no longer stores plaintext OTP/message.
+3. Caller-declared `internal_completion` / `privileged_completion` bypass is removed from the model-facing schema and ignored by runtime authorization.
+4. Existing public-route OTP controls, protected `/download/`, protected `/user/signatures/`, and multi-signer completion tests remain passing.
+5. AGPL/license risk is documented; no copied AGPL code/schema or new direct AGPL dependency was found in the reviewed Signature Core increment.
+
+STATE: DONE
+PROFILE: security-reviewer
+FILES_CHANGED: factory/projects/zeus-signature-core-refactor-hotfix/SECURITY_REVIEW.md
+COMMANDS_RUN: see T14R3 Final Security Re-review section above
+FACTORY_DB: pending at document-write time; security gate should be recorded as passed via sanctioned Factory CLI/tooling for this run
+RESULT: Security gate approved for T14 after T14R3; T15 may proceed to release readiness decision, with production propagation still on HOLD pending T15.
+RISK: medium residual production-operational risk only; no release-blocking security blocker remains for the reviewed sandbox/main state.
+BLOCKER: none for T14 security gate
+NEXT_ACTION: devops-release/T15 performs release readiness and runtime propagation decision; ensure PyMuPDF commercial-runtime licensing/fallback is decided before production propagation.
