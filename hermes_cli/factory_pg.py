@@ -260,9 +260,12 @@ _BLOCKER_TECHNICAL_KEYWORDS = (
     "error", "exception", "traceback", "crash", "timeout", "fail", "failed", "failing", "import error",
     "syntax error", "typeerror", "attributeerror", "test failed", "pytest", "bug", "regression", "rework",
 )
-_BLOCKER_HUMAN_KEYWORDS = (
+_BLOCKER_HUMAN_DECISION_KEYWORDS = (
     "human decision", "decisión humana", "jean debe", "jean needs", "owner decision", "business decision",
-    "legal approval", "customer approval", "api key", "token", "password", "credential", "secret", "2fa", "mfa",
+    "legal approval", "customer approval",
+)
+_BLOCKER_EXTERNAL_OWNER_KEYWORDS = (
+    "api key", "token", "password", "credential", "secret", "2fa", "mfa",
     "access denied", "permission denied", "403", "401", "billing", "payment method",
 )
 _BLOCKER_AUTO_KEYWORDS = (
@@ -3144,11 +3147,25 @@ def classify_factory_blocker(task: dict[str, Any], *, payload: Optional[dict[str
         blocker_category = "resolved_gate_or_routine_decision"
         recommended_action = "run_orchestrator_unblock_or_record_gate"
         requires_human = False
-    elif human_question or any(keyword in text for keyword in _BLOCKER_HUMAN_KEYWORDS):
+    elif human_question:
         action_category = "human_question_required"
         blocker_category = "external_or_owner_decision"
         recommended_action = "create_human_question_and_notify_owner"
         requires_human = True
+    elif any(keyword in text for keyword in _BLOCKER_EXTERNAL_OWNER_KEYWORDS):
+        action_category = "human_question_required"
+        blocker_category = "external_or_owner_decision"
+        recommended_action = "create_human_question_and_notify_owner"
+        requires_human = True
+    elif any(keyword in text for keyword in _BLOCKER_HUMAN_DECISION_KEYWORDS):
+        # A bare phrase like "requires a human decision" without a concrete
+        # JEAN_QUESTION/options is legacy/noisy classifier input. Treat it as
+        # autonomous technical rework so the Factory reasons through the state
+        # instead of sending Jean unactionable fallback questions.
+        action_category = "technical_rework" if status_value == "blocked" else "auto_resolvable"
+        blocker_category = "unactionable_legacy_human_reference"
+        recommended_action = "delegate_to_programming_worker_for_rework" if status_value == "blocked" else "run_orchestrator_tick"
+        requires_human = False
     elif any(keyword in text for keyword in _BLOCKER_TECHNICAL_KEYWORDS):
         action_category = "technical_rework"
         blocker_category = "technical"
@@ -3240,11 +3257,27 @@ def record_factory_blocker_actions(classified: Optional[list[dict[str, Any]]] = 
         )
         events_recorded += 1
         if create_questions and item.get("requires_human"):
+            explicit_question = str(item.get("human_question") or "").strip()
+            if not explicit_question:
+                sql.psql(
+                    f"""
+                    INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
+                    SELECT {_q(project_id)}, {_q(item.get('lane_id'))}, {_q(task_id)}, 'factory-blocker-detector', 'human_question_skipped_unactionable',
+                           {_q('Skipped human question because classifier had no concrete Jean question/options; keep autonomous repair loop')},
+                           {_j({'alert_key': item.get('alert_key'), 'classification': compact, 'reason': 'missing_explicit_human_question'})}
+                    WHERE NOT EXISTS (
+                      SELECT 1 FROM factory.events
+                      WHERE task_id={_q(task_id)}
+                        AND event_type='human_question_skipped_unactionable'
+                        AND metadata->>'alert_key'={_q(item.get('alert_key'))}
+                        AND timestamp > now() - interval '60 minutes'
+                    );
+                    """,
+                    user=_user(),
+                )
+                continue
             question_id = "hq-" + uuid.uuid5(uuid.NAMESPACE_URL, f"factory:{task_id}:human-question").hex[:16]
-            question = str(item.get("human_question") or "").strip() or (
-                f"Factory project {project_id} requires a human decision for task {task_id}: "
-                f"{item.get('title') or 'blocked task'}. Recommended action: {item.get('recommended_action')}."
-            )
+            question = explicit_question
             question_options = item.get("human_options") if isinstance(item.get("human_options"), list) else []
             before = sql.one(
                 f"SELECT question_id FROM factory.human_questions WHERE question_id={_q(question_id)} OR (task_id={_q(task_id)} AND status='pending')",

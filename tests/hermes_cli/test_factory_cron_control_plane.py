@@ -102,6 +102,32 @@ def test_factory_blocker_classifier_preserves_actionable_human_question():
     assert classified["human_options"] == ["APPROVED", "HOLD", "REJECTED"]
 
 
+def test_factory_blocker_classifier_rejects_unactionable_legacy_human_fallback():
+    payload = {
+        "projects": [{"project_id": "demo", "status": "active", "autonomous_enabled": True}],
+        "tasks": [
+            {
+                "project_id": "demo",
+                "lane_id": "demo-hybrid",
+                "task_id": "demo-qa",
+                "title": "Effective QA gate",
+                "status": "blocked",
+                "result_summary": "Factory project demo requires a human decision for task demo-qa. Recommended action: create_human_question_and_notify_owner.",
+            }
+        ],
+        "task_runs": [],
+        "gates": [],
+        "human_questions": [],
+    }
+
+    [classified] = factory_pg.classify_factory_blockers(payload)
+
+    assert classified["action_category"] == "technical_rework"
+    assert classified["blocker_category"] == "unactionable_legacy_human_reference"
+    assert classified["requires_human"] is False
+    assert classified["human_question"] is None
+
+
 def test_planning_tasks_are_not_validation_blockers_from_contract_metadata():
     task = {
         "task_id": "demo-planning",
@@ -194,6 +220,40 @@ def test_record_factory_blocker_actions_lets_sql_one_add_limit(monkeypatch):
     assert len(psql_calls) == 2
     assert "APPROVED / HOLD / REJECTED?" in psql_calls[1]
     assert '["APPROVED", "HOLD", "REJECTED"]' in psql_calls[1]
+
+
+def test_record_factory_blocker_actions_skips_unactionable_human_fallback(monkeypatch):
+    monkeypatch.setattr(factory_pg, "_SCHEMA_READY", True)
+    one_queries = []
+    psql_calls = []
+
+    monkeypatch.setattr(factory_pg.sql, "one", lambda query, **kwargs: one_queries.append(query) or None)
+    monkeypatch.setattr(factory_pg.sql, "psql", lambda query, **kwargs: psql_calls.append(query))
+
+    result = factory_pg.record_factory_blocker_actions(
+        [
+            {
+                "task_id": "demo-blocked",
+                "project_id": "demo",
+                "lane_id": "demo-hybrid",
+                "title": "Needs owner decision",
+                "action_category": "human_question_required",
+                "blocker_category": "external_or_owner_decision",
+                "recommended_action": "create_human_question_and_notify_owner",
+                "requires_human": True,
+                "alert_key": "factory:demo:demo-blocked:human_question_required",
+                "human_question": None,
+                "human_options": [],
+            }
+        ],
+        payload={"projects": [], "tasks": [], "task_runs": [], "gates": [], "human_questions": []},
+    )
+
+    assert result == {"classified": 1, "events_recorded": 1, "questions_created": 0}
+    assert one_queries == []
+    assert len(psql_calls) == 2
+    assert "human_question_skipped_unactionable" in psql_calls[1]
+    assert "INSERT INTO factory.human_questions" not in psql_calls[1]
 
 
 def test_factory_watchdog_alerts_are_actionable_for_runtime_invariants():
