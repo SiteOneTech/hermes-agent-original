@@ -659,6 +659,81 @@ def test_resume_preflight_allows_blocked_project_with_runnable_rework():
     assert factory_pg._resume_preflight_blocker(preflight) is None
 
 
+def test_claimable_work_predicate_ignores_dependency_blocked_future_todos():
+    tasks = [
+        {"task_id": "t01", "status": "done"},
+        {"task_id": "t02", "status": "blocked"},
+        {"task_id": "t06", "status": "todo", "dependencies": ["t01", "t02"]},
+    ]
+
+    assert factory_pg._has_runnable_autonomous_work(tasks) is True
+    assert factory_pg._has_claimable_autonomous_work(tasks) is False
+
+
+def test_classifier_prefers_technical_rework_over_prompt_auto_keywords_for_blocked_failures():
+    task = {
+        "project_id": "demo",
+        "task_id": "demo-t02",
+        "status": "blocked",
+        "title": "Backend adapter",
+        "result_summary": "Worker ran uv run pytest console/backend/tests/test_honcho_memory_adapters.py -q [exit 1]; test failed with SyntaxError",
+    }
+
+    result = factory_pg.classify_factory_blocker(task, payload={"task_runs": [], "gates": []})
+
+    assert result["action_category"] == "technical_rework"
+    assert result["recommended_action"] == "delegate_to_programming_worker_for_rework"
+
+
+def test_claimable_work_predicate_accepts_dependency_ready_todo():
+    tasks = [
+        {"task_id": "t01", "status": "done"},
+        {"task_id": "t02", "status": "todo", "dependencies": ["t01"]},
+    ]
+
+    assert factory_pg._has_claimable_autonomous_work(tasks) is True
+
+
+def test_supervisor_requeues_active_project_when_only_future_todos_are_dependency_blocked(fake_sql, monkeypatch):
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: {
+        "project_id": project_id,
+        "status": "active",
+        "autonomous_enabled": True,
+        "metadata": {"autonomous_enabled": True},
+    })
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: [
+        {"project_id": project_id, "task_id": "demo-done", "status": "done", "metadata": {}},
+        {
+            "project_id": project_id,
+            "lane_id": "demo-lane",
+            "task_id": "demo-blocked-tech",
+            "title": "Fix failing UI QA",
+            "status": "blocked",
+            "retry_count": 0,
+            "result_summary": "STATE: BLOCKED — tests failed with regression",
+            "metadata": {},
+        },
+        {
+            "project_id": project_id,
+            "lane_id": "demo-lane",
+            "task_id": "demo-future-ui",
+            "title": "Future UI task",
+            "status": "todo",
+            "dependencies": ["demo-blocked-tech"],
+            "metadata": {},
+        },
+    ])
+    fake_sql.rows_results = [[], []]
+
+    result = factory_pg.supervisor_health_check("demo", repair=True)
+
+    assert result["health"] == "yellow"
+    assert result["violations"][0]["invariant"] == "RED_AUTONOMOUS_WITHOUT_RUNNABLE_WORK_OR_QUESTION"
+    assert any(repair["operation"] == "supervisor_requeue_technical_blockers" for repair in result["repairs"])
+    joined = "\n".join(fake_sql.statements)
+    assert "SET status='rework'" in joined
+
+
 def test_supervisor_requeues_technical_blocker_before_manual_attention(fake_sql, monkeypatch):
     monkeypatch.setattr(factory_pg, "_project", lambda project_id: {
         "project_id": project_id,

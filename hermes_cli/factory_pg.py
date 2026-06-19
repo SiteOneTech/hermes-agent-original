@@ -2552,6 +2552,37 @@ def _has_runnable_autonomous_work(tasks: list[dict[str, Any]]) -> bool:
     return any(str(task.get("status") or "") in runnable_statuses for task in tasks)
 
 
+def _has_claimable_autonomous_work(tasks: list[dict[str, Any]]) -> bool:
+    """Return True only when the dispatcher can claim work from this snapshot.
+
+    ``_has_runnable_autonomous_work`` is intentionally broad for project status:
+    a project with future ``todo`` work should still look active/planned.  The
+    supervisor needs a stricter predicate.  Dependency-blocked ``todo`` rows are
+    not claimable, and treating them as runnable hides the absorbing state where
+    all real progress is behind one or more ``blocked`` tasks.
+    """
+
+    terminal_task_ids = {
+        str(task.get("task_id") or "")
+        for task in tasks
+        if str(task.get("status") or "") in TERMINAL_TASK_STATUSES
+    }
+    for task in tasks:
+        status_value = str(task.get("status") or "")
+        if status_value in IN_FLIGHT_TASK_STATUSES or status_value in {"rework", "review_ready"}:
+            return True
+        if status_value not in {"todo", "ready"}:
+            continue
+        dependencies = task.get("dependencies") or []
+        if isinstance(dependencies, str):
+            dependencies = [dependencies]
+        if not isinstance(dependencies, list):
+            dependencies = []
+        if all(str(dep) in terminal_task_ids for dep in dependencies):
+            return True
+    return False
+
+
 def _has_active_increment(tasks: list[dict[str, Any]]) -> bool:
     return any(str(t.get("status") or "") in ACTIVE_TASK_STATUSES for t in tasks)
 
@@ -3143,13 +3174,24 @@ def classify_factory_blocker(task: dict[str, Any], *, payload: Optional[dict[str
     task_id = str(task.get("task_id") or "")
     active_task_ids = _active_run_task_ids(payload)
     gate_statuses = _latest_gate_status_map_from_payload(payload)
+    auto_hit = _mentions_resolved_gate(task, gate_statuses) or any(keyword in text for keyword in _BLOCKER_AUTO_KEYWORDS)
+    technical_hit = any(keyword in text for keyword in _BLOCKER_TECHNICAL_KEYWORDS)
 
     if status_value in {"claimed", "running", "in_progress", "review_running"} and task_id not in active_task_ids:
         action_category = "stale_orphan_state"
         blocker_category = "runtime_state"
         recommended_action = "repair_orphan_inflight_state"
         requires_human = False
-    elif _mentions_resolved_gate(task, gate_statuses) or any(keyword in text for keyword in _BLOCKER_AUTO_KEYWORDS):
+    elif status_value == "blocked" and technical_hit:
+        # Failed worker/test logs often contain generic auto-resolution phrases
+        # from the prompt ("run tests", "run pytest").  A concrete technical
+        # failure must win for blocked tasks, otherwise the supervisor records a
+        # classification but never requeues the increment for repair.
+        action_category = "technical_rework"
+        blocker_category = "technical"
+        recommended_action = "delegate_to_programming_worker_for_rework"
+        requires_human = False
+    elif auto_hit:
         action_category = "auto_resolvable"
         blocker_category = "resolved_gate_or_routine_decision"
         recommended_action = "run_orchestrator_unblock_or_record_gate"
@@ -3173,7 +3215,7 @@ def classify_factory_blocker(task: dict[str, Any], *, payload: Optional[dict[str
         blocker_category = "unactionable_legacy_human_reference"
         recommended_action = "delegate_to_programming_worker_for_rework" if status_value == "blocked" else "run_orchestrator_tick"
         requires_human = False
-    elif any(keyword in text for keyword in _BLOCKER_TECHNICAL_KEYWORDS):
+    elif technical_hit:
         action_category = "technical_rework"
         blocker_category = "technical"
         recommended_action = "delegate_to_programming_worker_for_rework"
@@ -4425,10 +4467,10 @@ def supervisor_health_check(project_id: str, *, repair: bool = True) -> dict[str
         "gates": [],
         "human_questions": pending_questions,
     }
-    no_runnable_work = not _has_runnable_autonomous_work(tasks)
-    blocked_without_runtime = autonomous and blocked_tasks and not active_runs and no_runnable_work
+    no_claimable_work = not _has_claimable_autonomous_work(tasks)
+    blocked_without_runtime = autonomous and blocked_tasks and not active_runs and no_claimable_work
     delivery_hold_blocked = str(project.get("status") or "") == DELIVERY_HOLD_STATUS and blocked_without_runtime
-    autonomous_blocked = str(project.get("status") or "") == "blocked" and blocked_without_runtime
+    autonomous_blocked = str(project.get("status") or "") in {"active", "blocked"} and blocked_without_runtime
 
     if delivery_hold_blocked or autonomous_blocked:
         invariant = (
