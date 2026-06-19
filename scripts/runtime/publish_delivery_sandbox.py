@@ -131,6 +131,9 @@ from delivery_document_actions import (
     normalize_document_action,
 )
 
+TERMINAL_DOCUMENT_STATUSES = {"completed", "cancelled", "expired", "declined"}
+TERMINAL_GATED_DOCUMENT_EVENT_TYPES = {"approved", "rejected", "signed"}
+
 EVENT_DIR = Path(os.environ.get("EVENT_DIR", "/data/events"))
 PUBLIC_DIR = Path(os.environ.get("PUBLIC_DIR", "/data/public"))
 USER_DATA_DIR = Path(os.environ.get("USER_DATA_DIR", "/data/user-data"))
@@ -538,6 +541,17 @@ def _audit(event: dict[str, Any]) -> None:
         fh.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
 
 
+def _otp_dispatch_ref(challenge: dict[str, Any]) -> str:
+    material = ":".join([
+        str(challenge.get("challenge_id") or ""),
+        str(challenge.get("purpose") or "user_dashboard"),
+        str(challenge.get("event_type") or "login"),
+        str(challenge.get("channel_id") or ""),
+        _hash(str(challenge.get("target") or "")),
+    ])
+    return hmac.new(_secret(), f"otp-dispatch:{material}".encode("utf-8"), hashlib.sha256).hexdigest()
+
+
 def _queue_otp(challenge: dict[str, Any], otp: str) -> None:
     EVENT_DIR.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -545,10 +559,13 @@ def _queue_otp(challenge: dict[str, Any], otp: str) -> None:
         "occurred_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "status": "pending",
         "challenge_id": challenge["challenge_id"],
+        "dispatch_ref": _otp_dispatch_ref(challenge),
         "user_id": challenge["user_id"],
         "channel_id": challenge["channel_id"],
         "target": challenge["target"],
-        "message": challenge.get("message") or f"Tu código de {AGENT_NAME} para entrar al dashboard es: {otp}. Expira en 10 minutos.",
+        "target_hash": _hash(str(challenge.get("target") or "")),
+        "message_template": challenge.get("message_template") or "user_dashboard_otp",
+        "message_context": challenge.get("message_context") or {},
     }
     for key in ("purpose", "event_type", "deliverable_id", "token_ref"):
         if challenge.get(key):
@@ -1032,6 +1049,39 @@ def _validate_document_action_payload(payload: dict[str, Any]) -> tuple[str, str
     return event_type, deliverable_id, token, metadata
 
 
+def _status_from_mapping(data: Any) -> str:
+    if not isinstance(data, dict):
+        return ""
+    for key in ("request_status", "document_status", "signature_status", "status"):
+        value = str(data.get(key) or "").strip().lower()
+        if value:
+            return value
+    return ""
+
+
+def _terminal_document_action_status(event_type: str, token: str, metadata: dict[str, Any]) -> str | None:
+    if event_type not in TERMINAL_GATED_DOCUMENT_EVENT_TYPES:
+        return None
+    sources: list[Any] = [metadata]
+    workspace_manifest = _workspace_manifest(token)
+    recipient_manifest = _recipient_manifest(token)
+    for manifest in (workspace_manifest, recipient_manifest):
+        if isinstance(manifest, dict):
+            sources.append(manifest)
+            nested = manifest.get("metadata")
+            if isinstance(nested, dict):
+                sources.append(nested)
+    for source in sources:
+        status = _status_from_mapping(source)
+        if status in TERMINAL_DOCUMENT_STATUSES:
+            return status
+    return None
+
+
+def _reject_terminal_document_action(handler: BaseHTTPRequestHandler, status: str) -> None:
+    _json_response(handler, 409, {"ok": False, "error": "terminal_document_status", "status": status})
+
+
 def _create_document_action_challenge(payload: dict[str, Any], recipient: dict[str, str]) -> str:
     event_type = normalize_document_action(payload.get("event_type") or payload.get("action"))
     deliverable_id = str(payload.get("deliverable_id") or "").strip()
@@ -1061,7 +1111,13 @@ def _create_document_action_challenge(payload: dict[str, Any], recipient: dict[s
         "created_at": now,
         "expires_at": now + OTP_TTL_SECONDS,
         "attempts": 0,
-        "message": f"Tu código de {AGENT_NAME} para {action_label} en el documento {document_label} es: {otp}. Expira en 10 minutos.",
+        "message_template": "document_action_otp",
+        "message_context": {
+            "action": action_label,
+            "document": str(document_label),
+            "agent_name": AGENT_NAME,
+            "ttl_minutes": max(1, OTP_TTL_SECONDS // 60),
+        },
     }
     state = _cleanup_state(_load_state())
     challenges = state.setdefault("challenges", {})
@@ -1091,6 +1147,10 @@ def _handle_document_action_request_otp(handler: BaseHTTPRequestHandler) -> None
         _json_response(handler, 422, {"ok": False, "error": "invalid_document_action"})
         return
     event_type, deliverable_id, token, _metadata = validation
+    terminal_status = _terminal_document_action_status(event_type, token, _metadata)
+    if terminal_status:
+        _reject_terminal_document_action(handler, terminal_status)
+        return
     if not document_action_requires_otp(event_type):
         _json_response(handler, 422, {"ok": False, "error": "otp_not_required"})
         return
@@ -1148,6 +1208,10 @@ def _handle_document_action_verify_otp(handler: BaseHTTPRequestHandler) -> None:
         _json_response(handler, 422, {"ok": False, "error": "invalid_document_action"})
         return
     event_type, deliverable_id, token, _metadata = validation
+    terminal_status = _terminal_document_action_status(event_type, token, _metadata)
+    if terminal_status:
+        _reject_terminal_document_action(handler, terminal_status)
+        return
     recipient = _document_action_recipient(token) or {"target": challenge.get("target"), "channel_id": challenge.get("channel_id")}
     if event_type == "unlock":
         state.get("challenges", {}).pop(challenge_id, None)
@@ -1191,6 +1255,10 @@ def _handle_document_action(handler: BaseHTTPRequestHandler) -> None:
         _json_response(handler, 422, {"ok": False, "error": "invalid_document_action"})
         return
     event_type, deliverable_id, token, _metadata = validation
+    terminal_status = _terminal_document_action_status(event_type, token, _metadata)
+    if terminal_status:
+        _reject_terminal_document_action(handler, terminal_status)
+        return
     action_session = None
     if _workspace_requires_action_unlock(token):
         action_token = str(payload.get("action_token") or payload.get("metadata", {}).get("action_token") or "")
