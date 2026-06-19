@@ -882,7 +882,7 @@ STATE: DONE
 PROFILE: security-reviewer
 FILES_CHANGED: factory/projects/zeus-signature-core-refactor-hotfix/SECURITY_REVIEW.md
 COMMANDS_RUN: see T14R3 Final Security Re-review section above
-FACTORY_DB: pending at document-write time; security gate should be recorded as passed via sanctioned Factory CLI/tooling for this run
+FACTORY_DB: security gate recorded via sanctioned `hermes factory gate record`; `security` gate passed with `gate_id=572`
 RESULT: Security gate approved for T14 after T14R3; T15 may proceed to release readiness decision, with production propagation still on HOLD pending T15.
 RISK: medium residual production-operational risk only; no release-blocking security blocker remains for the reviewed sandbox/main state.
 BLOCKER: none for T14 security gate
