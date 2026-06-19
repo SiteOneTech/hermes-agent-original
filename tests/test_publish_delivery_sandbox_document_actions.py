@@ -33,7 +33,7 @@ def test_generated_server_document_action_policy_and_private_recipient(tmp_path)
     private = server.USER_DATA_DIR / "workspace-recipients"
     private.mkdir(parents=True)
     (private / f"{token}.json").write_text(
-        json.dumps({"recipient": {"channel_id": "whatsapp", "target": "+13050000000", "label": "WhatsApp"}}),
+        json.dumps({"recipient": {"channel_id": "whatsapp", "target": "+130****0000", "label": "WhatsApp"}}),
         encoding="utf-8",
     )
 
@@ -43,7 +43,48 @@ def test_generated_server_document_action_policy_and_private_recipient(tmp_path)
     assert server.document_action_requires_otp("rejected") is True
     assert server.document_action_requires_otp("signed") is True
     assert server._workspace_matches_token(token, "quote-1", {"quote_id": "quote-1"}) is True
-    assert server._document_action_recipient(token)["target"] == "+13050000000"
+    assert server._document_action_recipient(token)["target"] == "+130****0000"
+
+
+def test_generated_server_rejects_signed_action_without_otp_session(tmp_path):
+    server = _server_module(tmp_path)
+    token = "S" * 24
+    workspace = server.PUBLIC_DIR / "w" / token
+    workspace.mkdir(parents=True)
+    (workspace / "index.html").write_text("quote-otp", encoding="utf-8")
+    handler = _FakeJsonPostHandler({
+        "token": token,
+        "deliverable_id": "quote-otp",
+        "event_type": "signed",
+        "metadata": {"quote_id": "quote-otp"},
+    })
+
+    server._handle_document_action(handler)
+
+    assert handler.status == 401
+    response = json.loads(handler.wfile.getvalue().split(b"\r\n\r\n")[-1] or handler.wfile.getvalue())
+    assert response["error"] == "otp_required"
+
+
+def test_generated_server_rejects_wrong_signer_token_for_document_action(tmp_path):
+    server = _server_module(tmp_path)
+    real_token = "R" * 24
+    wrong_token = "W" * 24
+    workspace = server.PUBLIC_DIR / "w" / real_token
+    workspace.mkdir(parents=True)
+    (workspace / "index.html").write_text("quote-token", encoding="utf-8")
+    handler = _FakeJsonPostHandler({
+        "token": wrong_token,
+        "deliverable_id": "quote-token",
+        "event_type": "commented",
+        "metadata": {"quote_id": "quote-token"},
+    })
+
+    server._handle_document_action(handler)
+
+    assert handler.status == 422
+    response = json.loads(handler.wfile.getvalue().split(b"\r\n\r\n")[-1] or handler.wfile.getvalue())
+    assert response["error"] == "invalid_document_action"
 
 
 def test_generated_server_queue_otp_uses_document_action_message(tmp_path):
@@ -109,6 +150,49 @@ class _FakeStripeHandler:
         pass
 
 
+class _FakeGetHandler:
+    def __init__(self, cookie: str | None = None):
+        self.headers = {"Cookie": cookie or "", "Host": "example.test", "User-Agent": "pytest"}
+        self.rfile = BytesIO()
+        self.wfile = BytesIO()
+        self.client_address = ("127.0.0.1", 12345)
+        self.status = None
+        self.response_headers = []
+
+    def send_response(self, status):
+        self.status = status
+
+    def send_header(self, key, value):
+        self.response_headers.append((key, value))
+
+    def end_headers(self):
+        self.wfile.write(b"\r\n\r\n")
+
+
+class _FakeJsonPostHandler:
+    def __init__(self, payload: dict):
+        raw = json.dumps(payload).encode("utf-8")
+        self.headers = {"Content-Length": str(len(raw)), "Content-Type": "application/json", "Host": "example.test", "User-Agent": "pytest"}
+        self.rfile = BytesIO(raw)
+        self.wfile = BytesIO()
+        self.client_address = ("127.0.0.1", 12345)
+        self.status = None
+        self.response_headers = []
+
+    def send_response(self, status):
+        self.status = status
+
+    def send_header(self, key, value):
+        self.response_headers.append((key, value))
+
+    def end_headers(self):
+        self.wfile.write(b"\r\n\r\n")
+
+
+def _header(handler: _FakeGetHandler, key: str) -> str | None:
+    return next((value for name, value in handler.response_headers if name.lower() == key.lower()), None)
+
+
 def test_generated_server_stripe_webhook_queues_signed_event(tmp_path):
     server = _server_module(tmp_path)
     server.STRIPE_WEBHOOK_SECRET = "whsec_test"
@@ -154,3 +238,78 @@ def test_generated_server_stripe_webhook_rejects_bad_signature(tmp_path):
     server._handle_stripe_webhook(handler)
 
     assert handler.status == 400
+
+
+def test_generated_nginx_downloads_are_not_public_static_files():
+    download_block = publisher.NGINX_CONF.split("location /download/", 1)[1].split("location /w/", 1)[0]
+
+    assert "proxy_pass http://delivery-sandbox-events:8080" in download_block
+    assert "try_files" not in download_block
+
+
+def test_protected_download_rejects_direct_and_wrong_artifact_token(tmp_path):
+    server = _server_module(tmp_path)
+    workspace_token = "C" * 24
+    relative_path = f"{workspace_token}/signed.pdf"
+    artifact = server.PUBLIC_DIR / "download" / relative_path
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"signed pdf")
+
+    direct = _FakeGetHandler()
+    server._handle_protected_download(direct, f"/download/{relative_path}", {})
+    assert direct.status == 401
+
+    wrong = _FakeGetHandler()
+    server._handle_protected_download(wrong, f"/download/{relative_path}", {"artifact_token": ["wrong-token"]})
+    assert wrong.status == 403
+
+    allowed = _FakeGetHandler()
+    scoped_token = server._artifact_access_token(workspace_token, relative_path)
+    server._handle_protected_download(allowed, f"/download/{relative_path}", {"artifact_token": [scoped_token]})
+    assert allowed.status == 200
+    assert b"signed pdf" in allowed.wfile.getvalue()
+
+
+def test_signature_dashboard_requires_otp_session(tmp_path):
+    server = _server_module(tmp_path)
+    handler = _FakeGetHandler()
+
+    server._handle_user_get(handler, "/user/signatures/", {})
+
+    assert handler.status == 303
+    assert _header(handler, "Location") == "/user/login"
+
+
+def test_signature_dashboard_renders_protected_metrics_and_status(tmp_path, monkeypatch):
+    server = _server_module(tmp_path)
+    data_dir = server.USER_DATA_DIR
+    data_dir.mkdir(parents=True)
+    (data_dir / "signature_dashboard.json").write_text(json.dumps({
+        "summary": {
+            "active": 3,
+            "pending": 5,
+            "expiring": 2,
+            "completed": 8,
+            "declined": 1,
+            "reminders": 4,
+            "copy_receipts": 7,
+            "hash_status": "verified",
+        },
+        "processes": [
+            {"title": "Contrato Qrovia", "status": "pending", "pending_signers": 2, "hash_status": "verified", "expires_at": "2026-06-20"},
+            {"title": "NDA Flexipos", "status": "declined", "pending_signers": 0, "hash_status": "missing", "expires_at": "2026-06-18"},
+        ],
+    }), encoding="utf-8")
+    monkeypatch.setattr(server, "_session_from_request", lambda handler: {"user_id": "jean", "channel_id": "whatsapp"})
+    handler = _FakeGetHandler(cookie="session=ok")
+
+    server._handle_user_get(handler, "/user/signatures/", {})
+
+    html = handler.wfile.getvalue().decode("utf-8")
+    assert handler.status == 200
+    assert "Dashboard de firmas" in html
+    for label in ["Activas", "Pendientes", "Por vencer", "Completadas", "Declinadas", "Recordatorios", "Copias", "Hash"]:
+        assert label in html
+    assert "Contrato Qrovia" in html
+    assert "NDA Flexipos" in html
+    assert "verified" in html

@@ -86,4 +86,5 @@ Before any implementation task, a worker must read this index first, then:
 - `SECURITY_REVIEW.md`
 - `DELIVERY_REPORT.md`
 - `DB_TASKS.md`
+- `T14R_SECURITY_REWORK_EVIDENCE.md`
 
