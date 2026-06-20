@@ -3202,6 +3202,15 @@ def classify_factory_blocker(task: dict[str, Any], *, payload: Optional[dict[str
         blocker_category = "runtime_state"
         recommended_action = "repair_orphan_inflight_state"
         requires_human = False
+    elif human_question:
+        # Preserve concrete owner decisions before generic technical keyword
+        # matching. Actionable delivery questions often include option text like
+        # "REJECTED: specify rework scope"; that must not demote the blocker to
+        # autonomous technical repair.
+        action_category = "human_question_required"
+        blocker_category = "external_or_owner_decision"
+        recommended_action = "create_human_question_and_notify_owner"
+        requires_human = True
     elif status_value == "blocked" and technical_hit:
         # Failed worker/test logs often contain generic auto-resolution phrases
         # from the prompt ("run tests", "run pytest").  A concrete technical
@@ -3216,11 +3225,6 @@ def classify_factory_blocker(task: dict[str, Any], *, payload: Optional[dict[str
         blocker_category = "resolved_gate_or_routine_decision"
         recommended_action = "run_orchestrator_unblock_or_record_gate"
         requires_human = False
-    elif human_question:
-        action_category = "human_question_required"
-        blocker_category = "external_or_owner_decision"
-        recommended_action = "create_human_question_and_notify_owner"
-        requires_human = True
     elif any(keyword in text for keyword in _BLOCKER_EXTERNAL_OWNER_PHRASES):
         action_category = "human_question_required"
         blocker_category = "external_or_owner_decision"

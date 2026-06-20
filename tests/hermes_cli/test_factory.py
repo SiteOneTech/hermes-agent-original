@@ -9,13 +9,14 @@ from hermes_cli.factory_catalog import FACTORY_AGENTS, slugify
 def test_factory_catalog_seeds_expected_agent_roster():
     agent_ids = {agent[0] for agent in FACTORY_AGENTS}
     agent_by_id = {agent[0]: agent for agent in FACTORY_AGENTS}
-    assert len(agent_ids) == 14
+    assert len(agent_ids) == 15
     assert "factory-orchestrator" in agent_ids
     assert "claude-builder" in agent_ids
     assert "claude-deepseek-builder" in agent_ids
     assert "codex-builder" in agent_ids
     assert "openhands-builder" in agent_ids
     assert "openhands-lab" in agent_ids
+    assert "ux-ui-designer" in agent_ids
     assert "quality-reviewer" in agent_ids
     assert "terminal" in agent_by_id["factory-reporter"][4]
     assert "factory-sandbox-kidu" in agent_by_id["qa-verifier"][5]
