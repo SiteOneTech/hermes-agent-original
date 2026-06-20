@@ -4186,14 +4186,17 @@ def _process_is_alive(process_id: Any) -> bool:
     try:
         import psutil  # type: ignore[import-not-found]
 
-        proc = psutil.Process(pid)
-        return proc.is_running() and proc.status() != psutil.STATUS_ZOMBIE
-    except Exception:
-        try:
-            os.kill(pid, 0)
-            return True
-        except OSError:
+        if not psutil.pid_exists(pid):
             return False
+        try:
+            proc = psutil.Process(pid)
+            return proc.is_running() and proc.status() != psutil.STATUS_ZOMBIE
+        except psutil.AccessDenied:
+            return True
+        except psutil.NoSuchProcess:
+            return False
+    except Exception:
+        return False
 
 
 def _terminate_process_tree(process_id: Any, *, timeout_seconds: float = 3.0) -> dict[str, Any]:

@@ -3,8 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from pypdf import PdfReader
-from reportlab.pdfgen import canvas
+import pytest
 
 from tools import signature_pdf
 from tools.signature_pdf import sha256_file, stamp_signed_pdf
@@ -161,6 +160,8 @@ def test_completed_pdf_record_stores_completed_and_audit_attachments(monkeypatch
 
 
 def _sample_pdf(path: Path) -> None:
+    canvas = pytest.importorskip("reportlab.pdfgen").canvas
+
     c = canvas.Canvas(str(path), pagesize=(612, 792))
     c.setFont("Helvetica", 12)
     c.drawString(72, 720, "Contrato de prueba SitioUno")
@@ -168,6 +169,8 @@ def _sample_pdf(path: Path) -> None:
 
 
 def test_stamp_signed_pdf_uses_open_stack_and_adds_audit_page(tmp_path: Path):
+    PdfReader = pytest.importorskip("pypdf").PdfReader
+
     input_pdf = tmp_path / "input.pdf"
     output_pdf = tmp_path / "signed.pdf"
     _sample_pdf(input_pdf)
