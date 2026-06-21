@@ -13,6 +13,7 @@ import re
 import ssl
 import time
 from email.utils import formatdate
+from types import SimpleNamespace
 
 from agent.redact import redact_sensitive_text
 
@@ -1263,6 +1264,24 @@ async def _registry_standalone_send(
 
 # _send_whatsapp moved to plugins/platforms/whatsapp/adapter.py::_standalone_send,
 # wired via standalone_sender_fn and reached through _registry_standalone_send. #41112.
+
+
+async def _send_whatsapp(extra, chat_id, message, media_files=None, force_document=False):
+    """Backward-compatible wrapper for the migrated WhatsApp standalone send.
+
+    Tests and a few direct internal callers historically imported
+    ``_send_whatsapp(extra, chat_id, message, media_files=...)`` from this
+    module. Keep that small adapter while the real implementation lives in the
+    WhatsApp platform plugin's ``standalone_sender_fn``.
+    """
+    return await _registry_standalone_send(
+        "whatsapp",
+        SimpleNamespace(extra=extra or {}),
+        chat_id,
+        message,
+        media_files=media_files or [],
+        force_document=force_document,
+    )
 
 
 async def _send_signal(extra, chat_id, message, media_files=None):
