@@ -795,6 +795,38 @@ def test_supervisor_moves_exhausted_blocker_to_manual_attention(fake_sql, monkey
     assert "autonomous_enabled=false" in joined
 
 
+def test_supervisor_honors_task_specific_higher_rework_retry_ceiling(fake_sql, monkeypatch):
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: {
+        "project_id": project_id,
+        "status": "blocked",
+        "autonomous_enabled": True,
+        "metadata": {"autonomous_enabled": True},
+    })
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: [
+        {
+            "project_id": project_id,
+            "lane_id": "demo-lane",
+            "task_id": "demo-blocked-tech",
+            "title": "Fix failing UI QA",
+            "status": "blocked",
+            "retry_count": factory_pg.SUPERVISOR_TECHNICAL_REWORK_MAX_RETRIES,
+            "max_retries": factory_pg.SUPERVISOR_TECHNICAL_REWORK_MAX_RETRIES + 3,
+            "result_summary": "STATE: BLOCKED — repeated regression after rework",
+            "metadata": {},
+        }
+    ])
+    fake_sql.rows_results = [[], []]
+
+    result = factory_pg.supervisor_health_check("demo", repair=True)
+
+    assert result["health"] == "yellow"
+    assert any(repair["operation"] == "supervisor_requeue_technical_blockers" for repair in result["repairs"])
+    joined = "\n".join(fake_sql.statements)
+    assert "SET status='rework'" in joined
+    assert "status='manual_attention'" not in joined
+    assert "supervisor_rework_max_retries" in joined
+
+
 def test_supervisor_moves_existing_human_question_to_manual_attention(fake_sql, monkeypatch):
     monkeypatch.setattr(factory_pg, "_project", lambda project_id: {
         "project_id": project_id,

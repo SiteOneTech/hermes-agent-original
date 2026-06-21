@@ -3385,6 +3385,22 @@ def _task_retry_count(task: dict[str, Any]) -> int:
         return 0
 
 
+def _task_supervisor_max_retries(task: dict[str, Any], default: int = SUPERVISOR_TECHNICAL_REWORK_MAX_RETRIES) -> int:
+    """Return the supervisor retry ceiling, honoring explicit task overrides.
+
+    The global ceiling keeps normal blockers from monopolizing the single-active
+    Factory slot.  When Jean/operator explicitly reactivates a concrete task,
+    ``factory.tasks.max_retries`` can be raised for that task without patching
+    the supervisor again.
+    """
+
+    try:
+        value = int(task.get("max_retries") or 0)
+    except (TypeError, ValueError):
+        value = 0
+    return max(int(default or SUPERVISOR_TECHNICAL_REWORK_MAX_RETRIES), value) if value > 0 else int(default or SUPERVISOR_TECHNICAL_REWORK_MAX_RETRIES)
+
+
 def _supervisor_requeue_technical_blockers(
     project_id: str,
     classified: list[dict[str, Any]],
@@ -3412,13 +3428,14 @@ def _supervisor_requeue_technical_blockers(
         if not task or str(task.get("status") or "") != "blocked":
             continue
         retry_count = _task_retry_count(task)
-        if retry_count >= max_retries:
-            exhausted.append({"task_id": task_id, "retry_count": retry_count, "max_retries": max_retries})
+        effective_max_retries = _task_supervisor_max_retries(task, max_retries)
+        if retry_count >= effective_max_retries:
+            exhausted.append({"task_id": task_id, "retry_count": retry_count, "max_retries": effective_max_retries})
             continue
         summary = str(task.get("result_summary") or "").rstrip()
         rework_note = (
             "\n\n[factory-supervisor] Bloqueo técnico reabierto como rework automático "
-            f"(intento {retry_count + 1}/{max_retries}). El proyecto no requiere a Jean todavía; "
+            f"(intento {retry_count + 1}/{effective_max_retries}). El proyecto no requiere a Jean todavía; "
             "el worker debe corregir la causa raíz y cerrar con evidencia."
         )
         sql.psql(
@@ -3426,17 +3443,17 @@ def _supervisor_requeue_technical_blockers(
             UPDATE factory.tasks
             SET status='rework',
                 result_summary={_q((summary + rework_note).strip())},
-                metadata = metadata || {_j({'supervisor_rework': True, 'supervisor_rework_reason': item.get('blocker_category'), 'supervisor_rework_attempt': retry_count + 1, 'supervisor_rework_max_retries': max_retries})},
+                metadata = metadata || {_j({'supervisor_rework': True, 'supervisor_rework_reason': item.get('blocker_category'), 'supervisor_rework_attempt': retry_count + 1, 'supervisor_rework_max_retries': effective_max_retries})},
                 updated_at=now()
             WHERE task_id={_q(task_id)} AND status='blocked';
             INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
             VALUES ({_q(project_id)}, {_q(task.get('lane_id'))}, {_q(task_id)}, 'factory-supervisor', 'technical_blocker_requeued',
                     {_q('Supervisor converted technical blocker into runnable rework')},
-                    {_j({'retry_count': retry_count, 'max_retries': max_retries, 'classification': item})});
+                    {_j({'retry_count': retry_count, 'max_retries': effective_max_retries, 'classification': item})});
             """,
             user=_user(),
         )
-        requeued.append({"task_id": task_id, "retry_count": retry_count, "next_status": "rework"})
+        requeued.append({"task_id": task_id, "retry_count": retry_count, "next_status": "rework", "max_retries": effective_max_retries})
     return {"requeued": requeued, "exhausted": exhausted}
 
 
