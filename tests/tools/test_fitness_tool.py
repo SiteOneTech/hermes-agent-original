@@ -93,4 +93,92 @@ def test_progress_summary_queries_expected_sections(monkeypatch):
     result = _loads(fitness_tool._handle_progress_summary({"profile_id": "p1", "start_date": "2026-01-01", "end_date": "2026-01-07"}))
     assert result["ok"] is True
     assert "summary" in result
+    assert "latest_body_metric" in result
     assert "training" in result
+
+
+def test_body_metric_log_accepts_smart_scale_composition(monkeypatch):
+    captured: list[str] = []
+
+    monkeypatch.setattr(fitness_tool.sql, "one", lambda *a, **kw: None)
+
+    def fake_statement_one(statement: str, *, user: str | None = None):
+        captured.append(statement)
+        return {"body_metric_id": 42, "weight_kg": 113.8, "bmi": 33.3, "body_condition_score": 62}
+
+    monkeypatch.setattr(fitness_tool.sql, "statement_one", fake_statement_one)
+    result = _loads(fitness_tool._handle_body_metric_log_create({
+        "profile_id": "jean-garcia",
+        "weight_kg": 113.8,
+        "body_fat_pct": 23.9,
+        "bmi": 33.3,
+        "body_condition_score": 62,
+        "skeletal_muscle_pct": 40.3,
+        "water_pct": 55.2,
+        "protein_pct": 16.2,
+        "visceral_fat_index": 9,
+        "bone_mass_pct": 4.0,
+        "bmr_kcal": 2241,
+        "biological_age_years": 55,
+        "fat_weight_kg": 27.2,
+        "body_fat_mass_index": 5,
+        "fat_free_mass_kg": 86.6,
+        "metadata": {"idempotency_key": "scale-2026-06-22"},
+    }))
+    assert result["ok"] is True
+    assert result["body_metric"]["bmi"] == 33.3
+    statement = "\n".join(captured)
+    assert "body_condition_score" in statement
+    assert "skeletal_muscle_pct" in statement
+    assert "fat_free_mass_kg" in statement
+    assert "ON CONFLICT (profile_id, (btrim(metadata->>'idempotency_key')))" in statement
+
+
+def test_body_metric_log_uses_atomic_idempotent_upsert(monkeypatch):
+    captured: list[str] = []
+
+    monkeypatch.setattr(fitness_tool.sql, "one", lambda *a, **kw: {"body_metric_id": 7})
+
+    def fake_statement_one(statement: str, *, user: str | None = None):
+        captured.append(statement)
+        return {"body_metric_id": 7, "weight_kg": 113.8, "bmi": 33.3}
+
+    monkeypatch.setattr(fitness_tool.sql, "statement_one", fake_statement_one)
+    result = _loads(fitness_tool._handle_body_metric_log_create({
+        "profile_id": "jean-garcia",
+        "weight_kg": 113.8,
+        "metadata": {"idempotency_key": " scale-2026-06-22 "},
+    }))
+    assert result["ok"] is True
+    assert result["idempotent"] is True
+    statement = "\n".join(captured)
+    assert "ON CONFLICT (profile_id, (btrim(metadata->>'idempotency_key')))" in statement
+    assert "DO UPDATE SET" in statement
+    assert "weight_kg=COALESCE(EXCLUDED.weight_kg, fitness.body_metrics.weight_kg)" in statement
+    assert "bmi=COALESCE(EXCLUDED.bmi, fitness.body_metrics.bmi)" in statement
+    assert "metadata=fitness.body_metrics.metadata || EXCLUDED.metadata" in statement
+    assert '"idempotency_key": "scale-2026-06-22"' in statement
+
+
+def test_body_metric_log_ignores_blank_idempotency_key(monkeypatch):
+    captured: list[str] = []
+
+    def fail_one(*_args, **_kwargs):
+        raise AssertionError("blank idempotency keys should not trigger lookup")
+
+    monkeypatch.setattr(fitness_tool.sql, "one", fail_one)
+
+    def fake_statement_one(statement: str, *, user: str | None = None):
+        captured.append(statement)
+        return {"body_metric_id": 8, "weight_kg": 113.8}
+
+    monkeypatch.setattr(fitness_tool.sql, "statement_one", fake_statement_one)
+    result = _loads(fitness_tool._handle_body_metric_log_create({
+        "profile_id": "jean-garcia",
+        "weight_kg": 113.8,
+        "metadata": {"idempotency_key": "   "},
+    }))
+    assert result["ok"] is True
+    statement = "\n".join(captured)
+    assert "ON CONFLICT" not in statement
+    assert '"idempotency_key"' not in statement

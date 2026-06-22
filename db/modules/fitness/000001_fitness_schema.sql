@@ -257,6 +257,19 @@ CREATE TABLE IF NOT EXISTS fitness.body_metrics (
   measured_at timestamptz NOT NULL DEFAULT now(),
   weight_kg numeric,
   body_fat_pct numeric,
+  bmi numeric,
+  body_condition_score numeric,
+  skeletal_muscle_pct numeric,
+  water_pct numeric,
+  protein_pct numeric,
+  visceral_fat_index numeric,
+  bone_mass_pct numeric,
+  bmr_kcal numeric,
+  biological_age_years numeric,
+  fat_weight_kg numeric,
+  body_fat_mass_index numeric,
+  fat_free_mass_kg numeric,
+  weight_change_kg numeric,
   waist_cm numeric,
   chest_cm numeric,
   hip_cm numeric,
@@ -329,6 +342,7 @@ CREATE INDEX IF NOT EXISTS idx_fitness_routines_profile_status ON fitness.routin
 CREATE INDEX IF NOT EXISTS idx_fitness_workout_sessions_profile_time ON fitness.workout_sessions(profile_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_fitness_workout_sets_session ON fitness.workout_sets(session_id, exercise_id, set_index);
 CREATE INDEX IF NOT EXISTS idx_fitness_body_metrics_profile_time ON fitness.body_metrics(profile_id, measured_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fitness_body_metrics_idempotency ON fitness.body_metrics(profile_id, (btrim(metadata->>'idempotency_key'))) WHERE metadata ? 'idempotency_key' AND btrim(metadata->>'idempotency_key') <> '';
 CREATE INDEX IF NOT EXISTS idx_fitness_checkins_profile_time ON fitness.coach_checkins(profile_id, occurred_at DESC);
 CREATE INDEX IF NOT EXISTS idx_fitness_recommendations_profile_time ON fitness.coach_recommendations(profile_id, generated_at DESC);
 

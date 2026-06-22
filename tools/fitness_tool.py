@@ -452,17 +452,100 @@ def _handle_workout_finish(args: dict, **_kwargs) -> str:
         return _err(exc)
 
 
+def _arg(args: dict, *names: str) -> Any:
+    for name in names:
+        if name in args:
+            return args.get(name)
+    return None
+
+
+def _body_metric_field_sql(args: dict) -> list[tuple[str, str]]:
+    return [
+        ("weight_kg", _num(args.get("weight_kg"))),
+        ("body_fat_pct", _num(args.get("body_fat_pct"))),
+        ("bmi", _num(args.get("bmi"))),
+        ("body_condition_score", _num(args.get("body_condition_score"))),
+        ("skeletal_muscle_pct", _num(_arg(args, "skeletal_muscle_pct", "skeletal_muscle_mass_pct"))),
+        ("water_pct", _num(args.get("water_pct"))),
+        ("protein_pct", _num(args.get("protein_pct"))),
+        ("visceral_fat_index", _num(args.get("visceral_fat_index"))),
+        ("bone_mass_pct", _num(_arg(args, "bone_mass_pct", "bone_pct"))),
+        ("bmr_kcal", _num(_arg(args, "bmr_kcal", "bmr"))),
+        ("biological_age_years", _num(_arg(args, "biological_age_years", "biological_age"))),
+        ("fat_weight_kg", _num(args.get("fat_weight_kg"))),
+        ("body_fat_mass_index", _num(_arg(args, "body_fat_mass_index", "bfmi"))),
+        ("fat_free_mass_kg", _num(args.get("fat_free_mass_kg"))),
+        ("weight_change_kg", _num(args.get("weight_change_kg"))),
+        ("waist_cm", _num(args.get("waist_cm"))),
+        ("chest_cm", _num(args.get("chest_cm"))),
+        ("hip_cm", _num(args.get("hip_cm"))),
+        ("arm_cm", _num(args.get("arm_cm"))),
+        ("thigh_cm", _num(args.get("thigh_cm"))),
+        ("neck_cm", _num(args.get("neck_cm"))),
+        ("resting_hr_bpm", _num(args.get("resting_hr_bpm"))),
+        ("sleep_hours", _num(args.get("sleep_hours"))),
+        ("mood", _q(args.get("mood"))),
+        ("energy_level", _num(args.get("energy_level"))),
+        ("stress_level", _num(args.get("stress_level"))),
+    ]
+
+
+def _body_metric_columns_sql(args: dict, profile_id: str, metadata: dict[str, Any]) -> tuple[str, str, str]:
+    fields = _body_metric_field_sql(args)
+    columns = "profile_id, measured_at, " + ", ".join(name for name, _value in fields) + ", source, metadata"
+    values = (
+        f"{_q(profile_id)}, COALESCE({_q(args.get('measured_at'))}::timestamptz, now()), "
+        + ", ".join(value for _name, value in fields)
+        + f", {_q(args.get('source') or 'manual')}, {_j(metadata)}"
+    )
+    conflict_assignments = ", ".join(
+        [
+            f"measured_at=COALESCE({_q(args.get('measured_at'))}::timestamptz, fitness.body_metrics.measured_at)",
+            *[f"{name}=COALESCE(EXCLUDED.{name}, fitness.body_metrics.{name})" for name, _value in fields],
+            f"source=COALESCE({_q(args.get('source'))}, fitness.body_metrics.source)",
+            "metadata=fitness.body_metrics.metadata || EXCLUDED.metadata",
+        ]
+    )
+    return columns, values, conflict_assignments
+
+
 def _handle_body_metric_log_create(args: dict, **_kwargs) -> str:
     try:
         profile_id = str(args.get("profile_id") or "").strip()
         if not profile_id:
             raise ValueError("profile_id is required")
+        raw_metadata = args.get("metadata") or {}
+        if not isinstance(raw_metadata, dict):
+            raise ValueError("metadata must be an object")
+        metadata = dict(raw_metadata)
+        raw_key = metadata.get("idempotency_key")
+        idempotency_key = "" if raw_key is None else str(raw_key).strip()
+        if idempotency_key:
+            metadata["idempotency_key"] = idempotency_key
+        else:
+            metadata.pop("idempotency_key", None)
+        columns, values, conflict_assignments = _body_metric_columns_sql(args, profile_id, metadata)
+        if idempotency_key:
+            existing = sql.one(f"""
+              SELECT body_metric_id FROM fitness.body_metrics
+              WHERE profile_id={_q(profile_id)} AND btrim(metadata->>'idempotency_key')={_q(idempotency_key)}
+              ORDER BY measured_at DESC, body_metric_id DESC
+            """, user=_user())
+            row = sql.statement_one(f"""
+              INSERT INTO fitness.body_metrics ({columns})
+              VALUES ({values})
+              ON CONFLICT (profile_id, (btrim(metadata->>'idempotency_key')))
+              WHERE metadata ? 'idempotency_key' AND btrim(metadata->>'idempotency_key') <> ''
+              DO UPDATE SET {conflict_assignments}
+              RETURNING *
+            """, user=_user())
+            return _ok(body_metric=row, idempotent=bool(existing))
         row = sql.statement_one(f"""
-          INSERT INTO fitness.body_metrics (profile_id, measured_at, weight_kg, body_fat_pct, waist_cm, chest_cm, hip_cm, arm_cm, thigh_cm, neck_cm, resting_hr_bpm, sleep_hours, mood, energy_level, stress_level, source, metadata)
-          VALUES ({_q(profile_id)}, COALESCE({_q(args.get('measured_at'))}::timestamptz, now()), {_num(args.get('weight_kg'))}, {_num(args.get('body_fat_pct'))}, {_num(args.get('waist_cm'))}, {_num(args.get('chest_cm'))}, {_num(args.get('hip_cm'))}, {_num(args.get('arm_cm'))}, {_num(args.get('thigh_cm'))}, {_num(args.get('neck_cm'))}, {_num(args.get('resting_hr_bpm'))}, {_num(args.get('sleep_hours'))}, {_q(args.get('mood'))}, {_num(args.get('energy_level'))}, {_num(args.get('stress_level'))}, {_q(args.get('source') or 'manual')}, {_j(args.get('metadata') or {})})
+          INSERT INTO fitness.body_metrics ({columns})
+          VALUES ({values})
           RETURNING *
         """, user=_user())
-        return _ok(body_metric=row)
+        return _ok(body_metric=row, idempotent=False)
     except Exception as exc:
         return _err(exc)
 
@@ -521,7 +604,13 @@ def _handle_progress_summary(args: dict, **_kwargs) -> str:
             AND ({_q(end_date)} IS NULL OR s.started_at::date <= {_q(end_date)}::date)
           GROUP BY e.name ORDER BY volume_load DESC NULLS LAST LIMIT 10
         """, user=_user())
-        return _ok(profile_id=profile_id, range={"start_date": start_date, "end_date": end_date}, summary=summary, training=training, strength=strength)
+        latest_body_metric = sql.one(f"""
+          SELECT * FROM fitness.body_metrics
+          WHERE profile_id={_q(profile_id)}
+            AND ({_q(end_date)} IS NULL OR measured_at::date <= {_q(end_date)}::date)
+          ORDER BY measured_at DESC, body_metric_id DESC
+        """, user=_user())
+        return _ok(profile_id=profile_id, range={"start_date": start_date, "end_date": end_date}, summary=summary, latest_body_metric=latest_body_metric, training=training, strength=strength)
     except Exception as exc:
         return _err(exc)
 
@@ -570,7 +659,7 @@ registry.register(name="fitness_routine_get", toolset="fitness", schema=_schema(
 registry.register(name="fitness_workout_session_create", toolset="fitness", schema=_schema("fitness_workout_session_create", "Start or upsert a workout/cardio/activity session.", {"session_id": {"type": "string"}, "profile_id": {"type": "string"}, "routine_id": {"type": "string"}, "routine_day_id": {"type": "string"}, "started_at": {"type": "string"}, "ended_at": {"type": "string"}, "activity_type": {"type": "string"}, "title": {"type": "string"}, "status": {"type": "string"}, "duration_minutes": {"type": "number"}, "distance_km": {"type": "number"}, "calories_burned": {"type": "number"}, "perceived_effort": {"type": "number"}, "readiness_score": {"type": "number"}, "notes": {"type": "string"}, **_meta_props()}, ["profile_id"]), handler=_handle_workout_session_create, check_fn=_check_fitness, emoji="🏃")
 registry.register(name="fitness_workout_set_log", toolset="fitness", schema=_schema("fitness_workout_set_log", "Log a set with weight/reps/RPE/RIR/failure and computed volume/estimated 1RM.", {"session_id": {"type": "string"}, "exercise_id": {"type": "string"}, "set_index": {"type": "integer"}, "set_type": {"type": "string"}, "weight_kg": {"type": "number"}, "reps": {"type": "integer"}, "duration_seconds": {"type": "integer"}, "distance_m": {"type": "number"}, "rpe": {"type": "number"}, "rir": {"type": "number"}, "completed": {"type": "boolean"}, "failure": {"type": "boolean"}, "rest_seconds": {"type": "integer"}, "notes": {"type": "string"}, **_meta_props()}, ["session_id", "exercise_id"]), handler=_handle_workout_set_log, check_fn=_check_fitness, emoji="🏋️")
 registry.register(name="fitness_workout_finish", toolset="fitness", schema=_schema("fitness_workout_finish", "Finish a workout session and return exercise summaries.", {"session_id": {"type": "string"}, "ended_at": {"type": "string"}, "status": {"type": "string"}, "duration_minutes": {"type": "number"}, "perceived_effort": {"type": "number"}, "notes": {"type": "string"}}, ["session_id"]), handler=_handle_workout_finish, check_fn=_check_fitness, emoji="✅")
-registry.register(name="fitness_body_metric_log_create", toolset="fitness", schema=_schema("fitness_body_metric_log_create", "Log body weight, measurements, sleep, mood, energy, stress, and other health metrics.", {"profile_id": {"type": "string"}, "measured_at": {"type": "string"}, "weight_kg": {"type": "number"}, "body_fat_pct": {"type": "number"}, "waist_cm": {"type": "number"}, "chest_cm": {"type": "number"}, "hip_cm": {"type": "number"}, "arm_cm": {"type": "number"}, "thigh_cm": {"type": "number"}, "neck_cm": {"type": "number"}, "resting_hr_bpm": {"type": "number"}, "sleep_hours": {"type": "number"}, "mood": {"type": "string"}, "energy_level": {"type": "number"}, "stress_level": {"type": "number"}, "source": {"type": "string"}, **_meta_props()}, ["profile_id"]), handler=_handle_body_metric_log_create, check_fn=_check_fitness, emoji="⚖️")
+registry.register(name="fitness_body_metric_log_create", toolset="fitness", schema=_schema("fitness_body_metric_log_create", "Log body weight, smart-scale body composition, measurements, sleep, mood, energy, stress, and other health metrics.", {"profile_id": {"type": "string"}, "measured_at": {"type": "string"}, "weight_kg": {"type": "number"}, "body_fat_pct": {"type": "number"}, "bmi": {"type": "number"}, "body_condition_score": {"type": "number"}, "skeletal_muscle_pct": {"type": "number"}, "water_pct": {"type": "number"}, "protein_pct": {"type": "number"}, "visceral_fat_index": {"type": "number"}, "bone_mass_pct": {"type": "number"}, "bmr_kcal": {"type": "number", "description": "Basal metabolic rate in kcal/day."}, "biological_age_years": {"type": "number"}, "fat_weight_kg": {"type": "number"}, "body_fat_mass_index": {"type": "number"}, "fat_free_mass_kg": {"type": "number"}, "weight_change_kg": {"type": "number"}, "waist_cm": {"type": "number"}, "chest_cm": {"type": "number"}, "hip_cm": {"type": "number"}, "arm_cm": {"type": "number"}, "thigh_cm": {"type": "number"}, "neck_cm": {"type": "number"}, "resting_hr_bpm": {"type": "number"}, "sleep_hours": {"type": "number"}, "mood": {"type": "string"}, "energy_level": {"type": "number"}, "stress_level": {"type": "number"}, "source": {"type": "string"}, **_meta_props()}, ["profile_id"]), handler=_handle_body_metric_log_create, check_fn=_check_fitness, emoji="⚖️")
 registry.register(name="fitness_checkin_create", toolset="fitness", schema=_schema("fitness_checkin_create", "Record a subjective coach check-in: sleep, soreness, stress, hunger, energy, adherence, blockers, next steps.", {"checkin_id": {"type": "string"}, "profile_id": {"type": "string"}, "occurred_at": {"type": "string"}, "summary": {"type": "string"}, "sleep_quality": {"type": "number"}, "soreness": {"type": "number"}, "stress_level": {"type": "number"}, "hunger_level": {"type": "number"}, "energy_level": {"type": "number"}, "adherence_score": {"type": "number"}, "blockers": {"type": "string"}, "next_steps": {"type": "string"}, **_meta_props()}, ["profile_id", "summary"]), handler=_handle_checkin_create, check_fn=_check_fitness, emoji="🧠")
 registry.register(name="fitness_progress_summary", toolset="fitness", schema=_schema("fitness_progress_summary", "Summarize nutrition, body weight trend, training sessions, volume, and strength highlights for a date range.", {"profile_id": {"type": "string"}, "start_date": {"type": "string"}, "end_date": {"type": "string"}}, ["profile_id"]), handler=_handle_progress_summary, check_fn=_check_fitness, emoji="📈")
 registry.register(name="fitness_coach_review", toolset="fitness", schema=_schema("fitness_coach_review", "Generate a structured non-medical coaching review from logs, goals, adherence, and training frequency.", {"profile_id": {"type": "string"}, "start_date": {"type": "string"}, "end_date": {"type": "string"}, "minimum_weekly_sessions": {"type": "integer"}}, ["profile_id"]), handler=_handle_coach_review, check_fn=_check_fitness, emoji="🧑‍🏫")
