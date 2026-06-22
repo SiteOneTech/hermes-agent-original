@@ -2694,6 +2694,25 @@ def _candidate_dependencies_integrated(project_id: str, candidate: dict[str, Any
     return False
 
 
+def _candidate_requires_validation_readiness_before_dispatch(candidate: dict[str, Any]) -> bool:
+    """Return True when a candidate must wait for QA/security validation tasks.
+
+    Final delivery/reporting tasks must fail closed until validation tasks are
+    complete.  The actual deploy/sandbox-packaging increment is different: it is
+    often the prerequisite for post-deploy QA, so blocking it on downstream QA
+    creates a dispatch deadlock.
+    """
+
+    if _is_validation_task(candidate):
+        return False
+    phase = str(candidate.get("phase") or "").lower().replace("-", "_")
+    text = _task_text(candidate)
+    owner = str(candidate.get("owner_profile") or candidate.get("owner_agent_id") or "").lower()
+    if owner == "devops-release" and any(term in text for term in ("deploy", "deployment", "sandbox", "preview", "release")):
+        return False
+    return phase.startswith("delivery") or phase in {"release", "final", "final_report"} or "delivery report" in text or "final" in text
+
+
 def _next_runnable_task(project_id: str) -> dict[str, Any] | None:
     tasks = _tasks(project_id)
     if _has_in_flight_increment(tasks):
@@ -2720,7 +2739,7 @@ def _next_runnable_task(project_id: str) -> dict[str, Any] | None:
         text = _task_text(candidate)
         if active_rework_exists and not (_is_reconciliation_task(candidate) or phase in {"documentation", "planning"} or phase.startswith(("g0", "g1"))):
             continue
-        if phase.startswith(("delivery", "deploy", "release")) or "delivery report" in text or "final" in text:
+        if _candidate_requires_validation_readiness_before_dispatch(candidate):
             validation_blockers = _validation_task_readiness_findings(project_id)
             if validation_blockers and not _is_validation_task(candidate):
                 _record_dispatch_preflight_denied(project_id, candidate, ["unresolved_validation_tasks", *validation_blockers], worker="factory-dispatcher")

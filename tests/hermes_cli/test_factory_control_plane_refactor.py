@@ -500,7 +500,27 @@ def test_delivery_readiness_blocks_cancelled_qa_security_task(monkeypatch):
     assert any("demo-qa-security" in item and "cancelled" in item for item in findings)
 
 
-def test_status_payload_includes_document_status(fake_sql, monkeypatch):
+def test_dispatch_validation_readiness_does_not_deadlock_deploy_prerequisite():
+    deploy = {
+        "task_id": "demo-deploy",
+        "phase": "deploy",
+        "title": "Private sandbox deploy packaging",
+        "description": "Deploy to authorized Kidu sandbox before post-deploy browser QA.",
+        "owner_profile": "devops-release",
+    }
+    final_report = {
+        "task_id": "demo-report",
+        "phase": "delivery",
+        "title": "Final delivery report and gate closure",
+        "description": "Summarize validation and delivery evidence.",
+        "owner_profile": "factory-reporter",
+    }
+
+    assert factory_pg._candidate_requires_validation_readiness_before_dispatch(deploy) is False
+    assert factory_pg._candidate_requires_validation_readiness_before_dispatch(final_report) is True
+
+
+def test_status_attaches_document_status(fake_sql, monkeypatch):
     fake_sql.rows_results = [
         [{"project_id": "demo", "status": "active", "repo_path": None, "metadata": {}}],
         [], [], [], [], [], [], [], [],
