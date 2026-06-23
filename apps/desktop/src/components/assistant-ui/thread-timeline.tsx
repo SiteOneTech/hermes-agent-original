@@ -60,9 +60,19 @@ function userPromptText(content: unknown): string {
   return out
 }
 
+function findMessageNode(viewport: HTMLElement, id: string): HTMLElement | null {
+  for (const node of viewport.querySelectorAll<HTMLElement>('[data-message-id]')) {
+    if (node.dataset.messageId === id) {
+      return node
+    }
+  }
+
+  return null
+}
+
 function scrollToPrompt(id: string) {
   const viewport = document.querySelector<HTMLElement>(VIEWPORT)
-  const node = viewport?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(id)}"]`)
+  const node = viewport ? findMessageNode(viewport, id) : null
 
   if (!viewport || !node) {
     return
@@ -142,7 +152,7 @@ export const ThreadTimeline: FC = () => {
       const top = viewport.getBoundingClientRect().top
 
       const offsets = entries.map(entry => {
-        const node = viewport.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(entry.id)}"]`)
+        const node = findMessageNode(viewport, entry.id)
 
         return node ? node.getBoundingClientRect().top - top : null
       })
