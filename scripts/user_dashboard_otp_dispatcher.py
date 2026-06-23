@@ -10,9 +10,46 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import os
 import re
+import shlex
 import time
 from pathlib import Path
+
+
+def load_runtime_secrets_env() -> None:
+    """Load Zeus runtime secrets for script-only cron runs.
+
+    The gateway/dashboard systemd units receive /home/jean/.hermes/runtime-secrets.env,
+    but Hermes no_agent cron scripts run as plain subprocesses. Without this, the
+    OTP dispatcher sees Telegram/SendGrid as unconfigured even though the live
+    gateway is healthy.
+    """
+    env_path = Path(os.environ.get("HERMES_RUNTIME_SECRETS_ENV", "/home/jean/.hermes/runtime-secrets.env"))
+    if not env_path.exists():
+        return
+    for raw_line in env_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        try:
+            parsed = shlex.split(line, comments=False, posix=True)
+        except ValueError:
+            parsed = [line]
+        if not parsed:
+            continue
+        assignment = parsed[0]
+        if assignment.startswith("export "):
+            assignment = assignment.split(" ", 1)[1]
+        if "=" not in assignment:
+            continue
+        name, value = assignment.split("=", 1)
+        name = name.strip()
+        if name and name not in os.environ:
+            os.environ[name] = value
+
+
+load_runtime_secrets_env()
 
 from tools import notification_tool
 from tools.send_message_tool import send_message_tool
