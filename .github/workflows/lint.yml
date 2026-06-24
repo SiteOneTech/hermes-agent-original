@@ -9,18 +9,12 @@ name: Lint (ruff + ty)
 #      enforcement fails.
 
 on:
-  push:
-    branches: [main]
-    paths-ignore:
-      - "**/*.md"
-      - "docs/**"
-      - "website/**"
-
-  # No paths filter — the job must always run so the required check
-  # reports a status (path-gated workflows leave checks "pending" forever
-  # when no matching files change, which blocks merge).
-  pull_request:
-    branches: [main]
+  workflow_call:
+    inputs:
+      event_name:
+        description: The event name from the calling orchestrator (pull_request or push).
+        type: string
+        required: true
 
 permissions:
   contents: read
@@ -33,6 +27,7 @@ concurrency:
 jobs:
   lint-diff:
     name: ruff + ty diff
+    if: inputs.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -45,16 +40,16 @@ jobs:
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
 
       - name: Install ruff + ty
-        run: |
-          uv tool install ruff
-          uv tool install ty
+        uses: ./.github/actions/retry
+        with:
+          command: uv tool install ruff && uv tool install ty
 
       - name: Determine base ref
         id: base
         run: |
           # For PRs, diff against the merge base with the target branch.
           # For pushes to main, diff against the previous commit on main.
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
+          if [ "${{ inputs.event_name }}" = "pull_request" ]; then
             BASE_SHA=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
             BASE_REF="origin/${{ github.base_ref }}"
           else
@@ -105,7 +100,7 @@ jobs:
       - name: Generate diff summary
         env:
           BASE_REF_NAME: ${{ steps.base.outputs.ref }}
-          HEAD_REF_NAME: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name }}
+          HEAD_REF_NAME: ${{ inputs.event_name == 'pull_request' && github.head_ref || github.ref_name }}
         run: |
           python scripts/lint_diff.py \
             --base-ruff .lint-reports/base/ruff.json \
@@ -126,7 +121,7 @@ jobs:
           retention-days: 14
 
       - name: Post / update PR comment
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        if: inputs.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         continue-on-error: true
         uses: actions/github-script@d746ffe35508b1917358783b479e04febd2b8f71 # v9.0.0
         with:
@@ -176,7 +171,9 @@ jobs:
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
 
       - name: Install ruff
-        run: uv tool install ruff
+        uses: ./.github/actions/retry
+        with:
+          command: uv tool install ruff
 
       - name: ruff check .
         # No --exit-zero, no || true. Exit code propagates to the job,
