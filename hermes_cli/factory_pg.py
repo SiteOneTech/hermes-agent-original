@@ -4182,16 +4182,41 @@ def _final_marker_stall_seconds() -> float:
         return _FINAL_MARKER_STALL_SECONDS_DEFAULT
 
 
+_SEMANTIC_MARKER_LINE_RE = re.compile(r"^(?:FINAL:\s*)?STATE\s*:\s*(DONE|BLOCKED|IN_PROGRESS)\b", re.IGNORECASE)
+
+
+def _semantic_state_from_line(line: str) -> Optional[str]:
+    """Return a semantic state only when a line itself is the final marker.
+
+    Worker prompts and historical summaries can contain instructional prose such
+    as "terminate STATE: BLOCKED".  Those mid-sentence markers must not turn a
+    successful process exit into a blocked Factory task.  Accept only canonical
+    marker lines, with light leading Markdown/terminal decoration stripped.
+    """
+
+    clean = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", line or "").strip()
+    clean = clean.lstrip(" >│┃┊┆|-•*\t")
+    match = _SEMANTIC_MARKER_LINE_RE.match(clean)
+    if not match:
+        return None
+    value = match.group(1).upper()
+    if value == "DONE":
+        return "done"
+    if value == "BLOCKED":
+        return "blocked"
+    return "in_progress"
+
+
 def _final_semantic_state(text: str) -> Optional[str]:
-    # Returns 'done', 'blocked', 'in_progress', or None for the LAST semantic
-    # marker in `text`. Historical STATE markers embedded in the prompt or in a
-    # prior result_summary must never override the final assistant marker.
-    last_done = max(text.rfind(marker) for marker in _SEMANTIC_DONE_MARKERS)
-    last_blocked = max(text.rfind(marker) for marker in _SEMANTIC_BLOCKED_MARKERS)
-    last_in_progress = max(text.rfind(marker) for marker in _SEMANTIC_IN_PROGRESS_MARKERS)
-    candidates = [(last_done, "done"), (last_blocked, "blocked"), (last_in_progress, "in_progress")]
-    index, state = max(candidates, key=lambda item: item[0])
-    return None if index == -1 else state
+    # Returns 'done', 'blocked', 'in_progress', or None for the LAST canonical
+    # marker line in `text`. Historical/instructional prose containing STATE:*
+    # mid-sentence must never override process exit status.
+    state: Optional[str] = None
+    for line in (text or "").splitlines():
+        line_state = _semantic_state_from_line(line)
+        if line_state:
+            state = line_state
+    return state
 
 
 def _read_worker_output_summary(log_path: str | Path, *, tail_chars: int = 4000) -> str:
@@ -4205,7 +4230,7 @@ def _read_worker_output_summary(log_path: str | Path, *, tail_chars: int = 4000)
     # promoted to the summary as if they were the current outcome.
     final_marker_line: str | None = None
     for line in text.splitlines():
-        if any(marker in line for marker in _SEMANTIC_MARKERS):
+        if _semantic_state_from_line(line):
             final_marker_line = line.strip()[-500:]
     if final_marker_line and final_marker_line not in tail:
         return "Final semantic state marker:\n" + final_marker_line + "\n\nLog tail:\n" + tail

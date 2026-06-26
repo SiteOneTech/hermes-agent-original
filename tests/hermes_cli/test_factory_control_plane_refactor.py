@@ -1092,6 +1092,31 @@ def test_final_semantic_state_ignores_historical_markers():
     assert factory_pg._final_semantic_state(text) == "done"
 
 
+def test_final_semantic_state_ignores_instructional_mid_sentence_marker_without_final_marker():
+    text = (
+        "Query: If UI evidence is missing, terminate STATE: BLOCKED with rework.\n"
+        "...worker performs the task...\n"
+        "Verification: tests passed; push successful."
+    )
+    assert factory_pg._final_semantic_state(text) is None
+    assert factory_pg._effective_exit_code(0, text) == 0
+
+
+def test_worker_output_summary_does_not_promote_prompt_instruction_marker(tmp_path):
+    log = tmp_path / "worker.log"
+    log.write_text(
+        "Query: Si alguna evidencia UI falta, termina STATE: BLOCKED con rework específico.\n"
+        "Initializing agent...\n"
+        "Verification: backend 41 passed, frontend 21 passed, push successful.\n",
+        encoding="utf-8",
+    )
+
+    summary = factory_pg._read_worker_output_summary(log)
+
+    assert not summary.startswith("Final semantic state marker:")
+    assert factory_pg._effective_exit_code(0, summary) == 0
+
+
 def test_final_semantic_state_detects_ambiguous_in_progress():
     text = "...lots of work...\nSTATE: IN_PROGRESS"
     assert factory_pg._final_semantic_state(text) == "in_progress"
