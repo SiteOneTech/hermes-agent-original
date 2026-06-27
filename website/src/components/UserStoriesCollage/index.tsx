@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { type JSX, useMemo, useState } from 'react';
 import stories from '@site/src/data/userStories.json';
 import styles from './styles.module.css';
 

@@ -5,11 +5,11 @@ name: Publish to PyPI
 on:
   push:
     tags:
-      - 'v20*'  # CalVer tags: v2026.5.15, v2026.5.15.2, etc.
+      - "v20*" # CalVer tags: v2026.5.15, v2026.5.15.2, etc.
   workflow_dispatch:
     inputs:
       confirm_tag:
-        description: 'Tag to publish (e.g. v2026.5.15). Must already exist.'
+        description: "Tag to publish (e.g. v2026.5.15). Must already exist."
         required: true
         type: string
 
@@ -43,9 +43,9 @@ jobs:
           fi
 
       - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: '3.13'
+          python-version: "3.13"
 
       - name: Install uv
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
@@ -53,7 +53,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
         with:
-          node-version: '22'
+          node-version: "22"
 
       - name: Build web dashboard
         run: cd web && npm ci && npm run build
@@ -94,7 +94,7 @@ jobs:
       name: pypi
       url: https://pypi.org/p/hermes-agent
     permissions:
-      id-token: write  # OIDC trusted publishing
+      id-token: write # OIDC trusted publishing
 
     steps:
       - name: Download distribution artifacts
@@ -116,8 +116,8 @@ jobs:
     needs: publish
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # attach assets to the existing release
-      id-token: write   # sigstore signing
+      contents: write # attach assets to the existing release
+      id-token: write # sigstore signing
 
     steps:
       - name: Download distribution artifacts

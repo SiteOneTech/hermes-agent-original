@@ -6,6 +6,7 @@ on:
 
 jobs:
   typecheck:
+    name: Check TypeScript
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -34,6 +35,7 @@ jobs:
   # users build apps/desktop from source on install/update. Run the real
   # `vite build` here so that class of break fails in CI instead.
   desktop-build:
+    name: Build desktop app
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
