@@ -28,6 +28,7 @@ DEFAULTS = {
     "AGENT_CALENDAR_DB_NAME": "nettu_calendar",
     "AGENT_CRM_DB_NAME": "zeus_agent",
     "AGENT_FITNESS_DB_NAME": "zeus_agent",
+    "AGENT_SIGNATURE_DB_NAME": "zeus_agent",
     "AGENT_AGENT_MANAGEMENT_DB_NAME": "zeus_agent",
 }
 
@@ -55,6 +56,10 @@ MODULES = {
     "fitness": {
         "database_env": "AGENT_FITNESS_DB_NAME",
         "migrations": REPO_ROOT / "db" / "modules" / "fitness",
+    },
+    "signature": {
+        "database_env": "AGENT_SIGNATURE_DB_NAME",
+        "migrations": REPO_ROOT / "db" / "modules" / "signature",
     },
 }
 
@@ -199,7 +204,7 @@ def apply_external_sql_dir(env: dict[str, str], module: str, database: str, dire
 def status(env: dict[str, str]) -> None:
     compose_proc = compose(env, ["ps"])
     print(compose_proc.stdout)
-    for database in sorted({env["AGENT_DB_NAME"], env["AGENT_CALENDAR_DB_NAME"], env.get("AGENT_CRM_DB_NAME", env["AGENT_DB_NAME"]), env.get("AGENT_FITNESS_DB_NAME", env["AGENT_DB_NAME"]), env.get("AGENT_AGENT_MANAGEMENT_DB_NAME", env["AGENT_DB_NAME"])}):
+    for database in sorted({env["AGENT_DB_NAME"], env["AGENT_CALENDAR_DB_NAME"], env.get("AGENT_CRM_DB_NAME", env["AGENT_DB_NAME"]), env.get("AGENT_FITNESS_DB_NAME", env["AGENT_DB_NAME"]), env.get("AGENT_SIGNATURE_DB_NAME", env["AGENT_DB_NAME"]), env.get("AGENT_AGENT_MANAGEMENT_DB_NAME", env["AGENT_DB_NAME"])}):
         ensure_database(env, database)
         ensure_migration_ledger(env, database)
         proc = psql(env, database, "SELECT current_database(), module, version, applied_at FROM agent_core.schema_migrations ORDER BY module, version;")
@@ -225,16 +230,18 @@ def main() -> None:
         print(proc.stdout)
         ensure_database(env, env["AGENT_DB_NAME"])
         ensure_database(env, env["AGENT_CALENDAR_DB_NAME"])
+        ensure_database(env, env.get("AGENT_SIGNATURE_DB_NAME", env["AGENT_DB_NAME"]))
         ensure_database(env, env.get("AGENT_AGENT_MANAGEMENT_DB_NAME", env["AGENT_DB_NAME"]))
-        print(f"Agent Core DB ready: {env['AGENT_DB_NAME']} + {env['AGENT_CALENDAR_DB_NAME']} + crm:{env.get('AGENT_CRM_DB_NAME', env['AGENT_DB_NAME'])} + fitness:{env.get('AGENT_FITNESS_DB_NAME', env['AGENT_DB_NAME'])} + agent_management:{env.get('AGENT_AGENT_MANAGEMENT_DB_NAME', env['AGENT_DB_NAME'])}")
+        print(f"Agent Core DB ready: {env['AGENT_DB_NAME']} + {env['AGENT_CALENDAR_DB_NAME']} + crm:{env.get('AGENT_CRM_DB_NAME', env['AGENT_DB_NAME'])} + fitness:{env.get('AGENT_FITNESS_DB_NAME', env['AGENT_DB_NAME'])} + signature:{env.get('AGENT_SIGNATURE_DB_NAME', env['AGENT_DB_NAME'])} + agent_management:{env.get('AGENT_AGENT_MANAGEMENT_DB_NAME', env['AGENT_DB_NAME'])}")
     elif args.command == "migrate":
         compose(env, ["up", "-d"])
         ensure_database(env, env["AGENT_DB_NAME"])
         ensure_database(env, env["AGENT_CALENDAR_DB_NAME"])
         ensure_database(env, env.get("AGENT_CRM_DB_NAME", env["AGENT_DB_NAME"]))
         ensure_database(env, env.get("AGENT_FITNESS_DB_NAME", env["AGENT_DB_NAME"]))
+        ensure_database(env, env.get("AGENT_SIGNATURE_DB_NAME", env["AGENT_DB_NAME"]))
         ensure_database(env, env.get("AGENT_AGENT_MANAGEMENT_DB_NAME", env["AGENT_DB_NAME"]))
-        for module in ["agent_core", "factory", "agent_management", "calendar", "crm", "fitness"]:
+        for module in ["agent_core", "factory", "agent_management", "calendar", "crm", "fitness", "signature"]:
             apply_module(env, module)
     elif args.command == "status":
         status(env)

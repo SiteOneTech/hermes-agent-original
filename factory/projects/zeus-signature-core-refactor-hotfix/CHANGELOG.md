@@ -18,3 +18,12 @@ Reviewed: yes — initial Zeus Factory orchestrator review; independent quality/
 ## 2026-06-19
 
 - Resolved PDF licensing decision: no paid/commercial PyMuPDF license path; commercial runtime must use permissive/open PDF stamping (`pypdf` + `reportlab`) or original SitioUno code. PyMuPDF remains allowed only as an R&D fallback while not distributed as a proprietary runtime requirement.
+
+## 2026-06-27
+
+- Closed final legacy-overlap review: no active SEIS/Superform signing implementation exists in current Zeus `main`; old branches are intentionally not merged.
+- Confirmed canonical path as Signature Core v2: Agent Core `signature.*` schema, `tools/signature_tool.py`, `/w/<token>/`, `/api/document-actions*`, OTP proof, private `/user/signatures/`, completed/audit PDF artifacts.
+- Added Signature Core to Agent Core migration/status/runtime wiring and exposed the full v2 signature toolset.
+- Applied live migrations `signature:000001` and `signature:000002` to local Agent Core Postgres.
+- Verified with 61 focused tests, compileall, and live Signature Core smoke; cleaned smoke rows after verification.
+- Delivery public sandbox PASS waived because owner scope is private/VPN-only; internal live evidence recorded in `CLOSURE_RECONCILIATION_2026-06-27.md`.

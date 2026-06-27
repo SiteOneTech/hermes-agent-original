@@ -3,8 +3,41 @@
 Project: zeus-signature-core-refactor-hotfix
 Owner: Jean García / SitioUno
 Created: 2026-06-12T18:09:47-04:00
-Last updated: 2026-06-13T03:48:04-04:00
-Status: IN PROGRESS — implementation sprint active (7/15 tasks done, 1 blocked, 7 pending)
+Last updated: 2026-06-27T00:03:00Z
+Status: COMPLETED — closed after legacy-overlap audit, live Agent Core migration, focused regression tests, and live Signature Core smoke
+
+## 2026-06-27 Final Closure
+
+Zeus revalidated the project against the current `main` branch to answer Jean's concern about overlap with already-developed/legacy functionality.
+
+**Decision:** keep the current Signature Core v2 implementation on `main`; do **not** merge/revive legacy SEIS, Superform, `/sign/<slug>`, or `factory-runtime-contract-v1` snapshots.
+
+**Rationale:** current Signature Core v2 is the canonical Agent Core module path:
+
+- `signature.*` schema in the shared Agent Core DB.
+- `tools/signature_tool.py` as the agent-native tool contract.
+- `/w/<token>/` + `/api/document-actions*` + OTP as the customer-facing collection path.
+- `/user/signatures/` as the private dashboard surface.
+- submitter-bound `signer_token` + OTP proof for public/customer completion.
+- completed/audit PDF artifact recording with SHA-256 evidence.
+
+**Legacy overlap audit result:** no active SEIS/Superform signing implementation exists in current Zeus `main`. `git grep` found no current SEIS/Superform module, route, schema, or runtime path for signing after excluding generated deps; the only non-generated SEIS hit was README prose (“Seis backends de terminal”). Standalone `/sign/<slug>` remains non-canonical unless implemented later as an alias over the same secure workflow.
+
+**Runtime propagation closed:** Signature Core is now included in the Agent Core migration/status runner and runtime role/config surface. Live DB now records `signature:000001` and `signature:000002` migrations and has v2 tables/columns (`delivery_receipts`, `reminder_policies`, `reminder_attempts`, `template_version_id`, `signing_mode`, etc.).
+
+**Verification:**
+
+| Check | Result |
+|---|---|
+| Focused Signature/document workspace tests | `61 passed in 3.26s` |
+| Compile check for touched modules | passed |
+| Live Agent Core DB migration | `signature:000001`, `signature:000002` applied |
+| Live Signature Core smoke | token/OTP rejection works; first signer → `partially_signed`; second required approver → `completed`; completed/audit PDF + final copies + dashboard metrics recorded |
+| QA data cleanup | 0 QA rows remaining |
+
+Full evidence: `CLOSURE_RECONCILIATION_2026-06-27.md`.
+
+**Delivery gate disposition:** public sandbox PASS is waived by owner direction because this surface is private/VPN-only. Delivery evidence is internal/live Agent Core data and focused tests, not a public URL.
 
 ## PM Projection Warning — Recurring False Positive
 

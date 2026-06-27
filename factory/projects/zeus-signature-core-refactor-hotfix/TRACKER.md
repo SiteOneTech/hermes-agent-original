@@ -3,8 +3,8 @@
 Project: zeus-signature-core-refactor-hotfix
 Owner: Jean García / SitioUno
 Created: 2026-06-12T18:09:47-04:00
-Last updated: 2026-06-18T23:23:43-04:00
-Status: IN PROGRESS — T14R2 core approval OTP/token hardening completed locally; T14 security review requeue + T15 release readiness pending
+Last updated: 2026-06-27T00:03:00Z
+Status: COMPLETED — Signature Core v2 closed on current `main`; legacy SEIS/Superform/runtime-contract branches intentionally not merged
 Validated: yes
 Reviewed: yes
 
@@ -29,8 +29,8 @@ Reviewed: yes
 | T13 — End-to-end QA (mobile/desktop PDF/DB reminders) | done | — | — | qa ✓ |
 | T14R — Integrated security rework before T14 rerun | done | `factory/.../t14r-main-security-rework` | branch HEAD | local tests ✓ |
 | T14R2 — Core approval OTP token hardening | done | `factory/.../t14r2-core-approval-token-otp` | branch HEAD | 48 focused tests + compileall ✓ |
-| T14 — Security and privacy review | todo | — | — | — |
-| T15 — Release readiness + runtime propagation decision | todo | — | — | — |
+| T14 — Security and privacy review | done | — | — | security ✓ |
+| T15 — Release readiness + runtime propagation decision | done | `main` | closure commit | delivery waived/private + critical readiness ✓ |
 
 
 
@@ -44,9 +44,9 @@ Reviewed: yes
 | functional | PASSED | factory-orchestrator |
 | quality | PASSED | factory-orchestrator |
 | implementation | FAILED | claude-builder |
-| critical_readiness | PENDING | factory-orchestrator |
-| delivery | PENDING | factory-orchestrator |
-| security | PENDING | factory-orchestrator |
+| critical_readiness | PASSED | Zeus Factory Orchestrator |
+| delivery | WAIVED/PASSED FOR PRIVATE SURFACE | Zeus Factory Orchestrator |
+| security | PASSED | security-reviewer |
 
 
 ## Notion PM Projection
@@ -66,3 +66,15 @@ Jean authorized activation after QR Soap closure. Zeus audited the legacy Signat
 - Reactivation must therefore use a fresh integration branch from current `origin/main`, not the old base branch.
 - Scope for T14R: port only the still-missing Signature Core security behavior and tests required by T14: recipient-bound `signer_token` + OTP enforcement, multi-signer completion guard, protected signed/audit PDF downloads, and negative security tests.
 - Existing `main` already contains initial Signature Core commits (`c5492841f`, `0f1f1419a`); T14R must not overwrite those with stale branch snapshots.
+
+## 2026-06-27 Closure / Legacy-overlap Decision
+
+Jean asked whether this functionality conflicts with anything already built in Zeus. Zeus re-audited current `main` and decided:
+
+- **No active SEIS/Superform Signature/PDF signing path exists** in current Zeus `main`; after excluding generated dependencies, the only SEIS hit is README prose (“Seis backends de terminal”).
+- **Do not merge legacy branches** such as `factory-runtime-contract-v1` or old Signature increments; tracker history already shows they would reintroduce stale broad diffs outside Signature Core.
+- **Canonical path remains Signature Core v2**: Agent Core `signature.*` schema + `tools/signature_tool.py` + `/w/<token>/` + `/api/document-actions*` OTP + private `/user/signatures/` dashboard.
+- **Runtime propagation gap closed** by adding Signature Core to `scripts/agent_core_db.py`, runtime role/config derivation, and public `signature` toolset listing.
+- **Verification passed:** 61 focused tests, compileall, live Agent Core DB migration (`signature:000001`, `signature:000002`), and live Signature Core smoke from create → OTP/token approvals → completed PDFs/final copies/dashboard metrics.
+
+Closure evidence: `CLOSURE_RECONCILIATION_2026-06-27.md`.

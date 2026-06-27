@@ -24,12 +24,15 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fitness_runtime') THEN
     CREATE ROLE fitness_runtime NOLOGIN;
   END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'signature_runtime') THEN
+    CREATE ROLE signature_runtime NOLOGIN;
+  END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'agent_management_runtime') THEN
     CREATE ROLE agent_management_runtime NOLOGIN;
   END IF;
 END $$;
 
-GRANT CONNECT ON DATABASE zeus_agent TO agent_runtime, factory_runtime, calendar_runtime, crm_runtime, sales_runtime, accounting_runtime, fitness_runtime, agent_management_runtime;
-GRANT USAGE ON SCHEMA agent_core TO agent_runtime, factory_runtime, calendar_runtime, crm_runtime, sales_runtime, accounting_runtime, fitness_runtime, agent_management_runtime;
-GRANT SELECT ON ALL TABLES IN SCHEMA agent_core TO agent_runtime, factory_runtime, calendar_runtime, crm_runtime, sales_runtime, accounting_runtime, fitness_runtime, agent_management_runtime;
-ALTER DEFAULT PRIVILEGES IN SCHEMA agent_core GRANT SELECT ON TABLES TO agent_runtime, factory_runtime, calendar_runtime, crm_runtime, sales_runtime, accounting_runtime, fitness_runtime, agent_management_runtime;
+GRANT CONNECT ON DATABASE zeus_agent TO agent_runtime, factory_runtime, calendar_runtime, crm_runtime, sales_runtime, accounting_runtime, fitness_runtime, signature_runtime, agent_management_runtime;
+GRANT USAGE ON SCHEMA agent_core TO agent_runtime, factory_runtime, calendar_runtime, crm_runtime, sales_runtime, accounting_runtime, fitness_runtime, signature_runtime, agent_management_runtime;
+GRANT SELECT ON ALL TABLES IN SCHEMA agent_core TO agent_runtime, factory_runtime, calendar_runtime, crm_runtime, sales_runtime, accounting_runtime, fitness_runtime, signature_runtime, agent_management_runtime;
+ALTER DEFAULT PRIVILEGES IN SCHEMA agent_core GRANT SELECT ON TABLES TO agent_runtime, factory_runtime, calendar_runtime, crm_runtime, sales_runtime, accounting_runtime, fitness_runtime, signature_runtime, agent_management_runtime;

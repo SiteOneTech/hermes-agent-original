@@ -29,6 +29,7 @@ DEFAULTS = {
     "SALES_DB_RUNTIME_USER": "sales_runtime",
     "ACCOUNTING_DB_RUNTIME_USER": "accounting_runtime",
     "FITNESS_DB_RUNTIME_USER": "fitness_runtime",
+    "SIGNATURE_DB_RUNTIME_USER": "signature_runtime",
     "AGENT_MANAGEMENT_DB_RUNTIME_USER": "agent_management_runtime",
 }
 
@@ -58,6 +59,7 @@ def _fill_passwords_from_urls(env: dict[str, str]) -> None:
         "SALES_DB_RUNTIME_PASSWORD": "SALES_DATABASE_URL",
         "ACCOUNTING_DB_RUNTIME_PASSWORD": "ACCOUNTING_DATABASE_URL",
         "FITNESS_DB_RUNTIME_PASSWORD": "FITNESS_DATABASE_URL",
+        "SIGNATURE_DB_RUNTIME_PASSWORD": "SIGNATURE_DATABASE_URL",
         "AGENT_MANAGEMENT_DB_RUNTIME_PASSWORD": "AGENT_MANAGEMENT_DATABASE_URL",
     }
     for password_key, url_key in pairs.items():

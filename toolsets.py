@@ -277,10 +277,14 @@ TOOLSETS = {
     },
 
     "signature": {
-        "description": "Agent-native e-signature core: document requests, signers, signature capture, audit events, and approval hashes",
+        "description": "Agent-native e-signature core: document requests, signers, signature capture, audit events, approval hashes, reminders, signed PDFs, final copies, and dashboard metrics",
         "tools": [
             "signature_status", "signature_template_upsert", "signature_request_create",
             "signature_request_get", "signature_event_record", "signature_approval_hash_create",
+            "signature_delivery_receipt_record", "signature_reminder_policy_upsert",
+            "signature_reminder_attempt_record", "signature_followup_due",
+            "signature_completed_pdf_record", "signature_final_copies_send",
+            "signature_dashboard_metrics",
         ],
         "includes": []
     },
