@@ -2615,12 +2615,13 @@ def test_on_session_switch_does_not_block_caller_on_slow_drain():
     cheap and synchronous; the commit is offloaded. Mirrors the #41945
     'do not block the turn thread' contract."""
     import threading
-    import time
 
     provider = _make_provider_with_session("old-sid", turn_count=2)
 
     drain_entered = threading.Event()
     release_drain = threading.Event()
+    caller_done = threading.Event()
+    caller_errors = []
 
     def slow_drain(sid, timeout):
         drain_entered.set()
@@ -2630,20 +2631,33 @@ def test_on_session_switch_does_not_block_caller_on_slow_drain():
 
     provider._drain_writers = slow_drain
 
-    start = time.monotonic()
-    provider.on_session_switch("new-sid")
-    elapsed = time.monotonic() - start
+    def switch_session():
+        try:
+            provider.on_session_switch("new-sid")
+        except BaseException as exc:  # pragma: no cover - surfaced below
+            caller_errors.append(exc)
+        finally:
+            caller_done.set()
 
     # The caller returned promptly with state already rotated, even though the
-    # drain is still parked on the finalizer thread.
-    assert elapsed < 1.0, f"on_session_switch blocked the caller for {elapsed:.2f}s"
-    assert provider._session_id == "new-sid"
-    assert provider._turn_count == 0
-    assert drain_entered.wait(timeout=2.0), "finalizer never started draining"
-    # No commit yet — drain is still blocked off-thread.
-    provider._client.post.assert_not_called()
-    # Let the finalizer finish so it doesn't leak past the test.
-    release_drain.set()
+    # drain is still parked on the finalizer thread. Use a caller thread instead
+    # of a tight wall-clock threshold: CI can take >1s just to schedule the
+    # finalizer under heavy load, but an inline drain would keep the caller
+    # blocked until `release_drain` is set.
+    caller = threading.Thread(target=switch_session, daemon=True)
+    caller.start()
+    try:
+        assert drain_entered.wait(timeout=5.0), "finalizer never started draining"
+        assert caller_done.wait(timeout=5.0), "on_session_switch blocked while drain was parked"
+        assert not caller_errors
+        assert provider._session_id == "new-sid"
+        assert provider._turn_count == 0
+        # No commit yet — drain is still blocked off-thread.
+        provider._client.post.assert_not_called()
+    finally:
+        # Let the caller/finalizer finish so they don't leak past the test.
+        release_drain.set()
+        caller.join(timeout=5.0)
     assert provider._drain_finalizers(timeout=5.0)
     provider._client.post.assert_called_once_with(
         "/api/v1/sessions/old-sid/commit",
