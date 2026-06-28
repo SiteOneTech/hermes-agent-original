@@ -481,6 +481,13 @@ def _parse_target_ref(platform_name: str, target_ref: str):
         match = _TELEGRAM_TOPIC_TARGET_RE.fullmatch(target_ref)
         if match:
             return match.group(1), match.group(2), True
+        from plugins.platforms.telegram.telegram_ids import (
+            parse_telegram_username_target,
+        )
+
+        username = parse_telegram_username_target(target_ref)
+        if username:
+            return username, None, True
     if platform_name == "feishu":
         match = _FEISHU_TARGET_RE.fullmatch(target_ref)
         if match:
@@ -900,8 +907,8 @@ async def _send_to_platform(platform, pconfig, chat_id, message, thread_id=None,
         return last_result
 
     # --- WhatsApp: native media attachment support via the migrated plugin's
-    # standalone_sender_fn. Preserve the pre-migration send_message MEDIA
-    # path while keeping WhatsApp out of core gateway/platforms (#41112).
+    # standalone_sender_fn. Use the shared registry wrapper so plugin discovery
+    # and the backward-compatible _send_whatsapp shim stay in one place (#41112).
     if platform == Platform.WHATSAPP and media_files:
         last_result = None
         for i, chunk in enumerate(chunks):
@@ -912,7 +919,7 @@ async def _send_to_platform(platform, pconfig, chat_id, message, thread_id=None,
                 chat_id,
                 chunk,
                 thread_id,
-                media_files=media_files if is_last else [],
+                media_files=media_files if is_last else None,
                 force_document=force_document,
             )
             if isinstance(result, dict) and result.get("error"):
@@ -1058,7 +1065,13 @@ async def _send_telegram(token, chat_id, message, media_files=None, thread_id=No
                 bot = Bot(token=token)
         else:
             bot = Bot(token=token)
-        int_chat_id = int(chat_id)
+        from plugins.platforms.telegram.telegram_ids import (
+            normalize_telegram_chat_id,
+        )
+
+        # Telegram accepts a numeric chat_id OR an @username string; normalize
+        # rather than force-int so username home channels don't crash (#13206).
+        int_chat_id = normalize_telegram_chat_id(chat_id)
         media_files = media_files or []
         thread_kwargs = {}
         if thread_id is not None:
@@ -1241,6 +1254,7 @@ async def _registry_standalone_send(
     *,
     media_files=None,
     force_document=False,
+    caption_media=False,
 ):
     """Dispatch a one-shot send through a migrated platform plugin's
     standalone_sender_fn (registry hook).  Used for platforms whose adapter
@@ -1259,6 +1273,8 @@ async def _registry_standalone_send(
         kwargs["media_files"] = media_files
     if force_document:
         kwargs["force_document"] = force_document
+    if caption_media:
+        kwargs["caption_media"] = caption_media
     return await entry.standalone_sender_fn(pconfig, chat_id, message, **kwargs)
 
 
@@ -1281,6 +1297,7 @@ async def _send_whatsapp(extra, chat_id, message, media_files=None, force_docume
         message,
         media_files=media_files or [],
         force_document=force_document,
+        caption_media=True,
     )
 
 
