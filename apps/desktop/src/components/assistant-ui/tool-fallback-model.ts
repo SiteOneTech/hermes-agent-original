@@ -792,6 +792,14 @@ function hostnameOf(value: string): string {
   }
 }
 
+function browserHostnameOf(value: string): string {
+  try {
+    return new URL(value).hostname
+  } catch {
+    return value
+  }
+}
+
 export function looksRedundant(title: string, detail: string): boolean {
   if (!detail) {
     return true
@@ -1183,7 +1191,7 @@ function toolSubtitle(
       firstStringField(resultRecord, ['url']) ||
       findFirstUrl(argsRecord, resultRecord)
 
-    return url ? hostnameOf(url) : 'Navigated in browser'
+    return url ? browserHostnameOf(url) : 'Navigated in browser'
   }
 
   if (toolName === 'browser_snapshot') {
@@ -1550,7 +1558,7 @@ function dynamicTitle(
 
       return titledAction(
         failAction,
-        translateNow('assistant.tool.titleTemplates.actionTarget', failAction, hostnameOf(url))
+        translateNow('assistant.tool.titleTemplates.actionTarget', failAction, browserHostnameOf(url))
       )
     }
 
@@ -1558,7 +1566,7 @@ function dynamicTitle(
 
     return titledAction(
       action,
-      translateNow('assistant.tool.titleTemplates.actionTarget', action, hostnameOf(url))
+      translateNow('assistant.tool.titleTemplates.actionTarget', action, browserHostnameOf(url))
     )
   }
 
