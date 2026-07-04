@@ -1,5 +1,9 @@
+import { QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+
+import type * as HermesApi from '@/hermes'
+import { queryClient } from '@/lib/query-client'
 
 // Radix Select calls scrollIntoView on its items when the content opens; jsdom
 // doesn't implement it (nor hasPointerCapture / releasePointerCapture), so stub
@@ -22,7 +26,8 @@ const getHermesConfigRecord = vi.fn()
 const saveHermesConfig = vi.fn()
 const startManualProviderOAuth = vi.fn()
 
-vi.mock('@/hermes', () => ({
+vi.mock('@/hermes', async importOriginal => ({
+  ...(await importOriginal<typeof HermesApi>()),
   getGlobalModelInfo: () => getGlobalModelInfo(),
   getGlobalModelOptions: () => getGlobalModelOptions(),
   getAuxiliaryModels: () => getAuxiliaryModels(),
@@ -96,12 +101,17 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
+  queryClient.clear()
 })
 
 async function renderModelSettings() {
   const { ModelSettings } = await import('./model-settings')
 
-  return render(<ModelSettings />)
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <ModelSettings />
+    </QueryClientProvider>
+  )
 }
 
 describe('ModelSettings', () => {
