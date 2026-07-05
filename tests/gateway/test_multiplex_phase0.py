@@ -10,7 +10,9 @@ Covers the three Phase 0 deliverables:
 """
 import pytest
 from unittest.mock import patch
+import yaml
 
+from hermes_constants import reset_hermes_home_override, set_hermes_home_override
 from gateway.config import GatewayConfig, Platform
 from gateway.session import SessionSource, SessionStore, build_session_key
 
@@ -126,6 +128,43 @@ class TestMultiplexConfigFlag:
     def test_roundtrip(self):
         cfg = GatewayConfig.from_dict(GatewayConfig(multiplex_profiles=True).to_dict())
         assert cfg.multiplex_profiles is True
+
+    def test_gateway_config_loader_honors_profile_runtime_scope(self, tmp_path, monkeypatch):
+        """Multiplexed turns must resolve display settings from the routed profile."""
+        import gateway.run as gateway_run
+
+        root_home = tmp_path / "root"
+        profile_home = tmp_path / "profiles" / "quiet"
+        root_home.mkdir(parents=True)
+        profile_home.mkdir(parents=True)
+
+        (root_home / "config.yaml").write_text(
+            yaml.safe_dump(
+                {"display": {"tool_progress": "all", "interim_assistant_messages": True}},
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        (profile_home / "config.yaml").write_text(
+            yaml.safe_dump(
+                {"display": {"tool_progress": False, "interim_assistant_messages": False}},
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr(gateway_run, "_hermes_home", root_home)
+
+        assert gateway_run._load_gateway_config()["display"]["tool_progress"] == "all"
+
+        token = set_hermes_home_override(profile_home)
+        try:
+            scoped_config = gateway_run._load_gateway_config()
+        finally:
+            reset_hermes_home_override(token)
+
+        assert scoped_config["display"]["tool_progress"] is False
+        assert scoped_config["display"]["interim_assistant_messages"] is False
 
 
 class TestSessionStoreProfileResolution:
