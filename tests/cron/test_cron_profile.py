@@ -430,7 +430,7 @@ class TestTickProfilePartition:
         calls: list[tuple[str, str]] = []
         order_lock = threading.Lock()
 
-        def fake_run_job(job):
+        def fake_run_job(job, **_kwargs):
             with order_lock:
                 calls.append((job["id"], threading.current_thread().name))
             return True, "output", "response", None
