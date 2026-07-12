@@ -2,24 +2,24 @@
 
 Date: 2026-07-12
 Owner: Zeus
-Status: PASS for implemented increment
+Status: PASS / GREEN for implemented increment
 
 ## Commands executed
 
 ```bash
-python3 -m py_compile tools/sales_operator_tool.py scripts/runtime/publish_delivery_sandbox.py scripts/runtime/export_sales_operator_dashboard.py scripts/agent_core_roles.py hermes_cli/agent_core_sql.py scripts/agent_core_db.py
+python3 -m py_compile hermes_cli/agent_core_sql.py scripts/agent_core_roles.py scripts/agent_core_db.py tools/sales_operator_tool.py scripts/runtime/publish_delivery_sandbox.py scripts/runtime/export_sales_operator_dashboard.py && bash -n scripts/zeus-sync-secrets.sh
 ```
 
 Result: PASS, no output.
 
 ```bash
-pytest -q tests/test_sales_operator_dashboard_surface.py tests/test_publish_delivery_sandbox_document_actions.py
+pytest -q tests/scripts/test_agent_core_roles.py tests/scripts/test_signature_runtime_wiring.py tests/test_sales_operator_dashboard_surface.py tests/test_publish_delivery_sandbox_document_actions.py
 ```
 
 Result:
 
 ```text
-17 passed in 1.19s
+23 passed in 1.33s
 ```
 
 ```bash
@@ -35,6 +35,19 @@ sales_operator:000002 applied
 ```
 
 ```bash
+systemctl --user restart zeus-secrets-sync.service
+python3 scripts/agent_core_roles.py
+```
+
+Result:
+
+```text
+Agent Core runtime roles ready: agent_runtime, factory_runtime, calendar_runtime, crm_runtime, voice_runtime, sales_runtime, sales_operator_runtime, accounting_runtime, fitness_runtime, signature_runtime, agent_management_runtime
+```
+
+Secret verification was presence-only: `AGENT_MANAGEMENT_DB_RUNTIME_USER`, `AGENT_MANAGEMENT_DB_RUNTIME_PASSWORD`, `AGENT_MANAGEMENT_DATABASE_URL`, and `AGENT_MANAGEMENT_DATABASE_URL_DOCKER` are present in `~/.hermes/runtime-secrets.env`; values were not printed.
+
+```bash
 python3 scripts/runtime/export_sales_operator_dashboard.py --target /home/jean/zeus-runtime/delivery-sandbox/user-data --campaign-id empleado-uno-1000-subscribers-q3-2026 --prospect-limit 50 --report-limit 30
 ```
 
@@ -47,7 +60,7 @@ PLAYWRIGHT_JSON_OUTPUT_NAME=factory/projects/empleado-uno-sales-operator-core/ev
 Result:
 
 ```text
-1 passed (11.4s)
+1 passed (11.6s)
 ```
 
 ## Browser QA scope

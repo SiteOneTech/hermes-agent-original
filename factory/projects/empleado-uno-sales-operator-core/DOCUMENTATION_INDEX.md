@@ -35,8 +35,8 @@
 ## Implementation evidence
 
 - `factory/projects/empleado-uno-sales-operator-core/IMPLEMENTATION_REPORT.md` — implemented: yes; reviewed: yes
-- `factory/projects/empleado-uno-sales-operator-core/QA_REPORT.md` — qa: pass; reviewed: yes
-- `factory/projects/empleado-uno-sales-operator-core/SECURITY_REVIEW.md` — private dashboard pass; autonomous outbound hold
+- `factory/projects/empleado-uno-sales-operator-core/QA_REPORT.md` — qa: pass/green; reviewed: yes
+- `factory/projects/empleado-uno-sales-operator-core/SECURITY_REVIEW.md` — private dashboard pass; roles/secret sync green; autonomous outbound scoped to I6/I7
 - `factory/projects/empleado-uno-sales-operator-core/evidence/sales-operator-dashboard/playwright-report.json` — browser QA: pass
 - `factory/projects/empleado-uno-sales-operator-core/evidence/sales-operator-dashboard/desktop.png` — visual evidence: desktop
 - `factory/projects/empleado-uno-sales-operator-core/evidence/sales-operator-dashboard/mobile.png` — visual evidence: mobile

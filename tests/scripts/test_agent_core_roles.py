@@ -1,3 +1,4 @@
+from hermes_cli import agent_core_sql
 from scripts import agent_core_roles
 
 
@@ -20,3 +21,25 @@ def test_ensure_login_role_alters_existing_nologin_roles_to_login(monkeypatch):
     assert captured["database"] == "postgres"
     assert "ALTER ROLE " in captured["sql"]
     assert " LOGIN PASSWORD " in captured["sql"]
+
+
+def test_agent_management_runtime_password_falls_back_to_agent_runtime_password():
+    env = {"AGENT_DATABASE_URL": "postgresql://agent_runtime:samplepw@127.0.0.1:55430/zeus_agent"}
+
+    agent_core_roles._fill_passwords_from_urls(env)
+    agent_core_roles._apply_shared_runtime_password_fallbacks(env)
+
+    assert env["AGENT_DB_RUNTIME_PASSWORD"] == "samplepw"
+    assert env["AGENT_MANAGEMENT_DB_RUNTIME_PASSWORD"] == "samplepw"
+
+
+def test_agent_management_dedicated_password_wins_over_shared_fallback():
+    env = {
+        "AGENT_DB_RUNTIME_PASSWORD": "basepw",
+        "AGENT_MANAGEMENT_DB_RUNTIME_PASSWORD": "dedicatedpw",
+    }
+
+    agent_core_roles._apply_shared_runtime_password_fallbacks(env)
+    agent_core_sql._apply_shared_runtime_password_fallbacks(env)
+
+    assert env["AGENT_MANAGEMENT_DB_RUNTIME_PASSWORD"] == "dedicatedpw"

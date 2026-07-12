@@ -2,7 +2,7 @@
 
 Date: 2026-07-12
 Owner: Zeus
-Status: PASS for private supervision increment; HOLD for autonomous real outbound
+Status: PASS / GREEN for private supervision increment; autonomous real outbound remains scoped to I6/I7
 
 ## Passed controls
 
@@ -32,7 +32,9 @@ The following remain blocked until a later increment validates them:
 
 ## Security note from implementation
 
-`agent_core_roles.py` could not complete because `AGENT_MANAGEMENT_DB_RUNTIME_PASSWORD` is missing from the current runtime secret set. This did not block Sales Operator because migrations granted `sales_runtime` the required Sales Operator/CRM read permissions. The canonical follow-up is to add the missing optional/required runtime secret through Infisical rather than hardcoding it locally.
+`agent_core_roles.py` is now green. `zeus-secrets-sync.service` regenerates `~/.hermes/runtime-secrets.env` with `AGENT_MANAGEMENT_DB_RUNTIME_USER`, `AGENT_MANAGEMENT_DB_RUNTIME_PASSWORD`, `AGENT_MANAGEMENT_DATABASE_URL`, and `AGENT_MANAGEMENT_DATABASE_URL_DOCKER` present. The transition path uses the existing synced `AGENT_DATABASE_URL`/`AGENT_DB_RUNTIME_PASSWORD` as a same-database fallback when older Infisical projects do not yet define a dedicated `AGENT_MANAGEMENT_*` secret; a dedicated Infisical value automatically wins when present.
+
+Factory security gate `663` passed for the delivered private/supervised increment. Autonomous outbound remains a future-scope control for I6/I7, not a blocker for opening I6.
 
 ## Public pricing/content note
 

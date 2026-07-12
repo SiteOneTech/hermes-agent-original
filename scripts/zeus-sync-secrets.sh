@@ -181,6 +181,14 @@ for pwd_key, url_key in {
         if parsed.password:
             set_if_missing(pwd_key, unquote(parsed.password))
 
+# Agent Management runs in the same Agent Core DB. While older Infisical
+# projects are missing a dedicated AGENT_MANAGEMENT_* secret, inherit the
+# already-synced base agent runtime password so role rotation and runtime URLs
+# stay green without generating local-only credentials. A dedicated Infisical
+# value overrides this fallback automatically.
+set_if_missing('AGENT_MANAGEMENT_DB_RUNTIME_USER', values.get('AGENT_MANAGEMENT_DB_RUNTIME_USER') or 'agent_management_runtime')
+set_if_missing('AGENT_MANAGEMENT_DB_RUNTIME_PASSWORD', values.get('AGENT_DB_RUNTIME_PASSWORD'))
+
 def _agent_db_host_port():
     agent_url = values.get('AGENT_DATABASE_URL', '')
     if agent_url:

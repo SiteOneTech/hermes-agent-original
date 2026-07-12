@@ -49,6 +49,14 @@ SECRET_KEYS = [
     "AGENT_MANAGEMENT_DB_RUNTIME_PASSWORD",
 ]
 OPTIONAL_RUNTIME_PASSWORD_KEYS = {"SIGNATURE_DB_RUNTIME_PASSWORD", "SALES_OPERATOR_DB_RUNTIME_PASSWORD"}
+SHARED_RUNTIME_PASSWORD_FALLBACKS = {
+    # Agent Management lives in the same local Agent Core DB. Older Infisical
+    # projects may not yet define a dedicated secret for it; use the already
+    # synced base agent runtime password rather than blocking role rotation or
+    # generating an ad-hoc local secret. Once AGENT_MANAGEMENT_* exists in
+    # Infisical, the dedicated value wins.
+    "AGENT_MANAGEMENT_DB_RUNTIME_PASSWORD": "AGENT_DB_RUNTIME_PASSWORD",
+}
 
 
 def load_env_file(path: Path = ENV_FILE) -> dict[str, str]:
@@ -112,6 +120,12 @@ def _fill_passwords_from_urls(env: dict[str, str]) -> None:
         if parsed.password:
             env[password_key] = unquote(parsed.password)
 
+
+def _apply_shared_runtime_password_fallbacks(env: dict[str, str]) -> None:
+    for target_key, fallback_key in SHARED_RUNTIME_PASSWORD_FALLBACKS.items():
+        if not env.get(target_key) and env.get(fallback_key):
+            env[target_key] = env[fallback_key]
+
 def runtime_env(write_missing: bool = False) -> dict[str, str]:
     # Priority: defaults < local .env fallback < process env < Infisical runtime-secrets.env.
     # Infisical is canonical for operation; local .env only bootstraps dev/offline.
@@ -134,6 +148,7 @@ def runtime_env(write_missing: bool = False) -> dict[str, str]:
     ]:
         env.setdefault(key, default_user)
     _fill_passwords_from_urls(env)
+    _apply_shared_runtime_password_fallbacks(env)
     if write_missing:
         alphabet = string.ascii_letters + string.digits
         for key in SECRET_KEYS:

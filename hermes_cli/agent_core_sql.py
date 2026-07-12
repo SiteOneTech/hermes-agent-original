@@ -33,6 +33,9 @@ DEFAULTS = {
     "SIGNATURE_DB_RUNTIME_USER": "signature_runtime",
     "AGENT_MANAGEMENT_DB_RUNTIME_USER": "agent_management_runtime",
 }
+SHARED_RUNTIME_PASSWORD_FALLBACKS = {
+    "AGENT_MANAGEMENT_DB_RUNTIME_PASSWORD": "AGENT_DB_RUNTIME_PASSWORD",
+}
 
 
 def load_env_file(path: Path = ENV_FILE) -> dict[str, str]:
@@ -74,6 +77,12 @@ def _fill_passwords_from_urls(env: dict[str, str]) -> None:
         if parsed.password:
             env[password_key] = unquote(parsed.password)
 
+
+def _apply_shared_runtime_password_fallbacks(env: dict[str, str]) -> None:
+    for target_key, fallback_key in SHARED_RUNTIME_PASSWORD_FALLBACKS.items():
+        if not env.get(target_key) and env.get(fallback_key):
+            env[target_key] = env[fallback_key]
+
 def _runtime_secrets_file() -> Path:
     return Path(os.getenv("HERMES_HOME", Path.home() / ".hermes")) / "runtime-secrets.env"
 
@@ -86,6 +95,7 @@ def runtime_env() -> dict[str, str]:
     # monkeypatches it after modules are imported.
     env = {**DEFAULTS, **os.environ, **load_env_file(_runtime_secrets_file())}
     _fill_passwords_from_urls(env)
+    _apply_shared_runtime_password_fallbacks(env)
     return env
 
 
