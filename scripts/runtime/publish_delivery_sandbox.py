@@ -678,6 +678,106 @@ def _signature_dashboard_page(session: dict[str, Any]) -> str:
     return _layout(f"{AGENT_NAME} User - Firmas", body)
 
 
+def _sales_operator_dashboard_data() -> dict[str, Any]:
+    path = USER_DATA_DIR / "sales_operator_dashboard.json"
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+    return {
+        "campaign": {"product_name": "Empleado.uno", "status": "pending_snapshot", "target_subscribers": 1000, "referral_code": "zeus"},
+        "summary": {"prospects": 0, "contacted_clients": 0, "research_snapshots": 0, "attack_plans": 0, "open_outreach": 0, "attempts": 0, "daily_reports": 0, "territories": 0},
+        "channels": [], "territories": [], "reports": [], "prospects": [], "graph": [], "generated_at": None,
+    }
+
+
+def _sales_operator_list_items(value: Any, limit: int = 4) -> str:
+    if not isinstance(value, list):
+        return ""
+    items: list[str] = []
+    for item in value[:limit]:
+        if isinstance(item, dict):
+            text = item.get("summary") or item.get("title") or item.get("name") or item.get("note") or json.dumps(item, ensure_ascii=False)
+        else:
+            text = str(item)
+        if text:
+            items.append(f"<li>{_e(text)}</li>")
+    return "".join(items)
+
+
+def _sales_operator_dashboard_page(session: dict[str, Any]) -> str:
+    data = _sales_operator_dashboard_data()
+    campaign = data.get("campaign") if isinstance(data.get("campaign"), dict) else {}
+    summary = data.get("summary") if isinstance(data.get("summary"), dict) else {}
+    channels = data.get("channels") if isinstance(data.get("channels"), list) else []
+    territories = data.get("territories") if isinstance(data.get("territories"), list) else []
+    reports = data.get("reports") if isinstance(data.get("reports"), list) else []
+    prospects = data.get("prospects") if isinstance(data.get("prospects"), list) else []
+    graph = data.get("graph") if isinstance(data.get("graph"), list) else []
+    graph_b64 = base64.b64encode(json.dumps(graph, ensure_ascii=False).encode("utf-8")).decode("ascii")
+    product = campaign.get("product_name") or "Empleado.uno"
+    bonus = campaign.get("bonus_offer") or "Bono early adopter: 50% extra en créditos según el plan confirmado por correo."
+    metrics = [
+        ("Prospects", summary.get("prospects", 0), "CRM/contexto de esta campaña", "🧭"),
+        ("Contactados", summary.get("contacted_clients", 0), "clientes con evidencia real", "🤝"),
+        ("Research", summary.get("research_snapshots", 0), "snapshots de investigación", "🔎"),
+        ("Ataques", summary.get("attack_plans", 0), "planes personalizados", "🎯"),
+        ("Cola", summary.get("open_outreach", 0), "drafts/supervisado", "📬"),
+        ("Intentos", summary.get("attempts", 0), "provider/customer evidence", "📡"),
+        ("Jornadas", summary.get("daily_reports", 0), "retrospectivas diarias", "🗓️"),
+        ("Zonas", summary.get("territories", 0), "territorios activos/plan", "🌎"),
+    ]
+    metric_html = "".join(
+        f"<div class='metric'><span class='icon'>{icon}</span><span class='eyebrow'>{_e(label)}</span><strong>{_e(value)}</strong><p class='muted'>{_e(note)}</p></div>"
+        for label, value, note, icon in metrics
+    )
+    channel_html = "".join(
+        f"<div class='module-card'><div class='module-top'><span class='icon'>📣</span><span class='status {_e(ch.get('status') or 'planned')}'>{_e(ch.get('status') or 'planned')}</span></div><span class='eyebrow'>{_e(ch.get('channel'))}</span><h3>{_e(ch.get('mode') or 'draft_only')}</h3><p class='muted'>{_e(ch.get('notes') or '')}</p><p class='caption'>límite diario: {_e(ch.get('daily_limit', 0))} · aprobación: {_e('sí' if ch.get('requires_human_approval') else 'no')}</p></div>"
+        for ch in channels if isinstance(ch, dict)
+    )
+    territory_html = "".join(
+        f"<div class='module-card'><span class='eyebrow'>{_e(t.get('country'))} · {_e(t.get('city'))}</span><h3>{_e(t.get('vertical'))}</h3><p class='muted'>Estado: {_e(t.get('status'))}</p><p class='caption'>Prioridad {_e(t.get('priority'))}</p></div>"
+        for t in territories if isinstance(t, dict)
+    )
+    report_html = "".join(
+        f"<article class='card'><span class='eyebrow'>{_e(r.get('report_date'))}</span><h3>{_e(r.get('work_summary'))}</h3><div class='modules' style='grid-template-columns:repeat(3,minmax(0,1fr))'><div><p class='caption'>Acciones</p><ul>{_sales_operator_list_items(r.get('actions_taken')) or '<li>—</li>'}</ul></div><div><p class='caption'>Aprendizajes</p><ul>{_sales_operator_list_items(r.get('learnings')) or '<li>—</li>'}</ul></div><div><p class='caption'>Siguiente</p><ul>{_sales_operator_list_items(r.get('next_actions')) or '<li>—</li>'}</ul></div></div><p class='muted'>{_e(r.get('retrospective') or '')}</p></article>"
+        for r in reports if isinstance(r, dict)
+    )
+    prospect_rows = "".join(
+        f"<tr><td>{_e(p.get('name'))}<br><span class='caption'>{_e(p.get('domain') or p.get('website') or '')}</span></td><td>{_e(p.get('city') or '—')} / {_e(p.get('vertical') or '—')}</td><td>{_e(p.get('status'))}</td><td>{_e(p.get('fit_score') if p.get('fit_score') is not None else '—')}</td><td>{_e(p.get('contact_name') or p.get('contact_email') or p.get('organization_name') or '—')}</td><td>{_e(p.get('next_action') or '—')}</td></tr>"
+        for p in prospects if isinstance(p, dict)
+    )
+    body = f"""
+    <section class="hero"><span class="eyebrow">Sales Operator Core · {_e(session.get('user_id'))}</span><h1>{_e(product)} activo</h1><p class="muted">Superficie privada de supervisión del vendedor IA: campaña, canales, investigación, cola supervisada, jornadas de trabajo y CRM rápido. No ejecuta spam: todo outbound nace con políticas y evidencia.</p><div class="hero-actions"><a class="button secondary" href="/user/">Volver</a><a class="button secondary" href="/user/logout">Cerrar sesión</a></div><div class="grid" style="margin-top:18px"><div class="card"><span class="eyebrow">Meta</span><h3>{_e(campaign.get('target_subscribers') or 1000)} suscriptores</h3><p class="muted">Objetivo stretch de la campaña.</p></div><div class="card"><span class="eyebrow">Referido</span><h3>{_e(campaign.get('referral_code') or 'zeus')}</h3><p class="muted">Tracking manual por nombre del cliente.</p></div><div class="card"><span class="eyebrow">Bono</span><h3>+50% créditos</h3><p class="muted">{_e(bonus)}</p></div><div class="card"><span class="eyebrow">Snapshot</span><h3>{_e(data.get('generated_at') or 'pendiente')}</h3><p class="muted">Export seguro desde Agent Core.</p></div></div></section>
+    <section class="grid">{metric_html}</section>
+    <section class="card" style="margin-top:14px"><span class="eyebrow">Evolución dinámica</span><h2>Trabajo diario vs resultados</h2><canvas id="salesOperatorChart" height="190" style="width:100%;max-height:260px"></canvas></section>
+    <section class="card" style="margin-top:14px"><span class="eyebrow">Canales activos y planificados</span><h2>Política comercial</h2><div class="modules">{channel_html or '<p class="muted">Sin canales configurados todavía.</p>'}</div></section>
+    <section class="card" style="margin-top:14px"><span class="eyebrow">Territorios</span><h2>Zonas de ataque</h2><div class="modules">{territory_html or '<p class="muted">Sin territorios todavía.</p>'}</div></section>
+    <section class="card" style="margin-top:14px"><span class="eyebrow">Jornadas de trabajo</span><h2>Reporte diario y retrospectiva</h2><div style="display:grid;gap:12px">{report_html or '<p class="muted">Aún no hay jornadas registradas.</p>'}</div></section>
+    <section class="card" style="margin-top:14px"><span class="eyebrow">CRM rápido</span><h2>Clientes/prospects contactados o investigados</h2><table><thead><tr><th>Cliente</th><th>Zona/vertical</th><th>Estado</th><th>Score</th><th>Contacto CRM</th><th>Siguiente acción</th></tr></thead><tbody>{prospect_rows or '<tr><td colspan="6">Aún no hay clientes contactados desde este módulo.</td></tr>'}</tbody></table></section>
+    <script>
+    (function(){{
+      const graph = JSON.parse(atob('{graph_b64}'));
+      const canvas = document.getElementById('salesOperatorChart'); if(!canvas) return;
+      const ctx = canvas.getContext('2d'); const ratio = window.devicePixelRatio || 1; const width = canvas.clientWidth || 900; const height = 230;
+      canvas.width = width * ratio; canvas.height = height * ratio; ctx.scale(ratio, ratio);
+      const pad = 34, series = ['prospects_researched','attacks_prepared','messages_sent','responses','wins'];
+      const colors = ['#85b7ff','#c4b5fd','#fbbf24','#86efac','#38bdf8'];
+      const max = Math.max(1, ...graph.flatMap(g => series.map(k => Number(g[k] || 0))));
+      const total = graph.flatMap(g => series.map(k => Number(g[k] || 0))).reduce((a,b)=>a+b,0);
+      ctx.strokeStyle = 'rgba(255,255,255,.13)'; for(let i=0;i<5;i++){{ const y=pad+i*(height-pad*2)/4; ctx.beginPath(); ctx.moveTo(pad,y); ctx.lineTo(width-pad,y); ctx.stroke(); }}
+      if(!graph.length || total===0){{ ctx.fillStyle='#a8b3c7'; ctx.font='16px Inter, sans-serif'; ctx.fillText('Sin actividad cuantitativa todavía: las próximas jornadas llenarán esta gráfica.', pad, height/2); return; }}
+      const groupW = (width-pad*2)/graph.length, barW = Math.max(5, Math.min(18, groupW/(series.length+2)));
+      graph.forEach((g,i)=>{{ series.forEach((k,j)=>{{ const val=Number(g[k]||0), h=(height-pad*2)*(val/max), x=pad+i*groupW+j*barW+8, y=height-pad-h; ctx.fillStyle=colors[j]; ctx.globalAlpha=.86; ctx.fillRect(x,y,barW-2,h); }}); ctx.globalAlpha=1; ctx.fillStyle='#a8b3c7'; ctx.font='11px Inter, sans-serif'; ctx.fillText(String(g.report_date||'día').slice(5), pad+i*groupW+6, height-10); }});
+    }})();
+    </script>
+    """
+    return _layout(f"{AGENT_NAME} User - Sales Operator", body)
+
+
 def _dashboard_page(session: dict[str, Any]) -> str:
     cfg = _dashboard_config()
     metrics = cfg.get("metrics") or []
@@ -692,7 +792,8 @@ def _dashboard_page(session: dict[str, Any]) -> str:
         for mod in modules
     )
     signature_card = "<a class='module-card primary' href='/user/signatures/'><div class='module-top'><span class='icon'>✍️</span><span class='status active'>activo</span></div><span class='eyebrow'>módulo privado</span><h3>Firmas</h3><p class='muted'>Métricas de solicitudes, firmantes, recordatorios, copias y hashes.</p><p class='caption'>Protegido por sesión OTP</p></a>"
-    module_html = signature_card + module_html
+    sales_operator_card = "<a class='module-card primary' href='/user/sales-operator/'><div class='module-top'><span class='icon'>📈</span><span class='status active'>activo</span></div><span class='eyebrow'>módulo privado</span><h3>Sales Operator</h3><p class='muted'>Supervisa Empleado.uno: zonas, canales, jornadas, aprendizaje y CRM rápido.</p><p class='caption'>Gráficos + retrospectiva diaria</p></a>"
+    module_html = signature_card + sales_operator_card + module_html
     decision_html = "".join(f"<p>• <strong>{_e(d.get('title'))}</strong>: {_e(d.get('summary'))}</p>" for d in decisions)
     body = f"""
     <section class="hero"><span class="eyebrow">{_e(cfg.get('display_name') or session.get('user_id'))}</span><h1>Mapa del agente</h1><p class="muted">Vista ejecutiva de lo que el agente puede operar por chat: agenda, CRM, cotizaciones, invoices, documentos firmados, ventas, productos y módulos especializados como Fitness Coach. No es una UI de gestión pesada: es un panel claro para mostrar capacidades, métricas y accesos protegidos.</p><div class="hero-actions"><a class="button" href="/w/VtV636xEVsdDGmzSHys6vrko/coach/">Abrir Fitness Coach</a><a class="button secondary" href="/user/logout">Cerrar sesión</a></div></section>
@@ -723,6 +824,13 @@ def _handle_user_get(handler: BaseHTTPRequestHandler, path: str, query: dict[str
             _redirect(handler, "/user/login")
             return
         _html_response(handler, 200, _signature_dashboard_page(session))
+        return
+    if path in {"/user/sales-operator", "/user/sales-operator/"}:
+        session = _session_from_request(handler)
+        if not session:
+            _redirect(handler, "/user/login")
+            return
+        _html_response(handler, 200, _sales_operator_dashboard_page(session))
         return
     _json_response(handler, 404, {"ok": False, "error": "not_found"})
 

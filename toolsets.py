@@ -272,6 +272,20 @@ TOOLSETS = {
         "includes": []
     },
 
+    "sales_operator": {
+        "description": "Agent-native daily sales operator: campaigns, territories, source-backed lead research, supervised outreach, experiments, daily retrospectives, and CRM bridge",
+        "tools": [
+            "sales_operator_status", "sales_operator_campaign_upsert",
+            "sales_operator_seed_empleado_uno", "sales_operator_territory_upsert",
+            "sales_operator_channel_policy_upsert", "sales_operator_lead_source_upsert",
+            "sales_operator_prospect_upsert", "sales_operator_research_record",
+            "sales_operator_score_record", "sales_operator_attack_plan_upsert",
+            "sales_operator_outreach_enqueue", "sales_operator_outreach_attempt_record",
+            "sales_operator_daily_report_create", "sales_operator_dashboard_snapshot",
+        ],
+        "includes": []
+    },
+
     "notifications": {
         "description": "Provider-neutral notification adapters for email, marketing, and business notifications",
         "tools": ["notification_status", "notification_email_send"],

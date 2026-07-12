@@ -18,6 +18,9 @@
 | `DOCUMENTATION_INDEX.md` | validated: yes; reviewed: yes; owner: Zeus; reviewer: Zeus |
 | `QA_GATES.md` | validated: yes; reviewed: yes; owner: Zeus; reviewer: Zeus |
 | `SECURITY_GATES.md` | validated: yes; reviewed: yes; owner: Zeus; reviewer: Zeus |
+| `IMPLEMENTATION_REPORT.md` | validated: yes; reviewed: yes; owner: Zeus; reviewer: Zeus |
+| `QA_REPORT.md` | validated: yes; reviewed: yes; owner: Zeus; reviewer: Zeus |
+| `SECURITY_REVIEW.md` | validated: yes; reviewed: yes; owner: Zeus; reviewer: Zeus |
 
 ## Detailed source docs
 
@@ -29,8 +32,17 @@
 - `docs/sales-operator-core/QA-SECURITY-GATES.md` — validated: yes; reviewed: yes
 - `docs/sales-operator-core/DOCUMENTATION_INDEX.md` — validated: yes; reviewed: yes
 
+## Implementation evidence
+
+- `factory/projects/empleado-uno-sales-operator-core/IMPLEMENTATION_REPORT.md` — implemented: yes; reviewed: yes
+- `factory/projects/empleado-uno-sales-operator-core/QA_REPORT.md` — qa: pass; reviewed: yes
+- `factory/projects/empleado-uno-sales-operator-core/SECURITY_REVIEW.md` — private dashboard pass; autonomous outbound hold
+- `factory/projects/empleado-uno-sales-operator-core/evidence/sales-operator-dashboard/playwright-report.json` — browser QA: pass
+- `factory/projects/empleado-uno-sales-operator-core/evidence/sales-operator-dashboard/desktop.png` — visual evidence: desktop
+- `factory/projects/empleado-uno-sales-operator-core/evidence/sales-operator-dashboard/mobile.png` — visual evidence: mobile
+
 Ownership: Factory DB + repo Markdown are source of truth. Notion is disabled/non-blocking.
 
 ## Review note
 
-This validation covers planning readiness only. It does **not** pass the product security/implementation gates. Real outbound remains blocked until the Sales Operator policy engine, channel validation, opt-out, rate limits, and dry-run verification are implemented.
+Planning and the first implementation increment are validated. The private supervision dashboard, Agent Core schema, tools, seed, and browser QA are complete. Real autonomous outbound remains blocked until channel validation, opt-out automation, rate limits, and dry-run verification are implemented in a later increment.

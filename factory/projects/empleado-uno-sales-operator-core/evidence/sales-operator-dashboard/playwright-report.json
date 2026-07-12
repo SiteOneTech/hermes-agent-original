@@ -1,0 +1,126 @@
+{
+  "config": {
+    "argv": [
+      "/home/jean/.nvm/versions/node/v24.16.0/bin/node",
+      "/home/jean/Projects/hermes-agent-original/node_modules/.bin/playwright",
+      "test",
+      "scripts/qa/sales_operator_dashboard.spec.mjs",
+      "--reporter=json,line",
+      "--output=factory/projects/empleado-uno-sales-operator-core/evidence/sales-operator-dashboard/test-results"
+    ],
+    "rootDir": "/home/jean/Projects/hermes-agent-original",
+    "failOnFlakyTests": false,
+    "forbidOnly": false,
+    "fullyParallel": false,
+    "globalSetup": null,
+    "globalTeardown": null,
+    "globalTimeout": 0,
+    "grep": {},
+    "grepInvert": null,
+    "maxFailures": 0,
+    "metadata": {
+      "actualWorkers": 1
+    },
+    "preserveOutput": "always",
+    "projects": [
+      {
+        "outputDir": "/home/jean/Projects/hermes-agent-original/factory/projects/empleado-uno-sales-operator-core/evidence/sales-operator-dashboard/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "",
+        "name": "",
+        "testDir": "/home/jean/Projects/hermes-agent-original",
+        "testIgnore": [],
+        "testMatch": [
+          "**/*.@(spec|test).?(c|m)[jt]s?(x)"
+        ],
+        "timeout": 30000
+      }
+    ],
+    "quiet": false,
+    "reporter": [
+      [
+        "json"
+      ],
+      [
+        "line"
+      ]
+    ],
+    "reportSlowTests": {
+      "max": 5,
+      "threshold": 300000
+    },
+    "shard": null,
+    "tags": [],
+    "updateSnapshots": "missing",
+    "updateSourceMethod": "patch",
+    "version": "1.61.1",
+    "workers": 12,
+    "webServer": null
+  },
+  "suites": [
+    {
+      "title": "scripts/qa/sales_operator_dashboard.spec.mjs",
+      "file": "scripts/qa/sales_operator_dashboard.spec.mjs",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "Sales Operator private dashboard",
+          "file": "scripts/qa/sales_operator_dashboard.spec.mjs",
+          "line": 7,
+          "column": 6,
+          "specs": [
+            {
+              "title": "redirects unauthenticated users and renders protected dashboard",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "",
+                  "projectName": "",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 4487,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-07-12T16:31:39.736Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "4b1052281777f02de0c3-71a6ca702995b52a3745",
+              "file": "scripts/qa/sales_operator_dashboard.spec.mjs",
+              "line": 8,
+              "column": 3
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": {
+    "startTime": "2026-07-12T16:31:33.020Z",
+    "duration": 11449.678,
+    "expected": 1,
+    "skipped": 0,
+    "unexpected": 0,
+    "flaky": 0
+  }
+}

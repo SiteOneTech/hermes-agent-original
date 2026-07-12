@@ -53,6 +53,10 @@ MODULES = {
         "database_env": "AGENT_CRM_DB_NAME",
         "migrations": REPO_ROOT / "db" / "modules" / "crm",
     },
+    "sales_operator": {
+        "database_env": "AGENT_DB_NAME",
+        "migrations": REPO_ROOT / "db" / "modules" / "sales_operator",
+    },
     "fitness": {
         "database_env": "AGENT_FITNESS_DB_NAME",
         "migrations": REPO_ROOT / "db" / "modules" / "fitness",
@@ -241,7 +245,7 @@ def main() -> None:
         ensure_database(env, env.get("AGENT_FITNESS_DB_NAME", env["AGENT_DB_NAME"]))
         ensure_database(env, env.get("AGENT_SIGNATURE_DB_NAME", env["AGENT_DB_NAME"]))
         ensure_database(env, env.get("AGENT_AGENT_MANAGEMENT_DB_NAME", env["AGENT_DB_NAME"]))
-        for module in ["agent_core", "factory", "agent_management", "calendar", "crm", "fitness", "signature"]:
+        for module in ["agent_core", "factory", "agent_management", "calendar", "crm", "sales_operator", "fitness", "signature"]:
             apply_module(env, module)
     elif args.command == "status":
         status(env)
