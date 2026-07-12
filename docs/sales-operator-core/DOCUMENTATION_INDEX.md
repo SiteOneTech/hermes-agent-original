@@ -9,6 +9,8 @@
 - `TRACKER-001.md` — current gate tracker.
 - `QA-SECURITY-GATES.md` — safety, compliance, QA gates.
 - `CRON-LOOPS-I6.md` — disabled-by-default dry-run cron loops, wrapper commands, self-contained prompts, and I6 evidence.
+- `PILOT-SMOKE-I7.md` — synthetic first pilot smoke for Empleado.uno.
+- `RUNTIME-PROPAGATION-I8.md` — propagation report for `sitiouno-agent-runtime`.
 
 ## Related context
 

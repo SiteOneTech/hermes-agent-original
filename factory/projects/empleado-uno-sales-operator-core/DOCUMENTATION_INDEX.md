@@ -28,6 +28,9 @@
 | `I7_IMPLEMENTATION_REPORT.md` | validated: yes; reviewed: yes; owner: Zeus; reviewer: Zeus |
 | `I7_QA_REPORT.md` | validated: yes; reviewed: yes; owner: Zeus; reviewer: Zeus |
 | `I7_SECURITY_REVIEW.md` | validated: yes; reviewed: yes; owner: Zeus; reviewer: Zeus |
+| `I8_RUNTIME_PROPAGATION_REPORT.md` | validated: yes; reviewed: yes; owner: Zeus; reviewer: Zeus |
+| `I8_QA_REPORT.md` | validated: yes; reviewed: yes; owner: Zeus; reviewer: Zeus |
+| `I8_SECURITY_REVIEW.md` | validated: yes; reviewed: yes; owner: Zeus; reviewer: Zeus |
 
 ## Detailed source docs
 
@@ -40,6 +43,7 @@
 - `docs/sales-operator-core/DOCUMENTATION_INDEX.md` — validated: yes; reviewed: yes
 - `docs/sales-operator-core/CRON-LOOPS-I6.md` — validated: yes; reviewed: yes
 - `docs/sales-operator-core/PILOT-SMOKE-I7.md` — validated: yes; reviewed: yes
+- `docs/sales-operator-core/RUNTIME-PROPAGATION-I8.md` — validated: yes; reviewed: yes (runtime repo)
 
 ## Implementation evidence
 
@@ -53,6 +57,9 @@
 - `factory/projects/empleado-uno-sales-operator-core/I7_IMPLEMENTATION_REPORT.md` — I7 implemented: first Empleado.uno pilot smoke with synthetic 10-lead pack, scoring, attack plans and CRM readback
 - `factory/projects/empleado-uno-sales-operator-core/I7_QA_REPORT.md` — I7 QA pass: 15 targeted tests, migrate/roles, live DB readback and evidence validation
 - `factory/projects/empleado-uno-sales-operator-core/I7_SECURITY_REVIEW.md` — I7 security pass: synthetic `.test` fixtures, `external_sends=false`, `outreach_attempts=0`
+- `factory/projects/empleado-uno-sales-operator-core/I8_RUNTIME_PROPAGATION_REPORT.md` — I8 implemented: Sales Operator Core propagated to `SiteOneTech/sitiouno-agent-runtime`
+- `factory/projects/empleado-uno-sales-operator-core/I8_QA_REPORT.md` — I8 QA pass: 46 runtime tests, migrate/roles, live smoke, dry-run, DB readback, dashboard export
+- `factory/projects/empleado-uno-sales-operator-core/I8_SECURITY_REVIEW.md` — I8 security pass: commercial toolset boundary, no privileged tools/raw adapters, `external_sends=false`
 - `factory/projects/empleado-uno-sales-operator-core/evidence/sales-operator-dry-run-i6.json` — I6 dry-run evidence: `external_sends=false`, `messages_sent_by_dry_run=0`
 - `factory/projects/empleado-uno-sales-operator-core/evidence/sales-operator-dry-run-wrapper-i6.json` — I6 wrapper evidence: safe cron/no-agent output artifact
 - `factory/projects/empleado-uno-sales-operator-core/evidence/sales-operator-i7-pilot-smoke.json` — I7 full smoke evidence: tool outputs for campaign/territory/10 leads/scoring/attack plans/CRM readback
@@ -60,9 +67,12 @@
 - `factory/projects/empleado-uno-sales-operator-core/evidence/sales-operator-dashboard/playwright-report.json` — browser QA: pass
 - `factory/projects/empleado-uno-sales-operator-core/evidence/sales-operator-dashboard/desktop.png` — visual evidence: desktop
 - `factory/projects/empleado-uno-sales-operator-core/evidence/sales-operator-dashboard/mobile.png` — visual evidence: mobile
+- Runtime repo `docs/sales-operator-core/evidence/sales-operator-i8-runtime-smoke.json` — I8 runtime smoke evidence: `external_sends=false`, 10 synthetic leads, 10 research/scores/attack plans, 10 drafts, CRM readback
+- Runtime repo `docs/sales-operator-core/evidence/sales-operator-i8-daily-dry-run.json` — I8 runtime dry-run evidence: no external sends/messages
+- Runtime repo `docs/sales-operator-core/evidence/dashboard-user-data/sales_operator_dashboard.json` — I8 private dashboard snapshot
 
 Ownership: Factory DB + repo Markdown are source of truth. Notion is disabled/non-blocking.
 
 ## Review note
 
-Planning, the private supervision dashboard, Agent Core schema/tools/seed, browser QA, I6 dry-run cron loops, and I7 synthetic pilot smoke are validated. Real autonomous outbound remains blocked until channel validation, opt-out automation, rate limits, source-verified public leads, and live pilot policy gates are implemented in later increments.
+Planning, private supervision dashboard, Agent Core schema/tools/seed, browser QA, I6 dry-run cron loops, I7 synthetic pilot smoke, and I8 runtime propagation are validated. Real autonomous outbound remains blocked until channel validation, opt-out automation, rate limits, source-verified public leads, and live pilot policy gates are implemented in later increments.
