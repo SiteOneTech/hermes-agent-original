@@ -14,6 +14,7 @@ graph TD
   I --> J[Pilot campaign]
   H --> J
   J --> K[Live smoke + QA]
+  K --> L[Runtime propagation]
 ```
 
 ## Task inventory
@@ -28,4 +29,5 @@ graph TD
 | T5 | Empleado.uno playbook pack | Zeus/Claude | T0 | Vertical playbooks and templates available. |
 | T6 | Cron/daily operator scripts | Claude/Codex | T2,T4,T5 | Dry-run daily rollup works; cron creation documented/gated. |
 | T7 | Pilot smoke | Zeus/reviewer | T1-T6 | Campaign+territory+10 leads+rollup verified. |
+| T8 | Runtime propagation handoff | Zeus/Factory | T7 | Runtime repo branch/worktree prepared; inherited Sales Operator surface propagated/tested; outbound still gated. |
 ```

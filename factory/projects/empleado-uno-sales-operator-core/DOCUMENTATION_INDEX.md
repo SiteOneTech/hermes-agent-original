@@ -25,6 +25,9 @@
 | `I6_IMPLEMENTATION_REPORT.md` | validated: yes; reviewed: yes; owner: Zeus; reviewer: Zeus |
 | `I6_QA_REPORT.md` | validated: yes; reviewed: yes; owner: Zeus; reviewer: Zeus |
 | `I6_SECURITY_REVIEW.md` | validated: yes; reviewed: yes; owner: Zeus; reviewer: Zeus |
+| `I7_IMPLEMENTATION_REPORT.md` | validated: yes; reviewed: yes; owner: Zeus; reviewer: Zeus |
+| `I7_QA_REPORT.md` | validated: yes; reviewed: yes; owner: Zeus; reviewer: Zeus |
+| `I7_SECURITY_REVIEW.md` | validated: yes; reviewed: yes; owner: Zeus; reviewer: Zeus |
 
 ## Detailed source docs
 
@@ -36,6 +39,7 @@
 - `docs/sales-operator-core/QA-SECURITY-GATES.md` — validated: yes; reviewed: yes
 - `docs/sales-operator-core/DOCUMENTATION_INDEX.md` — validated: yes; reviewed: yes
 - `docs/sales-operator-core/CRON-LOOPS-I6.md` — validated: yes; reviewed: yes
+- `docs/sales-operator-core/PILOT-SMOKE-I7.md` — validated: yes; reviewed: yes
 
 ## Implementation evidence
 
@@ -46,8 +50,13 @@
 - `factory/projects/empleado-uno-sales-operator-core/I6_IMPLEMENTATION_REPORT.md` — I6 implemented: dry-run cron loops, no-send default, self-contained prompts
 - `factory/projects/empleado-uno-sales-operator-core/I6_QA_REPORT.md` — I6 QA pass: 27 tests, migrate/roles, dry-run and wrapper smoke
 - `factory/projects/empleado-uno-sales-operator-core/I6_SECURITY_REVIEW.md` — I6 security pass: no providers/senders, dry-run only, Accounting secret fallback fixed
+- `factory/projects/empleado-uno-sales-operator-core/I7_IMPLEMENTATION_REPORT.md` — I7 implemented: first Empleado.uno pilot smoke with synthetic 10-lead pack, scoring, attack plans and CRM readback
+- `factory/projects/empleado-uno-sales-operator-core/I7_QA_REPORT.md` — I7 QA pass: 15 targeted tests, migrate/roles, live DB readback and evidence validation
+- `factory/projects/empleado-uno-sales-operator-core/I7_SECURITY_REVIEW.md` — I7 security pass: synthetic `.test` fixtures, `external_sends=false`, `outreach_attempts=0`
 - `factory/projects/empleado-uno-sales-operator-core/evidence/sales-operator-dry-run-i6.json` — I6 dry-run evidence: `external_sends=false`, `messages_sent_by_dry_run=0`
 - `factory/projects/empleado-uno-sales-operator-core/evidence/sales-operator-dry-run-wrapper-i6.json` — I6 wrapper evidence: safe cron/no-agent output artifact
+- `factory/projects/empleado-uno-sales-operator-core/evidence/sales-operator-i7-pilot-smoke.json` — I7 full smoke evidence: tool outputs for campaign/territory/10 leads/scoring/attack plans/CRM readback
+- `factory/projects/empleado-uno-sales-operator-core/evidence/i7-pilot-fixture-leads.json` — I7 synthetic lead fixture pack (`.test` domains, no-contact)
 - `factory/projects/empleado-uno-sales-operator-core/evidence/sales-operator-dashboard/playwright-report.json` — browser QA: pass
 - `factory/projects/empleado-uno-sales-operator-core/evidence/sales-operator-dashboard/desktop.png` — visual evidence: desktop
 - `factory/projects/empleado-uno-sales-operator-core/evidence/sales-operator-dashboard/mobile.png` — visual evidence: mobile
@@ -56,4 +65,4 @@ Ownership: Factory DB + repo Markdown are source of truth. Notion is disabled/no
 
 ## Review note
 
-Planning, the private supervision dashboard, Agent Core schema/tools/seed, browser QA, and I6 dry-run cron loops are validated. Real autonomous outbound remains blocked until channel validation, opt-out automation, rate limits, and live pilot policy gates are implemented in later increments.
+Planning, the private supervision dashboard, Agent Core schema/tools/seed, browser QA, I6 dry-run cron loops, and I7 synthetic pilot smoke are validated. Real autonomous outbound remains blocked until channel validation, opt-out automation, rate limits, source-verified public leads, and live pilot policy gates are implemented in later increments.

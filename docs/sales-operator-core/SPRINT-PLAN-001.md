@@ -66,6 +66,14 @@ Entregar una primera versión operable del módulo vendedor diario para Empleado
 - Crear 1 CRM follow-up de prueba.
 - Verify DB + tools + rollup.
 
+### I8 — Runtime propagation handoff
+
+- Preparar branch/worktree contra `SiteOneTech/sitiouno-agent-runtime`.
+- Propagar solo superficie heredable/práctica del Sales Operator Core.
+- Mantener admin/factory internals exclusivos de Zeus.
+- Ejecutar tests/smoke equivalentes en runtime.
+- Dejar outbound real bloqueado hasta channel/security gate.
+
 ## Definition of Done
 
 - Docs actualizadas.

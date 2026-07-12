@@ -1,0 +1,282 @@
+{
+  "campaign_id": "empleado-uno-1000-subscribers-q3-2026",
+  "external_sends": false,
+  "generated_at": "2026-07-12T19:36:38.083077+00:00",
+  "leads": [
+    {
+      "attack_plan_id": "so-plan-i7-clinica-aurora-email",
+      "city": "Medellín",
+      "contact_email": "contacto@i7-clinica-aurora.test",
+      "contact_name": "Contacto Piloto Clinica Aurora",
+      "country": "Colombia",
+      "cta": "probar un empleado IA que responda preguntas frecuentes y agende valoraciones",
+      "domain": "i7-clinica-aurora.test",
+      "micro_vertical": "clínica estética facial",
+      "name": "I7 PILOTO — Clínica Aurora Medellín",
+      "outreach_id": "so-outreach-i7-clinica-aurora-email-draft",
+      "pain_points": [
+        "alto volumen de preguntas repetidas por WhatsApp",
+        "agenda de valoración dependiente de recepción",
+        "seguimiento manual a pacientes interesados"
+      ],
+      "priority": "hot",
+      "prospect_id": "so-prospect-i7-clinica-aurora",
+      "public_channels": [
+        "web",
+        "instagram",
+        "whatsapp_visible_fixture"
+      ],
+      "score": 90,
+      "slug": "clinica-aurora",
+      "vertical": "clínicas/estética",
+      "website": "https://i7-clinica-aurora.test/"
+    },
+    {
+      "attack_plan_id": "so-plan-i7-estetica-botanica-email",
+      "city": "Medellín",
+      "contact_email": "contacto@i7-estetica-botanica.test",
+      "contact_name": "Contacto Piloto Estetica Botanica",
+      "country": "Colombia",
+      "cta": "ver un demo de recepción IA para promociones y citas",
+      "domain": "i7-estetica-botanica.test",
+      "micro_vertical": "spa y estética corporal",
+      "name": "I7 PILOTO — Estética Botánica Laureles",
+      "outreach_id": "so-outreach-i7-estetica-botanica-email-draft",
+      "pain_points": [
+        "consultas por disponibilidad de cabinas",
+        "promociones manuales",
+        "recordatorios de citas sin automatizar"
+      ],
+      "priority": "hot",
+      "prospect_id": "so-prospect-i7-estetica-botanica",
+      "public_channels": [
+        "instagram",
+        "whatsapp_visible_fixture"
+      ],
+      "score": 84,
+      "slug": "estetica-botanica",
+      "vertical": "clínicas/estética",
+      "website": "https://i7-estetica-botanica.test/"
+    },
+    {
+      "attack_plan_id": "so-plan-i7-spa-altavista-email",
+      "city": "Medellín",
+      "contact_email": "contacto@i7-spa-altavista.test",
+      "contact_name": "Contacto Piloto Spa Altavista",
+      "country": "Colombia",
+      "cta": "activar una ruta de diagnóstico y agenda sin saturar al equipo",
+      "domain": "i7-spa-altavista.test",
+      "micro_vertical": "spa médico",
+      "name": "I7 PILOTO — Spa Médico Altavista",
+      "outreach_id": "so-outreach-i7-spa-altavista-email-draft",
+      "pain_points": [
+        "leads preguntan por paquetes",
+        "necesita filtro antes de consulta",
+        "respuestas fuera de horario"
+      ],
+      "priority": "hot",
+      "prospect_id": "so-prospect-i7-spa-altavista",
+      "public_channels": [
+        "web",
+        "email_fixture"
+      ],
+      "score": 80,
+      "slug": "spa-altavista",
+      "vertical": "clínicas/estética",
+      "website": "https://i7-spa-altavista.test/"
+    },
+    {
+      "attack_plan_id": "so-plan-i7-dermatologia-rio-email",
+      "city": "Medellín",
+      "contact_email": "contacto@i7-dermatologia-rio.test",
+      "contact_name": "Contacto Piloto Dermatologia Rio",
+      "country": "Colombia",
+      "cta": "probar respuestas guiadas y agendamiento para valoración",
+      "domain": "i7-dermatologia-rio.test",
+      "micro_vertical": "dermatología estética",
+      "name": "I7 PILOTO — Centro Dermatológico Río",
+      "outreach_id": "so-outreach-i7-dermatologia-rio-email-draft",
+      "pain_points": [
+        "dudas previas a procedimientos",
+        "triage básico antes de cita",
+        "seguimiento posterior lento"
+      ],
+      "priority": "hot",
+      "prospect_id": "so-prospect-i7-dermatologia-rio",
+      "public_channels": [
+        "web",
+        "instagram",
+        "email_fixture"
+      ],
+      "score": 88,
+      "slug": "dermatologia-rio",
+      "vertical": "clínicas/estética",
+      "website": "https://i7-dermatologia-rio.test/"
+    },
+    {
+      "attack_plan_id": "so-plan-i7-odontoestetica-poblado-email",
+      "city": "Medellín",
+      "contact_email": "contacto@i7-odontoestetica-poblado.test",
+      "contact_name": "Contacto Piloto Odontoestetica Poblado",
+      "country": "Colombia",
+      "cta": "mostrar cómo el empleado IA precalifica y agenda evaluación",
+      "domain": "i7-odontoestetica-poblado.test",
+      "micro_vertical": "odontología estética",
+      "name": "I7 PILOTO — Odontoestética Poblado",
+      "outreach_id": "so-outreach-i7-odontoestetica-poblado-email-draft",
+      "pain_points": [
+        "cotizaciones iniciales repetidas",
+        "preguntas por financiación",
+        "agenda de evaluación"
+      ],
+      "priority": "warm",
+      "prospect_id": "so-prospect-i7-odontoestetica-poblado",
+      "public_channels": [
+        "web",
+        "whatsapp_visible_fixture"
+      ],
+      "score": 76,
+      "slug": "odontoestetica-poblado",
+      "vertical": "clínicas/estética",
+      "website": "https://i7-odontoestetica-poblado.test/"
+    },
+    {
+      "attack_plan_id": "so-plan-i7-laser-primavera-email",
+      "city": "Medellín",
+      "contact_email": "contacto@i7-laser-primavera.test",
+      "contact_name": "Contacto Piloto Laser Primavera",
+      "country": "Colombia",
+      "cta": "demo de empleado IA para responder paquetes y reservar valoración",
+      "domain": "i7-laser-primavera.test",
+      "micro_vertical": "depilación láser",
+      "name": "I7 PILOTO — Clínica Láser Primavera",
+      "outreach_id": "so-outreach-i7-laser-primavera-email-draft",
+      "pain_points": [
+        "preguntas frecuentes por zonas y sesiones",
+        "recordatorios de paquetes",
+        "leads de promociones"
+      ],
+      "priority": "hot",
+      "prospect_id": "so-prospect-i7-laser-primavera",
+      "public_channels": [
+        "instagram",
+        "whatsapp_visible_fixture"
+      ],
+      "score": 82,
+      "slug": "laser-primavera",
+      "vertical": "clínicas/estética",
+      "website": "https://i7-laser-primavera.test/"
+    },
+    {
+      "attack_plan_id": "so-plan-i7-beauty-manila-email",
+      "city": "Medellín",
+      "contact_email": "contacto@i7-beauty-manila.test",
+      "contact_name": "Contacto Piloto Beauty Manila",
+      "country": "Colombia",
+      "cta": "ver una prueba de agenda y respuesta automática supervisada",
+      "domain": "i7-beauty-manila.test",
+      "micro_vertical": "beauty studio",
+      "name": "I7 PILOTO — Beauty Studio Manila",
+      "outreach_id": "so-outreach-i7-beauty-manila-email-draft",
+      "pain_points": [
+        "agenda fragmentada",
+        "mensajes fuera de horario",
+        "promociones por temporada"
+      ],
+      "priority": "warm",
+      "prospect_id": "so-prospect-i7-beauty-manila",
+      "public_channels": [
+        "instagram"
+      ],
+      "score": 70,
+      "slug": "beauty-manila",
+      "vertical": "clínicas/estética",
+      "website": "https://i7-beauty-manila.test/"
+    },
+    {
+      "attack_plan_id": "so-plan-i7-rehab-estetica-norte-email",
+      "city": "Medellín",
+      "contact_email": "contacto@i7-rehab-estetica-norte.test",
+      "contact_name": "Contacto Piloto Rehab Estetica Norte",
+      "country": "Colombia",
+      "cta": "probar un flujo IA para seguimiento y dudas frecuentes",
+      "domain": "i7-rehab-estetica-norte.test",
+      "micro_vertical": "postoperatorio y estética funcional",
+      "name": "I7 PILOTO — Rehabilitación Estética Norte",
+      "outreach_id": "so-outreach-i7-rehab-estetica-norte-email-draft",
+      "pain_points": [
+        "seguimiento de pacientes",
+        "instrucciones repetidas",
+        "triage de dudas comunes"
+      ],
+      "priority": "warm",
+      "prospect_id": "so-prospect-i7-rehab-estetica-norte",
+      "public_channels": [
+        "web",
+        "email_fixture"
+      ],
+      "score": 78,
+      "slug": "rehab-estetica-norte",
+      "vertical": "clínicas/estética",
+      "website": "https://i7-rehab-estetica-norte.test/"
+    },
+    {
+      "attack_plan_id": "so-plan-i7-wellness-belen-email",
+      "city": "Medellín",
+      "contact_email": "contacto@i7-wellness-belen.test",
+      "contact_name": "Contacto Piloto Wellness Belen",
+      "country": "Colombia",
+      "cta": "demo para centralizar respuestas y agenda en un empleado IA",
+      "domain": "i7-wellness-belen.test",
+      "micro_vertical": "wellness y medicina estética",
+      "name": "I7 PILOTO — Centro Wellness Belén",
+      "outreach_id": "so-outreach-i7-wellness-belen-email-draft",
+      "pain_points": [
+        "canales dispersos",
+        "consultas de horarios",
+        "clientes preguntan por combos"
+      ],
+      "priority": "warm",
+      "prospect_id": "so-prospect-i7-wellness-belen",
+      "public_channels": [
+        "web",
+        "instagram",
+        "whatsapp_visible_fixture"
+      ],
+      "score": 74,
+      "slug": "wellness-belen",
+      "vertical": "clínicas/estética",
+      "website": "https://i7-wellness-belen.test/"
+    },
+    {
+      "attack_plan_id": "so-plan-i7-integral-envigado-email",
+      "city": "Medellín",
+      "contact_email": "contacto@i7-integral-envigado.test",
+      "contact_name": "Contacto Piloto Integral Envigado",
+      "country": "Colombia",
+      "cta": "probar seguimiento IA sin enviar mensajes masivos",
+      "domain": "i7-integral-envigado.test",
+      "micro_vertical": "estética integral área metropolitana",
+      "name": "I7 PILOTO — Estética Integral Envigado",
+      "outreach_id": "so-outreach-i7-integral-envigado-email-draft",
+      "pain_points": [
+        "captura de leads desde redes",
+        "confirmación de citas",
+        "falta de seguimiento estructurado"
+      ],
+      "priority": "hot",
+      "prospect_id": "so-prospect-i7-integral-envigado",
+      "public_channels": [
+        "instagram",
+        "whatsapp_visible_fixture"
+      ],
+      "score": 86,
+      "slug": "integral-envigado",
+      "vertical": "clínicas/estética",
+      "website": "https://i7-integral-envigado.test/"
+    }
+  ],
+  "ok": true,
+  "reserved_test_domains": true,
+  "synthetic_only": true
+}
