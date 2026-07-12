@@ -91,3 +91,25 @@ The Playwright spec validates:
 ```json
 {"channels": 7, "reports": 1, "snapshot_file": "/home/jean/zeus-runtime/delivery-sandbox/user-data/sales_operator_dashboard.json", "snapshot_ok": true, "status_ok": true, "territories": 5}
 ```
+
+## I6 cron-loop dry-run QA
+
+Detailed report: `factory/projects/empleado-uno-sales-operator-core/I6_QA_REPORT.md`.
+
+Commands/results:
+
+```text
+python3 -m py_compile scripts/runtime/sales_operator_daily_dry_run.py ... && bash -n scripts/cron/sales_operator_daily_dry_run.sh scripts/zeus-sync-secrets.sh
+PASS
+
+pytest -q tests/test_sales_operator_daily_dry_run.py tests/test_sales_operator_dashboard_surface.py tests/test_publish_delivery_sandbox_document_actions.py tests/scripts/test_agent_core_roles.py tests/scripts/test_signature_runtime_wiring.py
+27 passed in 1.40s
+
+python3 scripts/agent_core_db.py migrate && python3 scripts/agent_core_roles.py && python3 scripts/runtime/sales_operator_daily_dry_run.py ...
+dry_run=true external_sends=false messages_sent_by_dry_run=0 cron_specs=3 actions=3 top_loop=lead_discovery_tick
+```
+
+Evidence:
+
+- `factory/projects/empleado-uno-sales-operator-core/evidence/sales-operator-dry-run-i6.json`
+- `factory/projects/empleado-uno-sales-operator-core/evidence/sales-operator-dry-run-wrapper-i6.json`

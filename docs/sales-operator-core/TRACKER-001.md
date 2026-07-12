@@ -3,12 +3,12 @@
 | Gate | Status | Evidence |
 |---|---|---|
 | Intake | Passed | Jean requested specialized daily seller module for Empleado.uno and future products. |
-| Architecture | Pending | Factory must review PRD/ADR and Agent Core schema design. |
+| Architecture | Passed | PRD/ADR and Agent Core local schema/tooling design validated. |
 | Planning | Passed | PRD/ADR/Sprint/Task graph/QA/Docs index created. |
-| Security | Pending | Must implement anti-spam, opt-out, rate limits, channel validation. |
-| Implementation | Pending | DB/tools not implemented yet. |
-| Test | Pending | No module tests yet. |
-| Delivery | Pending | No live smoke yet. |
+| Security | Passed for I6 dry-run scope | Outbound remains fail-closed; I6 sends no external messages and cron specs are disabled by default. |
+| Implementation | In progress by increment | DB/tools/dashboard/I6 dry-run loops implemented; I7 pilot smoke remains. |
+| Test | Passed for I6 | 27 targeted tests plus migrate/roles/live dry-run/wrapper smoke. |
+| Delivery | Passed for I6 source scope | I6 artifacts/evidence recorded; next increment is I7 pilot smoke. |
 
 ## Current assumptions
 

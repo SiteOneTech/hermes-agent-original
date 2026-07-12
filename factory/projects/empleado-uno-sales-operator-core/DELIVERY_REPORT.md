@@ -76,3 +76,26 @@ Smoke:
 ```
 
 `I7 First pilot smoke for Empleado.uno` remains after I6.
+
+## I6 delivery update
+
+I6 is implemented and verified in branch/worktree:
+
+- branch: `factory/empleado-uno-sales-operator-core/inc-070-i6-cron-loops-and-daily-sales-op`
+- worktree: `/home/jean/Projects/.worktrees/empleado-uno-sales-operator-core/inc-070-i6-cron-loops-and-daily-sales-op`
+
+Delivered:
+
+- runtime dry-run planner: `scripts/runtime/sales_operator_daily_dry_run.py`
+- cron/no-agent wrapper: `scripts/cron/sales_operator_daily_dry_run.sh`
+- docs: `docs/sales-operator-core/CRON-LOOPS-I6.md`
+- tests: `tests/test_sales_operator_daily_dry_run.py`
+- evidence: `factory/projects/empleado-uno-sales-operator-core/evidence/sales-operator-dry-run-i6.json`
+
+I6 verification summary:
+
+```json
+{"actions": 3, "cron_specs": 3, "dry_run": true, "external_sends": false, "messages_sent_by_dry_run": 0, "top_loop": "lead_discovery_tick"}
+```
+
+Next task after I6: `I7 First pilot smoke for Empleado.uno`.

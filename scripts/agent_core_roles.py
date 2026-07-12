@@ -50,6 +50,11 @@ SECRET_KEYS = [
 ]
 OPTIONAL_RUNTIME_PASSWORD_KEYS = {"SIGNATURE_DB_RUNTIME_PASSWORD", "SALES_OPERATOR_DB_RUNTIME_PASSWORD"}
 SHARED_RUNTIME_PASSWORD_FALLBACKS = {
+    # Accounting Lite Core lives in the same local Agent Core DB. Older
+    # Infisical projects may not yet define a dedicated secret for it; use the
+    # already synced base agent runtime password rather than blocking role
+    # rotation. Once ACCOUNTING_* exists in Infisical, the dedicated value wins.
+    "ACCOUNTING_DB_RUNTIME_PASSWORD": "AGENT_DB_RUNTIME_PASSWORD",
     # Agent Management lives in the same local Agent Core DB. Older Infisical
     # projects may not yet define a dedicated secret for it; use the already
     # synced base agent runtime password rather than blocking role rotation or

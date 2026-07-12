@@ -8,6 +8,7 @@
 - `TASK-GRAPH-001.md` — dependency graph and task inventory.
 - `TRACKER-001.md` — current gate tracker.
 - `QA-SECURITY-GATES.md` — safety, compliance, QA gates.
+- `CRON-LOOPS-I6.md` — disabled-by-default dry-run cron loops, wrapper commands, self-contained prompts, and I6 evidence.
 
 ## Related context
 

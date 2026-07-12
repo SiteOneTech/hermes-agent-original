@@ -1,0 +1,213 @@
+{
+  "campaign": {
+    "bonus_offer": "Bono early adopter: 50% extra de créditos según el plan si confirma el registro por correo.",
+    "budget_amount": 5000.0,
+    "business_id": "sitiouno",
+    "campaign_id": "empleado-uno-1000-subscribers-q3-2026",
+    "created_at": "2026-07-12T16:20:59.459942+00:00",
+    "currency": "USD",
+    "metadata": {
+      "initial_focus": [
+        "Medellín clínicas/estética",
+        "Lima restaurantes/delivery",
+        "Bogotá educación/cursos",
+        "CDMX restaurantes/clínicas"
+      ],
+      "objective": "1000 subscribers in 3 months as stretch target",
+      "pricing_warning": "Resolve public pricing consistency before paid traffic.",
+      "source": "sales_operator_seed_empleado_uno"
+    },
+    "positioning": "Empleado IA multicanal para pymes hispanohablantes. No vender como chatbot ni plataforma técnica.",
+    "product_id": "empleado-uno",
+    "product_name": "Empleado.uno",
+    "referral_code": "zeus",
+    "status": "active",
+    "target_deadline": null,
+    "target_subscribers": 1000,
+    "updated_at": "2026-07-12T16:20:59.459942+00:00"
+  },
+  "campaign_id": "empleado-uno-1000-subscribers-q3-2026",
+  "channel_gate_summary": {
+    "channels": {
+      "content_platforms": {
+        "daily_limit": 5,
+        "dry_run_enforced": true,
+        "mode": "content_only",
+        "requires_human_approval": false,
+        "status": "active"
+      },
+      "email": {
+        "daily_limit": 25,
+        "dry_run_enforced": true,
+        "mode": "supervised_send",
+        "requires_human_approval": true,
+        "status": "active"
+      },
+      "research_search": {
+        "daily_limit": 0,
+        "dry_run_enforced": true,
+        "mode": "research_only",
+        "requires_human_approval": false,
+        "status": "active"
+      },
+      "voice_sophie": {
+        "daily_limit": 10,
+        "dry_run_enforced": true,
+        "mode": "supervised_send",
+        "requires_human_approval": true,
+        "status": "supervised"
+      },
+      "web_agent": {
+        "daily_limit": 0,
+        "dry_run_enforced": true,
+        "mode": "inbound",
+        "requires_human_approval": false,
+        "status": "active"
+      },
+      "whatsapp_current": {
+        "daily_limit": 0,
+        "dry_run_enforced": true,
+        "mode": "draft_only",
+        "requires_human_approval": true,
+        "status": "draft_only"
+      },
+      "whatsapp_official": {
+        "daily_limit": 0,
+        "dry_run_enforced": true,
+        "mode": "planned",
+        "requires_human_approval": true,
+        "status": "planned"
+      }
+    },
+    "dry_run_channels": [
+      "content_platforms",
+      "email",
+      "research_search",
+      "voice_sophie",
+      "web_agent",
+      "whatsapp_current",
+      "whatsapp_official"
+    ],
+    "external_sends_allowed_by_this_script": false,
+    "unsafe_auto_send_channels": []
+  },
+  "cron_loops": {
+    "daily_brief": "Produces a report/brief for Jean; writing DB report requires explicit --write-report.",
+    "enrichment_tick": "Dry-run recommendation only; no scraping abuse, no private channels, no inferred private data.",
+    "follow_up_queue_dry_run": "Reviews queue/policies only; never calls providers or marks messages as sent.",
+    "lead_discovery_tick": "Dry-run recommendation only; use public business sources and store source evidence before import.",
+    "reply_audit_tick": "Audits recorded evidence only; provider ACK is not customer interest."
+  },
+  "cron_specs": [
+    {
+      "command": "/home/jean/Projects/hermes-agent-original/scripts/cron/sales_operator_daily_dry_run.sh --campaign-id empleado-uno-1000-subscribers-q3-2026 --format markdown",
+      "enabled_by_default": false,
+      "mode": "no_agent_safe_script",
+      "name": "sales-operator-daily-brief-dry-run",
+      "schedule": "0 8 * * *",
+      "self_contained_prompt": "Run the Sales Operator daily brief dry-run for campaign empleado-uno-1000-subscribers-q3-2026. Execute the repo script only. Do not send email, WhatsApp, SMS, voice calls, social DMs, posts, or provider actions. Return the script output and highlight blockers if any channel is not supervised/draft-only."
+    },
+    {
+      "command": "/home/jean/Projects/hermes-agent-original/scripts/cron/sales_operator_daily_dry_run.sh --campaign-id empleado-uno-1000-subscribers-q3-2026 --format markdown --queue-limit 100",
+      "enabled_by_default": false,
+      "mode": "no_agent_safe_script",
+      "name": "sales-operator-follow-up-queue-dry-run",
+      "schedule": "*/30 9-18 * * 1-6",
+      "self_contained_prompt": "Review due Sales Operator follow-up queue items in dry-run mode. Campaign: empleado-uno-1000-subscribers-q3-2026. Never execute queued outreach. Print prioritized queue review, approval requirements, and opt-out/rate-limit blockers only."
+    },
+    {
+      "command": "/home/jean/Projects/hermes-agent-original/scripts/cron/sales_operator_daily_dry_run.sh --campaign-id empleado-uno-1000-subscribers-q3-2026 --format json",
+      "enabled_by_default": false,
+      "mode": "agent_reasoned_report_optional",
+      "name": "sales-operator-close-report-dry-run",
+      "schedule": "0 17 * * 1-6",
+      "self_contained_prompt": "Generate the Sales Operator close-of-day dry-run report from the JSON produced by the script. Campaign: empleado-uno-1000-subscribers-q3-2026. Summarize actions, replies, demos, closes, blockers, and tomorrow priorities. Do not infer customer interest from provider acknowledgements. Do not send outbound messages."
+    }
+  ],
+  "dry_run": true,
+  "external_sends": false,
+  "generated_at": "2026-07-12T18:33:10.908812+00:00",
+  "metrics": {
+    "attack_plans": 0,
+    "attempts": 0,
+    "contacted_clients": 0,
+    "daily_reports": 1,
+    "external_messages_sent_by_dry_run": 0,
+    "open_outreach": 0,
+    "prospects": 0,
+    "queue_rows_reviewed": 0,
+    "research_snapshots": 0,
+    "territories": 5
+  },
+  "ok": true,
+  "priority_actions": [
+    {
+      "blockers": [],
+      "dry_run_only": true,
+      "external_send": false,
+      "loop": "lead_discovery_tick",
+      "priority": 100,
+      "reason": "La campaña todavía no tiene prospects; el siguiente avance comercial real es descubrir leads públicos y guardar evidencia antes de cualquier contacto.",
+      "requires_human_approval": true,
+      "target": {
+        "source_policy": "public_business_sources_only",
+        "suggested_batch_size": 10,
+        "territory": {
+          "city": "Medellín",
+          "country": "Colombia",
+          "metadata": {},
+          "priority": 95,
+          "status": "active",
+          "territory_id": "so-territory-empleado-uno-1000-subscribers-q3-2026-colombia-medell-n-cl-nicas-est-tica",
+          "vertical": "clínicas/estética"
+        }
+      },
+      "title": "Construir el primer lote público de leads del territorio prioritario"
+    },
+    {
+      "blockers": [
+        "no_prior_attempts"
+      ],
+      "dry_run_only": true,
+      "external_send": false,
+      "loop": "reply_audit_tick",
+      "priority": 54,
+      "reason": "No hay intentos registrados todavía; el auditor permanece listo pero sin adaptadores de inbox activos para leer.",
+      "requires_human_approval": true,
+      "target": {
+        "attempts_to_audit": 0
+      },
+      "title": "Mantener auditoría de replies en espera"
+    },
+    {
+      "blockers": [],
+      "dry_run_only": true,
+      "external_send": false,
+      "loop": "daily_brief",
+      "priority": 50,
+      "reason": "El brief resume pipeline, blockers y prioridades; no activa canales ni proveedores.",
+      "requires_human_approval": true,
+      "target": {
+        "latest_report_date": "2026-07-12"
+      },
+      "title": "Generar brief diario supervisado para Jean"
+    }
+  ],
+  "safety": {
+    "allowed_side_effects_by_default": [
+      "stdout",
+      "optional_local_json_target"
+    ],
+    "blocked_external_channels": [
+      "email",
+      "whatsapp",
+      "sms",
+      "voice",
+      "social_dm",
+      "public_post"
+    ],
+    "db_writes_by_default": false,
+    "default_state": "disabled_or_dry_run",
+    "external_message_senders_called": false
+  }
+}

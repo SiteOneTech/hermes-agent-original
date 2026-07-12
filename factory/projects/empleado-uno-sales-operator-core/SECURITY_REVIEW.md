@@ -44,3 +44,15 @@ Two public variants were observed:
 - `https://www.empleado.uno/` — older/different copy/pricing.
 
 For outbound/published campaigns, use the root `https://empleado.uno/` as canonical until redirects/content are cleaned.
+
+## I6 cron-loop dry-run security review
+
+Detailed report: `factory/projects/empleado-uno-sales-operator-core/I6_SECURITY_REVIEW.md`.
+
+I6 is PASS for dry-run/no-send scope:
+
+- `scripts/runtime/sales_operator_daily_dry_run.py` imports no provider sender and calls no external outbound channel.
+- Default output states `dry_run=true`, `external_sends=false`, and `messages_sent_by_dry_run=0`.
+- Daily report DB writes require explicit `--write-report`; default side effects are stdout and optional local JSON only.
+- Generated cron specs are disabled by default and include self-contained prompts forbidding email, WhatsApp, SMS, voice calls, social DMs, posts, or provider actions.
+- `ACCOUNTING_DB_RUNTIME_PASSWORD` runtime blocker was fixed with the same same-DB Infisical fallback pattern as Agent Management; dedicated Infisical values still win when present.
