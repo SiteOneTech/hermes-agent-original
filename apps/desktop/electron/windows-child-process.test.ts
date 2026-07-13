@@ -86,7 +86,8 @@ test('desktop backend teardown tree-kills Windows backend descendants', () => {
   assert.match(helperSnippet, /forceKillProcessTree\(child\.pid\)/)
   assert.match(helperSnippet, /child\.kill\('SIGTERM'\)/)
 
-  const resetIndex = source.indexOf('function resetHermesConnection()')
+  const resetMatch = /function resetHermesConnection\([^)]*\)/.exec(source)
+  const resetIndex = resetMatch?.index ?? -1
   assert.notEqual(resetIndex, -1, 'missing resetHermesConnection')
   const resetSnippet = source.slice(resetIndex, resetIndex + 300)
   assert.match(resetSnippet, /stopBackendChild\(hermesProcess\)/)

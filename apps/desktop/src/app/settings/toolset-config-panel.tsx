@@ -482,7 +482,7 @@ export function ToolsetConfigPanel({ toolset, onConfiguredChange }: ToolsetConfi
       providers.find(p => providerConfigured(p, envState)) ??
       providers[0]
 
-    setActiveProvider(selected.name)
+    setActiveProvider(current => current ?? selected.name)
   }, [activeProvider, providers, envState, cfg])
 
   async function handleSelect(provider: ToolProvider) {
