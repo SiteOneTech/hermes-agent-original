@@ -83,4 +83,4 @@ DB readback:
 
 ## Result
 
-I8 is ready to close once the runtime branch is committed and pushed. Production outbound remains future-gated.
+I8 is closed. Runtime `main` now points at `e340561755f7b3d61aa1d224ab7aea3425a8b9c0`, which includes the original Sales Operator propagation, the Vapi SMS transport-type backup commit, and the tracked dashboard exporter fix exposed by CI. Production outbound remains future-gated.

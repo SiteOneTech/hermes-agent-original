@@ -42,6 +42,18 @@ I8 propagated:
 
 Zeus-only admin/fleet functionality and privileged tools were not propagated.
 
+Final runtime `main` after post-push backup/fix:
+
+```text
+e340561755f7b3d61aa1d224ab7aea3425a8b9c0
+```
+
+This includes:
+
+- base Sales Operator propagation (`3d11a96ff`);
+- Vapi SMS transport type backup (`a0a1cfaec`);
+- tracked dashboard exporter fix (`e34056175`) after CI exposed that `.gitignore` ignored `export*` files.
+
 ## I8 verification evidence
 
 ```bash
