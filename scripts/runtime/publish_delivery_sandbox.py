@@ -564,8 +564,10 @@ def _queue_otp(challenge: dict[str, Any], otp: str) -> None:
         "channel_id": challenge["channel_id"],
         "target": challenge["target"],
         "target_hash": _hash(str(challenge.get("target") or "")),
+        "expires_at": int(challenge.get("expires_at") or 0),
         "message_template": challenge.get("message_template") or "user_dashboard_otp",
         "message_context": challenge.get("message_context") or {},
+        "message": challenge.get("message") or f"Tu código de {AGENT_NAME} para entrar al dashboard es: {otp}. Expira en 10 minutos.",
     }
     for key in ("purpose", "event_type", "deliverable_id", "token_ref"):
         if challenge.get(key):

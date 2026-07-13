@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import sys
 import time
 from pathlib import Path
 
@@ -71,7 +72,29 @@ def test_challenge_is_current_rejects_missing_expired_or_attempted_challenges(tm
         encoding="utf-8",
     )
 
+    assert dispatcher.challenge_is_current(tmp_path, {"expires_at": now + 300}) is True
+    assert dispatcher.challenge_is_current(tmp_path, {"expires_at": now - 1}) is False
     assert dispatcher.challenge_is_current(tmp_path, {"challenge_id": "current"}) is True
     assert dispatcher.challenge_is_current(tmp_path, {"challenge_id": "expired"}) is False
     assert dispatcher.challenge_is_current(tmp_path, {"challenge_id": "attempted"}) is False
     assert dispatcher.challenge_is_current(tmp_path, {"challenge_id": "missing"}) is False
+
+
+def test_dispatcher_marks_stale_malformed_outbox_items_handled(tmp_path, monkeypatch, capsys):
+    dispatcher = load_dispatcher()
+    now = int(time.time())
+    (tmp_path / "user_auth_state.json").write_text(
+        json.dumps({"challenges": {"expired": {"expires_at": now - 1, "attempts": 0}}}),
+        encoding="utf-8",
+    )
+    (tmp_path / "otp_outbox.jsonl").write_text(
+        json.dumps({"event_id": "evt-stale", "challenge_id": "expired", "target": "telegram"}) + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(sys, "argv", ["dispatcher", "--event-dir", str(tmp_path)])
+    dispatcher.main()
+
+    result = json.loads(capsys.readouterr().out)
+    assert result == {"ok": True, "dispatched": 0, "errors": []}
+    assert json.loads((tmp_path / "otp_outbox_sent.json").read_text(encoding="utf-8")) == ["evt-stale"]

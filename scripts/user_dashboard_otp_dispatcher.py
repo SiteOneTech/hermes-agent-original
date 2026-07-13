@@ -80,6 +80,11 @@ def load_state(event_dir: Path) -> dict:
 
 def challenge_is_current(event_dir: Path, item: dict) -> bool:
     """Skip stale queued OTPs so delayed email cannot send a code the UI no longer validates."""
+    if item.get("expires_at") is not None:
+        try:
+            return int(item.get("expires_at") or 0) > int(time.time())
+        except (TypeError, ValueError):
+            return False
     challenge_id = str(item.get("challenge_id") or "")
     if not challenge_id:
         return True
@@ -240,15 +245,15 @@ def main() -> None:
         event_id = str(item.get("event_id") or "")
         if not event_id or event_id in sent:
             continue
+        if not challenge_is_current(event_dir, item):
+            # Mark stale queued OTPs as handled so an old message cannot arrive after
+            # a newer challenge and produce the “right-looking code, wrong challenge” UX.
+            sent.add(event_id)
+            continue
         target = str(item.get("target") or "")
         message = str(item.get("message") or "")
         if not target or not message:
             errors.append({"event_id": event_id, "error": "missing_target_or_message"})
-            continue
-        if not challenge_is_current(event_dir, item):
-            # Mark stale queued OTPs as handled so an old email cannot arrive after
-            # a newer challenge and produce the “right-looking code, wrong challenge” UX.
-            sent.add(event_id)
             continue
         target_email = email_address_from_target(target)
         if args.dry_run:

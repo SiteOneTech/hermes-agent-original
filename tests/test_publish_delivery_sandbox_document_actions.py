@@ -87,7 +87,7 @@ def test_generated_server_rejects_wrong_signer_token_for_document_action(tmp_pat
     assert response["error"] == "invalid_document_action"
 
 
-def test_generated_server_queue_otp_omits_plaintext_code_and_message(tmp_path):
+def test_generated_server_queue_otp_includes_dispatch_message(tmp_path):
     server = _server_module(tmp_path)
     server._queue_otp(
         {
@@ -95,6 +95,7 @@ def test_generated_server_queue_otp_omits_plaintext_code_and_message(tmp_path):
             "user_id": "client@example.com",
             "channel_id": "email",
             "target": "client@example.com",
+            "expires_at": 2000000000,
             "purpose": "document_action",
             "event_type": "approved",
             "deliverable_id": "quote-1",
@@ -107,10 +108,9 @@ def test_generated_server_queue_otp_omits_plaintext_code_and_message(tmp_path):
     )
 
     outbox = server._outbox_path().read_text(encoding="utf-8").splitlines()
-    assert "123456" not in outbox[-1]
-    assert "Código para aprobar" not in outbox[-1]
     payload = json.loads(outbox[-1])
-    assert "message" not in payload
+    assert payload["message"] == "Código para aprobar: 123456"
+    assert payload["expires_at"] == 2000000000
     assert "otp" not in payload
     assert "otp_code" not in payload
     assert payload["purpose"] == "document_action"
@@ -143,9 +143,9 @@ def test_generated_server_document_action_challenge_state_omits_plaintext_messag
     assert "Expira en 10 minutos" not in state_text
     assert "otp_hash" in state_text
 
-    outbox_text = server._outbox_path().read_text(encoding="utf-8")
-    assert "Tu código" not in outbox_text
-    assert "Expira en 10 minutos" not in outbox_text
+    outbox_payload = json.loads(server._outbox_path().read_text(encoding="utf-8").splitlines()[-1])
+    assert outbox_payload["message"].startswith("Tu código de")
+    assert "Expira en 10 minutos" in outbox_payload["message"]
 
 
 def test_generated_server_rejects_terminal_document_action_before_otp_outbox(tmp_path):
