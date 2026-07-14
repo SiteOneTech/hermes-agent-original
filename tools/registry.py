@@ -47,11 +47,20 @@ def _module_registers_tools(module_path: Path) -> bool:
     (for/if/with/try) because some tool modules register a family of tools in a
     top-level loop.  Do not descend into functions or classes; helper functions
     that call ``registry.register()`` should not make a module auto-discovered.
+
+    A cheap text prefilter avoids the ``ast.parse`` cost for files that do not
+    mention both ``registry`` and ``register`` — a necessary condition for a
+    top-level ``registry.register()`` call to exist.
     """
     try:
         source = module_path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    if "registry" not in source or "register" not in source:
+        return False
+    try:
         tree = ast.parse(source, filename=str(module_path))
-    except (OSError, SyntaxError):
+    except SyntaxError:
         return False
 
     def _stmt_registers(stmt: ast.stmt) -> bool:

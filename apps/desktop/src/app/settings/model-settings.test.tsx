@@ -37,7 +37,8 @@ vi.mock('@/hermes', async importOriginal => ({
   getRecommendedDefaultModel: (slug: string) => getRecommendedDefaultModel(slug),
   setEnvVar: (key: string, value: string) => setEnvVar(key, value),
   getHermesConfigRecord: () => getHermesConfigRecord(),
-  saveHermesConfig: (config: unknown) => saveHermesConfig(config)
+  saveHermesConfig: (config: unknown) => saveHermesConfig(config),
+  setApiRequestProfile: () => {}
 }))
 
 vi.mock('@/store/onboarding', () => ({
