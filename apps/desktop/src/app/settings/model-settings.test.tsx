@@ -1,5 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type * as HermesApi from '@/hermes'
@@ -121,9 +122,13 @@ async function renderModelSettings() {
   const { ModelSettings } = await import('./model-settings')
 
   return render(
-    <QueryClientProvider client={queryClient}>
-      <ModelSettings />
-    </QueryClientProvider>
+    // The aux-task deep-link highlight reads useSearchParams, so the page
+    // needs a router context in tests (the app provides HashRouter at root).
+    <MemoryRouter>
+      <QueryClientProvider client={queryClient}>
+        <ModelSettings />
+      </QueryClientProvider>
+    </MemoryRouter>
   )
 }
 
