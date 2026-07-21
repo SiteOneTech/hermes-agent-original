@@ -1923,6 +1923,7 @@ class APIServerAdapter(BasePlatformAdapter):
         """
         from run_agent import AIAgent
         from gateway.run import (
+            _checkpoint_agent_kwargs,
             _current_max_iterations,
             _resolve_runtime_agent_kwargs,
             _resolve_gateway_model,
@@ -2004,6 +2005,7 @@ class APIServerAdapter(BasePlatformAdapter):
         agent = AIAgent(
             model=model,
             **runtime_kwargs,
+            **_checkpoint_agent_kwargs(user_config),
             max_iterations=max_iterations,
             quiet_mode=True,
             verbose_logging=False,
