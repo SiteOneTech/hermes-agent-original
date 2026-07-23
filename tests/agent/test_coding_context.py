@@ -254,6 +254,27 @@ class TestProjectFacts:
         for cmd in facts["verifyCommands"]:
             assert cmd in verify_line
 
+    def test_project_facts_skip_shared_temp_git_root(self, tmp_path, monkeypatch):
+        # A stray .git at the shared temp root must not swallow marker-only
+        # temp projects. Test runners and external tools can leave /tmp/.git
+        # behind; project_facts_for should still root at the actual project.
+        shared_tmp = tmp_path / "shared-tmp"
+        shared_tmp.mkdir()
+        (shared_tmp / ".git").mkdir()
+        project = shared_tmp / "project"
+        project.mkdir()
+        (project / "package.json").write_text(
+            json.dumps({"scripts": {"test": "vitest"}}), encoding="utf-8"
+        )
+        (project / "pnpm-lock.yaml").write_text("", encoding="utf-8")
+        monkeypatch.setattr(cc.tempfile, "gettempdir", lambda: str(shared_tmp))
+
+        facts = cc.project_facts_for(project)
+
+        assert facts is not None
+        assert facts["root"] == str(project.resolve())
+        assert facts["verifyCommands"] == ["pnpm run test"]
+
     def test_project_facts_for_none_outside_workspace(self, tmp_path):
         assert cc.project_facts_for(tmp_path) is None
 

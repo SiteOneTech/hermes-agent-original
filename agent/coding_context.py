@@ -389,7 +389,18 @@ def _resolve_cwd(cwd: Optional[str | Path]) -> Path:
 
 def _git_root(cwd: Path) -> Optional[Path]:
     current = cwd.resolve()
+    ignored_roots: set[Path] = set()
+    home = _home()
+    if home is not None:
+        ignored_roots.add(home)
+    try:
+        temp_root = Path(tempfile.gettempdir()).resolve()
+        ignored_roots.update([temp_root, *temp_root.parents])
+    except Exception:
+        pass
     for parent in [current, *current.parents]:
+        if parent in ignored_roots:
+            continue
         if (parent / ".git").exists():
             return parent
     return None
