@@ -6472,6 +6472,60 @@ class SlackAdapter(BasePlatformAdapter):
 # ──────────────────────────────────────────────────────────────────────────
 
 
+# Cache for Slack user ID -> DM conversation ID resolution in the standalone
+# send path.  Keyed by "{token}:{user_id}" to support multi-workspace setups.
+_slack_dm_cache: Dict[str, str] = {}
+
+
+async def _resolve_slack_user_dm(token: str, user_id: str) -> Optional[str]:
+    """Resolve a Slack user ID (U.../W...) to a DM conversation ID (D...).
+
+    ``chat.postMessage`` and ``files_upload_v2`` require a conversation ID; a
+    DM must be opened first via ``conversations.open``.  Results are cached
+    per (token, user_id) pair to avoid redundant API calls.  Returns None if
+    resolution fails (missing ``im:write`` scope, unknown user, etc.).
+    """
+    cache_key = f"{token}:{user_id}"
+    if cache_key in _slack_dm_cache:
+        return _slack_dm_cache[cache_key]
+
+    try:
+        import aiohttp
+    except ImportError:
+        return None
+    try:
+        from gateway.platforms.base import proxy_kwargs_for_aiohttp
+
+        _proxy = resolve_proxy_url()
+        _sess_kw, _req_kw = proxy_kwargs_for_aiohttp(_proxy)
+        url = "https://slack.com/api/conversations.open"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=15), **_sess_kw
+        ) as session:
+            payload = {"users": user_id}
+            async with session.post(
+                url, headers=headers, json=payload, **_req_kw
+            ) as resp:
+                data = await resp.json()
+                if data.get("ok") and data.get("channel", {}).get("id"):
+                    channel_id = data["channel"]["id"]
+                    _slack_dm_cache[cache_key] = channel_id
+                    return channel_id
+                logger.warning(
+                    "[Slack] conversations.open failed for %s: %s",
+                    user_id,
+                    data.get("error", "unknown"),
+                )
+                return None
+    except Exception as e:
+        logger.warning("[Slack] conversations.open exception for %s: %s", user_id, e)
+        return None
+
+
 async def _standalone_send(
     pconfig,
     chat_id,
@@ -6496,6 +6550,22 @@ async def _standalone_send(
     if not token:
         return {"error": "Slack send failed: SLACK_BOT_TOKEN not configured"}
 
+    # User-targeted delivery: chat.postMessage / files_upload_v2 reject bare
+    # user IDs (U.../W...) — resolve to a DM conversation ID (D...) first via
+    # conversations.open so `deliver=slack:U…` cron jobs reach the user's DM
+    # instead of failing with channel_not_found (#17444).
+    chat_id = str(chat_id or "")
+    if chat_id[:1] in ("U", "W"):
+        resolved = await _resolve_slack_user_dm(token, chat_id)
+        if resolved is None:
+            return {
+                "error": (
+                    f"Slack user ID resolution failed for {chat_id} "
+                    "(conversations.open — check the bot's im:write scope)"
+                )
+            }
+        chat_id = resolved
+
     formatted = message
     if message:
         try:
@@ -6506,6 +6576,58 @@ async def _standalone_send(
                 "Failed to apply Slack mrkdwn formatting in _standalone_send",
                 exc_info=True,
             )
+
+    # Out-of-process cron runs have no live SlackAdapter.  Upload MEDIA files
+    # here so the standalone path has feature parity with the live adapter
+    # instead of silently succeeding with text only.  This runs BEFORE the
+    # empty-text skip: a media delivery with a blank caption must still
+    # upload the files.
+    if media_files:
+        if not check_slack_requirements():
+            return {"error": "Slack send failed: slack-sdk is not installed"}
+
+        paths = []
+        for media in media_files:
+            path = media[0] if isinstance(media, (tuple, list)) else media
+            path = str(path)
+            if not os.path.isfile(path):
+                return {"error": f"Slack media file not found: {os.path.basename(path)}"}
+            paths.append(path)
+
+        try:
+            client = AsyncWebClient(token=token)  # pyright: ignore[reportCallIssue]
+            _apply_slack_proxy(client, resolve_proxy_url())
+            upload_result = None
+            for start in range(0, len(paths), 10):
+                batch = paths[start : start + 10]
+                kwargs = {
+                    "channel": chat_id,
+                    "initial_comment": formatted if start == 0 else "",
+                    "thread_ts": thread_id,
+                }
+                if len(batch) == 1:
+                    kwargs.update(
+                        file=batch[0],
+                        filename=os.path.basename(batch[0]),
+                    )
+                else:
+                    kwargs["file_uploads"] = [
+                        {"file": path, "filename": os.path.basename(path)}
+                        for path in batch
+                    ]
+                upload_result = await client.files_upload_v2(**kwargs)
+            return {
+                "success": True,
+                "platform": "slack",
+                "chat_id": chat_id,
+                "message_id": (
+                    upload_result.get("ts")
+                    if upload_result is not None and hasattr(upload_result, "get")
+                    else None
+                ),
+            }
+        except Exception as e:
+            return {"error": f"Slack media upload failed: {e}"}
 
     if not formatted or not formatted.strip():
         logger.debug("[Slack] _standalone_send: skipping empty/whitespace message")
@@ -6521,7 +6643,7 @@ async def _standalone_send(
         return {"error": "aiohttp not installed. Run: pip install aiohttp"}
 
     try:
-        from gateway.platforms.base import resolve_proxy_url, proxy_kwargs_for_aiohttp
+        from gateway.platforms.base import proxy_kwargs_for_aiohttp
 
         _proxy = resolve_proxy_url()
         _sess_kw, _req_kw = proxy_kwargs_for_aiohttp(_proxy)
