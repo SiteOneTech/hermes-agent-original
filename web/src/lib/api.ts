@@ -2669,6 +2669,7 @@ export interface MoaModelSlot {
   model: string;
   /** Optional per-slot reasoning effort — round-tripped, not edited here. */
   reasoning_effort?: string;
+  enabled?: boolean;
 }
 
 export interface MoaConfigResponse {
@@ -2679,6 +2680,8 @@ export interface MoaConfigResponse {
     aggregator: MoaModelSlot;
     reference_temperature: number;
     aggregator_temperature: number;
+    reference_timeout: number | null;
+    degraded_reference_policy: "loud" | "silent";
     max_tokens: number;
     /** Optional advisor output cap — round-tripped, not edited here. */
     reference_max_tokens?: number | null;
@@ -2690,6 +2693,8 @@ export interface MoaConfigResponse {
   aggregator: MoaModelSlot;
   reference_temperature: number;
   aggregator_temperature: number;
+  reference_timeout: number | null;
+  degraded_reference_policy: "loud" | "silent";
   max_tokens: number;
   enabled: boolean;
 }
