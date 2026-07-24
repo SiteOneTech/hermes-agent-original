@@ -273,7 +273,7 @@ describe('ModelSettings', () => {
     await renderModelSettings()
     await waitFor(() => expect(getHermesConfigRecord).toHaveBeenCalled())
 
-    const fastSwitch = await screen.findByRole('switch')
+    const fastSwitch = await screen.findByRole('switch', { name: /Fast/i })
     fireEvent.click(fastSwitch)
 
     await waitFor(() =>
@@ -299,7 +299,7 @@ describe('ModelSettings', () => {
     await renderModelSettings()
     await waitFor(() => expect(getHermesConfigRecord).toHaveBeenCalled())
 
-    expect(screen.queryByRole('switch')).toBeNull()
+    expect(screen.queryByRole('switch', { name: /Fast/i })).toBeNull()
   })
 
   it('renders the auxiliary task rows', async () => {
