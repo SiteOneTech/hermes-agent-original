@@ -581,7 +581,7 @@ def _load_json_arg(value: str | None, default: Any) -> Any:
         return default
     path = Path(value)
     if path.exists():
-        return json.loads(path.read_text("utf-8"))
+        return json.loads(path.read_text(encoding="utf-8"))
     return json.loads(value)
 
 

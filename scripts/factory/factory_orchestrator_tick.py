@@ -234,11 +234,27 @@ def _prepare_worktree(payload: dict[str, Any], claim: dict[str, Any]) -> dict[st
         return {"ready": False, "reason": "missing_repo_branch_or_worktree", "cwd": repo_raw or None}
     if not repo_path.exists():
         return {"ready": False, "reason": "repo_path_missing", "repo_path": str(repo_path), "cwd": str(repo_path)}
-    probe = subprocess.run(["git", "-C", str(repo_path), "rev-parse", "--is-inside-work-tree"], text=True, capture_output=True, timeout=10, check=False)
+    probe = subprocess.run(
+        ["git", "-C", str(repo_path), "rev-parse", "--is-inside-work-tree"],
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
     if probe.returncode != 0:
         return {"ready": False, "reason": "repo_path_not_git", "repo_path": str(repo_path), "stderr": probe.stderr[-500:], "cwd": str(repo_path)}
     if worktree_path.exists():
-        wt_probe = subprocess.run(["git", "-C", str(worktree_path), "rev-parse", "--is-inside-work-tree"], text=True, capture_output=True, timeout=10, check=False)
+        wt_probe = subprocess.run(
+            ["git", "-C", str(worktree_path), "rev-parse", "--is-inside-work-tree"],
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
         if wt_probe.returncode == 0:
             return {"ready": True, "reason": "worktree_exists", "repo_path": str(repo_path), "branch": branch, "worktree_path": str(worktree_path), "cwd": str(worktree_path)}
         return {"ready": False, "reason": "worktree_path_exists_not_git", "repo_path": str(repo_path), "worktree_path": str(worktree_path), "cwd": str(repo_path)}

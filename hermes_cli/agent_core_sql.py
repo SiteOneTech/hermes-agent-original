@@ -129,7 +129,16 @@ def psql(sql: str, *, database: str | None = None, user: str | None = None, chec
         "docker", "exec", "-i", env.get("AGENT_DB_CONTAINER", "agent-postgres"),
         "psql", "-X", "-q", "-t", "-A", "-v", "ON_ERROR_STOP=1", "-U", user, "-d", database,
     ]
-    return subprocess.run(cmd, input=sql, text=True, cwd=REPO_ROOT, capture_output=True, check=check)
+    return subprocess.run(
+        cmd,
+        input=sql,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        cwd=REPO_ROOT,
+        capture_output=True,
+        check=check,
+    )
 
 
 def json_query(sql: str, *, database: str | None = None, user: str | None = None) -> Any:

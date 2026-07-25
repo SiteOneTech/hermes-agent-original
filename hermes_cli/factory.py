@@ -241,7 +241,15 @@ def _run_orchestrator_script(project_id: str | None = None) -> dict[str, Any]:
     env = {**os.environ}
     if project_id:
         env["FACTORY_TICK_PROJECT_ID"] = project_id
-    proc = subprocess.run([sys.executable, str(script)], env=env, text=True, capture_output=True, timeout=180)
+    proc = subprocess.run(
+        [sys.executable, str(script)],
+        env=env,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        capture_output=True,
+        timeout=180,
+    )
     if proc.returncode != 0:
         raise RuntimeError(proc.stderr.strip() or proc.stdout.strip() or f"tick exited {proc.returncode}")
     try:

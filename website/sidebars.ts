@@ -40,6 +40,15 @@ const sidebars: SidebarsConfig = {
             'user-guide/secrets/onepassword',
           ],
         },
+        {
+          type: 'category',
+          label: 'Egress proxy',
+          collapsed: true,
+          items: [
+            'user-guide/egress/index',
+            'user-guide/egress/iron-proxy',
+          ],
+        },
         'user-guide/sessions',
         'user-guide/profiles',
         'user-guide/profile-distributions',
@@ -154,17 +163,9 @@ const sidebars: SidebarsConfig = {
                   items: [
                     'user-guide/skills/bundled/autonomous-ai-agents/autonomous-ai-agents-claude-code',
                     'user-guide/skills/bundled/autonomous-ai-agents/autonomous-ai-agents-codex',
+                    'user-guide/skills/bundled/autonomous-ai-agents/autonomous-ai-agents-computer-use',
                     'user-guide/skills/bundled/autonomous-ai-agents/autonomous-ai-agents-hermes-agent',
                     'user-guide/skills/bundled/autonomous-ai-agents/autonomous-ai-agents-opencode',
-                  ],
-                },
-                {
-                  type: 'category',
-                  label: 'computer-use',
-                  key: 'skills-bundled-computer-use',
-                  collapsed: true,
-                  items: [
-                    'user-guide/skills/bundled/computer-use/computer-use-computer-use',
                   ],
                 },
                 {
@@ -233,8 +234,8 @@ const sidebars: SidebarsConfig = {
                   items: [
                     'user-guide/skills/bundled/mlops/mlops-huggingface-hub',
                     'user-guide/skills/bundled/mlops/mlops-inference-llama-cpp',
-                    'user-guide/skills/bundled/mlops/mlops-evaluation-lm-evaluation-harness',
-                    'user-guide/skills/bundled/mlops/mlops-inference-vllm',
+                    'user-guide/skills/bundled/mlops/mlops-evaluation-evaluating-llms-harness',
+                    'user-guide/skills/bundled/mlops/mlops-inference-serving-llms-vllm',
                     'user-guide/skills/bundled/mlops/mlops-evaluation-weights-and-biases',
                   ],
                 },
@@ -361,7 +362,7 @@ const sidebars: SidebarsConfig = {
                   key: 'skills-optional-creative',
                   collapsed: true,
                   items: [
-                    'user-guide/skills/optional/creative/creative-audiocraft',
+                    'user-guide/skills/optional/creative/creative-audiocraft-audio-generation',
                     'user-guide/skills/optional/creative/creative-baoyu-article-illustrator',
                     'user-guide/skills/optional/creative/creative-baoyu-comic',
                     'user-guide/skills/optional/creative/creative-blender-mcp',
@@ -499,7 +500,7 @@ const sidebars: SidebarsConfig = {
                     'user-guide/skills/optional/mlops/mlops-pytorch-lightning',
                     'user-guide/skills/optional/mlops/mlops-qdrant',
                     'user-guide/skills/optional/mlops/mlops-saelens',
-                    'user-guide/skills/optional/mlops/mlops-models-segment-anything',
+                    'user-guide/skills/optional/mlops/mlops-models-segment-anything-model',
                     'user-guide/skills/optional/mlops/mlops-simpo',
                     'user-guide/skills/optional/mlops/mlops-slime',
                     'user-guide/skills/optional/mlops/mlops-stable-diffusion',
@@ -772,6 +773,7 @@ const sidebars: SidebarsConfig = {
             'developer-guide/browser-supervisor',
             'developer-guide/acp-internals',
             'developer-guide/cron-internals',
+            'developer-guide/egress-internals',
             'developer-guide/trajectory-format',
           ],
         },

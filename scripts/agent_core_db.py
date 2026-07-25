@@ -93,7 +93,17 @@ def runtime_env() -> dict[str, str]:
 
 
 def run(cmd: list[str], *, env: dict[str, str], input_text: str | None = None, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, input=input_text, text=True, env=env, cwd=REPO_ROOT, check=check, capture_output=True)
+    return subprocess.run(
+        cmd,
+        input=input_text,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=env,
+        cwd=REPO_ROOT,
+        check=check,
+        capture_output=True,
+    )
 
 
 def compose(env: dict[str, str], args: list[str]) -> subprocess.CompletedProcess[str]:
@@ -117,7 +127,7 @@ def psql_file(env: dict[str, str], database: str, path: Path) -> None:
         "psql", "-X", "-q", "-t", "-A", "-v", "ON_ERROR_STOP=1", "-U", user, "-d", database,
     ]
     with path.open("r", encoding="utf-8") as fh:
-        subprocess.run(cmd, stdin=fh, text=True, env=env, cwd=REPO_ROOT, check=True)
+        subprocess.run(cmd, stdin=fh, text=True, encoding="utf-8", errors="replace", env=env, cwd=REPO_ROOT, check=True)
 
 
 def quote_ident(value: str) -> str:

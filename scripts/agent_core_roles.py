@@ -192,7 +192,17 @@ def run_psql(env: dict[str, str], database: str, sql: str) -> str:
         "psql", "-X", "-q", "-t", "-A", "-v", "ON_ERROR_STOP=1",
         "-U", env["AGENT_DB_ADMIN_USER"], "-d", database,
     ]
-    proc = subprocess.run(cmd, input=sql, text=True, cwd=REPO_ROOT, env=env, capture_output=True, check=True)
+    proc = subprocess.run(
+        cmd,
+        input=sql,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        check=True,
+    )
     return proc.stdout
 
 

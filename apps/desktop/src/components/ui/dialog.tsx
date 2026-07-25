@@ -2,6 +2,7 @@ import { Dialog as DialogPrimitive } from 'radix-ui'
 import * as React from 'react'
 
 import { Button } from '@/components/ui/button'
+import { DialogPortalContainerContext } from '@/components/ui/dialog-portal-context'
 import { Tip } from '@/components/ui/tooltip'
 import { useI18n } from '@/i18n'
 import { X } from '@/lib/icons'
@@ -38,6 +39,31 @@ function DialogOverlay({ className, ...props }: React.ComponentProps<typeof Dial
 
 type DialogBannerTone = 'error' | 'warn' | 'info'
 
+type DialogContentPrimitiveProps = React.ComponentProps<typeof DialogPrimitive.Content>
+type DialogPointerDownOutsideEvent = Parameters<
+  NonNullable<DialogContentPrimitiveProps['onPointerDownOutside']>
+>[0]
+type DialogInteractOutsideEvent = Parameters<NonNullable<DialogContentPrimitiveProps['onInteractOutside']>>[0]
+
+const NESTED_FLOATING_LAYER_SELECTOR = [
+  '[data-slot="select-content"][data-state="open"]',
+  '[data-slot="dropdown-menu-content"][data-state="open"]',
+  '[data-slot="popover-content"][data-state="open"]'
+].join(',')
+
+function hasOpenNestedFloatingLayer(contentNode: HTMLElement | null): boolean {
+  const doc = contentNode?.ownerDocument ?? (typeof document === 'undefined' ? null : document)
+  if (!doc) return false
+
+  if (contentNode?.querySelector(NESTED_FLOATING_LAYER_SELECTOR)) return true
+
+  // Default-open Radix layers can mount once under document.body before the
+  // dialog ref publishes its portal container. Treat any currently open shared
+  // floating layer as the first outside press' owner; the next press (after the
+  // layer closes) can dismiss the dialog normally.
+  return Boolean(doc.querySelector(NESTED_FLOATING_LAYER_SELECTOR))
+}
+
 // Tinted, edge-to-edge bottom banner per tone. Error/warn keep their semantic
 // destructive/primary tokens; info derives from the dialog's own bubble
 // background so it reads as part of the themed dialog — lifted 30% toward white
@@ -67,9 +93,11 @@ function DialogContent({
   fitContent = false,
   banner,
   bannerTone = 'error',
+  onInteractOutside,
   onOpenAutoFocus,
+  onPointerDownOutside,
   ...props
-}: React.ComponentProps<typeof DialogPrimitive.Content> & {
+}: DialogContentPrimitiveProps & {
   showCloseButton?: boolean
   // Size the dialog to its content (capped at the viewport) instead of the
   // default fixed `max-w-lg`. For content that has no intrinsic width (grids,
@@ -84,6 +112,66 @@ function DialogContent({
   const { t } = useI18n()
 
   const widthClass = fitContent ? 'w-auto max-w-[92vw]' : 'w-full max-w-lg'
+
+  // Publish the dialog's content node so popovers (Select / Popover /
+  // DropdownMenu) opened inside it portal INTO the dialog instead of
+  // document.body. That keeps them as DOM descendants — focus never leaves the
+  // dialog, so dismissing a dropdown (or clicking another field) no longer
+  // trips the Dialog's outside-interaction/focus-out close. See
+  // dialog-portal-context.ts. State (not just a ref) so consumers re-render once
+  // the node mounts.
+  const [contentNode, setContentNode] = React.useState<HTMLElement | null>(null)
+  const nestedFloatingLayerPointerDownRef = React.useRef(false)
+
+  React.useEffect(() => {
+    const doc = contentNode?.ownerDocument ?? (typeof document === 'undefined' ? null : document)
+    if (!doc) return
+
+    const clearPointerDownFlag = () => {
+      nestedFloatingLayerPointerDownRef.current = false
+    }
+
+    const handleDocumentPointerDown = () => {
+      nestedFloatingLayerPointerDownRef.current = hasOpenNestedFloatingLayer(contentNode)
+      if (nestedFloatingLayerPointerDownRef.current) {
+        ;(doc.defaultView ?? window).setTimeout(clearPointerDownFlag, 0)
+      }
+    }
+
+    doc.addEventListener('pointerdown', handleDocumentPointerDown, true)
+    return () => {
+      doc.removeEventListener('pointerdown', handleDocumentPointerDown, true)
+    }
+  }, [contentNode])
+
+  const shouldKeepDialogOpenForNestedLayerDismiss = React.useCallback(
+    () => nestedFloatingLayerPointerDownRef.current || hasOpenNestedFloatingLayer(contentNode),
+    [contentNode]
+  )
+
+  const handlePointerDownOutside = React.useCallback(
+    (event: DialogPointerDownOutsideEvent) => {
+      onPointerDownOutside?.(event)
+      if (event.defaultPrevented) return
+
+      if (shouldKeepDialogOpenForNestedLayerDismiss()) {
+        event.preventDefault()
+      }
+    },
+    [onPointerDownOutside, shouldKeepDialogOpenForNestedLayerDismiss]
+  )
+
+  const handleInteractOutside = React.useCallback(
+    (event: DialogInteractOutsideEvent) => {
+      onInteractOutside?.(event)
+      if (event.defaultPrevented) return
+
+      if (shouldKeepDialogOpenForNestedLayerDismiss()) {
+        event.preventDefault()
+      }
+    },
+    [onInteractOutside, shouldKeepDialogOpenForNestedLayerDismiss]
+  )
 
   // No default here — Radix's normal autofocus (first focusable element, often
   // an input) is what most dialogs want. Dialogs with no input should pass
@@ -128,26 +216,31 @@ function DialogContent({
             'gap-0'
           )}
           data-slot="dialog-content"
+          onInteractOutside={handleInteractOutside}
           onOpenAutoFocus={onOpenAutoFocus}
+          onPointerDownOutside={handlePointerDownOutside}
+          ref={setContentNode}
           {...props}
         >
-          {/* Scroll lives on an inner box so this shell keeps a painted bottom radius. */}
-          <div className="relative z-10 overflow-hidden rounded-xl border border-b-0 border-(--stroke-nous) bg-(--ui-chat-bubble-background)">
-            <div className="grid max-h-[calc(85vh-5rem)] min-h-0 gap-3 overflow-y-auto p-4">{children}</div>
-          </div>
-          <div
-            className={cn(
-              // Overlap by one corner radius so the white bottom lobes read clearly
-              // over the tint instead of meeting it on a straight seam.
-              'relative z-0 -mt-[var(--radius-xl)] px-4 pb-2.5 pt-[calc(var(--radius-xl)+0.625rem)] text-center text-[length:var(--conversation-tool-font-size)] leading-relaxed shadow-[inset_0_7px_7px_-4px_rgb(0_0_0/0.28)]',
-              DIALOG_BANNER_TONES[bannerTone]
-            )}
-            data-slot="dialog-banner"
-            role={bannerTone === 'error' ? 'alert' : 'status'}
-          >
-            {banner}
-          </div>
-          {closeButton}
+          <DialogPortalContainerContext.Provider value={contentNode}>
+            {/* Scroll lives on an inner box so this shell keeps a painted bottom radius. */}
+            <div className="relative z-10 overflow-hidden rounded-xl border border-b-0 border-(--stroke-nous) bg-(--ui-chat-bubble-background)">
+              <div className="grid max-h-[calc(85vh-5rem)] min-h-0 gap-3 overflow-y-auto p-4">{children}</div>
+            </div>
+            <div
+              className={cn(
+                // Overlap by one corner radius so the white bottom lobes read clearly
+                // over the tint instead of meeting it on a straight seam.
+                'relative z-0 -mt-[var(--radius-xl)] px-4 pb-2.5 pt-[calc(var(--radius-xl)+0.625rem)] text-center text-[length:var(--conversation-tool-font-size)] leading-relaxed shadow-[inset_0_7px_7px_-4px_rgb(0_0_0/0.28)]',
+                DIALOG_BANNER_TONES[bannerTone]
+              )}
+              data-slot="dialog-banner"
+              role={bannerTone === 'error' ? 'alert' : 'status'}
+            >
+              {banner}
+            </div>
+            {closeButton}
+          </DialogPortalContainerContext.Provider>
         </DialogPrimitive.Content>
       </DialogPortal>
     )
@@ -166,11 +259,16 @@ function DialogContent({
           className
         )}
         data-slot="dialog-content"
+        onInteractOutside={handleInteractOutside}
         onOpenAutoFocus={onOpenAutoFocus}
+        onPointerDownOutside={handlePointerDownOutside}
+        ref={setContentNode}
         {...props}
       >
-        {children}
-        {closeButton}
+        <DialogPortalContainerContext.Provider value={contentNode}>
+          {children}
+          {closeButton}
+        </DialogPortalContainerContext.Provider>
       </DialogPrimitive.Content>
     </DialogPortal>
   )

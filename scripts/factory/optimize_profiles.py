@@ -28,7 +28,9 @@ def ensure_dir(path: Path) -> None:
 
 
 def run(*args: str, **kwargs) -> subprocess.CompletedProcess:
-    return subprocess.run(args, capture_output=True, text=True, **kwargs)
+    encoding = kwargs.pop("encoding", "utf-8")
+    errors = kwargs.pop("errors", "replace")
+    return subprocess.run(args, capture_output=True, text=True, encoding=encoding, errors=errors, **kwargs)
 
 
 # ── Profile specifications ──────────────────────────────────────────────────

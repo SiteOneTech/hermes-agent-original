@@ -64,7 +64,7 @@ def run_psql(sql: str, runtime_env: dict[str, str]) -> None:
         "-U", runtime_env["AGENT_DB_ADMIN_USER"],
         "-d", runtime_env["AGENT_DB_NAME"],
     ]
-    subprocess.run(cmd, input=sql, text=True, cwd=REPO_ROOT, env=runtime_env, check=True)
+    subprocess.run(cmd, input=sql, text=True, encoding="utf-8", errors="replace", cwd=REPO_ROOT, env=runtime_env, check=True)
 
 
 def rows(con: sqlite3.Connection, table: str) -> list[sqlite3.Row]:

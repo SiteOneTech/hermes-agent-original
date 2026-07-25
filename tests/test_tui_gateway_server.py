@@ -3256,6 +3256,145 @@ def test_prompt_submit_rejects_negative_truncate_ordinal(monkeypatch):
         server._sessions.pop("trunc-sid", None)
 
 
+def test_prompt_submit_refuses_empty_truncation_without_confirm(monkeypatch):
+    """Stale truncate_before_user_ordinal=0 must not wipe a non-empty transcript.
+
+    Desktop desync can attach ordinal 0 to an ordinary fresh submit. That cuts
+    at the first user message (history[:0] == []) and replace_messages() would
+    DELETE every durable row. Refuse unless confirm_empty_truncate is set.
+    """
+    replaced = []
+
+    class _FakeDB:
+        def replace_messages(self, key, messages):
+            replaced.append((key, list(messages)))
+
+    history = [
+        {"role": "user", "content": "first"},
+        {"role": "assistant", "content": "ok"},
+        {"role": "user", "content": "second"},
+        {"role": "assistant", "content": "done"},
+    ]
+    server._sessions["empty-trunc-sid"] = _session(history=list(history))
+    monkeypatch.setattr(server, "_get_db", lambda: _FakeDB())
+    monkeypatch.setattr(
+        server, "_start_agent_build", lambda *a, **k: pytest.fail("must not start a turn")
+    )
+    monkeypatch.setattr(
+        server, "_start_inflight_turn", lambda *a, **k: pytest.fail("must not start a turn")
+    )
+
+    try:
+        # Missing confirm → refuse.
+        resp = server.handle_request(
+            {
+                "id": "1",
+                "method": "prompt.submit",
+                "params": {
+                    "session_id": "empty-trunc-sid",
+                    "text": "fresh typed message",
+                    "truncate_before_user_ordinal": 0,
+                },
+            }
+        )
+        assert resp["error"]["code"] == 4028
+        assert "confirm_empty_truncate" in resp["error"]["message"]
+        # Explicit falsey values must not satisfy the opt-in either.
+        for falsey in (False, 0, "", "false", "no"):
+            resp = server.handle_request(
+                {
+                    "id": "1",
+                    "method": "prompt.submit",
+                    "params": {
+                        "session_id": "empty-trunc-sid",
+                        "text": "fresh typed message",
+                        "truncate_before_user_ordinal": 0,
+                        "confirm_empty_truncate": falsey,
+                    },
+                }
+            )
+            assert resp["error"]["code"] == 4028, falsey
+        assert server._sessions["empty-trunc-sid"]["history"] == history
+        assert server._sessions["empty-trunc-sid"]["running"] is False
+        assert server._sessions["empty-trunc-sid"]["history_version"] == 0
+        assert replaced == []
+    finally:
+        server._sessions.pop("empty-trunc-sid", None)
+
+
+def test_prompt_submit_empty_truncation_allowed_with_confirm(monkeypatch):
+    """Intentional restore/regenerate of the first user turn may wipe history."""
+
+    seen = {}
+    replaced = []
+
+    class _Agent:
+        def run_conversation(
+            self, prompt, conversation_history=None, stream_callback=None
+        ):
+            seen["prompt"] = prompt
+            seen["history"] = conversation_history
+            return {
+                "final_response": "regenerated",
+                "messages": [
+                    *(conversation_history or []),
+                    {"role": "user", "content": prompt},
+                    {"role": "assistant", "content": "regenerated"},
+                ],
+            }
+
+    class _ImmediateThread:
+        def __init__(self, target=None, daemon=None):
+            self._target = target
+
+        def start(self):
+            self._target()
+
+    class _FakeDB:
+        def replace_messages(self, key, messages):
+            replaced.append((key, list(messages)))
+
+    history = [
+        {"role": "user", "content": "first"},
+        {"role": "assistant", "content": "ok"},
+        {"role": "user", "content": "second"},
+        {"role": "assistant", "content": "done"},
+    ]
+    server._sessions["confirm-empty-sid"] = _session(
+        agent=_Agent(), history=list(history)
+    )
+
+    try:
+        monkeypatch.setattr(server.threading, "Thread", _ImmediateThread)
+        monkeypatch.setattr(server, "_get_usage", lambda _a: {})
+        monkeypatch.setattr(server, "render_message", lambda _t, _c: "")
+        monkeypatch.setattr(server, "_emit", lambda *a: None)
+        monkeypatch.setattr(server, "_get_db", lambda: _FakeDB())
+
+        resp = server.handle_request(
+            {
+                "id": "1",
+                "method": "prompt.submit",
+                "params": {
+                    "session_id": "confirm-empty-sid",
+                    "text": "first",
+                    "truncate_before_user_ordinal": 0,
+                    "confirm_empty_truncate": True,
+                },
+            }
+        )
+        assert resp.get("result"), f"got error: {resp.get('error')}"
+        assert seen["prompt"] == "first"
+        assert seen["history"] == []
+        assert replaced == [("session-key", [])]
+        assert server._sessions["confirm-empty-sid"]["history"] == [
+            {"role": "user", "content": "first"},
+            {"role": "assistant", "content": "regenerated"},
+        ]
+    finally:
+        server._sessions.pop("confirm-empty-sid", None)
+
+
 class _StopAfterOneNotificationPoll:
     def __init__(self):
         self._checks = 0
@@ -3910,7 +4049,7 @@ def test_ensure_session_db_row_persists_explicit_cwd(monkeypatch, tmp_path):
     created = []
 
     class _FakeDB:
-        def create_session(self, key, source=None, model=None, model_config=None, parent_session_id=None, cwd=None):
+        def create_session(self, key, source=None, model=None, model_config=None, parent_session_id=None, cwd=None, profile_name=None):
             created.append(
                 {"key": key, "source": source, "model": model, "model_config": model_config, "cwd": cwd}
             )
@@ -3931,7 +4070,7 @@ def test_ensure_session_db_row_persists_session_source(monkeypatch):
     created = []
 
     class _FakeDB:
-        def create_session(self, key, source=None, model=None, model_config=None, parent_session_id=None, cwd=None):
+        def create_session(self, key, source=None, model=None, model_config=None, parent_session_id=None, cwd=None, profile_name=None):
             created.append(
                 {"key": key, "source": source, "model": model, "model_config": model_config, "cwd": cwd}
             )
@@ -3952,7 +4091,7 @@ def test_ensure_session_db_row_defaults_to_no_workspace(monkeypatch, tmp_path):
     created = []
 
     class _FakeDB:
-        def create_session(self, key, source=None, model=None, model_config=None, parent_session_id=None, cwd=None):
+        def create_session(self, key, source=None, model=None, model_config=None, parent_session_id=None, cwd=None, profile_name=None):
             created.append(
                 {"key": key, "source": source, "model": model, "model_config": model_config, "cwd": cwd}
             )
@@ -3981,7 +4120,7 @@ def test_ensure_session_db_row_persists_session_model_override(monkeypatch):
     created = []
 
     class _FakeDB:
-        def create_session(self, key, source=None, model=None, model_config=None, parent_session_id=None, cwd=None):
+        def create_session(self, key, source=None, model=None, model_config=None, parent_session_id=None, cwd=None, profile_name=None):
             created.append(
                 {"key": key, "model": model, "model_config": model_config, "cwd": cwd}
             )
@@ -4013,7 +4152,7 @@ def test_ensure_session_db_row_no_override_uses_global(monkeypatch):
     created = []
 
     class _FakeDB:
-        def create_session(self, key, source=None, model=None, model_config=None, parent_session_id=None, cwd=None):
+        def create_session(self, key, source=None, model=None, model_config=None, parent_session_id=None, cwd=None, profile_name=None):
             created.append({"model": model, "model_config": model_config})
 
     monkeypatch.setattr(server, "_get_db", lambda: _FakeDB())
@@ -4022,6 +4161,36 @@ def test_ensure_session_db_row_no_override_uses_global(monkeypatch):
     server._ensure_session_db_row({"session_key": "k1", "model_override": None})
 
     assert created == [{"model": "global/default", "model_config": None}]
+
+
+def test_ensure_session_db_row_stamps_profile_name(monkeypatch, tmp_path):
+    """A profile session's row carries its owning profile_name, so unified
+    multi-profile aggregation never has to guess from which state.db file the
+    row happened to be read (the cross-profile session-jump bug)."""
+    profile_home = tmp_path / "profiles" / "mlperf"
+    profile_home.mkdir(parents=True)
+    created = []
+
+    class _ProfileDB:
+        def __init__(self, db_path=None):
+            created.append({"db_path": db_path})
+
+        def create_session(self, key, **kwargs):
+            created[-1].update({"key": key, "profile_name": kwargs.get("profile_name")})
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("hermes_state.SessionDB", _ProfileDB)
+    monkeypatch.setattr(server, "_resolve_model", lambda: "test-model")
+
+    server._ensure_session_db_row(
+        {"session_key": "k1", "profile_home": str(profile_home)}
+    )
+
+    assert created and created[0]["key"] == "k1"
+    assert created[0]["profile_name"] == "mlperf"
+    assert created[0]["db_path"] == profile_home / "state.db"
 
 
 def test_session_title_clears_pending_after_persist(monkeypatch):
@@ -8216,7 +8385,9 @@ def test_mirror_slash_compress_honors_here_argument(monkeypatch):
 
 # ---------------------------------------------------------------------------
 # session.create / session.close race: fast /new churn must not orphan the
-# slash_worker subprocess or the global approval-notify registration.
+# global approval-notify registration. (Slash workers are no longer pre-warmed
+# by the build thread — slash.exec spawns them on demand — so the build thread
+# must ALSO never construct one here.)
 # ---------------------------------------------------------------------------
 
 
@@ -8224,12 +8395,13 @@ def test_mirror_slash_compress_honors_here_argument(monkeypatch):
 def test_session_create_close_race_does_not_orphan_worker(monkeypatch):
     """Regression guard: if session.close runs while session.create's
     _build thread is still constructing the agent, the build thread
-    must detect the orphan and clean up the slash_worker + notify
-    registration it's about to install.  Without the cleanup those
-    resources leak — the subprocess stays alive until atexit and the
-    notify callback lingers in the global registry."""
+    must detect the orphan and unregister the notify registration it's
+    about to install.  It must also never pre-warm a slash worker (each
+    worker forks the full stdio MCP fleet; spawn is on-demand in
+    slash.exec) — a worker constructed here would be a regression."""
     import threading
 
+    created_workers: list[str] = []
     closed_workers: list[str] = []
     unregistered_keys: list[str] = []
 
@@ -8237,6 +8409,7 @@ def test_session_create_close_race_does_not_orphan_worker(monkeypatch):
         def __init__(self, key, model, profile_home=None):
             self.key = key
             self._closed = False
+            created_workers.append(key)
 
         def close(self):
             self._closed = True
@@ -8320,23 +8493,24 @@ def test_session_create_close_race_does_not_orphan_worker(monkeypatch):
     )
     assert close_resp.get("result", {}).get("closed") is True
 
-    # At this point session.close saw slash_worker=None (not yet
-    # installed) so it didn't close anything.  Release the build thread
-    # and let it finish — it should detect the orphan and clean up the
-    # worker it just allocated + unregister the notify.
+    # At this point session.close saw slash_worker=None (never eagerly
+    # installed) so it had nothing to close.  Release the build thread
+    # and let it finish — it should detect the orphan and unregister
+    # the notify, without ever having constructed a worker.
     release_build.set()
 
     # Give the build thread a moment to run through its finally.
     for _ in range(100):
-        if closed_workers:
+        if unregistered_keys:
             break
         import time
 
         time.sleep(0.02)
 
-    assert (
-        len(closed_workers) == 1
-    ), f"orphan worker was not cleaned up — closed_workers={closed_workers}"
+    assert created_workers == [], (
+        f"build thread pre-warmed a slash worker (spawn must stay on-demand "
+        f"in slash.exec) — created_workers={created_workers}"
+    )
     # Notify may be unregistered by both session.close (unconditional)
     # and the orphan-cleanup path; the key guarantee is that the build
     # thread does at least one unregister call (any prior close
@@ -8350,8 +8524,9 @@ def test_session_create_close_race_does_not_orphan_worker(monkeypatch):
 @pytest.mark.real_agent_prewarm
 def test_session_create_no_race_keeps_worker_alive(monkeypatch):
     """Regression guard: when session.close does NOT race, the build
-    thread must install the worker + notify normally and leave them
-    alone (no over-eager cleanup)."""
+    thread must install the notify normally and leave it alone (no
+    over-eager cleanup) — and must not pre-warm a slash worker (spawn
+    is on-demand in slash.exec)."""
     closed_workers: list[str] = []
     unregistered_keys: list[str] = []
 
@@ -8434,8 +8609,9 @@ def test_session_create_no_race_keeps_worker_alive(monkeypatch):
             own_unregistered == []
         ), f"build thread unregistered its own notify despite no race: {own_unregistered}"
 
-        # Session should have the live worker installed.
-        assert session.get("slash_worker") is not None
+        # No pre-warmed worker: slash.exec spawns on demand, so a fresh
+        # session that hasn't run a worker-routed command carries None.
+        assert session.get("slash_worker") is None
     finally:
         # Cleanup + restore sibling sessions we snapshotted.
         server._sessions.clear()
@@ -8689,6 +8865,536 @@ def test_session_delete_success_returns_deleted_id(monkeypatch):
     assert str(captured["sessions_dir"]).endswith("sessions")
 
 
+
+
+# --------------------------------------------------------------------------
+# session.* profile scoping (app-global remote mode) — #62503
+# --------------------------------------------------------------------------
+
+
+def test_session_list_honors_params_profile_opens_profile_db(monkeypatch, tmp_path):
+    """Issue #62503: session.list must read the profile's state.db, not launch."""
+    profile_home = tmp_path / "profiles" / "mlperf"
+    profile_home.mkdir(parents=True)
+    (profile_home / "state.db").write_bytes(b"")
+    seen: dict = {}
+
+    class LaunchDB:
+        def list_sessions_rich(self, **kwargs):
+            seen["launch"] = True
+            return [{"id": "launch-1", "source": "tui", "title": "L"}]
+
+    class ProfileDB:
+        def __init__(self, db_path=None):
+            seen["db_path"] = db_path
+
+        def list_sessions_rich(self, **kwargs):
+            seen["profile"] = True
+            return [
+                {
+                    "id": "ml-1",
+                    "source": "tui",
+                    "title": "M",
+                    "preview": "",
+                    "started_at": 1,
+                    "message_count": 1,
+                }
+            ]
+
+        def close(self):
+            seen["closed"] = True
+
+    monkeypatch.setattr(server, "_profile_home", lambda p: profile_home if p == "mlperf" else None)
+    monkeypatch.setattr(server, "_get_db", lambda: LaunchDB())
+    monkeypatch.setattr("hermes_state.SessionDB", ProfileDB)
+
+    resp = server.handle_request(
+        {
+            "id": "1",
+            "method": "session.list",
+            "params": {"profile": "mlperf", "limit": 5},
+        }
+    )
+    assert "result" in resp, resp
+    assert resp["result"]["sessions"][0]["id"] == "ml-1"
+    assert seen.get("profile") is True
+    assert seen.get("launch") is None
+    assert str(seen.get("db_path")).endswith("state.db")
+    assert seen.get("closed") is True
+
+
+def test_session_most_recent_honors_params_profile(monkeypatch, tmp_path):
+    """Issue #62503: session.most_recent must not return the launch profile tip."""
+    profile_home = tmp_path / "profiles" / "mlperf"
+    profile_home.mkdir(parents=True)
+
+    class LaunchDB:
+        def list_sessions_rich(self, **kwargs):
+            return [{"id": "launch-tip", "source": "tui", "title": "L", "started_at": 9}]
+
+    class ProfileDB2:
+        def __init__(self, db_path=None):
+            self.db_path = db_path
+
+        def list_sessions_rich(self, **kwargs):
+            return [
+                {"id": "tool-noise", "source": "tool", "title": "t", "started_at": 9},
+                {"id": "ml-tip", "source": "desktop", "title": "M", "started_at": 3},
+            ]
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(server, "_profile_home", lambda p: profile_home if p == "mlperf" else None)
+    monkeypatch.setattr(server, "_get_db", lambda: LaunchDB())
+    monkeypatch.setattr("hermes_state.SessionDB", ProfileDB2)
+
+    resp = server.handle_request(
+        {
+            "id": "1",
+            "method": "session.most_recent",
+            "params": {"profile": "mlperf"},
+        }
+    )
+    assert resp["result"]["session_id"] == "ml-tip"
+
+
+def test_session_create_reports_requested_profile_name(monkeypatch, tmp_path):
+    """Issue #62503: session.create info.profile_name must not always be launch."""
+    profile_home = tmp_path / "profiles" / "mlperf"
+    profile_home.mkdir(parents=True)
+
+    def _clear():
+        for session in list(server._sessions.values()):
+            server._teardown_session(session)
+        server._sessions.clear()
+
+    monkeypatch.setattr(server, "_start_agent_build", lambda *a, **k: None)
+    monkeypatch.setattr(server, "_schedule_agent_build", lambda *a, **k: None)
+    monkeypatch.setattr(server, "_schedule_session_cap_enforcement", lambda *a, **k: None)
+    monkeypatch.setattr(server, "_completion_cwd", lambda params=None: str(tmp_path))
+    monkeypatch.setattr(server, "_profile_home", lambda p: profile_home if p == "mlperf" else None)
+    monkeypatch.setattr(server, "_current_profile_name", lambda: "default")
+    monkeypatch.setattr(server, "_claim_active_session_slot", lambda *a, **k: (None, None))
+    _clear()
+    try:
+        resp = server._methods["session.create"]("r1", {"profile": "mlperf", "cols": 80})
+        assert "result" in resp, resp
+        assert resp["result"]["info"]["profile_name"] == "mlperf"
+        sid = resp["result"]["session_id"]
+        assert server._sessions[sid]["profile_home"] == str(profile_home)
+    finally:
+        _clear()
+
+
+def test_session_delete_honors_params_profile_sessions_dir(monkeypatch, tmp_path):
+    """Issue #62503: delete must target the profile state.db + sessions dir."""
+    profile_home = tmp_path / "profiles" / "mlperf"
+    (profile_home / "sessions").mkdir(parents=True)
+    captured: dict = {}
+
+    class ProfileDB:
+        def __init__(self, db_path=None):
+            captured["db_path"] = db_path
+
+        def delete_session(self, sid, sessions_dir=None):
+            captured["sid"] = sid
+            captured["sessions_dir"] = sessions_dir
+            return True
+
+        def close(self):
+            captured["closed"] = True
+
+    monkeypatch.setattr(server, "_profile_home", lambda p: profile_home if p == "mlperf" else None)
+    monkeypatch.setattr(server, "_get_db", lambda: None)
+    monkeypatch.setattr("hermes_state.SessionDB", ProfileDB)
+
+    resp = server.handle_request(
+        {
+            "id": "1",
+            "method": "session.delete",
+            "params": {"session_id": "old-ml", "profile": "mlperf"},
+        }
+    )
+    assert "result" in resp, resp
+    assert resp["result"] == {"deleted": "old-ml"}
+    assert str(captured["db_path"]).endswith("state.db")
+    assert Path(captured["sessions_dir"]) == profile_home / "sessions"
+    assert captured.get("closed") is True
+
+
+def test_session_title_uses_session_profile_db_not_launch(monkeypatch, tmp_path):
+    """session.title on a non-launch profile session must not touch launch DB."""
+    profile_home = tmp_path / "profiles" / "mlperf"
+    profile_home.mkdir(parents=True)
+    seen: dict = {}
+
+    class LaunchDB:
+        def get_session_title(self, _key):
+            seen["launch_read"] = True
+            return "from-launch"
+
+        def set_session_title(self, _key, _title):
+            seen["launch_write"] = True
+            return True
+
+        def get_session(self, _key):
+            return {"id": _key, "title": "from-launch"}
+
+    class ProfileDB:
+        def __init__(self, db_path=None):
+            self.db_path = db_path
+            seen["db_path"] = db_path
+
+        def get_session_title(self, _key):
+            return seen.get("title")
+
+        def get_session(self, _key):
+            if "title" in seen:
+                return {"id": _key, "title": seen["title"]}
+            return None
+
+        def set_session_title(self, _key, title):
+            seen["title"] = title
+            seen["profile_write"] = True
+            return True
+
+        def close(self):
+            seen["closed"] = True
+
+    server._sessions["sid"] = {
+        "session_key": "ml-sess",
+        "history": [],
+        "history_lock": __import__("threading").Lock(),
+        "running": False,
+        "pending_title": None,
+        "profile_home": str(profile_home),
+        "agent": None,
+        "created_at": 1.0,
+        "last_active": 1.0,
+    }
+    monkeypatch.setattr(server, "_get_db", lambda: LaunchDB())
+    monkeypatch.setattr("hermes_state.SessionDB", ProfileDB)
+    try:
+        set_resp = server.handle_request(
+            {
+                "id": "1",
+                "method": "session.title",
+                "params": {"session_id": "sid", "title": "profile-title"},
+            }
+        )
+        assert "result" in set_resp, set_resp
+        assert set_resp["result"]["title"] == "profile-title"
+        assert seen.get("profile_write") is True
+        assert seen.get("launch_write") is None
+        assert str(seen.get("db_path")).endswith("state.db")
+
+        get_resp = server.handle_request(
+            {"id": "2", "method": "session.title", "params": {"session_id": "sid"}}
+        )
+        assert get_resp["result"]["title"] == "profile-title"
+        assert seen.get("launch_read") is None
+    finally:
+        server._sessions.pop("sid", None)
+
+
+def test_session_history_uses_session_profile_db(monkeypatch, tmp_path):
+    """session.history must read durable messages from the profile state.db."""
+    profile_home = tmp_path / "profiles" / "mlperf"
+    profile_home.mkdir(parents=True)
+    seen: dict = {}
+
+    class LaunchDB:
+        def get_messages_as_conversation(self, _key, include_ancestors=True):
+            seen["launch"] = True
+            return [{"role": "user", "content": "launch"}]
+
+    class ProfileDB:
+        def __init__(self, db_path=None):
+            seen["db_path"] = db_path
+
+        def get_messages_as_conversation(self, _key, include_ancestors=True):
+            seen["profile"] = True
+            return [{"role": "user", "content": "from-profile"}]
+
+        def close(self):
+            seen["closed"] = True
+
+    server._sessions["sid"] = {
+        "session_key": "ml-sess",
+        "history": [{"role": "user", "content": "mem"}],
+        "history_lock": __import__("threading").Lock(),
+        "running": False,
+        "profile_home": str(profile_home),
+        "agent": None,
+        "created_at": 1.0,
+        "last_active": 1.0,
+    }
+    monkeypatch.setattr(server, "_get_db", lambda: LaunchDB())
+    monkeypatch.setattr("hermes_state.SessionDB", ProfileDB)
+    try:
+        resp = server.handle_request(
+            {"id": "1", "method": "session.history", "params": {"session_id": "sid"}}
+        )
+        assert "result" in resp, resp
+        assert seen.get("profile") is True
+        assert seen.get("launch") is None
+        # Count comes from profile-backed conversation (1 msg), not bare mem list alone.
+        assert resp["result"]["count"] == 1
+        texts = []
+        for m in resp["result"]["messages"]:
+            texts.append(str(m))
+        assert any("from-profile" in t for t in texts) or resp["result"]["count"] == 1
+    finally:
+        server._sessions.pop("sid", None)
+
+
+def test_session_status_uses_session_profile_db(monkeypatch, tmp_path):
+    """session.status must load meta from the session profile state.db."""
+    profile_home = tmp_path / "profiles" / "mlperf"
+    profile_home.mkdir(parents=True)
+    seen: dict = {}
+
+    class LaunchDB:
+        def get_session(self, _key):
+            seen["launch"] = True
+            return {"id": _key, "title": "launch-title", "started_at": 1}
+
+    class ProfileDB:
+        def __init__(self, db_path=None):
+            seen["db_path"] = db_path
+
+        def get_session(self, _key):
+            seen["profile"] = True
+            return {"id": _key, "title": "profile-title", "started_at": 42}
+
+        def close(self):
+            seen["closed"] = True
+
+    server._sessions["sid"] = {
+        "session_key": "ml-sess",
+        "history": [],
+        "history_lock": __import__("threading").Lock(),
+        "running": False,
+        "profile_home": str(profile_home),
+        "agent": None,
+        "created_at": 1.0,
+        "last_active": 1.0,
+    }
+    monkeypatch.setattr(server, "_get_db", lambda: LaunchDB())
+    monkeypatch.setattr("hermes_state.SessionDB", ProfileDB)
+    try:
+        resp = server.handle_request(
+            {"id": "1", "method": "session.status", "params": {"session_id": "sid"}}
+        )
+        assert "result" in resp, resp
+        assert "profile-title" in resp["result"]["output"]
+        assert seen.get("profile") is True
+        assert seen.get("launch") is None
+    finally:
+        server._sessions.pop("sid", None)
+
+
+def test_teardown_ends_session_in_profile_db(monkeypatch, tmp_path):
+    """_teardown_session must end_session on the profile store, not launch."""
+    profile_home = tmp_path / "profiles" / "mlperf"
+    profile_home.mkdir(parents=True)
+    seen: dict = {}
+
+    class LaunchDB:
+        def get_session(self, _key):
+            seen["launch"] = True
+            return {"id": _key, "source": "tui"}
+
+        def end_session(self, _key, _reason):
+            seen["launch_end"] = True
+
+    class ProfileDB:
+        def __init__(self, db_path=None):
+            seen["db_path"] = db_path
+
+        def get_session(self, _key):
+            seen["profile"] = True
+            return {"id": _key, "source": "tui"}
+
+        def end_session(self, key, reason):
+            seen["ended"] = (key, reason)
+
+        def close(self):
+            seen["closed"] = True
+
+    monkeypatch.setattr(server, "_get_db", lambda: LaunchDB())
+    monkeypatch.setattr("hermes_state.SessionDB", ProfileDB)
+    session = {
+        "session_key": "ml-sess",
+        "profile_home": str(profile_home),
+        "agent": None,
+        "history": [],
+        "source": "tui",
+    }
+    server._teardown_session(session, end_reason="closed")
+    assert seen.get("ended") == ("ml-sess", "closed")
+    assert seen.get("launch_end") is None
+    assert seen.get("launch") is None
+    assert str(seen.get("db_path")).endswith("state.db")
+
+
+def test_session_branch_writes_to_parent_profile_db(monkeypatch, tmp_path):
+    """session.branch must copy history into the parent's profile state.db."""
+    profile_home = tmp_path / "profiles" / "mlperf"
+    profile_home.mkdir(parents=True)
+    seen: dict = {"msgs": []}
+
+    class LaunchDB:
+        def get_session_title(self, _key):
+            seen["launch"] = True
+            return "L"
+
+        def create_session(self, *a, **k):
+            seen["launch_create"] = True
+
+        def append_message(self, **k):
+            seen["launch_msg"] = True
+
+        def set_session_title(self, *a, **k):
+            return True
+
+    class ProfileDB:
+        def __init__(self, db_path=None):
+            seen["db_path"] = db_path
+            seen.setdefault("inits", 0)
+            seen["inits"] += 1
+
+        def get_session_title(self, _key):
+            return "parent"
+
+        def get_next_title_in_lineage(self, current):
+            return f"{current} (branch)"
+
+        def create_session(self, new_key, **kwargs):
+            seen["created"] = new_key
+            seen["parent"] = kwargs.get("parent_session_id")
+            seen["profile_name"] = kwargs.get("profile_name")
+
+        def append_message(self, **kwargs):
+            seen["msgs"].append(kwargs)
+
+        def set_session_title(self, key, title):
+            seen["title"] = (key, title)
+            return True
+
+        def get_session(self, key):
+            return {"id": key, "cwd": str(tmp_path)}
+
+        def update_session_cwd(self, *a, **k):
+            return None
+
+        def close(self):
+            seen["closed"] = True
+
+    class FakeAgent:
+        def __init__(self):
+            self.model = "test-model"
+            self.session_id = None
+
+    parent = {
+        "session_key": "parent-key",
+        "history": [{"role": "user", "content": "hi"}],
+        "history_lock": __import__("threading").Lock(),
+        "running": False,
+        "cols": 80,
+        "profile_home": str(profile_home),
+        "source": "tui",
+        "agent": FakeAgent(),
+        "created_at": 1.0,
+        "last_active": 1.0,
+        "cwd": str(tmp_path),
+    }
+    server._sessions["parent"] = parent
+    monkeypatch.setattr(server, "_get_db", lambda: LaunchDB())
+    monkeypatch.setattr("hermes_state.SessionDB", ProfileDB)
+    monkeypatch.setattr(server, "_claim_active_session_slot", lambda *a, **k: (None, None))
+
+    def _fake_make_agent(*a, **k):
+        seen["agent_session_db"] = k.get("session_db")
+        return FakeAgent()
+
+    monkeypatch.setattr(server, "_make_agent", _fake_make_agent)
+    monkeypatch.setattr(server, "_set_session_context", lambda *a, **k: {})
+    monkeypatch.setattr(server, "_clear_session_context", lambda *a, **k: None)
+    monkeypatch.setattr(server, "_resolve_model", lambda: "test-model")
+    monkeypatch.setattr(server, "_session_cwd", lambda s: str(tmp_path))
+    monkeypatch.setattr(server, "_register_session_cwd", lambda *a, **k: None)
+    monkeypatch.setattr(server, "_attach_worker", lambda *a, **k: None)
+    try:
+        resp = server.handle_request(
+            {
+                "id": "1",
+                "method": "session.branch",
+                "params": {"session_id": "parent", "name": "forked"},
+            }
+        )
+        assert "result" in resp, resp
+        assert seen.get("created")
+        assert seen.get("parent") == "parent-key"
+        # The branch row is self-describing: stamped with the parent's owning
+        # profile, not left NULL for aggregators to mis-tag as "default".
+        assert seen.get("profile_name") == "mlperf"
+        assert seen.get("title") == (seen["created"], "forked")
+        assert len(seen["msgs"]) == 1
+        assert seen.get("launch") is None
+        assert seen.get("launch_create") is None
+        child_sid = resp["result"]["session_id"]
+        assert server._sessions[child_sid]["profile_home"] == str(profile_home)
+        # The branched AGENT must be bound to the parent profile's state.db —
+        # not just the row. Otherwise its own flushes (and a later compression
+        # rotation) land on the launch db, splitting the lineage again.
+        assert isinstance(seen.get("agent_session_db"), ProfileDB)
+    finally:
+        for k in list(server._sessions):
+            server._sessions.pop(k, None)
+
+
+def test_pending_title_finalizer_uses_session_profile_db(monkeypatch, tmp_path):
+    """Post-turn pending_title must land in the session profile store."""
+    profile_home = tmp_path / "profiles" / "mlperf"
+    profile_home.mkdir(parents=True)
+    seen: dict = {}
+
+    class LaunchDB:
+        def set_session_title(self, _key, _title):
+            seen["launch"] = True
+            return True
+
+    class ProfileDB:
+        def __init__(self, db_path=None):
+            seen["db_path"] = db_path
+
+        def set_session_title(self, key, title):
+            seen["set"] = (key, title)
+            return True
+
+        def close(self):
+            seen["closed"] = True
+
+    monkeypatch.setattr(server, "_get_db", lambda: LaunchDB())
+    monkeypatch.setattr("hermes_state.SessionDB", ProfileDB)
+    session = {
+        "session_key": "ml-sess",
+        "pending_title": "deferred-title",
+        "profile_home": str(profile_home),
+        "history": [],
+    }
+    # Exercise the same close pattern as the post-turn finalizer.
+    with server._session_db(session) as db:
+        assert db is not None
+        assert db.set_session_title(session["session_key"], session["pending_title"])
+        session["pending_title"] = None
+    assert seen.get("set") == ("ml-sess", "deferred-title")
+    assert seen.get("launch") is None
+    assert session["pending_title"] is None
+
+
 # --------------------------------------------------------------------------
 # model.options — curated-list parity with `hermes model` and classic /model
 # --------------------------------------------------------------------------
@@ -8879,6 +9585,7 @@ def test_model_options_preserves_canonical_custom_row_after_agent_init(monkeypat
     canonical.assert_called_once_with(
         base_url="http://127.0.0.1:11434/v1",
         config_provider="custom:local-ollama",
+        model="qwen3.6:35b-65k",
     )
 
 
@@ -11287,7 +11994,8 @@ def test_attach_worker_stores_worker_on_live_session():
 
 def test_restart_slash_worker_closes_orphan_when_session_reaped(monkeypatch):
     """Post-turn restart of a session reaped mid-flight (e.g. close_on_disconnect
-    fired while `running` flipped false) must close the fresh worker, not orphan it."""
+    fired while `running` flipped false) must close both the stale worker and
+    the fresh replacement, not orphan either."""
     closed = []
 
     class _FakeWorker:
@@ -11299,11 +12007,14 @@ def test_restart_slash_worker_closes_orphan_when_session_reaped(monkeypatch):
 
     monkeypatch.setattr(server, "_SlashWorker", _FakeWorker)
     server._sessions.pop("reaped", None)
-    reaped = {"session_key": "k"}  # not in _sessions -> torn down concurrently
+    # not in _sessions -> torn down concurrently; carries a live worker so the
+    # restart path actually runs (a workerless session is a restart no-op now)
+    reaped = {"session_key": "k", "slash_worker": _FakeWorker()}
     server._restart_slash_worker("reaped", reaped)
 
-    assert closed == [True]
-    assert reaped.get("slash_worker") is None
+    # stale worker closed by the restart, fresh worker closed by _attach_worker
+    # (sid no longer maps to this session)
+    assert closed == [True, True]
     assert "reaped" not in server._sessions
 
 
@@ -11316,13 +12027,93 @@ def test_restart_slash_worker_stores_on_live_session(monkeypatch):
             pass
 
     monkeypatch.setattr(server, "_SlashWorker", _FakeWorker)
-    live = {"session_key": "k", "slash_worker": None}
+    old_worker = _FakeWorker()
+    live = {"session_key": "k", "slash_worker": old_worker}
     server._sessions["live-restart"] = live
     try:
         server._restart_slash_worker("live-restart", live)
         assert isinstance(live["slash_worker"], _FakeWorker)
+        assert live["slash_worker"] is not old_worker
     finally:
         server._sessions.pop("live-restart", None)
+
+
+def test_restart_slash_worker_noop_without_worker(monkeypatch):
+    """A session that never spawned a worker (slash.exec not used yet) must
+    stay workerless across a restart — spawning here would fork the per-worker
+    stdio MCP fleet for sessions that never run worker-routed commands."""
+    spawned = []
+
+    class _FakeWorker:
+        def __init__(self, *a, **k):
+            spawned.append(True)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(server, "_SlashWorker", _FakeWorker)
+    live = {"session_key": "k", "slash_worker": None}
+    server._sessions["lazy-noop"] = live
+    try:
+        server._restart_slash_worker("lazy-noop", live)
+        assert spawned == []
+        assert live["slash_worker"] is None
+    finally:
+        server._sessions.pop("lazy-noop", None)
+
+
+def test_slash_exec_concurrent_first_use_spawns_single_worker(monkeypatch):
+    """With eager pre-warm removed, slash.exec is the only spawn path — two
+    concurrent worker-routed commands on a fresh session must not each fork a
+    full MCP-fleet worker. The per-session spawn lock serializes first use."""
+    import time as _time
+
+    spawned = []
+    barrier = threading.Barrier(2, timeout=5)
+
+    class _SlowWorker:
+        def __init__(self, *a, **k):
+            spawned.append(self)
+            _time.sleep(0.05)  # widen the None-observation window
+
+        def run(self, cmd):
+            return f"ran {cmd}"
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(server, "_SlashWorker", _SlowWorker)
+    monkeypatch.setattr(server, "_mirror_slash_side_effects", lambda *a, **k: None)
+    session = _session(slash_worker=None)
+    server._sessions["race-spawn"] = session
+
+    results = []
+
+    def _exec(n):
+        barrier.wait()
+        resp = server.handle_request(
+            {
+                "id": str(n),
+                "method": "slash.exec",
+                "params": {"command": "/context", "session_id": "race-spawn"},
+            }
+        )
+        results.append(resp)
+
+    try:
+        threads = [threading.Thread(target=_exec, args=(i,)) for i in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+        assert len(spawned) == 1, (
+            f"concurrent slash.exec spawned {len(spawned)} workers — first-use "
+            f"spawn must be serialized per session"
+        )
+        assert session["slash_worker"] is spawned[0]
+        assert all("result" in r for r in results), results
+    finally:
+        server._sessions.pop("race-spawn", None)
 
 
 def test_session_close_rpc_claims_then_tears_down(monkeypatch):
