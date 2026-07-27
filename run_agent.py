@@ -437,7 +437,7 @@ class AIAgent:
         command: str = None,
         args: list[str] | None = None,
         model: str = "",
-        max_iterations: int = 90,  # Default tool-calling iterations (shared with subagents)
+        max_iterations: int = 500,  # Default tool-calling iterations (shared with subagents)
         tool_delay: float = 1.0,
         enabled_toolsets: List[str] = None,
         disabled_toolsets: List[str] = None,
@@ -1762,8 +1762,23 @@ class AIAgent:
                 # blocks. A list override, however, is the original clean
                 # multimodal payload (for example before a queued /model note)
                 # and must replace the API-local list once the turn is final.
-                if override is not None and (
-                    not isinstance(msg.get("content"), list) or isinstance(override, list)
+                # Preflight compaction can re-anchor this index at a message
+                # whose content was MERGED with the compaction summary
+                # (merge-summary-into-tail).  That is not an accident:
+                # ``reanchor_current_turn_user_idx`` falls back to the last
+                # user row precisely BECAUSE the merge rewrote the content and
+                # the exact-match lookup misses.  Overwriting it with the clean
+                # text would drop the summary from the continuation history the
+                # next turn is built from — the same hazard the DB-write twin
+                # below already refuses (see the sibling guard in
+                # ``_flush_messages_to_session_db_unlocked``).
+                if (
+                    override is not None
+                    and not msg.get(COMPRESSED_SUMMARY_METADATA_KEY)
+                    and (
+                        not isinstance(msg.get("content"), list)
+                        or isinstance(override, list)
+                    )
                 ):
                     msg["content"] = override
                 if timestamp is not None:
@@ -6462,13 +6477,43 @@ class AIAgent:
         ``force=False``.
         """
         from agent.conversation_compression import compress_context
-        return compress_context(
-            self, messages, system_message,
-            approx_tokens=approx_tokens, task_id=task_id, focus_topic=focus_topic,
-            force=force,
-            defer_context_engine_notification=defer_context_engine_notification,
-            commit_fence=commit_fence,
+        from agent.portal_tags import (
+            get_conversation_context,
+            reset_conversation_context,
+            set_conversation_context,
         )
+        # Out-of-turn compaction entry points — ``/compact`` (cli.py), the
+        # gateway ``/compress`` command and its hygiene sweep (both of which
+        # build a throwaway agent), and partial head compression — call this
+        # forwarder directly, outside ``run_conversation``'s ambient scope.
+        # With nothing ambient the summarizer's auxiliary call carries no
+        # conversation tag and no Portal sticky key, so it routes independently
+        # of the conversation it belongs to. Publish the root here as a
+        # fallback; in-turn callers already have it set to the same value, so
+        # this is a no-op for them.
+        #
+        # Note this does NOT keep the compaction turn's own prompt cache warm:
+        # compaction replaces the history with a summary and rebuilds the
+        # system prompt, so that request is a cold write on any endpoint. What
+        # it buys is the turns AFTER compaction reading the cache it wrote.
+        token = None
+        if get_conversation_context() is None:
+            root = self._conversation_root_id()
+            if root:
+                token = set_conversation_context(root)
+        try:
+            return compress_context(
+                self, messages, system_message,
+                approx_tokens=approx_tokens, task_id=task_id, focus_topic=focus_topic,
+                force=force,
+                defer_context_engine_notification=defer_context_engine_notification,
+                commit_fence=commit_fence,
+            )
+        finally:
+            # Restore whatever the caller had, so a compaction never leaks its
+            # tag into the surrounding scope.
+            if token is not None:
+                reset_conversation_context(token)
 
     def _set_tool_guardrail_halt(self, decision: ToolGuardrailDecision) -> None:
         """Record the first guardrail decision that should stop this turn."""
