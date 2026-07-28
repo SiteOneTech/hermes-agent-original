@@ -127,8 +127,6 @@ export function SidebarCronJobsSection({
   const cap = Math.min(visibleCount, max)
   const shown = sorted.slice(0, cap)
   const hiddenCount = Math.min(sorted.length, max) - shown.length
-  // When capped, signal "50+" rather than implying the list is complete.
-  const countLabel = jobs.length > max ? `${max}+` : String(jobs.length)
 
   return (
     <SidebarGroup className="shrink-0 p-0 pb-1">
@@ -139,7 +137,6 @@ export function SidebarCronJobsSection({
           type="button"
         >
           <SidebarPanelLabel>{label}</SidebarPanelLabel>
-          <span className="text-[0.6875rem] font-medium text-(--ui-text-quaternary)">{countLabel}</span>
           <DisclosureCaret
             className="text-(--ui-text-tertiary) opacity-0 transition group-hover/section-label:opacity-100"
             open={open}
@@ -250,7 +247,7 @@ function CronJobSidebarRow({
 
   return (
     <div>
-      <ActionsContextMenu ariaLabel={c.actionsFor(label)} contentClassName="w-44" items={items}>
+      <ActionsContextMenu ariaLabel={c.actionsTitle} contentClassName="w-44" items={items}>
         <div className="group/cron relative grid min-h-[1.625rem] grid-cols-[minmax(0,1fr)_auto] items-center rounded-md hover:bg-(--chrome-action-hover)">
           {/* Lead with the dot in the same w-3.5 cell + pl-2 the session rows use
               so the cron dots line up with the sessions above; the caret sits next

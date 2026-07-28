@@ -181,7 +181,7 @@ function EnvVarField({ envVar, isSet, onSaved, onCleared }: EnvVarFieldProps) {
           {!editing &&
             (isSet ? (
               <EnvVarActionsMenu {...actionProps}>
-                <EnvVarActionsTrigger label={envVar.key} onClick={event => event.stopPropagation()} />
+                <EnvVarActionsTrigger onClick={event => event.stopPropagation()} />
               </EnvVarActionsMenu>
             ) : (
               <span className="flex shrink-0 items-center gap-1.5">
@@ -190,7 +190,7 @@ function EnvVarField({ envVar, isSet, onSaved, onCleared }: EnvVarFieldProps) {
                 </Button>
                 {envVar.url && (
                   <EnvVarActionsMenu {...actionProps}>
-                    <EnvVarActionsTrigger label={envVar.key} onClick={event => event.stopPropagation()} />
+                    <EnvVarActionsTrigger onClick={event => event.stopPropagation()} />
                   </EnvVarActionsMenu>
                 )}
               </span>
