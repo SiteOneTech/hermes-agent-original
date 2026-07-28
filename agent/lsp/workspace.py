@@ -42,13 +42,15 @@ def normalize_path(path: str) -> str:
 
 
 def find_git_worktree(start: str) -> Optional[str]:
-    """Walk up from ``start`` looking for a ``.git`` entry (file or dir).
+    """Walk up from ``start`` looking for a valid ``.git`` entry.
 
     Returns the directory containing ``.git``, or ``None`` if no git
     root is found before hitting the filesystem root.
 
     A ``.git`` *file* (not directory) means we're inside a git
-    worktree set up via ``git worktree add`` — both forms count.
+    worktree set up via ``git worktree add``. A directory must include
+    Git's required ``HEAD`` file: accepting an arbitrary empty ``.git``
+    directory would incorrectly make unrelated files belong to a workspace.
     """
     try:
         start_path = Path(normalize_path(start))
@@ -72,7 +74,9 @@ def find_git_worktree(start: str) -> Optional[str]:
     for _ in range(64):
         git_marker = cur / ".git"
         try:
-            if git_marker.exists():
+            if git_marker.is_file() or (
+                git_marker.is_dir() and (git_marker / "HEAD").is_file()
+            ):
                 resolved = str(cur)
                 _workspace_cache[str(start_path)] = (resolved, True)
                 return resolved

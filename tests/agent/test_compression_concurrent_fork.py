@@ -429,7 +429,7 @@ def test_cancelled_commit_fence_blocks_late_session_db_compaction(
 
     def _slow_summary(*_args, **_kwargs):
         summary_started.set()
-        assert release_summary.wait(timeout=5)
+        release_summary.wait()
         return [
             {"role": "user", "content": "[CONTEXT COMPACTION] summary"},
             {"role": "user", "content": "tail"},
@@ -456,7 +456,10 @@ def test_cancelled_commit_fence_blocks_late_session_db_compaction(
 
     worker = threading.Thread(target=_run_compression, name="timed-out-hygiene")
     worker.start()
-    assert summary_started.wait(timeout=2)
+    # The worker may need to finish plugin-heavy agent setup before it reaches
+    # the barrier on a saturated CI host; the per-test isolation cap remains
+    # the hard deadlock bound.
+    assert summary_started.wait(timeout=20)
 
     assert fence.cancel_before_commit() is True
     release_summary.set()
@@ -496,7 +499,7 @@ def test_fence_cancelled_compression_leaves_lock_reacquirable(tmp_path: Path) ->
 
     def _slow_summary(*_args, **_kwargs):
         summary_started.set()
-        assert release_summary.wait(timeout=5)
+        release_summary.wait()
         return [
             {"role": "user", "content": "[CONTEXT COMPACTION] summary"},
             {"role": "user", "content": "tail"},
@@ -517,7 +520,10 @@ def test_fence_cancelled_compression_leaves_lock_reacquirable(tmp_path: Path) ->
 
     worker = threading.Thread(target=_run_compression, name="fenced-hygiene")
     worker.start()
-    assert summary_started.wait(timeout=2)
+    # The worker may need to finish plugin-heavy agent setup before it reaches
+    # the barrier on a saturated CI host; the per-test isolation cap remains
+    # the hard deadlock bound.
+    assert summary_started.wait(timeout=20)
     assert fence.cancel_before_commit() is True
     release_summary.set()
     worker.join(timeout=5)

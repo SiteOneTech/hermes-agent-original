@@ -49,6 +49,12 @@ def test_real_binaries_execute_leading_dash_program_payload(
     """A PATH marker proves these binaries do not reparse '-program' as an option."""
     if shutil.which(tool) is None or (needs_tty and shutil.which("script") is None):
         pytest.skip(f"{tool} or script is not installed")
+    if tool == "sort":
+        version = subprocess.run(
+            [tool, "--version"], text=True, capture_output=True, check=False
+        )
+        if "GNU coreutils" not in version.stdout:
+            pytest.skip("sort --compress-program requires GNU coreutils")
 
     marker = tmp_path / "executed"
     payload = tmp_path / "-payload-marker"

@@ -9,7 +9,11 @@ def _payload(result: str) -> dict:
 
 
 def test_factory_toolset_exposes_factory_tools():
-    tools = model_tools.get_tool_definitions(enabled_toolsets=["factory"], quiet_mode=True)
+    tools = model_tools.get_tool_definitions(
+        enabled_toolsets=["factory"],
+        quiet_mode=True,
+        skip_tool_search_assembly=True,
+    )
     names = {tool["function"]["name"] for tool in tools}
 
     assert "factory_project_create" in names

@@ -120,6 +120,10 @@ def gw_session(monkeypatch):
     session_key = "cluster-test-session"
     token = A.set_current_session_key(session_key)
     with A._lock:
+        permanent_approved = set(A._permanent_approved)
+        session_approved = set(A._session_approved.get(session_key, set()))
+        A._permanent_approved.discard("execute_code")
+        A._session_approved.pop(session_key, None)
         A._gateway_queues.pop(session_key, None)
         A._gateway_notify_cbs.pop(session_key, None)
     try:
@@ -127,6 +131,12 @@ def gw_session(monkeypatch):
     finally:
         A.reset_current_session_key(token)
         with A._lock:
+            A._permanent_approved.clear()
+            A._permanent_approved.update(permanent_approved)
+            if session_approved:
+                A._session_approved[session_key] = session_approved
+            else:
+                A._session_approved.pop(session_key, None)
             A._gateway_queues.pop(session_key, None)
             A._gateway_notify_cbs.pop(session_key, None)
 

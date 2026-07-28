@@ -353,6 +353,8 @@ def cron_create(args):
         script=getattr(args, "script", None),
         workdir=getattr(args, "workdir", None),
         profile=getattr(args, "profile", None),
+        model=getattr(args, "model", None),
+        provider=getattr(args, "model_provider", None),
         no_agent=getattr(args, "no_agent", False) or None,
     )
     if not result.get("success"):
@@ -419,6 +421,8 @@ def cron_edit(args):
         script=getattr(args, "script", None),
         workdir=getattr(args, "workdir", None),
         profile=getattr(args, "profile", None),
+        model=getattr(args, "model", None),
+        provider=getattr(args, "model_provider", None),
         no_agent=getattr(args, "no_agent", None),
     )
     if not result.get("success"):

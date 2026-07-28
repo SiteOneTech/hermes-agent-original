@@ -279,6 +279,61 @@ def test_positional_path_not_treated_as_flag(tmp_path: Path) -> None:
     assert "test_flagprobe.py" in proc.stdout, proc.stdout
 
 
+def test_exclusive_marker_runs_before_parallel_pool(tmp_path: Path) -> None:
+    """A marker-tagged file completes before ordinary files are scheduled."""
+    repo_root = Path(__file__).resolve().parent.parent
+    runner = repo_root / "scripts" / "run_tests_parallel.py"
+    probe_dir = tmp_path / "exclusive-probe"
+    probe_dir.mkdir()
+    marker = tmp_path / "exclusive-finished"
+    (probe_dir / "test_00_exclusive.py").write_text(
+        textwrap.dedent(
+            f"""
+            # HERMES_TEST_EXCLUSIVE
+            import time
+            from pathlib import Path
+
+            def test_exclusive_file():
+                time.sleep(0.2)
+                Path({str(marker)!r}).write_text("done")
+            """
+        ),
+        encoding="utf-8",
+    )
+    (probe_dir / "test_01_parallel.py").write_text(
+        textwrap.dedent(
+            f"""
+            from pathlib import Path
+
+            def test_parallel_file_starts_after_exclusive_file():
+                assert Path({str(marker)!r}).read_text() == "done"
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(runner),
+            "--paths",
+            str(probe_dir),
+            "-j",
+            "2",
+            "--file-timeout",
+            "30",
+        ],
+        cwd=repo_root,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout
+    assert "Running 1 exclusive test file(s) before the parallel pool" in proc.stdout
+
+
 def test_file_retry_self_heals_and_prints_both_attempts(tmp_path: Path) -> None:
     """A pass-on-retry is green, loud, and retains the failing traceback."""
     repo_root = Path(__file__).resolve().parent.parent

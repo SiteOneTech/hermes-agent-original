@@ -74,6 +74,19 @@ def build_cron_parser(subparsers, *, cmd_cron: Callable) -> None:
         "--profile",
         help="Hermes profile name to run the job under. Use 'default' for the root profile. Named profiles must already exist. Omit to preserve the scheduler's existing profile.",
     )
+    cron_create.add_argument(
+        "--model",
+        help=(
+            "Pin this job to a specific inference model (user-owned; the "
+            "agent's cronjob tool cannot set this). Omit to follow "
+            "cron.model / model.default from config.yaml."
+        ),
+    )
+    cron_create.add_argument(
+        "--provider",
+        dest="model_provider",
+        help="Inference provider paired with --model (e.g. 'openrouter', 'nous').",
+    )
 
     # cron edit
     cron_edit = cron_subparsers.add_parser(
@@ -141,6 +154,19 @@ def build_cron_parser(subparsers, *, cmd_cron: Callable) -> None:
     cron_edit.add_argument(
         "--profile",
         help="Hermes profile name to run the job under. Use 'default' for the root profile. Pass empty string to clear.",
+    )
+    cron_edit.add_argument(
+        "--model",
+        help=(
+            "Pin this job to a specific inference model (user-owned; the "
+            "agent's cronjob tool cannot set this). Pass empty string to "
+            "clear the pin and follow cron.model / model.default."
+        ),
+    )
+    cron_edit.add_argument(
+        "--provider",
+        dest="model_provider",
+        help="Inference provider paired with --model. Pass empty string to clear.",
     )
 
     # lifecycle actions

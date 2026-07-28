@@ -52,9 +52,10 @@ const NESTED_FLOATING_LAYER_SELECTOR = [
 
 function hasOpenNestedFloatingLayer(contentNode: HTMLElement | null): boolean {
   const doc = contentNode?.ownerDocument ?? (typeof document === 'undefined' ? null : document)
-  if (!doc) return false
 
-  if (contentNode?.querySelector(NESTED_FLOATING_LAYER_SELECTOR)) return true
+  if (!doc) {return false}
+
+  if (contentNode?.querySelector(NESTED_FLOATING_LAYER_SELECTOR)) {return true}
 
   // Default-open Radix layers can mount once under document.body before the
   // dialog ref publishes its portal container. Treat any currently open shared
@@ -124,7 +125,8 @@ function DialogContent({
 
   React.useEffect(() => {
     const doc = contentNode?.ownerDocument ?? (typeof document === 'undefined' ? null : document)
-    if (!doc) return
+
+    if (!doc) {return}
 
     const clearPointerDownFlag = () => {
       nestedFloatingLayerPointerDownRef.current = false
@@ -132,12 +134,14 @@ function DialogContent({
 
     const handleDocumentPointerDown = () => {
       nestedFloatingLayerPointerDownRef.current = hasOpenNestedFloatingLayer(contentNode)
+
       if (nestedFloatingLayerPointerDownRef.current) {
         ;(doc.defaultView ?? window).setTimeout(clearPointerDownFlag, 0)
       }
     }
 
     doc.addEventListener('pointerdown', handleDocumentPointerDown, true)
+
     return () => {
       doc.removeEventListener('pointerdown', handleDocumentPointerDown, true)
     }
@@ -151,7 +155,8 @@ function DialogContent({
   const handlePointerDownOutside = React.useCallback(
     (event: DialogPointerDownOutsideEvent) => {
       onPointerDownOutside?.(event)
-      if (event.defaultPrevented) return
+
+      if (event.defaultPrevented) {return}
 
       if (shouldKeepDialogOpenForNestedLayerDismiss()) {
         event.preventDefault()
@@ -163,7 +168,8 @@ function DialogContent({
   const handleInteractOutside = React.useCallback(
     (event: DialogInteractOutsideEvent) => {
       onInteractOutside?.(event)
-      if (event.defaultPrevented) return
+
+      if (event.defaultPrevented) {return}
 
       if (shouldKeepDialogOpenForNestedLayerDismiss()) {
         event.preventDefault()

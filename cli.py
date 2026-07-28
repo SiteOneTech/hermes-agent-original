@@ -1266,9 +1266,8 @@ def _notify_session_finalize(
     reason: str = "shutdown",
 ) -> None:
     try:
-        from hermes_cli.plugins import invoke_hook as _invoke_hook
-        _invoke_hook(
-            "on_session_finalize",
+        from hermes_cli.lifecycle import finalize_session
+        finalize_session(
             session_id=session_id,
             platform=platform,
             reason=reason,
@@ -1296,7 +1295,7 @@ def _emit_interrupted_session_end(cli, *, reason: str = "keyboard_interrupt") ->
             pass
 
     try:
-        from hermes_cli.plugins import invoke_hook as _invoke_hook
+        from hermes_cli.lifecycle import invoke_hook as _invoke_hook
         _invoke_hook(
             "on_session_end",
             session_id=session_id,
@@ -4032,6 +4031,14 @@ def save_config_value(key_path: str, value: any) -> bool:
         except (OSError, NotImplementedError):
             pass
 
+        # Model/provider changes made through /model and the TUI use this
+        # persistence path rather than ``hermes config set``. Surface the same
+        # fail-closed cron drift warning for every operator-facing model switch.
+        from hermes_cli.config import (
+            warn_unpinned_cron_jobs_after_model_config_change,
+        )
+
+        warn_unpinned_cron_jobs_after_model_config_change(key_path, value)
         return True
     except Exception as e:
         logger.error("Failed to save config: %s", e)
@@ -4064,6 +4071,23 @@ def _normalize_moa_model(model: Optional[str]) -> tuple[Optional[str], Optional[
             if preset:
                 return "moa", preset
     return None, model
+
+
+class _VoiceInputMessage:
+    """Sentinel wrapper for voice-transcribed messages in ``_pending_input``.
+
+    Distinguishes STT output from manually typed text while voice mode is
+    active, so the concise-voice-response prefix is applied only to messages
+    that actually came from the microphone (#65827).
+    """
+
+    __slots__ = ("text",)
+
+    def __init__(self, text: str):
+        self.text = text
+
+    def __str__(self) -> str:
+        return self.text
 
 
 class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
@@ -7697,13 +7721,21 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         lifecycle point (shutdown, /new, /reset).
         """
         try:
-            from hermes_cli.plugins import invoke_hook as _invoke_hook
-            _invoke_hook(
-                event_type,
-                session_id=self.agent.session_id if self.agent else None,
-                platform=getattr(self, "platform", None) or "cli",
-                reason="new_session" if event_type == "on_session_reset" else "session_boundary",
-            )
+            from hermes_cli.lifecycle import finalize_session, invoke_hook
+
+            context = {
+                "session_id": self.agent.session_id if self.agent else None,
+                "platform": getattr(self, "platform", None) or "cli",
+                "reason": (
+                    "new_session"
+                    if event_type == "on_session_reset"
+                    else "session_boundary"
+                ),
+            }
+            if event_type == "on_session_finalize":
+                finalize_session(**context)
+            else:
+                invoke_hook(event_type, **context)
         except Exception:
             pass
 
@@ -8071,11 +8103,13 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         if not self.conversation_history:
             print("(._.) No messages to retry.")
             return None
-
-        # Walk backwards to find the last user message
+        # Walk backwards to the last *real* user message. Timeline bookkeeping
+        # rows (display_kind set) are role=user but are not user turns — match
+        # CLI resume counting and list_recent_user_messages.
         last_user_idx = None
         for i in range(len(self.conversation_history) - 1, -1, -1):
-            if self.conversation_history[i].get("role") == "user":
+            msg = self.conversation_history[i]
+            if msg.get("role") == "user" and not msg.get("display_kind"):
                 last_user_idx = i
                 break
 
@@ -8120,10 +8154,13 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         if n < 1:
             n = 1
 
-        # Walk backwards collecting the indices of the last N user messages.
+        # Walk backwards collecting the indices of the last N *real* user
+        # messages (exclude display_kind timeline rows — same predicate as
+        # list_recent_user_messages and resume turn counting).
         user_indices = []
         for i in range(len(self.conversation_history) - 1, -1, -1):
-            if self.conversation_history[i].get("role") == "user":
+            msg = self.conversation_history[i]
+            if msg.get("role") == "user" and not msg.get("display_kind"):
                 user_indices.append(i)
                 if len(user_indices) >= n:
                     break
@@ -11746,6 +11783,19 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         self._voice_recorder._silence_duration = (
             _duration if isinstance(_duration, (int, float)) and not isinstance(_duration, bool) else 3.0
         )
+        # voice.max_recording_seconds — hard cap on a single recording's length.
+        # Same numeric guard as the silence params (bool excluded: a hand-edited
+        # ``max_recording_seconds: true`` must not become ``1`` — it falls back
+        # to the documented 120 default, mirroring the silence-param handling).
+        # An explicit numeric value <= 0 disables the cap. Previously this
+        # documented key was never read (dead config); wiring it here makes it
+        # take effect.
+        _max_rec = voice_cfg.get("max_recording_seconds")
+        self._voice_recorder._max_recording_seconds = (
+            (_max_rec if _max_rec > 0 else 0.0)
+            if isinstance(_max_rec, (int, float)) and not isinstance(_max_rec, bool)
+            else 120.0
+        )
 
         def _on_silence():
             """Called by AudioRecorder when silence is detected after speech."""
@@ -11793,13 +11843,36 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         threading.Thread(target=_refresh_level, daemon=True).start()
 
     def _voice_stt_model(self) -> Optional[str]:
-        """STT model override from config, or None for the provider default."""
+        """STT model override from config, or None for the provider default.
+
+        For the local provider, prefer stt.local.model (default ``base``) so the
+        CLI passes a real model name into the local STT backend.
+        """
         try:
             from hermes_cli.config import load_config
             stt_config = load_config().get("stt", {})
-            return stt_config.get("model") if isinstance(stt_config, dict) else None
+            if not isinstance(stt_config, dict):
+                return None
+            provider = str(stt_config.get("provider") or "").strip().lower()
+            if provider == "local":
+                local_config = stt_config.get("local") or {}
+                if not isinstance(local_config, dict):
+                    local_config = {}
+                return local_config.get("model") or "base"
+            return stt_config.get("model")
         except Exception:
             return None
+
+    def _voice_stt_provider(self) -> str:
+        """Configured STT provider name (lowercased), or empty string."""
+        try:
+            from hermes_cli.config import load_config
+            stt_config = load_config().get("stt", {})
+            if not isinstance(stt_config, dict):
+                return ""
+            return str(stt_config.get("provider") or "").strip().lower()
+        except Exception:
+            return ""
 
     def _voice_restart_recording_async(self) -> None:
         """Restart continuous-mode recording off-thread (start() can block)."""
@@ -11847,10 +11920,18 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             # _voice_processing is already True (set atomically above)
             if hasattr(self, '_app') and self._app:
                 self._app.invalidate()
-            _cprint(f"{_DIM}Transcribing...{_RST}")
+
+            stt_model = self._voice_stt_model()
+            if self._voice_stt_provider() == "local":
+                _cprint(
+                    f"{_DIM}Preparing local STT model '{stt_model}' "
+                    f"(first use may download it from Hugging Face)...{_RST}"
+                )
+            else:
+                _cprint(f"{_DIM}Transcribing...{_RST}")
 
             from tools.voice_mode import transcribe_recording
-            result = transcribe_recording(wav_path, model=self._voice_stt_model())
+            result = transcribe_recording(wav_path, model=stt_model)
 
             if result.get("success") and result.get("transcript", "").strip():
                 transcript = result["transcript"].strip()
@@ -11864,7 +11945,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 self._attached_images.clear()
                 if hasattr(self, '_app') and self._app:
                     self._app.invalidate()
-                self._pending_input.put(transcript)
+                self._pending_input.put(_VoiceInputMessage(transcript))
                 submitted = True
             elif result.get("success"):
                 _cprint(f"{_DIM}No speech detected.{_RST}")
@@ -11893,13 +11974,14 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 pass
 
             # Track consecutive no-speech cycles to avoid infinite restart loops.
+            stop_continuous_restart = False
             if not submitted:
                 self._no_speech_count = getattr(self, '_no_speech_count', 0) + 1
                 if self._no_speech_count >= 3:
                     self._voice_continuous = False
                     self._no_speech_count = 0
                     _cprint(f"{_DIM}No speech detected 3 times, continuous mode stopped.{_RST}")
-                    return
+                    stop_continuous_restart = True
             else:
                 self._no_speech_count = 0
 
@@ -11907,7 +11989,12 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             # restart recording so the user can keep talking.
             # (When transcript IS submitted, process_loop handles restart
             # after chat() completes.)
-            if self._voice_continuous and not submitted and not self._voice_recording:
+            if (
+                self._voice_continuous
+                and not submitted
+                and not self._voice_recording
+                and not stop_continuous_restart
+            ):
                 self._voice_restart_recording_async()
 
     def _voice_speak_response_async(self, text: str) -> None:
@@ -11930,19 +12017,26 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             from tools.tts_tool import text_to_speech_tool
             from tools.voice_mode import play_audio_file
 
-            # Strip markdown and non-speech content for cleaner TTS
-            tts_text = text[:4000] if len(text) > 4000 else text
-            tts_text = re.sub(r'```[\s\S]*?```', ' ', tts_text)   # fenced code blocks
-            tts_text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', tts_text)  # [text](url) -> text
-            tts_text = re.sub(r'https?://\S+', '', tts_text)      # URLs
-            tts_text = re.sub(r'\*\*(.+?)\*\*', r'\1', tts_text)  # bold
-            tts_text = re.sub(r'\*(.+?)\*', r'\1', tts_text)      # italic
-            tts_text = re.sub(r'`(.+?)`', r'\1', tts_text)        # inline code
-            tts_text = re.sub(r'^#+\s*', '', tts_text, flags=re.MULTILINE)  # headers
-            tts_text = re.sub(r'^\s*[-*]\s+', '', tts_text, flags=re.MULTILINE)  # list items
-            tts_text = re.sub(r'---+', '', tts_text)              # horizontal rules
-            tts_text = re.sub(r'\n{3,}', '\n\n', tts_text)        # excessive newlines
-            tts_text = tts_text.strip()
+            # Strip markdown and non-speech content for cleaner TTS via the
+            # shared cleaner (tools/tts_text_normalize): markdown, emoji,
+            # <think> blocks, verifier footer, units, newline flattening.
+            try:
+                from tools.tts_text_normalize import prepare_spoken_text
+                tts_text = prepare_spoken_text(text, max_chars=4000)
+            except Exception:
+                # Legacy fallback pipeline — keep voice replies best-effort.
+                tts_text = text[:4000] if len(text) > 4000 else text
+                tts_text = re.sub(r'```[\s\S]*?```', ' ', tts_text)   # fenced code blocks
+                tts_text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', tts_text)  # [text](url) -> text
+                tts_text = re.sub(r'https?://\S+', '', tts_text)      # URLs
+                tts_text = re.sub(r'\*\*(.+?)\*\*', r'\1', tts_text)  # bold
+                tts_text = re.sub(r'\*(.+?)\*', r'\1', tts_text)      # italic
+                tts_text = re.sub(r'`(.+?)`', r'\1', tts_text)        # inline code
+                tts_text = re.sub(r'^#+\s*', '', tts_text, flags=re.MULTILINE)  # headers
+                tts_text = re.sub(r'^\s*[-*]\s+', '', tts_text, flags=re.MULTILINE)  # list items
+                tts_text = re.sub(r'---+', '', tts_text)              # horizontal rules
+                tts_text = re.sub(r'\n{3,}', '\n\n', tts_text)        # excessive newlines
+                tts_text = tts_text.strip()
             if not tts_text:
                 return
 
@@ -11954,17 +12048,30 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 f"tts_{time.strftime('%Y%m%d_%H%M%S')}.mp3",
             )
 
-            text_to_speech_tool(text=tts_text, output_path=mp3_path)
+            raw_result = text_to_speech_tool(text=tts_text, output_path=mp3_path)
+            try:
+                tts_result = json.loads(raw_result) if isinstance(raw_result, str) else {}
+            except Exception:
+                tts_result = {}
 
-            # Play the MP3 directly (the TTS tool returns OGG path but MP3 still exists)
-            if os.path.isfile(mp3_path) and os.path.getsize(mp3_path) > 0:
-                play_audio_file(mp3_path)
+            # Prefer the requested MP3 when the provider produced it. This
+            # preserves reliable local playback while still supporting
+            # providers that write to and return a different path.
+            audio_path = mp3_path
+            if not os.path.isfile(mp3_path) or os.path.getsize(mp3_path) == 0:
+                audio_path = tts_result.get("file_path") or mp3_path
+
+            if os.path.isfile(audio_path) and os.path.getsize(audio_path) > 0:
+                play_audio_file(audio_path)
                 # Clean up
                 try:
-                    os.unlink(mp3_path)
-                    ogg_path = mp3_path.rsplit(".", 1)[0] + ".ogg"
-                    if os.path.isfile(ogg_path):
-                        os.unlink(ogg_path)
+                    cleanup_paths = {audio_path, mp3_path}
+                    for path in list(cleanup_paths):
+                        ogg_path = path.rsplit(".", 1)[0] + ".ogg"
+                        cleanup_paths.add(ogg_path)
+                    for path in cleanup_paths:
+                        if os.path.isfile(path):
+                            os.unlink(path)
                 except OSError:
                     pass
         except Exception as e:
@@ -12026,7 +12133,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     _cprint(f"\n{_DIM}Stop phrase detected — ending voice chat.{_RST}")
                     self._disable_voice_mode()
                     return
-                self._pending_input.put(transcript)
+                self._pending_input.put(_VoiceInputMessage(transcript))
                 submitted = True
             elif not result.get("success"):
                 _cprint(f"\n{_DIM}Transcription failed: {result.get('error', 'Unknown error')}{_RST}")
@@ -12047,9 +12154,12 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         """Return whether CLI voice mode should play record start/stop beeps."""
         try:
             from hermes_cli.config import load_config
+            from utils import is_truthy_value
             voice_cfg = load_config().get("voice", {})
             if isinstance(voice_cfg, dict):
-                return bool(voice_cfg.get("beep_enabled", True))
+                # is_truthy_value handles quoted YAML strings like "false"
+                # which bool() would misread as True (#49883).
+                return is_truthy_value(voice_cfg.get("beep_enabled", True), default=True)
         except Exception:
             pass
         return True
@@ -12730,7 +12840,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             except Exception:
                 pass
 
-    def chat(self, message, images: list = None) -> Optional[str]:
+    def chat(self, message, images: list = None, voice_input: bool = False) -> Optional[str]:
         """
         Send a message to the agent and get a response.
 
@@ -12745,7 +12855,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         Args:
             message: The user's message (str or multimodal content list)
             images: Optional list of Path objects for attached images
-
+            voice_input: True when the message came from voice transcription
+                (gates the concise voice-response prefix, #65827)
         Returns:
             The agent's response, or None on error
         """
@@ -12972,7 +13083,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             # model responds concisely. The prefix is API-call-local only —
             # run_conversation persists the original clean user message.
             _voice_prefix = ""
-            if self._voice_mode and isinstance(message, str):
+            if voice_input and isinstance(message, str):
                 _voice_prefix = (
                     "[Voice input — respond concisely and conversationally, "
                     "2-3 sentences max. No code blocks or markdown.] "
@@ -15001,15 +15112,16 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     daemon=True,
                 ).start()
             else:
-                # Guard: don't START recording during agent run or interactive prompts
-                if cli_ref._agent_running:
+                # Allow disarming continuous mode even when the agent is
+                # running or transcribing — otherwise the user is stuck in
+                # an auto-restart loop until /voice off (#67545).
+                if cli_ref._agent_running or cli_ref._voice_processing:
+                    with cli_ref._voice_lock:
+                        cli_ref._voice_continuous = False
+                    event.app.invalidate()
                     return
+                # Guard: don't START recording during interactive prompts
                 if cli_ref._clarify_state or cli_ref._sudo_state or cli_ref._approval_state or cli_ref._slash_confirm_state:
-                    return
-                # Guard: don't start while a previous stop/transcribe cycle is
-                # still running — recorder.stop() holds AudioRecorder._lock and
-                # start() would block the event-loop thread waiting for it.
-                if cli_ref._voice_processing:
                     return
 
                 # Interrupt TTS if playing, so user can start talking.
@@ -16138,6 +16250,12 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                                 pass
                         continue
 
+                    # Voice-transcribed messages arrive wrapped in a sentinel
+                    # so only genuine STT output gets the voice prefix (#65827).
+                    is_voice_input = isinstance(user_input, _VoiceInputMessage)
+                    if is_voice_input:
+                        user_input = user_input.text
+
                     if not user_input:
                         continue
 
@@ -16233,7 +16351,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     app.invalidate()  # Refresh status line
 
                     try:
-                        self.chat(user_input, images=submit_images or None)
+                        self.chat(user_input, images=submit_images or None, voice_input=is_voice_input)
                     finally:
                         self._agent_running = False
                         self._spinner_text = ""
@@ -16612,7 +16730,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             # the exit occurred, meaning run_conversation's hook didn't fire.
             if self.agent and getattr(self, '_agent_running', False):
                 try:
-                    from hermes_cli.plugins import invoke_hook as _invoke_hook
+                    from hermes_cli.lifecycle import invoke_hook as _invoke_hook
                     _invoke_hook(
                         "on_session_end",
                         session_id=self.agent.session_id,

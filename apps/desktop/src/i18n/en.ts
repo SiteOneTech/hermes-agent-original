@@ -538,6 +538,9 @@ export const en: Translations = {
       builtinOnly: 'Built-in only',
       notSet: 'Not set',
       commaSeparated: 'comma-separated values',
+      searchPlaceholder: 'Search…',
+      noResults: 'No results found',
+      systemDefault: 'System default',
       loading: 'Loading Hermes configuration...',
       emptyTitle: 'Nothing to configure',
       emptyDesc: 'This section has no adjustable settings.',
@@ -546,7 +549,12 @@ export const en: Translations = {
       imported: 'Config imported',
       invalidJson: 'Invalid config JSON',
       keepAwakeTitle: 'Keep computer awake',
-      keepAwakeDesc: 'Stop this machine from sleeping so long or overnight runs keep going. The display can still dim.'
+      keepAwakeDesc: 'Stop this machine from sleeping so long or overnight runs keep going. The display can still dim.',
+      attachmentSizeTitle: 'Max attachment size',
+      attachmentSizeDesc:
+        'How big a local file Desktop will load for attach and previews, in MB. Default is 16. This is only a limit on this computer. Setting it very high loads the whole file into memory and can freeze or crash the app.',
+      attachmentSizeUnit: 'MB',
+      attachmentSizeLabel: 'Max attachment size in megabytes'
     },
     quickEntry: {
       enabledTitle: 'Quick Entry',

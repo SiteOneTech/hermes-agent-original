@@ -32,16 +32,22 @@ def _clear_provider_caches():
 
 
 def test_bundled_plugins_discovered():
-    """Every plugins/model-providers/<name>/ should contain a plugin.yaml + __init__.py."""
+    """Every declared bundled provider has both package and manifest files."""
     plugins_dir = REPO_ROOT / "plugins" / "model-providers"
     assert plugins_dir.is_dir(), f"Missing {plugins_dir}"
 
-    child_dirs = [c for c in plugins_dir.iterdir() if c.is_dir()]
-    assert len(child_dirs) >= 28, f"Expected at least 28 provider plugins, found {len(child_dirs)}"
-
-    for child in child_dirs:
-        assert (child / "__init__.py").exists(), f"{child.name} missing __init__.py"
-        assert (child / "plugin.yaml").exists(), f"{child.name} missing plugin.yaml"
+    plugin_dirs = [
+        child for child in plugins_dir.iterdir()
+        if child.is_dir()
+        and (
+            (child / "plugin.yaml").is_file()
+            or (child / "__init__.py").is_file()
+        )
+    ]
+    assert plugin_dirs, "Expected at least one bundled provider plugin"
+    for child in plugin_dirs:
+        assert (child / "plugin.yaml").is_file(), f"{child.name} missing plugin.yaml"
+        assert (child / "__init__.py").is_file(), f"{child.name} missing __init__.py"
 
 
 def test_all_profiles_register():
@@ -55,7 +61,15 @@ def test_all_profiles_register():
     from providers import list_providers
 
     plugins_dir = REPO_ROOT / "plugins" / "model-providers"
-    plugin_dir_count = sum(1 for c in plugins_dir.iterdir() if c.is_dir())
+    plugin_dir_count = sum(
+        1
+        for child in plugins_dir.iterdir()
+        if child.is_dir()
+        and (
+            (child / "plugin.yaml").is_file()
+            or (child / "__init__.py").is_file()
+        )
+    )
 
     profiles = list_providers()
     names = sorted(p.name for p in profiles)

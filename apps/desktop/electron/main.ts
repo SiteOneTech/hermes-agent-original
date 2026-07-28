@@ -81,6 +81,7 @@ import {
   shouldRemoveAppBundle,
   uninstallArgsForMode
 } from './desktop-uninstall'
+import { describeDevCdpDecision, resolveDevCdpPort } from './dev-cdp'
 import { installEmbedReferer } from './embed-referer'
 import { createEventDeduper } from './event-dedupe'
 import { findGitBash as _findGitBash } from './find-git-bash'
@@ -114,7 +115,9 @@ import {
   switchBranch
 } from './git-worktree-ops'
 import {
-  DATA_URL_READ_MAX_BYTES,
+  clampDataUrlReadMaxMb,
+  DATA_URL_READ_DEFAULT_MAX_MB,
+  dataUrlReadMaxBytesFromMb,
   DEFAULT_FETCH_TIMEOUT_MS,
   encryptDesktopSecret as encryptDesktopSecretStrict,
   resolveReadableFileForIpc,
@@ -270,6 +273,29 @@ if (REMOTE_DISPLAY_REASON) {
   console.log(
     `[hermes] remote display detected (${REMOTE_DISPLAY_REASON}); disabling GPU hardware acceleration to prevent flicker`
   )
+}
+
+// Renderer debugging port. On for dev-server runs (`hgui` / `npm run dev`) so
+// the CDP tooling in scripts/ can attach; never for a packaged build — see
+// electron/dev-cdp.ts. Must run before app `ready` like the switches above;
+// Chromium binds it at launch.
+const DEV_CDP = resolveDevCdpPort({ env: process.env, isPackaged: IS_PACKAGED, devServer: DEV_SERVER })
+
+if (DEV_CDP.port) {
+  app.commandLine.appendSwitch('remote-debugging-port', String(DEV_CDP.port))
+  // Loopback only. Chromium already defaults to 127.0.0.1, but say it out loud
+  // so a future edit can't widen it by omission.
+  app.commandLine.appendSwitch('remote-debugging-address', '127.0.0.1')
+  console.log(
+    `[hermes] renderer debugging on http://127.0.0.1:${DEV_CDP.port} — anything that can reach it ` +
+      'can run code in the renderer. HERMES_DESKTOP_CDP_PORT=off to disable.'
+  )
+} else {
+  const why = describeDevCdpDecision(DEV_CDP)
+
+  if (why) {
+    console.warn(`[hermes] ${why}`)
+  }
 }
 
 // WSLg: Chromium blocklists the Mesa vGPU → software compositing → typing lag.
@@ -936,7 +962,7 @@ app.setAboutPanelOptions({
 
 // Custom scheme for streaming local media (video/audio) into the renderer.
 // Reading large media through `readFileDataUrl` failed: it base64-loads the
-// whole file into memory and is hard-capped at DATA_URL_READ_MAX_BYTES (16 MB),
+// whole file into memory and is hard-capped (default 16 MB, Settings → Chat),
 // so any non-trivial video silently refused to load. Streaming via a protocol
 // handler removes the size cap and gives the <video> element seekable,
 // range-aware playback. Must be registered before the app is ready.
@@ -5163,7 +5189,7 @@ function buildApplicationMenu() {
         label: 'Actual Size',
         accelerator: 'CommandOrControl+0',
         click: () => {
-          setAndPersistZoomLevel(mainWindow, 0)
+          setAndPersistZoomLevel(mainWindow, DEFAULT_ZOOM_LEVEL)
         }
       },
       {
@@ -5171,7 +5197,7 @@ function buildApplicationMenu() {
         accelerator: 'CommandOrControl+Plus',
         click: () => {
           if (mainWindow && !mainWindow.isDestroyed()) {
-            setAndPersistZoomLevel(mainWindow, mainWindow.webContents.getZoomLevel() + 0.1)
+            setAndPersistZoomLevel(mainWindow, mainWindow.webContents.getZoomLevel() + ZOOM_STEP)
           }
         }
       },
@@ -5180,7 +5206,7 @@ function buildApplicationMenu() {
         accelerator: 'CommandOrControl+-',
         click: () => {
           if (mainWindow && !mainWindow.isDestroyed()) {
-            setAndPersistZoomLevel(mainWindow, mainWindow.webContents.getZoomLevel() - 0.1)
+            setAndPersistZoomLevel(mainWindow, mainWindow.webContents.getZoomLevel() - ZOOM_STEP)
           }
         }
       },
@@ -5259,8 +5285,10 @@ function installPreviewShortcut(window) {
 // read it back on did-finish-load to re-apply after reloads or crash recovery.
 import {
   applyZoomLevel,
+  DEFAULT_ZOOM_LEVEL,
   installZoomReassertOnWindowEvents,
   percentToZoomLevel,
+  ZOOM_STEP,
   ZOOM_STORAGE_KEY,
   zoomLevelToPercent,
   zoomWiringForWindowKind
@@ -5304,31 +5332,33 @@ function restorePersistedZoomLevel(window) {
     return
   }
 
-  // Fall back to localStorage for installs that predate zoom-state.json,
-  // migrating the value into the JSON store on first read.
+  // No JSON yet: paint the shipped default immediately so a fresh install
+  // doesn't flash Chromium 100%, then try localStorage for pre-JSON installs
+  // and overwrite if a legacy value is there.
+  applyZoomLevel(window.webContents, DEFAULT_ZOOM_LEVEL)
+
   window.webContents
     .executeJavaScript(
       `(() => { try { return localStorage.getItem(${JSON.stringify(ZOOM_STORAGE_KEY)}) } catch { return null } })()`
     )
     .then(stored => {
-      if (stored == null || !window || window.isDestroyed()) {
+      if (!window || window.isDestroyed()) {
         return
       }
 
-      // Notify the renderer too — otherwise the Appearance UI Scale control
-      // can stay stuck at 100% even though the window zoom was restored.
-      const applied = applyZoomLevel(window.webContents, Number(stored))
+      const level = stored == null ? DEFAULT_ZOOM_LEVEL : Number(stored)
+      const applied = applyZoomLevel(window.webContents, level)
       writeZoomState(applied)
     })
     .catch(error => rememberLog(`[zoom] restore failed: ${error?.message || error}`))
 }
 
 function installZoomShortcuts(window) {
-  // Override Ctrl/Cmd + +/-/0 with half the default zoom step (0.1 vs 0.2).
-  // The menu items handle this on macOS (where the menu is always present),
-  // but on Linux/Windows the menu is null and Chromium's default handler
-  // would use the full 0.2 step, so we intercept here for consistency.
-  const ZOOM_STEP = 0.1
+  // Override Ctrl/Cmd + +/-/0 with half Chromium's default zoom step (ZOOM_STEP
+  // is 0.1 vs Chromium's 0.2). The menu items handle this on macOS (where the
+  // menu is always present), but on Linux/Windows the menu is null and
+  // Chromium's default handler would use the full 0.2 step, so we intercept
+  // here for consistency. Ctrl/Cmd+0 resets to DEFAULT_ZOOM_LEVEL, not Chromium 0.
   window.webContents.on('before-input-event', (event, input) => {
     const mod = IS_MAC ? input.meta : input.control
 
@@ -5344,7 +5374,7 @@ function installZoomShortcuts(window) {
       }
 
       event.preventDefault()
-      setAndPersistZoomLevel(window, 0)
+      setAndPersistZoomLevel(window, DEFAULT_ZOOM_LEVEL)
     } else if (key === '=' || key === '+') {
       // Zoom-in must accept the shift modifier: on US layouts Plus is
       // physically Shift+=, so Cmd+Plus arrives as Cmd+Shift+'+' (or '='
@@ -5480,18 +5510,22 @@ function installContextMenu(window) {
   })
 }
 
-// Microphone capture for the voice composer. The renderer drives mic access
+// Microphone and camera capture. The voice composer drives mic access and
+// renderer features (e.g. desktop plugins) can drive camera access, both
 // through getUserMedia, which Chromium gates behind these two session hooks.
 //
 // The naive `details.mediaTypes.includes('audio')` check works on macOS but
-// breaks on Windows: Chromium frequently fires the mic permission request with
-// an empty/undefined `mediaTypes`, so the strict check denies it and
-// getUserMedia throws NotAllowedError ("Microphone permission was denied").
-// We therefore treat an audio-capture request as allowed whenever it's the
-// 'media'/'audioCapture' permission AND mediaTypes either includes 'audio' OR
-// is empty/absent (the Windows case). Video is still denied.
-function isAudioCapturePermission(permission, details) {
-  if (permission === 'audioCapture') {
+// breaks on Windows: Chromium frequently fires the request with an empty or
+// undefined `mediaTypes`, so a strict check denies it and getUserMedia throws
+// NotAllowedError. We therefore allow the capture permissions and treat absent
+// metadata as allowed.
+//
+// Granting here is not the last gate: the OS still applies its own capture
+// permission (macOS TCC prompts on first use, per the NSMicrophone/NSCamera
+// usage strings), so the user keeps a real allow/deny and can revoke it in
+// System Settings afterwards.
+function isMediaCapturePermission(permission, details) {
+  if (permission === 'audioCapture' || permission === 'videoCapture') {
     return true
   }
 
@@ -5501,38 +5535,31 @@ function isAudioCapturePermission(permission, details) {
 
   const mediaTypes = details?.mediaTypes
 
+  // Windows: mediaTypes is often empty for a capture request. Don't deny on
+  // missing metadata.
   if (!Array.isArray(mediaTypes) || mediaTypes.length === 0) {
-    // Windows: mediaTypes is often empty for a mic request. Don't deny on
-    // missing metadata. (A video request would carry mediaTypes:['video'].)
     return true
   }
 
-  return mediaTypes.includes('audio') && !mediaTypes.includes('video')
+  return mediaTypes.includes('audio') || mediaTypes.includes('video')
 }
 
 function installMediaPermissions() {
   // Async request handler: the prompt-style path (most platforms).
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback, details) => {
-    callback(isAudioCapturePermission(permission, details))
+    callback(isMediaCapturePermission(permission, details))
   })
 
   // Synchronous check handler: Chromium consults this for getUserMedia on
   // Windows in addition to (or instead of) the request handler. Without it,
-  // the check defaults to false and the mic is denied before the request
+  // the check defaults to false and capture is denied before the request
   // handler ever runs.
-  session.defaultSession.setPermissionCheckHandler((_webContents, permission, _origin, details) => {
-    if (permission === 'media' || permission === ('audioCapture' as any) /* todo: is this needed? */) {
-      // details.mediaType is a single string here (not the mediaTypes array).
-      const mediaType = details?.mediaType
-
-      if (mediaType === 'video') {
-        return false
-      }
-
-      return true
-    }
-
-    return false
+  session.defaultSession.setPermissionCheckHandler((_webContents, permission) => {
+    return (
+      permission === 'media' ||
+      permission === ('audioCapture' as any) /* todo: is this needed? */ ||
+      permission === ('videoCapture' as any)
+    )
   })
 }
 
@@ -7993,6 +8020,17 @@ async function spawnPoolBackend(profile, entry) {
 
   entry.token = authToken
 
+  // Verify the WebSocket session token before declaring backend ready.
+  // HTTP /api/status can pass while WS auth fails (separate transport, separate guards).
+  const wsUrl = `ws://127.0.0.1:${port}/api/ws?token=${encodeURIComponent(authToken)}`
+  const wsProbe = await probeGatewayWebSocket(wsUrl, { WebSocketImpl: globalThis.WebSocket })
+
+  if (!wsProbe.ok) {
+    throw new Error(
+      `Hermes backend for profile "${profile}" is HTTP-reachable but the WebSocket (/api/ws) rejected the session token: ${wsProbe.reason}`
+    )
+  }
+
   return {
     baseUrl,
     mode: 'local',
@@ -8000,7 +8038,7 @@ async function spawnPoolBackend(profile, entry) {
     authMode: 'token',
     token: authToken,
     profile,
-    wsUrl: `ws://127.0.0.1:${port}/api/ws?token=${encodeURIComponent(authToken)}`,
+    wsUrl,
     logs: hermesLog.slice(-80),
     ...getWindowState()
   }
@@ -8318,6 +8356,16 @@ async function startHermes() {
       rememberLog
     })
 
+    // Verify the WebSocket session token before declaring backend ready.
+    const wsUrl = `ws://127.0.0.1:${port}/api/ws?token=${encodeURIComponent(authToken)}`
+    const wsProbe = await probeGatewayWebSocket(wsUrl, { WebSocketImpl: globalThis.WebSocket })
+
+    if (!wsProbe.ok) {
+      throw new Error(
+        `Local Hermes backend is HTTP-reachable but the WebSocket (/api/ws) rejected the session token: ${wsProbe.reason}`
+      )
+    }
+
     updateBootProgress({
       phase: 'backend.ready',
       message: 'Hermes backend is ready. Finalizing desktop startup',
@@ -8332,7 +8380,7 @@ async function startHermes() {
       source: 'local',
       authMode: 'token',
       token: authToken,
-      wsUrl: `ws://127.0.0.1:${port}/api/ws?token=${encodeURIComponent(authToken)}`,
+      wsUrl,
       logs: hermesLog.slice(-80),
       ...getWindowState()
     }
@@ -9242,7 +9290,8 @@ ipcMain.handle('hermes:window:openInstance', async () => {
 // shortcuts and the View menu. Reads and writes target the asking window.
 ipcMain.handle('hermes:zoom:get', event => {
   const window = BrowserWindow.fromWebContents(event.sender)
-  const level = window && !window.isDestroyed() ? window.webContents.getZoomLevel() : 0
+
+  const level = window && !window.isDestroyed() ? window.webContents.getZoomLevel() : DEFAULT_ZOOM_LEVEL
 
   return { level, percent: zoomLevelToPercent(level) }
 })
@@ -10023,9 +10072,56 @@ ipcMain.handle('hermes:notify', (_event, payload) => {
   return true
 })
 
+// Data-URL file load cap (composer attach + local previews). Main owns the
+// persisted MB value so every IPC read honours Settings → Chat without the
+// renderer having to pass maxBytes on each call. Default is 16 MB; clamp
+// lives in hardening.ts.
+const DATA_URL_READ_MAX_CONFIG_PATH = path.join(app.getPath('userData'), 'data-url-read-max.json')
+
+function readPersistedDataUrlReadMaxMb() {
+  try {
+    return clampDataUrlReadMaxMb(JSON.parse(fs.readFileSync(DATA_URL_READ_MAX_CONFIG_PATH, 'utf8')).maxMb)
+  } catch {
+    return DATA_URL_READ_DEFAULT_MAX_MB
+  }
+}
+
+let dataUrlReadMaxMb = readPersistedDataUrlReadMaxMb()
+
+function persistDataUrlReadMaxMb(maxMb) {
+  const next = clampDataUrlReadMaxMb(maxMb)
+  dataUrlReadMaxMb = next
+
+  try {
+    fs.mkdirSync(path.dirname(DATA_URL_READ_MAX_CONFIG_PATH), { recursive: true })
+    fs.writeFileSync(DATA_URL_READ_MAX_CONFIG_PATH, JSON.stringify({ maxMb: next }, null, 2), 'utf8')
+  } catch (error) {
+    rememberLog(`[data-url-read-max] write failed: ${error.message}`)
+  }
+
+  return next
+}
+
+ipcMain.handle('hermes:data-url-read-max:get', () => ({
+  maxMb: dataUrlReadMaxMb,
+  // Keep the default bytes constant visible for tests / diagnostics.
+  defaultMaxMb: DATA_URL_READ_DEFAULT_MAX_MB,
+  maxBytes: dataUrlReadMaxBytesFromMb(dataUrlReadMaxMb)
+}))
+
+ipcMain.handle('hermes:data-url-read-max:set', (_event, maxMb) => {
+  const next = persistDataUrlReadMaxMb(maxMb)
+
+  return {
+    maxMb: next,
+    defaultMaxMb: DATA_URL_READ_DEFAULT_MAX_MB,
+    maxBytes: dataUrlReadMaxBytesFromMb(next)
+  }
+})
+
 ipcMain.handle('hermes:readFileDataUrl', async (_event, filePath) => {
   const { resolvedPath } = await resolveReadableFileForIpc(filePath, {
-    maxBytes: DATA_URL_READ_MAX_BYTES,
+    maxBytes: dataUrlReadMaxBytesFromMb(dataUrlReadMaxMb),
     purpose: 'File preview'
   })
 

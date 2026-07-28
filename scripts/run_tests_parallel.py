@@ -34,6 +34,12 @@ Environment:
     HERMES_TEST_WORKERS  Override worker count (default: os.cpu_count())
     HERMES_TEST_PATHS    Override discovery roots (colon-sep, default: 'tests')
 
+Test-file marker:
+    # HERMES_TEST_EXCLUSIVE  Declare this near the module header to run the
+                             file alone before the parallel pool. Use when its
+                             tests spawn enough nested processes that concurrent
+                             pytest files starve them.
+
 Exit code: 0 if every file's pytest exited 0; 1 otherwise.
 """
 
@@ -98,6 +104,20 @@ _DEFAULT_FILE_RETRIES = 1
 # wall-clock seconds. Used by ``--slice`` to distribute files across
 # CI jobs by estimated total time, so no one job gets all the slow files.
 _DURATIONS_FILE = "test_durations.json"
+
+# A deliberately source-level opt-in: files that spawn their own per-test
+# subprocess pool can make no progress when a full outer pytest pool runs at
+# the same time. Keeping the header declaration in the test file makes the
+# constraint visible at its cause and avoids a brittle path-based exception.
+
+
+def _is_exclusive_test_file(path: Path) -> bool:
+    """Return whether a header declaration opts *path* out of the pool."""
+    try:
+        header = path.read_text(encoding="utf-8").splitlines()[:20]
+    except OSError:
+        return False
+    return any(line.strip().startswith("# HERMES_TEST_EXCLUSIVE") for line in header)
 
 
 def _approximately_count_tests(
@@ -991,21 +1011,34 @@ def main() -> int:
             if rc != 0:
                 _print_inline_failure(fpath, output, repo_root, pytest_passthrough)
 
-    with ThreadPoolExecutor(max_workers=args.jobs) as pool:
-        futures: List[Future] = []
-        for file in files:
-            t0 = time.monotonic()
-            fut = pool.submit(
-                _run_one_file, file, pytest_passthrough, repo_root,
-                args.file_timeout, args.file_retries,
-            )
-            fut.add_done_callback(lambda f, file=file, t0=t0: _on_done(file, t0, f))
-            futures.append(fut)
-        # Block until everything's done. ThreadPoolExecutor.__exit__ waits
-        # for all submitted work, but doing it explicitly here makes the
-        # control flow obvious.
-        for fut in futures:
-            fut.result() if fut.exception() is None else None
+    def _run_batch(batch: List[Path], workers: int) -> None:
+        """Run one batch and report through the shared progress callback."""
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures: List[Future] = []
+            for file in batch:
+                t0 = time.monotonic()
+                fut = pool.submit(
+                    _run_one_file, file, pytest_passthrough, repo_root,
+                    args.file_timeout, args.file_retries,
+                )
+                fut.add_done_callback(lambda f, file=file, t0=t0: _on_done(file, t0, f))
+                futures.append(fut)
+            # Block until everything's done. ThreadPoolExecutor.__exit__ waits
+            # for all submitted work, but doing it explicitly here makes the
+            # control flow obvious.
+            for fut in futures:
+                fut.result() if fut.exception() is None else None
+
+    exclusive_files = [file for file in files if _is_exclusive_test_file(file)]
+    parallel_files = [file for file in files if file not in exclusive_files]
+    if exclusive_files:
+        print(
+            f"Running {len(exclusive_files)} exclusive test file(s) before the parallel pool",
+            flush=True,
+        )
+        _run_batch(exclusive_files, workers=1)
+    if parallel_files:
+        _run_batch(parallel_files, workers=args.jobs)
 
     elapsed = time.monotonic() - started
     print()

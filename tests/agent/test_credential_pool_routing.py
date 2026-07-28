@@ -389,9 +389,15 @@ class TestFailureAttribution:
         (hermes_home / "auth.json").write_text(
             json.dumps({"version": 1, "credential_pool": {"anthropic": entries}})
         )
-        from agent.credential_pool import load_pool
+        import agent.credential_pool as credential_pool
 
-        return load_pool("anthropic")
+        monkeypatch.setattr(
+            credential_pool, "_seed_from_singletons", lambda *_: (False, set())
+        )
+        monkeypatch.setattr(
+            credential_pool, "_seed_from_env", lambda *_: (False, set())
+        )
+        return credential_pool.load_pool("anthropic")
 
     def _entry(self, idx, key, **overrides):
         entry = {

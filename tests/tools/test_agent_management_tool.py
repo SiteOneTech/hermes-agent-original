@@ -371,7 +371,11 @@ def test_model_tool_definitions_expose_flat_function_schema():
         entry.check_fn = lambda: True
     invalidate_check_fn_cache()
     try:
-        definitions = model_tools.get_tool_definitions(enabled_toolsets=["agent_management"], quiet_mode=False)
+        definitions = model_tools.get_tool_definitions(
+            enabled_toolsets=["agent_management"],
+            quiet_mode=False,
+            skip_tool_search_assembly=True,
+        )
     finally:
         for name, original in originals.items():
             entry = registry.get_entry(name)
@@ -396,7 +400,11 @@ def test_model_tool_definitions_expose_flat_function_schema():
         entry.check_fn = lambda: True
     invalidate_check_fn_cache()
     try:
-        runtime_definitions = model_tools.get_tool_definitions(enabled_toolsets=["agent_management_runtime"], quiet_mode=False)
+        runtime_definitions = model_tools.get_tool_definitions(
+            enabled_toolsets=["agent_management_runtime"],
+            quiet_mode=False,
+            skip_tool_search_assembly=True,
+        )
     finally:
         for name, original in runtime_originals.items():
             entry = registry.get_entry(name)

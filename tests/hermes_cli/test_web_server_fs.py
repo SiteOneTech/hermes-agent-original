@@ -130,6 +130,7 @@ def test_fs_read_data_url_rejects_over_cap(client, tmp_path, monkeypatch):
 
 def test_fs_git_root_for_nested_file(client, tmp_path):
     (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
     nested = tmp_path / "pkg" / "mod"
     nested.mkdir(parents=True)
     target = nested / "file.py"

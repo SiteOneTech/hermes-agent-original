@@ -748,6 +748,9 @@ export const zh: Translations = {
       builtinOnly: '仅内置',
       notSet: '未设置',
       commaSeparated: '逗号分隔的值',
+      searchPlaceholder: '搜索…',
+      noResults: '未找到结果',
+      systemDefault: '系统默认',
       loading: '正在加载 Hermes 配置...',
       emptyTitle: '无可配置项',
       emptyDesc: '此分区没有可调整的设置。',
@@ -756,7 +759,12 @@ export const zh: Translations = {
       imported: '配置已导入',
       invalidJson: '配置 JSON 无效',
       keepAwakeTitle: '保持电脑唤醒',
-      keepAwakeDesc: '阻止本机休眠，让长时间或通宵运行继续进行。屏幕仍可变暗。'
+      keepAwakeDesc: '阻止本机休眠，让长时间或通宵运行继续进行。屏幕仍可变暗。',
+      attachmentSizeTitle: '附件大小上限',
+      attachmentSizeDesc:
+        '桌面端为附件和预览加载本地文件的大小上限（MB）。默认为 16。此限制仅作用于本机。设置过大会将整个文件读入内存，可能导致应用卡死或崩溃。',
+      attachmentSizeUnit: 'MB',
+      attachmentSizeLabel: '附件大小上限（MB）'
     },
     quickEntry: {
       enabledTitle: '快速输入',
