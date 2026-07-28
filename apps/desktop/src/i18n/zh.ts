@@ -252,6 +252,7 @@ export const zh: Translations = {
       'view.toggleSidebar': '切换会话侧边栏',
       'view.toggleRightSidebar': '切换文件浏览器',
       'view.toggleReview': '切换审查面板',
+      'view.toggleStatusbar': '切换状态栏',
       'view.showFiles': '显示文件浏览器',
       'view.showTerminal': '显示终端',
       'view.terminalSelection': '将终端选区发送到输入框',
@@ -1954,10 +1955,7 @@ export const zh: Translations = {
     open: '打开'
   },
 
-  artifactPane: {
-    tabFallback: '产物',
-    modePreview: '预览',
-    modeSource: '源码',
+  artifactPreview: {
     versionOf: (current, total) => `第 ${current}/${total} 版`,
     olderVersion: '较旧版本',
     newerVersion: '较新版本',
@@ -1994,11 +1992,11 @@ export const zh: Translations = {
     allPinned: '这里的全部已置顶。取消置顶某个对话即可在最近中显示。',
     shiftClickHint: 'Shift+ 单击对话以置顶 · 拖动以重新排序',
     noWorkspace: '无工作区',
-    noProject: '无项目',
     projectEmpty: '暂无会话',
     noSessions: '暂无会话',
     projects: {
       sectionLabel: '项目',
+      home: '主页',
       newButton: '新建项目',
       createTitle: '新建项目',
       createDesc: '为工作区命名并添加一个或多个文件夹。',
@@ -2603,9 +2601,13 @@ export const zh: Translations = {
       gatewayRestarting: '重启中…',
       gatewayTitle: 'Hermes 推理网关状态',
       customizeTitle: '在状态栏中显示',
+      hideStatusbar: '隐藏状态栏',
       toggleApprovalMode: '审批',
       toggleBackendVersion: '后端版本',
       toggleCommandCenter: '命令中心',
+      toggleContextUsage: '上下文用量',
+      toggleRunningTimer: '回合计时',
+      toggleSessionTimer: '会话计时',
       toggleTerminal: '终端',
       toggleVersion: '版本与更新',
       toggleWorkspace: '工作区',
@@ -2839,6 +2841,9 @@ export const zh: Translations = {
       resumeWhenBackgroundDone: count =>
         count === 1 ? '后台任务完成后将自动继续' : `${count} 个后台任务完成后将自动继续`,
       thinking: '思考中',
+      thought: '已思考',
+      thoughtBriefly: '思考了片刻',
+      thoughtFor: duration => `思考了 ${duration}`,
       today: time => `今天，${time}`,
       yesterday: time => `昨天，${time}`,
       copy: '复制',
@@ -2895,7 +2900,6 @@ export const zh: Translations = {
       lateAnswerHint: '此问题已不再等待回答。选择一个选项会将其起草为后续消息。'
     },
     tool: {
-      code: '代码',
       copyCode: '复制代码',
       renderingImage: '正在渲染图片',
       copyOutput: '复制输出',

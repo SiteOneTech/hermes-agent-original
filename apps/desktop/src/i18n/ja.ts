@@ -1628,10 +1628,7 @@ export const ja = defineLocale({
     open: '開く'
   },
 
-  artifactPane: {
-    tabFallback: 'アーティファクト',
-    modePreview: 'プレビュー',
-    modeSource: 'ソース',
+  artifactPreview: {
     versionOf: (current, total) => `${total} 中 v${current}`,
     olderVersion: '前のバージョン',
     newerVersion: '次のバージョン',
@@ -1668,11 +1665,11 @@ export const ja = defineLocale({
     allPinned: 'ここにあるものはすべてピン留めされています。チャットのピン留めを解除すると最近のものに表示されます。',
     shiftClickHint: 'Shift クリックでピン留め · ドラッグで並べ替え',
     noWorkspace: 'ワークスペースなし',
-    noProject: 'プロジェクトなし',
     projectEmpty: 'セッションはまだありません',
     noSessions: 'セッションはまだありません',
     projects: {
       sectionLabel: 'プロジェクト',
+      home: 'ホーム',
       newButton: '新規プロジェクト',
       createTitle: '新規プロジェクト',
       createDesc: 'ワークスペースに名前を付け、1つ以上のフォルダを追加します。',
@@ -2520,6 +2517,9 @@ export const ja = defineLocale({
           ? 'バックグラウンドタスクの完了後に再開します'
           : `${count} 件のバックグラウンドタスクの完了後に再開します`,
       thinking: '考え中',
+      thought: '思考済み',
+      thoughtBriefly: '少し思考',
+      thoughtFor: duration => `${duration} 思考`,
       today: time => `今日 ${time}`,
       yesterday: time => `昨日 ${time}`,
       copy: 'コピー',
@@ -2574,7 +2574,6 @@ export const ja = defineLocale({
       lateAnswerHint: 'この質問はもう回答を待っていません。選択肢を選ぶとフォローアップメッセージとして下書きされます。'
     },
     tool: {
-      code: 'コード',
       copyCode: 'コードをコピー',
       renderingImage: '画像をレンダリング中',
       copyOutput: '出力をコピー',

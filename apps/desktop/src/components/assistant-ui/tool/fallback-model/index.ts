@@ -71,7 +71,7 @@ function fileEditPath(args: Record<string, unknown>, result: Record<string, unkn
   )
 }
 
-function fileEditBasename(path: string): string {
+export function fileEditBasename(path: string): string {
   const normalized = path.replace(/\\/g, '/').trim()
 
   return normalized.split('/').filter(Boolean).pop() || normalized
@@ -591,7 +591,7 @@ function summarizeBrowserSnapshot(snapshot: string): string {
   return labels.length ? `${stats}\nTop controls: ${labels.join(', ')}` : stats
 }
 
-function firstStringField(record: Record<string, unknown>, keys: readonly string[]): string {
+export function firstStringField(record: Record<string, unknown>, keys: readonly string[]): string {
   for (const key of keys) {
     const value = record[key]
 

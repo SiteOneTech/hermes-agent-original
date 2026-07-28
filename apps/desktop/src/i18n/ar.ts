@@ -1503,10 +1503,7 @@ export const ar = defineLocale({
     open: 'فتح'
   },
 
-  artifactPane: {
-    tabFallback: 'ناتج',
-    modePreview: 'معاينة',
-    modeSource: 'المصدر',
+  artifactPreview: {
     versionOf: (current, total) => `الإصدار ${current} من ${total}`,
     olderVersion: 'إصدار أقدم',
     newerVersion: 'إصدار أحدث',
@@ -1546,11 +1543,11 @@ export const ar = defineLocale({
     allPinned: 'كل الجلسات مثبتة',
     shiftClickHint: 'استخدم Shift للتحديد المتعدد',
     noWorkspace: 'بدون مساحة عمل',
-    noProject: 'لا يوجد مشروع',
     projectEmpty: 'لا توجد جلسات بعد',
     noSessions: 'لا توجد جلسات بعد',
     projects: {
       sectionLabel: 'المشاريع',
+      home: 'الرئيسية',
       newButton: 'مشروع جديد',
       createTitle: 'مشروع جديد',
       createDesc: 'سمِّ مساحة العمل وأضف مجلدا أو أكثر.',
@@ -2276,6 +2273,9 @@ export const ar = defineLocale({
       resumeWhenBackgroundDone: count =>
         count === 1 ? 'سيُستأنف عند انتهاء المهمة الخلفية' : `سيُستأنف عند انتهاء ${count} مهام خلفية`,
       thinking: 'يفكر...',
+      thought: 'فكّر',
+      thoughtBriefly: 'فكّر قليلاً',
+      thoughtFor: duration => `فكّر لمدة ${duration}`,
       today: time => `اليوم ${time}`,
       yesterday: time => `أمس ${time}`,
       copy: 'نسخ',
@@ -2326,7 +2326,6 @@ export const ar = defineLocale({
       continueLabel: 'متابعة'
     },
     tool: {
-      code: 'الكود',
       copyCode: 'نسخ الكود',
       renderingImage: 'جار عرض الصورة...',
       copyOutput: 'نسخ الإخراج',
