@@ -1,5 +1,6 @@
 """Tests for gateway session management."""
 import json
+import os
 import pytest
 from dataclasses import replace
 from datetime import datetime
@@ -23,6 +24,24 @@ from gateway.session import (
 # canonical_whatsapp_identifier.  Keep the tests referencing the old name
 # working without duplicating the suite.
 normalize_whatsapp_identifier = canonical_whatsapp_identifier
+
+
+def test_hermetic_home_rebinds_sessiondb_default_path():
+    """SessionDB defaults must respect the per-test HERMES_HOME fixture.
+
+    ``DEFAULT_DB_PATH`` is initialized at module import, before pytest's
+    autouse fixture redirects HERMES_HOME.  Without rebinding it in that
+    fixture, a SessionStore created by a test can write routing rows into the
+    developer's real state.db.
+    """
+    import hermes_state
+
+    assert hermes_state.DEFAULT_DB_PATH == Path(os.environ["HERMES_HOME"]) / "state.db"
+    db = SessionDB()
+    try:
+        assert db.db_path == Path(os.environ["HERMES_HOME"]) / "state.db"
+    finally:
+        db.close()
 
 
 class TestSessionSourceRoundtrip:
