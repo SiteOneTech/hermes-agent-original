@@ -78,6 +78,103 @@ _DEFAULT_SIDECAR_BIND = "127.0.0.1"
 # size to ~16 KB.  Keep a conservative cap that matches BlueBubbles.
 _MAX_MESSAGE_LENGTH = 8000
 
+# ---------------------------------------------------------------------------
+# Sidecar runtime record
+#
+# Out-of-process senders (cron subprocesses, `hermes send`, the dashboard)
+# go through ``_standalone_send`` and need the live sidecar's port + token —
+# but the token is generated at spawn time and otherwise exists only in the
+# gateway process memory and the sidecar child env (issue #69960). The
+# gateway persists this record once the sidecar passes its /healthz
+# readiness check, and removes it on every stop / failed-start path so a
+# stale record never outlives a dead sidecar.
+
+_RUNTIME_RECORD_NAME = "photon-sidecar.json"
+
+
+def _runtime_record_path() -> Path:
+    # get_hermes_home() honors profile overrides — never hardcode ~/.hermes.
+    from hermes_constants import get_hermes_home
+
+    return get_hermes_home() / "runtime" / _RUNTIME_RECORD_NAME
+
+
+def _write_runtime_record(port: int, token: str, pid: int) -> None:
+    """Atomically persist ``{port, token, pid}`` with owner-only perms."""
+    import tempfile
+
+    try:
+        path = _runtime_record_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(
+            dir=str(path.parent), prefix=".photon-sidecar.", suffix=".tmp"
+        )
+        try:
+            # Restrict perms BEFORE the token hits disk (mkstemp is already
+            # 0600 on POSIX; the explicit chmod is a belt-and-braces guard,
+            # wrapped so Windows/exotic filesystems can't crash the write).
+            try:
+                os.chmod(tmp, 0o600)
+            except OSError:  # pragma: no cover - Windows / odd fs
+                pass
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump({"port": port, "token": token, "pid": pid}, fh)
+            os.replace(tmp, path)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+    except Exception as e:  # best-effort: gateway sends still work without it
+        logger.warning("[photon] failed to write sidecar runtime record: %s", e)
+
+
+def _read_runtime_record() -> Optional[Dict[str, Any]]:
+    try:
+        raw = json.loads(_runtime_record_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return raw if isinstance(raw, dict) else None
+
+
+def _delete_runtime_record() -> None:
+    try:
+        _runtime_record_path().unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _sidecar_pid_alive(pid: Any) -> bool:
+    """Best-effort liveness check for the recorded sidecar pid."""
+    try:
+        pid_int = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if pid_int <= 0:
+        return False
+    try:
+        # Cross-platform (psutil-backed, Windows-safe — see its docstring).
+        from gateway.status import _pid_exists
+
+        return bool(_pid_exists(pid_int))
+    except Exception:
+        pass
+    if os.name == "posix":
+        try:
+            os.kill(pid_int, 0)  # windows-footgun: ok — inside os.name == "posix" guard
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        except OSError:
+            return False
+        return True
+    # Windows without gateway.status/psutil: can't probe safely
+    # (os.kill(pid, 0) is destructive there) — assume alive and let the
+    # HTTP send itself be the arbiter.
+    return True
+
 # Dedup parameters — the gRPC stream is at-least-once, and a sidecar
 # reconnect can replay, so keep at least 1k ids for ~48h.
 _DEDUP_MAX_SIZE = 4000
@@ -86,6 +183,8 @@ _DEDUP_WINDOW_SECONDS = 48 * 3600
 _FFFC_WAIT_SECONDS = 15.0  # Timeout for waiting on an attachment after a U+FFFC placeholder.
 
 _SIDECAR_DIR = Path(__file__).parent / "sidecar"
+_NPM_ERROR_LOG = _SIDECAR_DIR / ".photon-npm-error.log"
+_NPM_ERROR_LOG_MAX_CHARS = 300
 
 # Cap on a self-heal `npm ci`/`npm install` of the sidecar deps. A cold
 # install of the pinned spectrum-ts tree normally takes well under a minute;
@@ -131,16 +230,59 @@ def _coerce_port(value: Any, default: int) -> int:
         return default
 
 
+def sidecar_deps_installed() -> bool:
+    """True when spectrum-ts is present under node_modules/.
+
+    Checks the dependency's own directory, not just node_modules/'s
+    existence: npm creates node_modules/ before aborting on ENOSPC, a
+    network timeout, or EACCES, so an empty/partial node_modules/ would
+    otherwise read as "installed". Shared by check_requirements(),
+    _start_sidecar(), and `hermes photon status` so all three agree on
+    what "installed" means.
+    """
+    return (_SIDECAR_DIR / "node_modules" / "spectrum-ts").exists()
+
+
 def check_requirements() -> bool:
     """Return True when both Python deps and the Node sidecar are available."""
     if not HTTPX_AVAILABLE:
+        logger.warning("photon: httpx not installed — pip install httpx")
         return False
     if not shutil.which(os.getenv("PHOTON_NODE_BIN") or "node"):
+        logger.warning(
+            "photon: node binary '%s' not found on PATH",
+            os.getenv("PHOTON_NODE_BIN") or "node",
+        )
         return False
-    if not (_SIDECAR_DIR / "node_modules").exists():
-        # spectrum-ts not installed yet — `hermes photon setup` will
-        # install it.  check_fn still returns False so the gateway
-        # surfaces the missing-deps state in `hermes setup` / status.
+    if not sidecar_deps_installed():
+        # spectrum-ts not installed yet, or node_modules/ was partially created
+        # by an aborted npm install (ENOSPC, network timeout, EACCES).
+        # Checking spectrum-ts presence — not just node_modules/ existence —
+        # prevents a false positive where an empty/broken node_modules/ dir
+        # causes check_requirements() to return True while the sidecar crashes
+        # at runtime with an unrelated-looking missing-module error.
+        # DEBUG (not WARNING): this is the normal pre-setup state.
+        # check_fn() is called from multiple hot paths in the core
+        # (load_gateway_config, hermes status, GET /api/status polling) —
+        # WARNING here would spam logs on every probe for unconfigured photon.
+        npm_error = ""
+        try:
+            if _NPM_ERROR_LOG.exists():
+                npm_error = _NPM_ERROR_LOG.read_text(encoding="utf-8").strip()[:_NPM_ERROR_LOG_MAX_CHARS]
+        except OSError:
+            pass
+        if npm_error:
+            logger.debug(
+                "photon: spectrum-ts not installed at %s "
+                "(last npm error: %s) — run: hermes photon setup",
+                _SIDECAR_DIR,
+                npm_error,
+            )
+        else:
+            logger.debug(
+                "photon: spectrum-ts not installed at %s — run: hermes photon setup",
+                _SIDECAR_DIR,
+            )
         return False
     return True
 
@@ -280,6 +422,10 @@ class PhotonAdapter(BasePlatformAdapter):
     """
 
     MAX_MESSAGE_LENGTH = _MAX_MESSAGE_LENGTH
+    # Photon (iMessage) has no real edit API for already-sent messages.
+    # Mark it explicitly so streaming suppresses the visible cursor instead
+    # of leaving a stale tofu square (▉) behind when edit attempts fail.
+    SUPPORTS_MESSAGE_EDITING = False
 
     def __init__(self, config: PlatformConfig):
         super().__init__(config, Platform("photon"))
@@ -436,7 +582,7 @@ class PhotonAdapter(BasePlatformAdapter):
             )
             return False
 
-        client = httpx.AsyncClient(timeout=30.0)
+        client = httpx.AsyncClient(timeout=30.0, trust_env=False)
         self._http_client = client
 
         # The sidecar holds the gRPC stream for BOTH directions, so it is
@@ -450,6 +596,9 @@ class PhotonAdapter(BasePlatformAdapter):
                     f"failed to start Photon sidecar: {e}",
                     retryable=True,
                 )
+                # No live sidecar — make sure no stale runtime record
+                # survives to mislead standalone senders.
+                _delete_runtime_record()
                 await client.aclose()
                 self._http_client = None
                 return False
@@ -919,7 +1068,7 @@ class PhotonAdapter(BasePlatformAdapter):
         if sys.platform == "win32":  # lsof/ps; orphaning is a POSIX-only path
             return
         try:
-            async with httpx.AsyncClient(timeout=2.0) as client:
+            async with httpx.AsyncClient(timeout=2.0, trust_env=False) as client:
                 await client.post(
                     f"http://{self._sidecar_bind}:{self._sidecar_port}/healthz",
                     headers={"X-Hermes-Sidecar-Token": self._sidecar_token},
@@ -963,7 +1112,7 @@ class PhotonAdapter(BasePlatformAdapter):
             )
 
     async def _start_sidecar(self) -> None:
-        if not (_SIDECAR_DIR / "node_modules").exists():
+        if not sidecar_deps_installed():
             raise RuntimeError(
                 f"Photon sidecar deps not installed. Run: "
                 f"cd {_SIDECAR_DIR} && npm install   (or `hermes photon setup`)"
@@ -1045,9 +1194,10 @@ class PhotonAdapter(BasePlatformAdapter):
         # Wait for /healthz to come up — give it up to 15s on cold start.
         deadline = time.time() + 15.0
         last_err: Optional[Exception] = None
-        async with httpx.AsyncClient(timeout=2.0) as client:
+        async with httpx.AsyncClient(timeout=2.0, trust_env=False) as client:
             while time.time() < deadline:
                 if self._sidecar_proc.poll() is not None:
+                    _delete_runtime_record()
                     raise RuntimeError(
                         f"Photon sidecar exited with code "
                         f"{self._sidecar_proc.returncode} before becoming ready"
@@ -1058,10 +1208,19 @@ class PhotonAdapter(BasePlatformAdapter):
                         headers={"X-Hermes-Sidecar-Token": self._sidecar_token},
                     )
                     if resp.status_code == 200:
+                        # Persist port/token/pid so out-of-process senders
+                        # (cron, `hermes send`) can reach this sidecar
+                        # (see _standalone_send / issue #69960).
+                        _write_runtime_record(
+                            self._sidecar_port,
+                            self._sidecar_token,
+                            self._sidecar_proc.pid,
+                        )
                         return
                 except httpx.RequestError as e:
                     last_err = e
                 await asyncio.sleep(0.2)
+        _delete_runtime_record()
         raise RuntimeError(
             f"Photon sidecar did not become ready within 15s: {last_err}"
         )
@@ -1099,6 +1258,9 @@ class PhotonAdapter(BasePlatformAdapter):
     async def _stop_sidecar(self) -> None:
         proc = self._sidecar_proc
         if proc is None:
+            # Nothing to stop, but never leave a record behind on disconnect
+            # (e.g. autostart was disabled or startup failed earlier).
+            _delete_runtime_record()
             return
         try:
             # Closing our end of the stdin pipe is itself a shutdown signal
@@ -1135,6 +1297,9 @@ class PhotonAdapter(BasePlatformAdapter):
                     proc.kill()
         finally:
             self._sidecar_proc = None
+            # The sidecar is gone (or going) — remove the runtime record so
+            # standalone senders don't chase a dead port/token.
+            _delete_runtime_record()
             if self._sidecar_supervisor_task is not None:
                 self._sidecar_supervisor_task.cancel()
                 self._sidecar_supervisor_task = None
@@ -1608,7 +1773,7 @@ class PhotonAdapter(BasePlatformAdapter):
         # _http_client directly — it always runs on the gateway's loop.
         url = f"http://{self._sidecar_bind}:{self._sidecar_port}{path}"
         headers = {"X-Hermes-Sidecar-Token": self._sidecar_token}
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
             resp = await client.post(url, json=body, headers=headers)
         if resp.status_code != 200:
             raise RuntimeError(
@@ -1737,18 +1902,37 @@ async def _standalone_send(
     )
     token = os.getenv("PHOTON_SIDECAR_TOKEN")
     if not token:
-        return {
-            "error": (
-                "Photon standalone send requires a running sidecar with "
-                "PHOTON_SIDECAR_TOKEN set in the environment. Cron processes "
-                "cannot spawn the sidecar themselves."
-            )
-        }
+        # Fall back to the runtime record the gateway persists once its
+        # sidecar passes /healthz (issue #69960) — the token only exists in
+        # the gateway process env otherwise, so cron/`hermes send` would be
+        # structurally unable to authenticate.
+        record = _read_runtime_record()
+        stale_hint = ""
+        if record and record.get("token"):
+            if _sidecar_pid_alive(record.get("pid")):
+                token = str(record["token"])
+                port = _coerce_port(record.get("port"), port)
+            else:
+                stale_hint = (
+                    " A stale sidecar runtime record was found (pid "
+                    f"{record.get('pid')} is not running) — the gateway "
+                    "appears to be down."
+                )
+        if not token:
+            return {
+                "error": (
+                    "Photon standalone send requires a running sidecar. "
+                    "Start the Hermes gateway (which spawns the sidecar and "
+                    "records its address under <hermes-home>/runtime/"
+                    f"{_RUNTIME_RECORD_NAME}), or set PHOTON_SIDECAR_TOKEN "
+                    "in this process's environment." + stale_hint
+                )
+            }
     base = f"http://{_DEFAULT_SIDECAR_BIND}:{port}"
     headers = {"X-Hermes-Sidecar-Token": token}
     last_message_id: Optional[str] = None
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
             # 1. Text body first (if any), so it leads the conversation.
             if message:
                 send_body: Dict[str, Any] = {

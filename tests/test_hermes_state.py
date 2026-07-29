@@ -5414,7 +5414,15 @@ class TestOptimizeFts:
         """A fresh DB has both FTS indexes; optimize merges both."""
         db.create_session(session_id="s1", source="cli")
         db.append_message(session_id="s1", role="user", content="hello world")
-        assert db.optimize_fts() == 2
+        statements = []
+        db._conn.set_trace_callback(statements.append)
+        try:
+            assert db.optimize_fts() == 2
+        finally:
+            db._conn.set_trace_callback(None)
+        optimize_sql = [sql for sql in statements if "'optimize'" in sql]
+        assert len(optimize_sql) == 2
+        assert not any("'merge'" in sql for sql in optimize_sql)
 
     def test_optimize_preserves_search_and_snippet(self, db):
         """Optimize is layout-only: MATCH results + snippets are unchanged."""
@@ -5466,39 +5474,200 @@ class TestOptimizeFts:
         # Search still works after repeated optimization.
         assert len(db.search_messages("repeat")) == 1
 
-    def test_write_path_optimizes_fts_on_cadence(self, db, monkeypatch):
-        """Writes periodically merge FTS segments so they never accumulate
-        into the tens-of-thousands that lengthen the write-lock hold and
-        starve competing writers ("database is locked")."""
-        db._OPTIMIZE_EVERY_N_WRITES = 5
-        calls = {"n": 0}
-        real_optimize = db.optimize_fts
-
-        def _counting_optimize():
-            calls["n"] += 1
-            return real_optimize()
-
-        monkeypatch.setattr(db, "optimize_fts", _counting_optimize)
-        # create_session is write #1; appends are #2.. -> #5 and #10 trigger.
+    def test_incremental_merge_bounded_commands_per_present_index(self, db):
+        """Each pass issues bounded 'merge' commands, never 'optimize'."""
         db.create_session(session_id="s1", source="cli")
-        for i in range(9):
+        db.append_message(session_id="s1", role="user", content="bounded merge")
+        statements = []
+        db._conn.set_trace_callback(statements.append)
+        try:
+            executed = db._merge_fts_incrementally(max_pages=37)
+        finally:
+            db._conn.set_trace_callback(None)
+
+        # At least one merge command per present FTS index, and never more
+        # than the per-pass command cap per index.
+        present = [t for t in db._FTS_TABLES if db._fts_table_exists(t)]
+        assert len(present) >= 2  # messages_fts + trigram on a fresh DB
+        merge_sql = [sql for sql in statements if "VALUES('merge', 37)" in sql]
+        assert len(merge_sql) == executed
+        assert len(present) <= executed <= (
+            len(present) * db._FTS_MERGE_COMMANDS_PER_PASS
+        )
+        for tbl in present:
+            n = sum(f"{tbl}({tbl}, rank)" in sql for sql in merge_sql)
+            assert 1 <= n <= db._FTS_MERGE_COMMANDS_PER_PASS
+        # The usermerge floor is applied so positive merges can make
+        # progress on levels with >= 2 segments (SQLite FTS5 §6.8).
+        assert any("VALUES('usermerge', 2)" in sql for sql in statements)
+        assert not any("'optimize'" in sql for sql in statements)
+
+    def test_incremental_merge_converges_on_fragmented_index(self, db):
+        """Bounded passes make real progress on a fragmented index and
+        reach a no-more-work steady state — the failure mode of a bare
+        positive-rank merge (usermerge default 4) is that it never merges
+        anything and the index stays fragmented forever."""
+        db.create_session(session_id="s1", source="cli")
+        # Suppress automerge so every insert leaves its own level-0 segment
+        # — a deliberately fragmented index that only explicit merge
+        # commands can compact. Config is scoped to this test's temp DB.
+        with db._lock:
+            for tbl in ("messages_fts", "messages_fts_trigram"):
+                db._conn.execute(
+                    f"INSERT INTO {tbl}({tbl}, rank) VALUES('automerge', 0)"
+                )
+        for i in range(60):
+            db.append_message(
+                session_id="s1", role="user",
+                content=f"fragment needle {i} lorem ipsum dolor",
+            )
+
+        # First pass must do real merge work (shadow-table rows change).
+        before = db._conn.total_changes
+        executed_first = db._merge_fts_incrementally(max_pages=500)
+        assert executed_first >= 2
+        assert db._conn.total_changes - before > executed_first  # real work
+
+        # Repeated passes converge: eventually a pass issues exactly one
+        # no-progress command per present index and stops early.
+        present = sum(1 for t in db._FTS_TABLES if db._fts_table_exists(t))
+        for _ in range(50):
+            if db._merge_fts_incrementally(max_pages=500) == present:
+                break
+        else:
+            pytest.fail("bounded merge passes never converged")
+
+        # Merging is layout-only: every row is still searchable.
+        assert len(db.search_messages("fragment", limit=100)) == 60
+
+    def test_incremental_merge_compacts_below_default_usermerge(self, db):
+        """A level with only 2-3 segments — below FTS5's default usermerge
+        threshold of 4 — must still get merged. A bare positive-rank
+        'merge' skips such levels entirely (SQLite FTS5 §6.8), which is
+        why the cadence lowers usermerge to 2 first; without the floor,
+        light fragmentation persists forever and every MATCH pays for it."""
+
+        def _segment_count(tbl: str) -> int:
+            # FTS5 structure record: id=10 in the %_data shadow table.
+            # Format: 4-byte cookie, then varint nlevel, varint nsegment...
+            # nsegment fits in one varint byte for small indexes; parse the
+            # second varint (single-byte values < 128 read directly).
+            blob = db._conn.execute(
+                f"SELECT block FROM {tbl}_data WHERE id=10"
+            ).fetchone()[0]
+            pos = 4
+            for _ in range(1):  # skip nlevel varint (single byte here)
+                assert blob[pos] < 0x80
+                pos += 1
+            assert blob[pos] < 0x80
+            return blob[pos]
+
+        db.create_session(session_id="s1", source="cli")
+        with db._lock:
+            db._conn.execute(
+                "INSERT INTO messages_fts(messages_fts, rank) "
+                "VALUES('automerge', 0)"
+            )
+        # Exactly 3 level-0 segments: below the default usermerge of 4.
+        for i in range(3):
+            db.append_message(
+                session_id="s1", role="user", content=f"sparse token{i}"
+            )
+        assert _segment_count("messages_fts") == 3
+
+        for _ in range(10):
+            db._merge_fts_incrementally(max_pages=500)
+
+        assert _segment_count("messages_fts") == 1, (
+            "3-segment level was not compacted — usermerge floor missing?"
+        )
+        assert len(db.search_messages("sparse")) == 3
+
+    def test_incremental_merge_skips_absent_optional_index(self, db):
+        with db._lock:
+            for trigger in (
+                "messages_fts_trigram_insert",
+                "messages_fts_trigram_delete",
+                "messages_fts_trigram_update",
+            ):
+                db._conn.execute(f"DROP TRIGGER {trigger}")
+            db._conn.execute("DROP TABLE messages_fts_trigram")
+
+        statements = []
+        db._conn.set_trace_callback(statements.append)
+        try:
+            assert db._merge_fts_incrementally(max_pages=19) >= 1
+        finally:
+            db._conn.set_trace_callback(None)
+        merge_sql = [sql for sql in statements if "VALUES('merge', 19)" in sql]
+        assert merge_sql
+        assert all("messages_fts(messages_fts, rank)" in sql for sql in merge_sql)
+
+    def test_incremental_merge_skips_missing_primary_index(self, db):
+        """A missing messages_fts is a valid transient state (chunked
+        optimize-storage rebuild drops + backfills it while writers keep
+        running) — the cadence must skip it, not raise a warning every
+        1000 writes for the whole backfill window."""
+        with db._lock:
+            for trigger in (
+                "messages_fts_insert",
+                "messages_fts_delete",
+                "messages_fts_update",
+            ):
+                db._conn.execute(f"DROP TRIGGER {trigger}")
+            db._conn.execute("DROP TABLE messages_fts")
+
+        statements = []
+        db._conn.set_trace_callback(statements.append)
+        try:
+            executed = db._merge_fts_incrementally(max_pages=19)
+        finally:
+            db._conn.set_trace_callback(None)
+        assert executed >= 1  # trigram index still present and merged
+        assert not any(
+            "messages_fts(messages_fts, rank)" in sql for sql in statements
+        )
+
+    def test_write_path_merges_fts_only_at_cadence_boundary(self, db, monkeypatch):
+        """Routine writes use bounded merge and never full optimize."""
+        db._FTS_MERGE_EVERY_N_WRITES = 5
+        calls = []
+
+        def _counting_merge(*, max_pages):
+            calls.append(max_pages)
+            return 0
+
+        def _unexpected_optimize():
+            raise AssertionError("routine cadence must not call optimize")
+
+        monkeypatch.setattr(db, "_merge_fts_incrementally", _counting_merge)
+        monkeypatch.setattr(db, "optimize_fts", _unexpected_optimize)
+        db.create_session(session_id="s1", source="cli")
+        for i in range(3):
             db.append_message(session_id="s1", role="user", content=f"needle {i}")
-        assert calls["n"] == 2
-        # The auto-merge is layout-only: search is unaffected.
+        assert calls == []  # Four successful writes are below the boundary.
+        db.append_message(session_id="s1", role="user", content="needle 3")
+        assert calls == [500]  # The fifth write gets the production page budget.
+        for i in range(4, 8):
+            db.append_message(session_id="s1", role="user", content=f"needle {i}")
+        assert calls == [500]
+        db.append_message(session_id="s1", role="user", content="needle 8")
+        assert calls == [500, 500]  # The tenth write is the next boundary.
         assert len(db.search_messages("needle")) == 9
 
-    def test_write_path_optimize_failure_never_breaks_write(self, db, monkeypatch):
-        """A failing periodic optimize must not fail the surrounding write."""
-        db._OPTIMIZE_EVERY_N_WRITES = 2
+    def test_write_path_merge_failure_is_logged_without_breaking_write(
+        self, db, monkeypatch, caplog
+    ):
+        db._FTS_MERGE_EVERY_N_WRITES = 2
 
-        def _boom():
-            raise sqlite3.OperationalError("simulated optimize failure")
+        def _boom(*, max_pages):
+            raise sqlite3.OperationalError("simulated merge failure")
 
-        monkeypatch.setattr(db, "optimize_fts", _boom)
+        monkeypatch.setattr(db, "_merge_fts_incrementally", _boom)
         db.create_session(session_id="s1", source="cli")  # write #1
-        # write #2 trips the cadence; the swallowed failure must not propagate.
         db.append_message(session_id="s1", role="user", content="still persists")
         assert len(db.get_messages("s1")) == 1
+        assert "FTS incremental merge failed: simulated merge failure" in caplog.text
 
 
 class TestAutoMaintenance:

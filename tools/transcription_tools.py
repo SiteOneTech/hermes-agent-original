@@ -30,12 +30,14 @@ Usage::
 import logging
 import os
 import platform
+import queue
 import re
 import shlex
 import shutil
 import subprocess
 import tempfile
 import threading
+import time
 from pathlib import Path
 from typing import Optional, Dict, Any
 from urllib.parse import urljoin
@@ -671,13 +673,43 @@ def _terminate_command_stt_process_tree(proc: subprocess.Popen) -> None:
         proc.kill()
 
 
-def _run_command_stt(command: str, timeout: float) -> subprocess.CompletedProcess:
-    """Run a command-provider shell command with process-tree timeout cleanup.
+def _command_stt_env_passthrough(config: Dict[str, Any]) -> list:
+    """Return the provider's ``env_passthrough`` allowlist (opt-out of scrub).
 
-    Mirrors ``tools.tts_tool._run_command_tts``.
+    Command providers legitimately reference their own API keys in the shell
+    template (curl one-liners). The child env is scrubbed of Hermes secrets by
+    default; ``env_passthrough: [MY_API_KEY, ...]`` copies the named variables
+    back from the parent environment so a trusted template keeps working.
+    Mirrors ``tools.tts_tool._command_provider_env_passthrough``.
+    """
+    raw = config.get("env_passthrough")
+    if not isinstance(raw, (list, tuple)):
+        return []
+    return [str(item).strip() for item in raw if str(item).strip()]
+
+
+def _run_command_stt(
+    command: str,
+    timeout: float,
+    env_passthrough: Optional[list] = None,
+) -> subprocess.CompletedProcess:
+    """Run a command-provider shell command with process-tree idle cleanup.
+
+    Mirrors ``tools.tts_tool._run_command_tts``: ``timeout`` is an IDLE
+    timeout, reset whenever the command emits output on stdout/stderr —
+    a slow-but-alive provider survives, a silently stalled one is killed
+    (same progress-based stuck detection as the TTS runner, #50081).
+    Child env is scrubbed of Hermes secrets (salvage of #56332) while still
+    propagating delegated-child lineage markers when applicable.
     """
     from agent.delegation_context import delegated_child_subprocess_env
+    from tools.environments.local import hermes_subprocess_env
 
+    scrubbed = hermes_subprocess_env(inherit_credentials=False)
+    for key in env_passthrough or []:
+        value = os.environ.get(key)
+        if value is not None:
+            scrubbed[key] = value
     popen_kwargs: Dict[str, Any] = {
         "shell": True,
         "stdout": subprocess.PIPE,
@@ -687,7 +719,7 @@ def _run_command_stt(command: str, timeout: float) -> subprocess.CompletedProces
         # must not raise in the reader threads on non-UTF-8 Windows (#45099).
         "encoding": "utf-8",
         "errors": "replace",
-        "env": delegated_child_subprocess_env(),
+        "env": delegated_child_subprocess_env(scrubbed),
     }
     if os.name == "nt":
         popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
@@ -695,21 +727,89 @@ def _run_command_stt(command: str, timeout: float) -> subprocess.CompletedProces
         popen_kwargs["start_new_session"] = True
 
     proc = subprocess.Popen(command, **popen_kwargs, stdin=subprocess.DEVNULL)
-    try:
-        stdout, stderr = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired as exc:
-        _terminate_command_stt_process_tree(proc)
+    output_queue: "queue.Queue[tuple[str, Optional[str]]]" = queue.Queue()
+    chunks: Dict[str, list] = {"stdout": [], "stderr": []}
+    open_streams = {"stdout", "stderr"}
+
+    def read_stream(name: str, stream: Any) -> None:
+        encoding = getattr(stream, "encoding", None) or "utf-8"
+        read1 = getattr(getattr(stream, "buffer", None), "read1", None)
         try:
-            stdout, stderr = proc.communicate(timeout=1)
-        except Exception:
-            stdout = getattr(exc, "output", None)
-            stderr = getattr(exc, "stderr", None)
-        raise subprocess.TimeoutExpired(
-            command,
-            timeout,
-            output=stdout,
-            stderr=stderr,
-        ) from exc
+            while True:
+                if read1 is None:
+                    chunk = stream.read(65536)
+                else:
+                    data = read1(65536)
+                    chunk = data.decode(encoding, errors="replace")
+                if not chunk:
+                    break
+                output_queue.put((name, chunk))
+        finally:
+            output_queue.put((name, None))
+
+    readers = [
+        threading.Thread(
+            target=read_stream,
+            args=("stdout", proc.stdout),
+            daemon=True,
+        ),
+        threading.Thread(
+            target=read_stream,
+            args=("stderr", proc.stderr),
+            daemon=True,
+        ),
+    ]
+    for reader in readers:
+        reader.start()
+
+    deadline = time.monotonic() + timeout
+    timed_out = False
+    while open_streams:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            timed_out = True
+            break
+        try:
+            name, chunk = output_queue.get(timeout=min(0.05, remaining))
+        except queue.Empty:
+            continue
+        if chunk is None:
+            open_streams.discard(name)
+            continue
+        chunks[name].append(chunk)
+        deadline = time.monotonic() + timeout
+
+    if not timed_out:
+        try:
+            proc.wait(timeout=max(0.0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            timed_out = True
+
+    if timed_out:
+        _terminate_command_stt_process_tree(proc)
+        for reader in readers:
+            reader.join(timeout=0.5)
+        while True:
+            try:
+                name, chunk = output_queue.get_nowait()
+            except queue.Empty:
+                break
+            if chunk:
+                chunks[name].append(chunk)
+        stdout = "".join(chunks["stdout"])
+        stderr = "".join(chunks["stderr"])
+        try:
+            raise subprocess.TimeoutExpired(command, timeout)
+        except subprocess.TimeoutExpired as exc:
+            raise subprocess.TimeoutExpired(
+                command,
+                timeout,
+                output=stdout,
+                stderr=stderr,
+            ) from exc
+
+    stdout = "".join(chunks["stdout"])
+    stderr = "".join(chunks["stderr"])
 
     if proc.returncode:
         raise subprocess.CalledProcessError(
@@ -821,7 +921,11 @@ def _transcribe_command_stt(
                 audio.name, provider_name,
             )
             try:
-                result = _run_command_stt(command, timeout)
+                result = _run_command_stt(
+                    command,
+                    timeout,
+                    env_passthrough=_command_stt_env_passthrough(config),
+                )
             except subprocess.TimeoutExpired:
                 return {
                     "success": False,
@@ -1564,13 +1668,24 @@ def _transcribe_local_command(file_path: str, model_name: str) -> Dict[str, Any]
                 language=shlex.quote(language),
                 model=shlex.quote(normalized_model),
             )
-            # User-provided templates (env var) may contain shell syntax; auto-detected commands are safe for list mode.
-            use_shell = bool(os.getenv(LOCAL_STT_COMMAND_ENV, "").strip())
-            if use_shell:
-                subprocess.run(command, shell=True, check=True, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=300, stdin=subprocess.DEVNULL, creationflags=windows_hide_flags())
-            else:
-                subprocess.run(shlex.split(command), check=True, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=300, stdin=subprocess.DEVNULL, creationflags=windows_hide_flags())
-            
+            # Scrub Hermes secrets from the child env (sibling path to #56332 /
+            # _run_command_stt — this local-whisper path previously inherited
+            # the full process environment).
+            from tools.environments.local import hermes_subprocess_env
+
+            child_env = hermes_subprocess_env(inherit_credentials=False)
+            subprocess.run(
+                shlex.split(command),
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=300,
+                stdin=subprocess.DEVNULL,
+                env=child_env,
+                creationflags=windows_hide_flags(),
+            )
 
             txt_files = sorted(Path(output_dir).glob("*.txt"))
             if not txt_files:
@@ -2148,6 +2263,15 @@ def _transcribe_prepared_audio(file_path: str, model: Optional[str] = None) -> D
           - "error" (str, optional): Error message if success is False
           - "provider" (str, optional): Which provider was used
     """
+    # Refuse to feed a credential / secret store (auth.json, .env, OAuth
+    # tokens, mcp-tokens/, ...) to an STT provider: an external provider would
+    # ship its plaintext contents to a third-party API. Mirrors the local-input
+    # read guard added to image-gen (587be5b5b) and xAI video-gen (104232979).
+    from agent.file_safety import get_read_block_error
+    blocked = get_read_block_error(file_path)
+    if blocked:
+        return {"success": False, "transcript": "", "error": blocked}
+
     # Apply common path validation before provider resolution so invalid files
     # cannot trigger provider setup or lazy installation. The remote-upload
     # size cap is enforced separately below, only for non-local providers.
@@ -2292,6 +2416,15 @@ def _transcribe_prepared_audio(file_path: str, model: Optional[str] = None) -> D
 
 def transcribe_audio(file_path: str, model: Optional[str] = None) -> Dict[str, Any]:
     """Safely validate, preprocess supported inputs, and dispatch transcription."""
+    # Refuse to feed a credential / secret store (auth.json, .env, OAuth
+    # tokens, mcp-tokens/, ...) to an STT provider — before ANY validation or
+    # preprocessing, so the refusal names the real reason rather than a
+    # format error. Mirrors the image-gen / video-gen read guards.
+    from agent.file_safety import get_read_block_error
+    blocked = get_read_block_error(file_path)
+    if blocked:
+        return {"success": False, "transcript": "", "error": blocked}
+
     # Cap .silk sources before the decoder runs (decoder safety). For all
     # other inputs the remote-upload size cap is provider-scoped and enforced
     # in _transcribe_prepared_audio, so local whisper can handle big files.
