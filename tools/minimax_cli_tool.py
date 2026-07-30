@@ -10,7 +10,6 @@ compact JSON.
 from __future__ import annotations
 
 import json
-import os
 import shlex
 import shutil
 import subprocess
@@ -19,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from hermes_constants import get_hermes_home
+from tools.environments.local import hermes_subprocess_env
 from tools.registry import registry, tool_error
 
 
@@ -41,7 +41,10 @@ def _cache_dir() -> Path:
 
 
 def _runtime_env() -> dict[str, str]:
-    env = os.environ.copy()
+    # ``mmx`` is a model-driving CLI, so it legitimately receives provider
+    # credentials, but it must still inherit the centralized Hermes child-env
+    # protections (profile home, session context, and always-strip secrets).
+    env = hermes_subprocess_env(inherit_credentials=True)
     runtime = get_hermes_home() / "runtime-secrets.env"
     if runtime.exists():
         for raw in runtime.read_text(errors="ignore").splitlines():

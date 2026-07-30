@@ -877,9 +877,13 @@ def _read_profile_capabilities(profile_dir: Path) -> dict:
     config: dict = {}
     if config_path.exists():
         try:
-            import yaml
+            # This card intentionally reports the profile's explicit local
+            # declarations rather than defaults/managed overlays.  Delegate
+            # parsing to the canonical raw-config owner so it retains the
+            # documented profile-safe YAML semantics.
+            from hermes_cli.config import read_user_config_raw
 
-            loaded = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+            loaded = read_user_config_raw(config_path)
             if isinstance(loaded, dict):
                 config = loaded
         except Exception:
