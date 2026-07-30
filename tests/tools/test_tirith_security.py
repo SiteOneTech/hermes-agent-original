@@ -254,6 +254,17 @@ class TestCaps:
         result = check_command_security("cmd")
         assert len(result["summary"]) == 500
 
+    @patch("tools.tirith_security.subprocess.run")
+    @patch("tools.tirith_security._load_security_config")
+    def test_findings_and_summary_capped(self, mock_cfg, mock_run):
+        mock_cfg.return_value = {"tirith_enabled": True, "tirith_path": "tirith",
+                                 "tirith_timeout": 5, "tirith_fail_open": True}
+        findings = [{"rule_id": f"rule_{i}"} for i in range(100)]
+        mock_run.return_value = _mock_run(2, _json_stdout(findings, "x" * 1000))
+        result = check_command_security("cmd")
+        assert len(result["findings"]) == 50
+        assert len(result["summary"]) == 500
+
 
 # ---------------------------------------------------------------------------
 # Programming errors propagate
@@ -433,6 +444,16 @@ class TestUnsupportedPlatform:
             result = _tirith_mod._resolve_tirith_path("/opt/custom/tirith")
             assert result == "/opt/custom/tirith"
             assert _tirith_mod._resolved_path == "/opt/custom/tirith"
+
+    @pytest.mark.parametrize("system, machine, expected", [
+        ("Linux", "x86_64", True),
+        ("Windows", "AMD64", False),
+        ("Linux", "riscv64", False),
+    ])
+    def test_is_platform_supported(self, system, machine, expected):
+        with patch("tools.tirith_security.platform.system", return_value=system), \
+             patch("tools.tirith_security.platform.machine", return_value=machine):
+            assert _tirith_mod.is_platform_supported() is expected
 
 
 # ---------------------------------------------------------------------------
@@ -905,7 +926,9 @@ class TestDiskFailureMarker:
         marker = os.path.join(tmpdir, ".tirith-install-failed")
         with patch("tools.tirith_security._failure_marker_path", return_value=marker):
             from tools.tirith_security import _mark_install_failed, _is_install_failed_on_disk
+            assert not _is_install_failed_on_disk()
             _mark_install_failed("download_failed")
+            assert _is_install_failed_on_disk()
             # Backdate the file past 24h TTL
             old_time = time.time() - 90000  # 25 hours ago
             os.utime(marker, (old_time, old_time))
@@ -1442,6 +1465,16 @@ class TestIsAppTldFinding:
 
     def test_case_insensitive_match(self):
         assert self.fn({"rule_id": "lookalike_tld", "value": ".APP"})
+
+    @pytest.mark.parametrize("finding, expected", [
+        ({"rule_id": "lookalike_tld", "value": ".APP"}, True),   # case-insensitive
+        ({"rule_id": "lookalike_tld", "message": "Domain uses '.app' TLD"}, True),
+        ({"rule_id": "shortened_url", "value": ".app"}, False),  # wrong rule_id
+        ({"rule_id": "lookalike_tld", "value": ".zip"}, False),  # other TLD
+    ])
+    def test_app_tld_detection(self, finding, expected):
+        from tools.tirith_security import _is_app_tld_finding
+        assert _is_app_tld_finding(finding) is expected
 
 
 # ---------------------------------------------------------------------------

@@ -1835,7 +1835,6 @@ class TestQuickSnapshot:
         pruned — losing the only recovery copy.
         """
         import json
-        import time as _t
         from hermes_cli.backup import create_quick_snapshot, list_quick_snapshots
 
         # First snapshot: complete (state.db is small, under any cap)
@@ -1844,7 +1843,7 @@ class TestQuickSnapshot:
         first_dir = hermes_home / "state-snapshots" / first_id
         assert (first_dir / "state.db").exists()
 
-        _t.sleep(1.05)  # ensure distinct timestamp
+        _advance_backup_clock()
 
         # Second snapshot: state.db exceeds the 1024-byte cap → skipped for
         # size, but small config files (32-54 bytes) still land in the manifest.
@@ -2179,14 +2178,13 @@ class TestPreUpdateBackup:
     def test_rotation_keeps_only_n(self, hermes_home):
         """After more than ``keep`` backups are created, older ones are
         pruned automatically."""
-        import time as _t
         from hermes_cli.backup import create_pre_update_backup
 
         created = []
         for _ in range(5):
             out = create_pre_update_backup(hermes_home=hermes_home, keep=3)
             created.append(out)
-            _t.sleep(1.05)  # ensure distinct seconds in timestamp
+            _advance_backup_clock()
 
         remaining = sorted(
             p.name for p in (hermes_home / "backups").iterdir()
@@ -2296,11 +2294,10 @@ class TestRunPreUpdateBackup:
         monkeypatch.setenv("HERMES_HOME", str(root))
         # Make Path.home() point at tmp_path for anything that uses it
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        # Config paths are resolved dynamically from HERMES_HOME and cached by
-        # path/mtime. Do not delete modules from sys.modules here: later tests
-        # may hold references to the originally imported hermes_cli.config
-        # module, and deleting it creates a second live module that monkeypatches
-        # no longer affect.
+        # Bust caches for hermes_cli.config + hermes_constants so they pick up HERMES_HOME
+        for mod in list(__import__("sys").modules.keys()):
+            if mod.startswith("hermes_cli.config") or mod == "hermes_constants":
+                del __import__("sys").modules[mod]
         return root
 
     @staticmethod
@@ -2535,11 +2532,10 @@ class TestPreMigrationBackup:
         update_backup = create_pre_update_backup(hermes_home=hermes_home, keep=5)
         assert update_backup is not None and update_backup.exists()
         # Spin up a lot of migration backups with keep=1
-        import time as _t
         for _ in range(3):
             out = create_pre_migration_backup(hermes_home=hermes_home, keep=1)
             assert out is not None
-            _t.sleep(1.05)
+            _advance_backup_clock()
         # Update backup must still be there
         assert update_backup.exists(), "pre-migration rotation wrongly pruned the pre-update backup"
 
@@ -2849,3 +2845,30 @@ class TestMemoryProviderExternalPaths:
 
         paths = HindsightMemoryProvider().backup_paths()
         assert str(tmp_path / ".hindsight") in paths
+
+def _advance_backup_clock(seconds: float = 1.1) -> None:
+    """Skew hermes_cli.backup's datetime forward instead of sleeping.
+
+    Snapshot ids have 1-second resolution; tests that need two distinct
+    timestamps previously slept >1s. This installs (once) a datetime shim in
+    the backup module whose now() adds a cumulative offset, then bumps it.
+    """
+    import datetime as _dt
+
+    import hermes_cli.backup as _backup
+
+    shim = getattr(_backup.datetime, "_hermes_test_shim", None)
+    if shim is None:
+        class _ShimDatetime(_dt.datetime):
+            _hermes_test_shim = True
+            _offset = _dt.timedelta(0)
+
+            @classmethod
+            def now(cls, tz=None):  # noqa: D102
+                return _dt.datetime.now(tz) + cls._offset
+
+        _backup.datetime = _ShimDatetime
+        shim = _ShimDatetime
+    else:
+        shim = _backup.datetime
+    shim._offset += _dt.timedelta(seconds=seconds)

@@ -389,15 +389,20 @@ class TestFailureAttribution:
         (hermes_home / "auth.json").write_text(
             json.dumps({"version": 1, "credential_pool": {"anthropic": entries}})
         )
-        import agent.credential_pool as credential_pool
+        # This unit fixture owns the entire pool.  Do not let a developer's
+        # real Claude Code/Hermes OAuth singleton add an unrelated entry,
+        # which would make single-entry rotation assertions non-hermetic.
+        import agent.anthropic_adapter as anthropic_adapter
 
         monkeypatch.setattr(
-            credential_pool, "_seed_from_singletons", lambda *_: (False, set())
+            anthropic_adapter, "read_claude_code_credentials", lambda: None
         )
         monkeypatch.setattr(
-            credential_pool, "_seed_from_env", lambda *_: (False, set())
+            anthropic_adapter, "read_hermes_oauth_credentials", lambda: None
         )
-        return credential_pool.load_pool("anthropic")
+        from agent.credential_pool import load_pool
+
+        return load_pool("anthropic")
 
     def _entry(self, idx, key, **overrides):
         entry = {

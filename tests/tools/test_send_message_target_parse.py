@@ -18,15 +18,15 @@ def _run_async_immediately(coro):
 
 
 def test_photon_e164_target_is_explicit() -> None:
-    chat_id, thread_id, is_explicit = _parse_target_ref("photon", "+155****4567")
+    chat_id, thread_id, is_explicit = _parse_target_ref("photon", "+15551234567")
 
-    assert chat_id == "+155****4567"
+    assert chat_id == "+15551234567"
     assert thread_id is None
     assert is_explicit is True
 
 
 def test_e164_target_still_requires_phone_platform() -> None:
-    assert _parse_target_ref("matrix", "+155****4567")[2] is False
+    assert _parse_target_ref("matrix", "+15551234567")[2] is False
 
 
 def test_photon_dm_chat_guid_is_explicit() -> None:

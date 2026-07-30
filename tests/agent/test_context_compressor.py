@@ -608,7 +608,8 @@ class TestGenerateSummaryNoneContent:
             {"role": "user" if i % 2 == 0 else "assistant", "content": f"msg {i}"}
             for i in range(10)
         ]
-        result = c.compress(msgs)
+        with patch("agent.context_compressor.call_llm", side_effect=RuntimeError("no provider")):
+            result = c.compress(msgs)
         assert len(result) < len(msgs)
 
 
@@ -2683,7 +2684,8 @@ class TestSummaryTargetRatio:
             + [{"role": "user" if i % 2 == 0 else "assistant", "content": f"msg {i}"}
                for i in range(8)]
         )
-        result = c.compress(msgs)
+        with patch("agent.context_compressor.call_llm", side_effect=RuntimeError("no provider")):
+            result = c.compress(msgs)
         # System prompt (msg[0]) survives as head
         assert result[0]["role"] == "system"
         assert result[0]["content"].startswith("System prompt")

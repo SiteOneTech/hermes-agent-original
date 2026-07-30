@@ -2438,6 +2438,23 @@ class TestDeriveForumThreadName:
     def test_strips_whitespace_around_first_line(self):
         assert _derive_forum_thread_name("  Title  \nBody") == "Title"
 
+    def test_first_line_heading_and_fallback_handling(self):
+        cases = [
+            ("Hello world", "Hello world"),
+            ("First line\nSecond line", "First line"),
+            ("  Title  \nBody", "Title"),
+            ("## My Heading", "My Heading"),
+            ("### Deep heading", "Deep heading"),
+            ("", "New Post"),
+            ("   \n  ", "New Post"),
+            ("###", "New Post"),
+        ]
+        for message, expected in cases:
+            assert _derive_forum_thread_name(message) == expected, repr(message)
+
+        # Titles are capped at Discord's 100-char thread-name limit.
+        assert len(_derive_forum_thread_name("A" * 200)) == 100
+
 
 # ---------------------------------------------------------------------------
 # Tests for _send_discord with forum channel support
@@ -3676,3 +3693,104 @@ class TestSendTelegramThreadNotFoundRetry:
         finally:
             if media_path and os.path.exists(media_path):
                 os.unlink(media_path)
+
+class TestParseTargetRef:
+    """_parse_target_ref extracts (chat_id, thread_id, is_explicit) per platform.
+
+    The tables below cover every explicit target form each platform accepts,
+    the forms that must fall through to directory resolution, and the
+    cross-platform scoping guards (a Slack ID is not a Discord target, a
+    WhatsApp JID is not a Signal target, ...).
+    """
+
+    def test_explicit_targets_round_trip_chat_and_thread(self):
+        cases = [
+            # Discord: snowflake, optional :thread, surrounding whitespace
+            ("discord", "-1001234567890:17585", "-1001234567890", "17585"),
+            ("discord", "1003724596514", "1003724596514", None),
+            ("discord", "  123456:789  ", "123456", "789"),
+            # Matrix: room id, room:thread-event, user MXID
+            ("matrix", "!HLOQwxYGgFPMPJUSNR:matrix.org:$thread123:matrix.org",
+             "!HLOQwxYGgFPMPJUSNR:matrix.org", "$thread123:matrix.org"),
+            ("matrix", "!HLOQwxYGgFPMPJUSNR:matrix.org",
+             "!HLOQwxYGgFPMPJUSNR:matrix.org", None),
+            ("matrix", "@hermes:matrix.org", "@hermes:matrix.org", None),
+            # Phone platforms: E.164 keeps its '+' for signal-cli; groups and
+            # bare digits also resolve.
+            ("signal", "+41791234567", "+41791234567", None),
+            ("signal", "  group:abc123  ", "group:abc123", None),
+            ("signal", "15551234567", "15551234567", None),
+            ("sms", "+15551234567", "+15551234567", None),
+            ("whatsapp", "+15551234567", "+15551234567", None),
+            ("photon", "+15551234567", "+15551234567", None),
+            # WhatsApp native JIDs. Regression: group (@g.us) and linked-identity
+            # (@lid) JIDs matched no branch and silently fell through to the
+            # configured home DM instead of the requested group.
+            ("whatsapp", "120363408391911677@g.us", "120363408391911677@g.us", None),
+            ("whatsapp", "19255551234@s.whatsapp.net", "19255551234@s.whatsapp.net", None),
+            ("whatsapp", "149606612619433@lid", "149606612619433@lid", None),
+            ("whatsapp", "status@broadcast", "status@broadcast", None),
+            ("whatsapp", "120363000000000000@newsletter",
+             "120363000000000000@newsletter", None),
+            # Slack: channel/group/DM ids, thread ts, and user targets that the
+            # caller must open as a DM.
+            ("slack", "C0B0QV5434G:171.000001", "C0B0QV5434G", "171.000001"),
+            ("slack", "C0B0QV5434G", "C0B0QV5434G", None),
+            ("slack", "G123ABCDEF", "G123ABCDEF", None),
+            ("slack", "D123ABCDEF", "D123ABCDEF", None),
+            ("slack", "U123ABCDEF", "user:U123ABCDEF", None),
+            ("slack", "@alice", "user_name:alice", None),
+            ("slack", "  C0B0QV5434G  ", "C0B0QV5434G", None),
+            # Email
+            ("email", "user@example.com", "user@example.com", None),
+            ("email", "first.last@example.co.uk", "first.last@example.co.uk", None),
+            ("email", "user+tag@gmail.com", "user+tag@gmail.com", None),
+            ("email", "  user@example.com  ", "user@example.com", None),
+        ]
+        for platform, target, expected_chat, expected_thread in cases:
+            chat_id, thread_id, is_explicit = _parse_target_ref(platform, target)
+            label = f"{platform}:{target}"
+            assert is_explicit is True, label
+            assert chat_id == expected_chat, label
+            assert thread_id == expected_thread, label
+
+    def test_non_explicit_targets_fall_through_to_resolution(self):
+        cases = [
+            ("matrix", "#general:matrix.org"),   # alias needs resolution
+            ("signal", "  group:  "),            # empty group id
+            ("signal", "+123"),                  # E.164 too short
+            ("signal", "+1234567890123456"),     # E.164 too long
+            ("signal", "+12abc4567890"),         # non-numeric
+            ("signal", "+"),
+            ("whatsapp", "general"),             # friendly name, not a JID
+            ("slack", "W123ABCDEF"),             # workspace id is not sendable
+            ("slack", "c0b0qv5434g"),            # lowercase
+            ("slack", "C123"),                   # too short
+            ("slack", "X0B0QV5434G"),            # unknown prefix
+            ("email", "not-an-email"),
+            ("email", "@example.com"),
+            ("email", "user@"),
+            ("email", "user@.com"),
+        ]
+        for platform, target in cases:
+            chat_id, _, is_explicit = _parse_target_ref(platform, target)
+            assert is_explicit is False, f"{platform}:{target}"
+
+    def test_prefixes_and_suffixes_are_platform_scoped(self):
+        """A form that is explicit on one platform must not leak to another."""
+        cases = [
+            ("telegram", "!something"),
+            ("discord", "@someone"),
+            ("telegram", "+15551234567"),
+            ("discord", "+15551234567"),
+            ("matrix", "+15551234567"),
+            ("telegram", "120363408391911677@g.us"),
+            ("signal", "149606612619433@lid"),
+            ("discord", "C0B0QV5434G"),
+            ("telegram", "C0B0QV5434G"),
+            ("telegram", "user@example.com"),
+            ("discord", "user@example.com"),
+            ("slack", "user@example.com"),
+        ]
+        for platform, target in cases:
+            assert _parse_target_ref(platform, target)[2] is False, f"{platform}:{target}"
