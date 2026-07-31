@@ -2018,12 +2018,17 @@ def test_load_enabled_toolsets_rejects_disabled_mcp_env(monkeypatch, capsys):
         config_mod, "load_config", lambda: {"platform_toolsets": {"cli": ["memory"]}}
     )
 
-    # Sorted: ["kanban", "memory", "minimax_cli", "project"]. `kanban` and
-    # `minimax_cli` are auto-recovered by _get_platform_tools because they are
-    # non-configurable platform toolsets whose tools live in hermes-cli's
-    # universe (see toolsets.py); `project` is GUI-only, folded in by
-    # _load_enabled_toolsets.
-    assert server._load_enabled_toolsets() == ["kanban", "memory", "minimax_cli", "project"]
+    # `kanban` and `minimax_cli` are auto-recovered non-configurable toolsets;
+    # `project` is GUI-only. Newly released toolsets are back-filled too, so
+    # tolerate only the explicit transition set beyond this stable baseline.
+    from hermes_cli.tools_config import _RECENTLY_SHIPPED_TOOLSETS
+
+    result = server._load_enabled_toolsets()
+    assert result is not None
+    expected = {"kanban", "memory", "minimax_cli", "project"}
+    assert result == sorted(result)
+    assert expected <= set(result)
+    assert set(result) - expected <= _RECENTLY_SHIPPED_TOOLSETS
     err = capsys.readouterr().err
     assert "ignoring disabled MCP servers" in err
     assert "mcp-off" in err
@@ -2044,7 +2049,14 @@ def test_load_enabled_toolsets_falls_back_when_tui_env_invalid(monkeypatch, caps
         config_mod, "load_config", lambda: {"platform_toolsets": {"cli": ["memory"]}}
     )
 
-    assert server._load_enabled_toolsets() == ["kanban", "memory", "minimax_cli", "project"]
+    from hermes_cli.tools_config import _RECENTLY_SHIPPED_TOOLSETS
+
+    result = server._load_enabled_toolsets()
+    assert result is not None
+    expected = {"kanban", "memory", "minimax_cli", "project"}
+    assert result == sorted(result)
+    assert expected <= set(result)
+    assert set(result) - expected <= _RECENTLY_SHIPPED_TOOLSETS
     assert "using configured CLI toolsets" in capsys.readouterr().err
 
 
