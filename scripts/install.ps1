@@ -1182,11 +1182,11 @@ function Set-GitBashEnvVar {
     Write-Info "If needed, set HERMES_GIT_BASH_PATH manually to your bash.exe path."
 }
 
-# The desktop build runs Vite ^8, which refuses to start on Node outside
-# `^20.19 || >=22.12`. That toolchain floor is the real constraint; do NOT
-# raise it past what a dependency actually demands, or every user on a working
-# Node gets their toolchain replaced for nothing. Returns $true when a
-# `node --version` string clears that floor.
+# The dependency tree's real Node floor is >=22.22.0, set by react-router 8.3.0
+# (`engines.node`). Keep this in sync with the root package.json: looser lets an
+# install reach a `npm ci` that dies with EBADENGINE, stricter replaces a working
+# user toolchain for nothing. Returns $true when a `node --version` string
+# clears that floor.
 function Test-NodeVersionOk {
     param([string]$Version)
     try {
@@ -1194,8 +1194,7 @@ function Test-NodeVersionOk {
     } catch {
         return $false
     }
-    if ($v.Major -eq 20) { return ($v.Minor -ge 19) }
-    if ($v.Major -eq 22) { return ($v.Minor -ge 12) }
+    if ($v.Major -eq 22) { return ($v.Minor -ge 22) }
     return ($v.Major -gt 22)
 }
 
@@ -1240,7 +1239,7 @@ function Test-Node {
             Write-Warn "npm $npmVersion cannot honor this repo's .npmrc (npm 11.10-11.16 ignores min-release-age-exclude)"
             Write-Info "Installing Hermes-managed Node.js with a compatible npm instead..."
         } else {
-            Write-Warn "Node.js $version is too old (Hermes requires Node ^20.19 or >=22.12)"
+            Write-Warn "Node.js $version is too old (Hermes requires Node >=22.22)"
         }
     }
 
