@@ -13,7 +13,6 @@ import {
   HUD_SURFACE,
   HUD_TEXT
 } from '@/app/floating-hud'
-import { setTerminalTakeover } from '@/app/right-sidebar/store'
 import { codiconIcon } from '@/components/ui/codicon'
 import { Command, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import { HighlightMatches } from '@/components/ui/highlight-matches'
@@ -52,7 +51,6 @@ import {
   SlidersHorizontal,
   Starmap,
   Sun,
-  Terminal,
   Users,
   Wrench,
   Zap
@@ -385,7 +383,15 @@ const toSessionEntry = (session: SessionRow): SessionEntry => ({
 })
 
 type NonConfigSettingsLabel =
-  'about' | 'archivedChats' | 'gateway' | 'keysSettings' | 'keysTools' | 'mcp' | 'providerAccounts' | 'providerApiKeys'
+  | 'about'
+  | 'archivedChats'
+  | 'gateway'
+  | 'keysSettings'
+  | 'keysTools'
+  | 'mcp'
+  | 'plugins'
+  | 'providerAccounts'
+  | 'providerApiKeys'
 
 const NON_CONFIG_SETTINGS: ReadonlyArray<{
   icon: IconComponent
@@ -417,6 +423,12 @@ const NON_CONFIG_SETTINGS: ReadonlyArray<{
     keywords: ['gateway', 'proxy', 'server', 'webhook', 'env', 'egress proxy', 'iron proxy'],
     labelKey: 'keysSettings',
     tab: 'keys&kview=settings'
+  },
+  {
+    icon: Package,
+    keywords: ['plugins', 'extensions', 'desktop plugins', 'addon', 'add-on'],
+    labelKey: 'plugins',
+    tab: 'plugins'
   },
   { icon: Archive, keywords: ['history', 'archived'], labelKey: 'archivedChats', tab: 'sessions' },
   { icon: Info, keywords: ['version', 'about'], labelKey: 'about', tab: 'about' }
@@ -757,14 +769,6 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
                 }
               ]
             : []),
-          {
-            action: 'view.showTerminal',
-            icon: Terminal,
-            id: 'nav-terminal',
-            keywords: ['terminal', 'shell', 'console'],
-            label: t.keybinds.actions['view.showTerminal'],
-            run: () => setTerminalTakeover(true)
-          },
           {
             action: 'nav.settings',
             icon: Settings,
