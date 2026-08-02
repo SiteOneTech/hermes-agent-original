@@ -2525,7 +2525,17 @@ def _detect_venv_dir() -> Path | None:
 def get_python_path() -> str:
     venv = _detect_venv_dir()
     if venv is not None:
-        from hermes_constants import venv_python_path
+        try:
+            from hermes_constants import venv_python_path
+        except ImportError:
+            # Update-boundary: a gateway restarted mid-update can hold a
+            # hermes_constants cached from before this symbol existed. Reload
+            # it directly: managed_uv may be cached from that same old
+            # checkout, so importing its recovery helper would fail too.
+            import importlib
+            import hermes_constants
+
+            venv_python_path = importlib.reload(hermes_constants).venv_python_path
 
         venv_python = venv_python_path(venv, windows=is_windows())
         if venv_python.exists():

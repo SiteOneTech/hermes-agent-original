@@ -19,6 +19,30 @@ from gateway.restart import (
 )
 
 
+class TestGatewayVenvPythonResolution:
+    def test_recovers_stale_constants_without_managed_uv_helper(self, tmp_path, monkeypatch):
+        """A gateway update boundary must not depend on a second stale module."""
+        import hermes_constants
+        import hermes_cli.managed_uv as managed_uv
+
+        venv = tmp_path / "venv"
+        python = venv / "bin" / "python"
+        python.parent.mkdir(parents=True)
+        python.write_text("", encoding="utf-8")
+
+        original_constants = dict(hermes_constants.__dict__)
+        try:
+            monkeypatch.setattr(gateway_cli, "_detect_venv_dir", lambda: venv)
+            monkeypatch.setattr(gateway_cli, "is_windows", lambda: False)
+            monkeypatch.delattr(hermes_constants, "venv_python_path", raising=False)
+            monkeypatch.delattr(managed_uv, "_reload_hermes_constants", raising=False)
+
+            assert gateway_cli.get_python_path() == str(python)
+        finally:
+            hermes_constants.__dict__.clear()
+            hermes_constants.__dict__.update(original_constants)
+
+
 class TestUserSystemdPrivateSocketPreflight:
     def test_preflight_accepts_private_socket_without_dbus_bus(self, monkeypatch):
         monkeypatch.setattr(gateway_cli, "_ensure_user_systemd_env", lambda: None)

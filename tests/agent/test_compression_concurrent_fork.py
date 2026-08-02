@@ -499,7 +499,7 @@ def test_fence_cancelled_compression_leaves_lock_reacquirable(tmp_path: Path) ->
 
     def _slow_summary(*_args, **_kwargs):
         summary_started.set()
-        assert release_summary.wait(timeout=5)
+        release_summary.wait()
         return [
             {"role": "user", "content": "[CONTEXT COMPACTION] summary"},
             {"role": "user", "content": "tail"},
@@ -520,10 +520,15 @@ def test_fence_cancelled_compression_leaves_lock_reacquirable(tmp_path: Path) ->
 
     worker = threading.Thread(target=_run_compression, name="fenced-hygiene")
     worker.start()
-    assert summary_started.wait(timeout=2)
-    assert fence.cancel_before_commit() is True
-    release_summary.set()
-    worker.join(timeout=5)
+    try:
+        # The worker can take time to reach the compressor under full-suite
+        # contention; the subprocess cap remains the deadlock bound.
+        assert summary_started.wait(timeout=20)
+        assert fence.cancel_before_commit() is True
+    finally:
+        # Never strand the worker if an assertion above fails.
+        release_summary.set()
+    worker.join(timeout=20)
     assert not worker.is_alive()
 
     # Cancelled attempt: no mutation, and — the invariant under test — the

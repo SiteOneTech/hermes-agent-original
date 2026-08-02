@@ -150,14 +150,14 @@ $PythonVersion = "3.11"
 # interpreters, so this list also matches a pre-existing system Python.  Single
 # source of truth shared by Test-Python's fallback and Resolve-AvailablePythonVersion.
 $PythonFallbackVersions = @("3.12", "3.13", "3.10")
-$NodeVersion = "26"
+$NodeVersion = "22"
 # The npm range the root package.json pins in `engines.npm`.  A constant rather
 # than a manifest read like the POSIX side does: Test-Node runs BEFORE the repo
 # is cloned, so there is usually no package.json on disk yet (and none at all
 # when install.ps1 is piped straight from the web).  Get-NpmRange prefers the
 # manifest whenever it does exist, so a drifted constant self-corrects on any
 # run against an existing checkout.
-$NpmRange = ">=12.0.0"
+$NpmRange = ">=10.0.0 <11.10.0 || >=11.17.0"
 
 # Stage-protocol version.  Bumped only for genuinely breaking changes to the
 # manifest schema, stage-name set semantics, or stdout JSON shape.  Adding a
@@ -587,12 +587,9 @@ function Get-NpmRange {
 
 # Upgrade the Hermes-managed Node tree's bundled npm into $NpmRange.
 #
-# The nodejs.org zip ships whatever npm that Node major bundles -- Node 26.5.1
-# bundles npm 11.17.0, one minor below the root package.json's own
-# `engines.npm` floor of >=12.  The repo .npmrc sets `engine-strict=true`, so
-# that is fatal rather than a warning and a brand-new install dies at the first
-# `npm ci` with EBADENGINE.  Provision the right npm here instead of reacting
-# to the failure later.
+# The nodejs.org zip ships whichever npm its Node major bundles.  Keep the
+# managed tree within the root manifest's compatible range before the first
+# npm ci, rather than discovering an engine-strict failure after the download.
 #
 # Three details are load-bearing, mirroring _nb_ensure_bundled_npm_range in
 # scripts/lib/node-bootstrap.sh and upgrade_managed_npm in
@@ -614,17 +611,12 @@ function Update-ManagedNpm {
     $range = Get-NpmRange
 
     # Skip the network round-trip when the bundled npm already satisfies the
-    # range.  Only the ">=N" shape we actually author is parsed; anything more
-    # exotic falls through to letting npm itself decide.
-    if ($range -match '^>=(\d+)') {
-        $want = [int]$Matches[1]
-        try {
-            $have = (& $npmCmd --version 2>$null)
-            if ($have -match '^(\d+)') {
-                if ([int]$Matches[1] -ge $want) { return $true }
-            }
-        } catch { }
-    }
+    # compatible range. Test-NpmVersionOk encodes the non-monotonic 11.10-11.16
+    # exclusion, which a simple >= parser cannot represent.
+    try {
+        $have = (& $npmCmd --version 2>$null)
+        if (Test-NpmVersionOk $have $range) { return $true }
+    } catch { }
 
     Write-Info "Upgrading bundled npm to satisfy $range ..."
 
@@ -1190,10 +1182,11 @@ function Set-GitBashEnvVar {
     Write-Info "If needed, set HERMES_GIT_BASH_PATH manually to your bash.exe path."
 }
 
-# Hermes requires Node 26 across every install: the desktop build's toolchain
-# floor is pinned there and the managed runtime, heal, and upgrade paths all
-# provision latest-v26.x. Returns $true when a `node --version` string clears
-# that floor.
+# The desktop build runs Vite ^8, which refuses to start on Node outside
+# `^20.19 || >=22.12`. That toolchain floor is the real constraint; do NOT
+# raise it past what a dependency actually demands, or every user on a working
+# Node gets their toolchain replaced for nothing. Returns $true when a
+# `node --version` string clears that floor.
 function Test-NodeVersionOk {
     param([string]$Version)
     try {
@@ -1201,7 +1194,33 @@ function Test-NodeVersionOk {
     } catch {
         return $false
     }
-    return ($v.Major -ge 26)
+    if ($v.Major -eq 20) { return ($v.Minor -ge 19) }
+    if ($v.Major -eq 22) { return ($v.Minor -ge 12) }
+    return ($v.Major -gt 22)
+}
+
+# npm 11.10.0-11.16.x honors min-release-age but ignores
+# min-release-age-exclude. Both settings are in .npmrc, so that band applies
+# the age gate to deliberately exempted packages and makes npm ci fail ETARGET.
+# Keep this in step with package.json's engines.npm range; Test-Node runs before
+# a piped install has cloned the manifest, so it cannot rely on reading it.
+function Test-NpmVersionOk {
+    param(
+        [string]$Version,
+        [string]$Range = (Get-NpmRange)
+    )
+    try {
+        $v = [version]($Version -replace '^v', '' -replace '-.*$', '')
+    } catch {
+        return $false
+    }
+    # The current non-monotonic range excludes npm 11.10-11.16 because that
+    # band ignores min-release-age-exclude. Fail closed for a future range so
+    # callers upgrade through npm itself instead of silently accepting an npm
+    # version the manifest no longer permits.
+    if ($Range -ne ">=10.0.0 <11.10.0 || >=11.17.0") { return $false }
+    if ($v.Major -lt 10) { return $false }
+    return -not ($v.Major -eq 11 -and $v.Minor -ge 10 -and $v.Minor -le 16)
 }
 
 function Test-Node {
@@ -1211,11 +1230,18 @@ function Test-Node {
         $version = node --version
         if (Test-NodeVersionOk $version) {
             Ensure-NodeExeOnPath | Out-Null
-            Write-Success "Node.js $version found"
-            $script:HasNode = $true
-            return $true
+            $npmCmd = Resolve-NpmCmd
+            $npmVersion = if ($npmCmd) { & $npmCmd --version 2>$null } else { "" }
+            if (-not $npmCmd -or (Test-NpmVersionOk $npmVersion)) {
+                Write-Success "Node.js $version found"
+                $script:HasNode = $true
+                return $true
+            }
+            Write-Warn "npm $npmVersion cannot honor this repo's .npmrc (npm 11.10-11.16 ignores min-release-age-exclude)"
+            Write-Info "Installing Hermes-managed Node.js with a compatible npm instead..."
+        } else {
+            Write-Warn "Node.js $version is too old (Hermes requires Node ^20.19 or >=22.12)"
         }
-        Write-Warn "Node.js $version is too old (Hermes requires Node >=26)"
     }
 
     # Prefer a Hermes-managed Node from a previous run over a too-old system one.
@@ -1225,9 +1251,8 @@ function Test-Node {
         $env:Path = "$HermesHome\node;$env:Path"
         Set-ManagedNodeFirstOnUserPath "$HermesHome\node"
         Write-Success "Node.js $version found (Hermes-managed)"
-        # A tree from an older install still has that Node major's bundled
-        # npm, which is below the current engines.npm floor. No-ops when the
-        # npm is already in range, so reruns cost one --version probe.
+        # A tree from an older install can have an npm outside the compatible
+        # range. No-ops when the bundled npm is already usable.
         Update-ManagedNpm "$HermesHome\node" | Out-Null
         $script:HasNode = $true
         return $true
@@ -1277,7 +1302,8 @@ function Test-Node {
 
                 $version = & "$HermesHome\node\node.exe" --version
                 Write-Success "Node.js $version installed to $HermesHome\node\ (portable, user-scoped)"
-                # The zip's bundled npm is below the repo's engines.npm floor.
+                # Upgrade only when the zip's bundled npm is outside the repo's
+                # compatible range.
                 Update-ManagedNpm "$HermesHome\node" | Out-Null
                 $script:HasNode = $true
 
