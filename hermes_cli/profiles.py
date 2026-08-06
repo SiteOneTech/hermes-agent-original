@@ -998,8 +998,12 @@ def write_profile_meta(
         existing["engine_label"] = engine_label.strip()
     if engine_model is not None:
         existing["engine_model"] = engine_model.strip()
-    with open(path, "w", encoding="utf-8") as f:
-        yaml.safe_dump(existing, f, sort_keys=False, default_flow_style=False)
+    # Atomic write: bare open("w") truncates before the dump, and the read
+    # path above swallows parse errors as {}, so a crashed write would
+    # silently drop unspecified fields on the next call (#51356, #16743).
+    from utils import atomic_yaml_write
+
+    atomic_yaml_write(path, existing, sort_keys=False)
 
 
 # ---------------------------------------------------------------------------

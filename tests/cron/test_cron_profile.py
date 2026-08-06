@@ -425,7 +425,9 @@ class TestTickProfilePartition:
         parallel_job = {"id": "c", "name": "C", "profile": None}
 
         monkeypatch.setattr(sched, "get_due_jobs", lambda: [profile_a, profile_b, parallel_job])
-        monkeypatch.setattr(sched, "advance_next_run", lambda *_a, **_kw: None)
+        # Upstream batches pre-dispatch scheduling updates. Keep this local
+        # profile-isolation test focused on pool partitioning, not persistence.
+        monkeypatch.setattr(sched, "advance_next_runs", lambda *_a, **_kw: None)
 
         calls: list[tuple[str, str]] = []
         order_lock = threading.Lock()
