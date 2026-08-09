@@ -16,8 +16,9 @@ owner: solution-architect
 - Reactive alerts are research/decision context only, not execution directives.
 - The implementation must be Factory-managed and deployed by the Vonash/internal engineering lane after review.
 
-## Verified prior observations
-- Vonash already has research, hypothesis, report/directive, scheduling and experiment-related concepts in its canonical substrate.
+## Historical observations pending revalidation
+The following were captured during the 2026-08-08/09 ARF-001 bootstrap review. They are useful planning signals, not proof of current Vonash runtime state; I1 must revalidate them against the supplied repository/runtime and attach current evidence.
+- Vonash previously exposed research, hypothesis, report/directive, scheduling and experiment-related concepts in its canonical substrate.
 - A previous directive/report handshake did not provide a dependable typed acknowledgement loop.
 - A previously observed research dispatcher was explicitly retired/pruned; it must not be reactivated by changing a database flag.
 - A source registry entry marked enabled did not prove deployed credential injection or fresh ingestion.

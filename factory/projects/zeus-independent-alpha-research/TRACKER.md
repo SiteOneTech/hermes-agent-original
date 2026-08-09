@@ -12,8 +12,8 @@ owner: factory-reporter
 | Area | State | Evidence / next action |
 |---|---|---|
 | Scope correction | complete | Magnus is runtime operator; Zeus is advisory research only |
-| Project-local G1 pack | in review | This directory is being reconciled into the Factory-required path |
-| Existing product references | pending sync | Update contradictory two-turn/deferred-transport text to point here |
+| Project-local G1 pack | complete | 15 canonical documents indexed, reviewed and merged to `main` at `402d821438dd0ede78ec9b67f75d17b05e569c96` |
+| Existing product references | complete | Concise references now point to the canonical G1 pack and contain no two-turn/deferred-transport rule |
 | Vonash audit | blocked by missing repository/runtime access | Jean/internal team supplies read-only repo/branch and supported runtime contract |
 | Programming implementation | not started | Must follow I1 audit and I2 contract design |
 | Daily/realtime scheduler | not enabled | Requires source-controlled supported dispatcher and manual proof |
