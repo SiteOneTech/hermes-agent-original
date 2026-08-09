@@ -1,39 +1,13 @@
-# QA & Security Gates — Zeus Independent Alpha Research
+# QA and Security Gates — Market Research Core
 
-## Pre-flight gates
+**Status:** Current concise reference. Controlling QA/security gates: [`factory/projects/zeus-independent-alpha-research/QA_GATES.md`](../../factory/projects/zeus-independent-alpha-research/QA_GATES.md) and [`SECURITY_GATES.md`](../../factory/projects/zeus-independent-alpha-research/SECURITY_GATES.md).
 
-- [ ] Project remains `zeus_only`; no Vonash runtime/database deploy target is introduced.
-- [ ] Worktree branch is isolated from active refactors.
-- [ ] Migration plan includes schema, module registry, dedicated runtime role/credential, grants, indexes, and rollback posture.
-- [ ] The market-research toolset cannot silently fall back to a broader Agent Core runtime credential.
-- [ ] No secret is placed in code, tests, logs, reports, or chat.
-- [ ] A capability request can only create a planning artifact; it cannot edit code, create a deployment, or mutate Vonash.
+## Required proof
+- A typed Zeus↔Magnus message is authenticated, schema-validated, idempotent, auditable and recoverable from transport failure.
+- Only research/capability/result/alert types are accepted; tests prove no broker, order, risk, paper/live, promotion, config, credential, code or deployment action can enter via this channel.
+- Evidence and Alpha Cards carry provenance, freshness, source terms and the actual data contract; bars are not represented as true footprint/order flow without granular evidence.
+- The daily workshop has a 45-minute cap, up to six substantive turns per agent and no more than three cards/topics; it closes with a typed synthesis.
+- Reactive alerts are evidence-backed, acknowledgement-driven and non-executing. Synthetic no-send testing proves routing before operational use.
+- Source freshness, no acknowledgement, empty cycle, duplicate lineage, mirror failure and redaction behavior are observable.
 
-## Research integrity gates
-
-- [ ] Card has mechanism, falsification criterion, required data granularity, costs/execution assumptions, and provenance.
-- [ ] Practitioner/social content is labelled ideation-only.
-- [ ] Third-party strategy/signal study has explicit terms/access permission; opaque or non-authorized signals are never mirrored.
-- [ ] Card lineage compares mechanism, not merely its title.
-- [ ] Review tests leakage, survivorship bias, data-snooping, regime dependence, capacity, and transaction costs.
-- [ ] Result comparison requires identical/specified evaluation gate definitions and temporal windows.
-
-## Collaboration gates
-
-- [ ] Session limit is enforced by code: four substantive agent turns (two per agent) or 45 minutes, whichever occurs first.
-- [ ] Only research message types are allowed: `brief`, `question`, `capability_ack`, `critique`, `experiment_request`, `result_reference`, `synthesis`.
-- [ ] Forbidden types are rejected: `trade`, `order`, `risk_change`, `promotion`, `paper_activation`, `live_activation`.
-- [ ] KB, book-library, repository, data API, and future transport adapters are read-only, allowlisted, and disabled without explicit connector configuration.
-- [ ] Every imported item identifies system, collection/channel, reference, retrieval time, and redaction state.
-
-## Verification gates
-
-- [ ] Unit tests for schema invariants and state machines.
-- [ ] Unit tests proving turn/time closure and forbidden message rejection.
-- [ ] Tool tests run with an Agent Core test database.
-- [ ] Full targeted test suite passes with no type/lint regression.
-- [ ] Manual pilot produces one Alpha Card and one completed zero-execution session.
-
-## Stop conditions
-
-Stop and escalate instead of guessing when an external KB/API lacks authentication details, its data usage/license is unclear, experiment results are incomparable, or a requested operation could alter trading/paper/live state.
+No passing integration/pilot test authorizes paper/live promotion. That remains governed by Vonash’s existing policy and separate release decision.
