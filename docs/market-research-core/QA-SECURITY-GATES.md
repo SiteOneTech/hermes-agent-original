@@ -4,7 +4,8 @@
 
 - [ ] Project remains `zeus_only`; no Vonash runtime/database deploy target is introduced.
 - [ ] Worktree branch is isolated from active refactors.
-- [ ] Migration plan includes schema, module registry, runtime role, grants, indexes, and rollback posture.
+- [ ] Migration plan includes schema, module registry, dedicated runtime role/credential, grants, indexes, and rollback posture.
+- [ ] The market-research toolset cannot silently fall back to a broader Agent Core runtime credential.
 - [ ] No secret is placed in code, tests, logs, reports, or chat.
 
 ## Research integrity gates
@@ -17,7 +18,7 @@
 
 ## Collaboration gates
 
-- [ ] Session limit is enforced by code: 8 substantive messages or 30 minutes, whichever occurs first.
+- [ ] Session limit is enforced by code: four substantive agent turns (two per agent) or 45 minutes, whichever occurs first.
 - [ ] Only research message types are allowed: `brief`, `question`, `capability_ack`, `critique`, `experiment_request`, `result_reference`, `synthesis`.
 - [ ] Forbidden types are rejected: `trade`, `order`, `risk_change`, `promotion`, `paper_activation`, `live_activation`.
 - [ ] KB/Slack adapter is read-only, allowlisted, and disabled without explicit connector configuration.
