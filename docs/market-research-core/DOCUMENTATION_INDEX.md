@@ -7,6 +7,7 @@
 3. [Sprint Plan 001](SPRINT-PLAN-001.md)
 4. [Task Graph](TASK_GRAPH.md)
 5. [QA & Security Gates](QA-SECURITY-GATES.md)
+6. [Operating Model v1](OPERATING_MODEL_V1.md)
 
 ## Factory record
 
