@@ -2008,6 +2008,7 @@ class TestRunJobSessionPersistence:
                 return {"final_response": "ok"}
 
         with patch("cron.scheduler._hermes_home", tmp_path), \
+             patch("cron.scheduler._preflight_job_config", return_value=None), \
              patch("hermes_state.SessionDB", return_value=fake_db), \
              patch(
                  "hermes_cli.runtime_provider.resolve_runtime_provider",
@@ -2067,6 +2068,7 @@ class TestRunJobSessionPersistence:
                 return {"final_response": "ok"}
 
         with patch("cron.scheduler._hermes_home", tmp_path), \
+             patch("cron.scheduler._preflight_job_config", return_value=None), \
              patch("hermes_state.SessionDB", return_value=fake_db), \
              patch(
                  "hermes_cli.runtime_provider.resolve_runtime_provider",
@@ -2237,6 +2239,7 @@ class TestRunJobSessionPersistence:
                 return {"final_response": "ok"}
 
         with patch("cron.scheduler._hermes_home", tmp_path), \
+             patch("cron.scheduler._preflight_job_config", return_value=None), \
              patch("hermes_state.SessionDB", return_value=fake_db), \
              patch(
                  "hermes_cli.runtime_provider.resolve_runtime_provider",
@@ -3001,8 +3004,12 @@ class TestRunJobSkillBacked:
         assert success is True
         assert error is None
         assert final_response == "ok"
-        assert skill_view_mock.call_count == 2
-        assert [call.args[0] for call in skill_view_mock.call_args_list] == ["blogwatcher", "maps"]
+        # Preflight validates each skill's readiness before the effective prompt
+        # loads them; both passes must preserve the declared order.
+        assert skill_view_mock.call_count == 4
+        assert [call.args[0] for call in skill_view_mock.call_args_list] == [
+            "blogwatcher", "maps", "blogwatcher", "maps"
+        ]
 
         prompt_arg = mock_agent.run_conversation.call_args.args[0]
         assert prompt_arg.index("blogwatcher") < prompt_arg.index("maps")
@@ -3626,7 +3633,7 @@ class TestParallelTick:
         barrier = threading.Barrier(2, timeout=5)
         call_order = []
 
-        def mock_run_job(job, *, defer_agent_teardown=None):
+        def mock_run_job(job, *, defer_agent_teardown=None, **kw):
             """Each job hits a barrier — both must be active simultaneously."""
             call_order.append(("start", job["id"]))
             barrier.wait()  # blocks until both threads reach here
@@ -3660,7 +3667,7 @@ class TestParallelTick:
         from gateway.session_context import get_session_env
         seen = {}
 
-        def mock_run_job(job, *, defer_agent_teardown=None):
+        def mock_run_job(job, *, defer_agent_teardown=None, **kw):
             origin = job.get("origin", {})
             # run_job sets ContextVars — verify each job sees its own
             from gateway.session_context import set_session_vars, clear_session_vars
@@ -3700,7 +3707,7 @@ class TestParallelTick:
         monkeypatch.setenv("HERMES_CRON_MAX_PARALLEL", "1")
         call_times = []
 
-        def mock_run_job(job, *, defer_agent_teardown=None):
+        def mock_run_job(job, *, defer_agent_teardown=None, **_kwargs):
             import time
             call_times.append(("start", job["id"], time.monotonic()))
             time.sleep(0.05)
@@ -5534,6 +5541,30 @@ class TestMultiTargetDeliveryContinuesOnFailure:
         assert "a@example.com" in result
         assert "b@example.com" in result
         assert mock_pool.submit.call_count == 2
+
+class TestBuildJobPromptExtraPrompt:
+    """Regression: _build_job_prompt merges extra_prompt into the assembled prompt."""
+
+    def test_extra_prompt_appended_with_header(self):
+        """extra_prompt appears under a '## Run Context' header."""
+        job = {"prompt": "stored prompt"}
+        result = _build_job_prompt(job, extra_prompt="CONTEXT: client=Foo")
+        assert "stored prompt" in result
+        assert "## Run Context" in result
+        assert "CONTEXT: client=Foo" in result
+
+    def test_extra_prompt_does_not_mutate_job(self):
+        """The job dict's 'prompt' field must remain unchanged."""
+        job = {"prompt": "original"}
+        _build_job_prompt(job, extra_prompt="transient context")
+        assert job["prompt"] == "original"
+
+    def test_no_extra_prompt_omits_header(self):
+        """Without extra_prompt, no '## Run Context' header is injected."""
+        job = {"prompt": "just the stored prompt"}
+        result = _build_job_prompt(job)
+        assert "## Run Context" not in result
+        assert "just the stored prompt" in result
 
 
 class TestSetCronSessionTitle:

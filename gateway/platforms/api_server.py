@@ -1299,12 +1299,15 @@ try:
     from cron.jobs import (
         list_jobs as _cron_list,
         get_job as _cron_get,
-        create_job as _cron_create,
         update_job as _cron_update,
         remove_job as _cron_remove,
         pause_job as _cron_pause,
         resume_job as _cron_resume,
         trigger_job as _cron_trigger,
+    )
+    from cron.scheduler import (
+        CronSchedulerRegistrationError as _CronSchedulerRegistrationError,
+        create_job_with_scheduler_registration as _cron_create,
     )
     _CRON_AVAILABLE = True
 except ImportError:
@@ -1316,6 +1319,9 @@ except ImportError:
     _cron_pause = None
     _cron_resume = None
     _cron_trigger = None
+
+    class _CronSchedulerRegistrationError(RuntimeError):
+        pass
 
 
 def _notify_cron_provider_jobs_changed() -> None:
@@ -1463,6 +1469,15 @@ class APIServerAdapter(BasePlatformAdapter):
         # (the /v1/runs path tracks its own in-flight set via
         # _active_run_tasks).
         self._inflight_agent_runs: int = 0
+        # Every agent currently inside _run_agent(), i.e. exactly the turns
+        # counted by _inflight_agent_runs above.  Shutdown needs the whole
+        # adapter-owned set, so this is deliberately NOT _active_run_agents:
+        # that one is run_id-keyed and scoped to the public /v1/runs stop API,
+        # and only /v1/runs has a run_id at all.  Keyed by id() because the
+        # other six agent-entry paths have no stable identifier of their own;
+        # the dict holds a strong reference for the life of the turn, so an
+        # id() can never be recycled while it is still registered.
+        self._shutdown_interruptible_agents: Dict[int, Any] = {}
         # Back-reference to the owning GatewayRunner (set by gateway/run.py)
         # so /api/platforms/{platform}/events can resolve sibling adapters.
         # BasePlatformAdapter declares the class-level default of None.
@@ -1488,6 +1503,52 @@ class APIServerAdapter(BasePlatformAdapter):
             )
         except Exception:
             return 0
+
+    def interrupt_active_runs(self, reason: str) -> int:
+        """Cooperatively interrupt every adapter-owned agent during shutdown.
+
+        The gateway drain accounts for API-server work through
+        ``active_agent_work_count()``, but those agents are owned by this
+        adapter rather than ``GatewayRunner._running_agents``, so
+        ``GatewayRunner._interrupt_running_agents()`` never reaches them: the
+        turn runs to the drain timeout with no cooperative interrupt and is
+        then amputated by the post-interrupt tool-subprocess kill.
+
+        Cover the same set the drain waits on, so accounting and interrupt
+        agree:
+
+        * ``_active_run_agents`` — the ``/v1/runs`` agents counted through
+          ``_active_run_tasks``.
+        * ``_shutdown_interruptible_agents`` — every ``_run_agent()`` turn
+          counted through ``_inflight_agent_runs``, i.e. both session-chat
+          routes, ``/v1/chat/completions`` and ``/v1/responses`` in their
+          streaming and non-streaming forms.
+
+        ``_pending_agent_requests`` is intentionally not covered: it counts
+        admitted requests that have not constructed an agent yet, so there is
+        no object to interrupt.
+
+        Returns the number of agents that accepted an interrupt.
+        """
+        agents: Dict[int, Any] = {}
+        for agent in list(self._active_run_agents.values()):
+            if agent is not None:
+                agents[id(agent)] = agent
+        for agent in list(self._shutdown_interruptible_agents.values()):
+            if agent is not None:
+                # Dedupe by object identity — the two registries are disjoint
+                # today (/v1/runs runs its own lifecycle, not _run_agent), but
+                # an agent published to both must still be interrupted once.
+                agents[id(agent)] = agent
+
+        interrupted = 0
+        for agent in agents.values():
+            try:
+                if request_hard_interrupt(agent, reason):
+                    interrupted += 1
+            except Exception as exc:
+                logger.debug("[api_server] failed interrupting active agent: %s", exc)
+        return interrupted
 
     @staticmethod
     def _gateway_is_draining() -> bool:
@@ -2740,7 +2801,6 @@ class APIServerAdapter(BasePlatformAdapter):
             runtime_kwargs = _resolve_runtime_agent_kwargs()
         except RuntimeError as exc:
             raise _ProviderAuthResolutionError(str(exc)) from exc
-        reasoning_config = GatewayRunner._load_reasoning_config()
         model = _resolve_gateway_model()
 
         # When the primary provider's auth fails (expired token / 429 quota
@@ -2756,8 +2816,6 @@ class APIServerAdapter(BasePlatformAdapter):
             model = runtime_model
 
         request_reasoning_config = _request_reasoning_config(model_options)
-        if request_reasoning_config is not None:
-            reasoning_config = request_reasoning_config
         request_service_tier = _request_service_tier(model_options)
 
         request_model = _clean_request_string(requested_model)
@@ -2960,6 +3018,20 @@ class APIServerAdapter(BasePlatformAdapter):
             None
             if confirmed_runtime_lock
             else GatewayRunner._load_fallback_model()
+        )
+
+        # Resolve reasoning against the model this request will actually
+        # run. Per-model ``agent.reasoning_overrides`` key off that model,
+        # and it is only settled after the precedence chain above (browser
+        # lock -> session /model -> session row -> route -> per-request ->
+        # defaults). Resolving at function entry keyed them off
+        # ``model.default`` instead — the defect e81d18dfb removed from the
+        # native gateway paths. An explicit per-request reasoning parameter
+        # still wins over config.
+        reasoning_config = (
+            request_reasoning_config
+            if request_reasoning_config is not None
+            else GatewayRunner._load_reasoning_config(model)
         )
 
         agent_kwargs = {
@@ -3817,11 +3889,52 @@ class APIServerAdapter(BasePlatformAdapter):
             return err
         db = await self._ensure_session_db_async()
         resolved_id = await asyncio.to_thread(db.resolve_resume_session_id, session_id)
-        messages = await asyncio.to_thread(db.get_messages, resolved_id)
+        raw_limit = request.query.get("limit")
+        raw_offset = request.query.get("offset", "0")
+        order = request.query.get("order")
+        if order not in (None, "oldest", "latest"):
+            return web.json_response(
+                _openai_error(
+                    "order must be one of: oldest, latest",
+                    code="invalid_pagination",
+                ),
+                status=400,
+            )
+        try:
+            offset = int(raw_offset)
+            requested_limit = None if raw_limit is None else int(raw_limit)
+        except (TypeError, ValueError):
+            offset = -1
+            requested_limit = -1
+        if offset < 0 or (requested_limit is not None and requested_limit < 0):
+            return web.json_response(
+                _openai_error(
+                    "limit and offset must be non-negative integers",
+                    code="invalid_pagination",
+                ),
+                status=400,
+            )
+
+        default_page = requested_limit is None
+        latest_page = order == "latest" or (order is None and default_page)
+        limit = 500 if default_page else min(requested_limit, 500)
+        messages = await asyncio.to_thread(
+            db.get_messages,
+            resolved_id,
+            limit=limit,
+            offset=offset,
+            latest=latest_page,
+        )
         return web.json_response({
             "object": "list",
             "session_id": resolved_id,
             "data": [self._message_response(m) for m in messages],
+            "pagination": {
+                "limit": limit,
+                "offset": offset,
+                "order": order or ("latest" if default_page else "oldest"),
+                "returned": len(messages),
+            },
         })
 
     async def _handle_fork_session(self, request: "web.Request") -> "web.Response":
@@ -5856,8 +5969,9 @@ class APIServerAdapter(BasePlatformAdapter):
                 kwargs["repeat"] = repeat
 
             job = _cron_create(**kwargs)
-            _notify_cron_provider_jobs_changed()
             return web.json_response({"job": job})
+        except _CronSchedulerRegistrationError as e:
+            return web.json_response(e.to_dict(), status=424)
         except Exception as e:
             return web.json_response({"error": _redact_api_error_text(e)}, status=500)
 
@@ -6216,14 +6330,23 @@ class APIServerAdapter(BasePlatformAdapter):
                 for tc in msg["tool_calls"]:
                     func = tc.get("function", {})
                     items.append({
+                        "id": f"fc_{uuid.uuid4().hex[:24]}",
                         "type": "function_call",
+                        # These calls were already executed server-side by the
+                        # Hermes agent; they are replayed for structured tool
+                        # UI only.  Mark them completed (matching the SSE
+                        # streaming path) so OpenAI clients don't interpret
+                        # them as pending calls the client must execute.
+                        "status": "completed",
                         "name": func.get("name", ""),
                         "arguments": func.get("arguments", ""),
                         "call_id": tc.get("id", ""),
                     })
             elif role == "tool":
                 items.append({
+                    "id": f"fco_{uuid.uuid4().hex[:24]}",
                     "type": "function_call_output",
+                    "status": "completed",
                     "call_id": msg.get("tool_call_id", ""),
                     "output": msg.get("content", ""),
                 })
@@ -6401,6 +6524,13 @@ class APIServerAdapter(BasePlatformAdapter):
                     # runs its own agent lifecycle and doesn't go through
                     # TurnRunner, so it needs its own baseline.
                     _publish_turn_process_ownership(agent, effective_task_id)
+                    # Shutdown interrupt coverage (#63529).  Registering here,
+                    # once, covers every _run_agent() caller — the same reason
+                    # the _ProviderAuthResolutionError handler below lives here
+                    # rather than in each route.  Only two callers pass
+                    # ``agent_ref``, and only /v1/runs has a run_id, so neither
+                    # is a usable hook for the rest.
+                    self._shutdown_interruptible_agents[id(agent)] = agent
                     result = agent.run_conversation(
                         user_message=user_message,
                         conversation_history=conversation_history,
@@ -6530,6 +6660,11 @@ class APIServerAdapter(BasePlatformAdapter):
                     # in gateway/run.py's _run_sync_with_timeout_lifecycle.
                     if agent is not None:
                         _clear_turn_process_ownership(agent)
+                        # Symmetric with the registration above: the turn is
+                        # over, so it must not be interrupted by a later
+                        # shutdown.  pop() is a no-op when _create_agent
+                        # succeeded but the turn never reached registration.
+                        self._shutdown_interruptible_agents.pop(id(agent), None)
                     clear_session_vars(tokens)
 
         self._activate_admitted_request()

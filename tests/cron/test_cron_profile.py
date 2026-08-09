@@ -220,7 +220,9 @@ class TestRunJobProfileContext:
             },
         )
 
-        monkeypatch.setattr(sched, "_build_job_prompt", lambda job, prerun_script=None: "hi")
+        monkeypatch.setattr(
+            sched, "_build_job_prompt", lambda job, prerun_script=None, **_kwargs: "hi"
+        )
         monkeypatch.setattr(sched, "_resolve_origin", lambda job: None)
         monkeypatch.setattr(sched, "_resolve_delivery_target", lambda job: None)
         monkeypatch.setattr(sched, "_resolve_cron_enabled_toolsets", lambda job, cfg: None)
