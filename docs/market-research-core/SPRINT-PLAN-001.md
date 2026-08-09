@@ -16,7 +16,7 @@ Deliver PRD, ADR, task graph, QA/security gates, documentation index, Factory re
 
 ### I1 — Local persistence foundation
 
-Add the `market_research` migration module, runtime DB role, schema ownership/grants, and migration registration. Add tests that prove no execution/trading schema is touched.
+Add `db/agent-core/000004_market_research_runtime_role.sql`, `db/modules/market_research/000001_market_research_schema.sql`, the dedicated runtime credential wiring, schema ownership/grants, and migration registration. Add tests that prove no execution/trading schema is touched and that a broader runtime role is never silently reused.
 
 ### I2 — Evidence and Alpha Card tools
 
@@ -28,7 +28,7 @@ Implement local daily cycle creation/closure and report tools. Add a scheduled Z
 
 ### I4 — Bounded Magnus collaboration adapter
 
-Implement a provider interface with a disabled-by-default adapter. It supports a finite research session and authenticated read-only KB retrieval. No direct DB access and no execution command type.
+Implement a provider interface with a disabled-by-default adapter. It supports a finite research session and authenticated read-only KB retrieval. The default session is four substantive turns (Zeus ×2, Magnus ×2) or 45 minutes, whichever closes first. No direct DB access and no execution command type.
 
 ### I5 — Results comparison
 
@@ -41,7 +41,7 @@ Run migration/tool/cron tests; perform a manual Alpha Card and a manually initia
 ## Daily session default
 
 - **Research cycle:** 06:30 America/New_York.
-- **Retrospective window:** manually initiated or scheduled after research, max 30 minutes.
-- **Message cap:** 8 substantive messages total.
+- **Retrospective window:** manually initiated or scheduled after research, max 45 minutes.
+- **Message cap:** 4 substantive agent turns total (two per agent).
 - **Closure:** synthesis plus explicit `open_questions`, `capability_gaps`, `candidate_experiments`, and `disagreements`.
 - **Escalation:** missing data or ambiguous platform behavior becomes a question for Jean/Magnus; it is never guessed.

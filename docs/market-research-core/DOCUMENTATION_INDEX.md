@@ -1,9 +1,9 @@
-# Zeus Independent Alpha Research — Documentation Index
+# Market Research Core — Documentation Index
 
 ## Canonical planning documents
 
-1. [PRD-001 — Independent Alpha Research](PRD-001-independent-alpha-research.md)
-2. [ADR-001 — Local Zeus Alpha Research Core](ADR-001-local-zeus-alpha-research.md)
+1. [PRD-001 — Market Research Ledger](PRD-001-market-research-ledger.md)
+2. [ADR-001 — Local Zeus Market Research Ledger](ADR-001-local-market-research-ledger.md)
 3. [Sprint Plan 001](SPRINT-PLAN-001.md)
 4. [Task Graph](TASK_GRAPH.md)
 5. [QA & Security Gates](QA-SECURITY-GATES.md)

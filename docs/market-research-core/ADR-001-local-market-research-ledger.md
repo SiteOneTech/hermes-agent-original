@@ -14,20 +14,20 @@ Collaboration with Magnus is an optional adapter that exchanges bounded research
 
 ## Core entities
 
-- `programs`: research line and policy (`zeus-independent-alpha`).
-- `sources`: registered research inputs and license/trust metadata.
-- `evidence_items`: immutable retrieved claims/observations.
-- `alpha_cards`: research hypotheses with state `draft → reviewed → exported | rejected | archived`.
-- `alpha_lineage`: parent/variant/family relationships.
-- `research_cycles`: daily intake, synthesis, red-team, and retrospective output.
-- `reviews`: skeptical review with structured rejection/limitations.
-- `collaboration_sessions`: finite Zeus ↔ Magnus dialogue window.
-- `collaboration_messages`: typed messages and acknowledgements.
-- `experiment_result_refs`: non-authoritative references/snapshots received from Vonash; never the experiment executor.
+- `programs`: research line and policy (`zeus-independent-alpha`), including an explicit `research_only=true` boundary.
+- `source_registry`: registered research inputs, license/trust metadata, availability, and attribution.
+- `research_cycles`: daily/manual intake, synthesis, red-team, and retrospective output.
+- `evidence_events`: timestamped, source-attributed claims/observations; corrections supersede rather than erase evidence.
+- `hypotheses`: Alpha Card ledger with typed family/status/data readiness plus mechanism, data contract, execution assumptions, no-trade rules, risk envelope, and falsification plan.
+- `hypothesis_evidence`: many-to-many evidence links with a claim role and rationale.
+- `reviews`: skeptical, red-team, or methodology review with structured decisions and limitations.
+- `handoffs`: inert, auditable future Magnus handoffs, fixed to `authority_scope=research_only`; v1 never dispatches a message or calls Vonash.
+
+The future collaboration adapter may add session/message tables, but it is a later increment. The v1 ledger is deliberately able to persist an evidence-backed, non-executing handoff before any connector exists.
 
 ## Security and control boundaries
 
-1. `market_research_runtime` may only access `market_research.*`.
+1. `market_research_runtime` may only access `market_research.*` plus read-only module-registry/migration-ledger metadata. It receives a dedicated credential; it must not silently fall back to a broader Agent Core role.
 2. No broker, execution, risk-management, trader, paper/live, or raw Vonash mutation tool belongs to this module.
 3. Read-only connectors use a scoped service credential stored in Infisical and may fetch only allowlisted KB collections/Slack channels.
 4. Every external item records source and retrieval metadata; no secret, private Slack export, or raw customer data is duplicated into research cards.

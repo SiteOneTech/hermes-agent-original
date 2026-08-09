@@ -1,4 +1,4 @@
-# PRD-001 — Zeus Independent Alpha Research
+# PRD-001 — Market Research Ledger
 
 **Status:** Planning / no runtime coupling
 
@@ -44,7 +44,7 @@ Every hypothesis records parent cards and a mechanism/family fingerprint. A cand
 
 ### FR-4 — Bounded daily collaboration
 
-A session is a finite object. Default: maximum 8 substantive messages, 30 minutes elapsed time, and a mandatory written synthesis. It closes automatically on either limit.
+A session is a finite object. Default: four substantive agent turns (two Zeus and two Magnus), 45 minutes elapsed time, and a mandatory written synthesis. It closes automatically on either limit. System-generated open/close events do not consume a turn.
 
 ### FR-5 — Results comparison
 
