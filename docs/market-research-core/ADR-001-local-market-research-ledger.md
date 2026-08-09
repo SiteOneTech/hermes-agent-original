@@ -10,7 +10,7 @@ Vonash is undergoing an independent, active refactor. Its Research subsystem mus
 
 Build a **Zeus-only Agent Core PostgreSQL module** in the existing shared `zeus_agent` database under schema `market_research`. It will not write to the Vonash database or call Vonash runtime mutation endpoints.
 
-Collaboration with Magnus is an optional adapter that exchanges bounded research messages. The adapter is disabled until a documented, least-privilege interface exists.
+Collaboration with Magnus is an optional adapter that exchanges bounded research messages. The adapter is disabled until Jean selects a transport and a documented, least-privilege interface exists. The transport can be Telegram, Slack, or a service-owned thread; none becomes the canonical record.
 
 ## Core entities
 
@@ -22,6 +22,7 @@ Collaboration with Magnus is an optional adapter that exchanges bounded research
 - `hypothesis_evidence`: many-to-many evidence links with a claim role and rationale.
 - `reviews`: skeptical, red-team, or methodology review with structured decisions and limitations.
 - `handoffs`: inert, auditable future Magnus handoffs, fixed to `authority_scope=research_only`; v1 never dispatches a message or calls Vonash.
+- `capability_requests`: linked missing-data/evaluator/platform requirements owned by Jean/backend planning, with specification, value, alternatives, acceptance criteria, and triage status. They are never implementation tasks owned by Zeus.
 
 The future collaboration adapter may add session/message tables, but it is a later increment. The v1 ledger is deliberately able to persist an evidence-backed, non-executing handoff before any connector exists.
 
@@ -29,7 +30,7 @@ The future collaboration adapter may add session/message tables, but it is a lat
 
 1. `market_research_runtime` may only access `market_research.*` plus read-only module-registry/migration-ledger metadata. It receives a dedicated credential; it must not silently fall back to a broader Agent Core role.
 2. No broker, execution, risk-management, trader, paper/live, or raw Vonash mutation tool belongs to this module.
-3. Read-only connectors use a scoped service credential stored in Infisical and may fetch only allowlisted KB collections/Slack channels.
+3. Read-only connectors use a scoped service credential stored in Infisical and may fetch only allowlisted KB/book collections, repository paths, API endpoints, or selected transport scope.
 4. Every external item records source and retrieval metadata; no secret, private Slack export, or raw customer data is duplicated into research cards.
 5. The adapter must fail closed: absent connector credentials means no outbound/inbound collaboration attempt.
 
@@ -38,7 +39,8 @@ The future collaboration adapter may add session/message tables, but it is a lat
 - **Write directly into Vonash research tables:** couples this project to the refactor and contaminates attribution.
 - **Use a local SQLite notebook:** conflicts with the canonical Postgres requirement and lacks durable access control/audit.
 - **Give Zeus control of Vonash promotion:** violates separation of duties and adds financial-operational risk.
-- **Ingest all Slack/KB permanently:** noisy, stale, sensitive, and impossible to attribute correctly.
+- **Ingest all Slack/KB/repository content permanently:** noisy, stale, sensitive, and impossible to attribute correctly.
+- **Use Telegram or Slack as the canonical collaboration record:** transport is not an auditable research ledger.
 
 ## Consequences
 

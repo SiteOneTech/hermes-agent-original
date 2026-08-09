@@ -16,11 +16,11 @@ Deliver PRD, ADR, task graph, QA/security gates, documentation index, Factory re
 
 ### I1 — Local persistence foundation
 
-Add `db/agent-core/000004_market_research_runtime_role.sql`, `db/modules/market_research/000001_market_research_schema.sql`, the dedicated runtime credential wiring, schema ownership/grants, and migration registration. Add tests that prove no execution/trading schema is touched and that a broader runtime role is never silently reused.
+Add `db/agent-core/000004_market_research_runtime_role.sql`, `db/modules/market_research/000001_market_research_schema.sql`, including inert handoffs and Jean/backend-owned capability requests, plus dedicated runtime credential wiring, schema ownership/grants, and migration registration. Add tests that prove no execution/trading schema is touched and that a broader runtime role is never silently reused.
 
 ### I2 — Evidence and Alpha Card tools
 
-Implement source/evidence/card/lineage/review tools. Require provenance and a mechanism fingerprint. Add safe read/search/dashboard snapshot tools.
+Implement source/evidence/card/lineage/review/capability-request tools. Require provenance and a mechanism fingerprint. Add safe read/search/dashboard snapshot tools.
 
 ### I3 — Daily research cycle
 
@@ -28,7 +28,7 @@ Implement local daily cycle creation/closure and report tools. Add a scheduled Z
 
 ### I4 — Bounded Magnus collaboration adapter
 
-Implement a provider interface with a disabled-by-default adapter. It supports a finite research session and authenticated read-only KB retrieval. The default session is four substantive turns (Zeus ×2, Magnus ×2) or 45 minutes, whichever closes first. No direct DB access and no execution command type.
+Implement a provider interface with a disabled-by-default adapter only after Jean selects Slack, Telegram, or a service-owned API thread. It supports a finite research session and authenticated read-only KB/repository/data retrieval. The default session is four substantive turns (Zeus ×2, Magnus ×2) or 45 minutes, whichever closes first. No direct DB access and no execution command type.
 
 ### I5 — Results comparison
 
