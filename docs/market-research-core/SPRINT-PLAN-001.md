@@ -1,47 +1,14 @@
 # Sprint Plan 001 — Zeus Independent Alpha Research
 
-## Gate 0 — Repository strategy
+**Status:** Current concise reference. The approved Factory sequence is in [`factory/projects/zeus-independent-alpha-research/SPRINT_PLAN.md`](../../factory/projects/zeus-independent-alpha-research/SPRINT_PLAN.md).
 
-- **Project:** `zeus-independent-alpha-research`
-- **Repository:** `SiteOneTech/hermes-agent-original`
-- **Scope:** `zeus_only`
-- **Branch policy:** one isolated worktree per increment; no propagation to runtime.
-- **Autonomy:** 0 / supervised. No deploy or external credential change without an explicit later decision.
+1. Reconcile the canonical planning pack and internal handoff.
+2. Run a read-only Vonash capability audit.
+3. Design the exact typed thread/API/outbox/auth contract from audited facts.
+4. Implement owning-system ledger/exchange foundations in their respective repos.
+5. Implement evidence/Alpha Card/lineage and capability/result-reference lifecycle.
+6. Implement the daily workshop, acknowledgement and optional Telegram mirror.
+7. Implement evidence-based reactive alerting with no execution surface.
+8. Prove a paper-safe/manual pilot, then complete independent QA/security/release review.
 
-## Increments
-
-### I0 — Planning, boundary and task graph
-
-Deliver PRD, ADR, task graph, QA/security gates, documentation index, Factory registration, and an initial non-mutating interface contract. No Vonash change.
-
-### I1 — Local persistence foundation
-
-Add `db/agent-core/000004_market_research_runtime_role.sql`, `db/modules/market_research/000001_market_research_schema.sql`, including inert handoffs and Jean/backend-owned capability requests, plus dedicated runtime credential wiring, schema ownership/grants, and migration registration. Add tests that prove no execution/trading schema is touched and that a broader runtime role is never silently reused.
-
-### I2 — Evidence and Alpha Card tools
-
-Implement source/evidence/card/lineage/review/capability-request tools. Require provenance and a mechanism fingerprint. Add safe read/search/dashboard snapshot tools.
-
-### I3 — Daily research cycle
-
-Implement local daily cycle creation/closure and report tools. Add a scheduled Zeus job only after the tools and storage tests are green. The job produces research records; it cannot contact Vonash yet.
-
-### I4 — Bounded Magnus collaboration adapter
-
-Implement a provider interface with a disabled-by-default adapter only after Jean selects Slack, Telegram, or a service-owned API thread. It supports a finite research session and authenticated read-only KB/repository/data retrieval. The default session is four substantive turns (Zeus ×2, Magnus ×2) or 45 minutes, whichever closes first. No direct DB access and no execution command type.
-
-### I5 — Results comparison
-
-Implement imported result references and source-family scorecards. Require data version, gate definition, timeframe, cost model, and experiment reference to avoid comparing incomparable metrics.
-
-### I6 — QA, security and first manual pilot
-
-Run migration/tool/cron tests; perform a manual Alpha Card and a manually initiated bounded session. Record evidence. No market or execution activation.
-
-## Daily session default
-
-- **Research cycle:** 06:30 America/New_York.
-- **Retrospective window:** manually initiated or scheduled after research, max 45 minutes.
-- **Message cap:** 4 substantive agent turns total (two per agent).
-- **Closure:** synthesis plus explicit `open_questions`, `capability_gaps`, `candidate_experiments`, and `disagreements`.
-- **Escalation:** missing data or ambiguous platform behavior becomes a question for Jean/Magnus; it is never guessed.
+The daily workshop is not a two-turn relay: it is 45 minutes, up to six substantive turns per agent, three cards/topics maximum, and a typed synthesis. No increment enables a retired scheduler, automatic promotion or live trading.
