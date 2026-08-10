@@ -280,6 +280,65 @@ def _commit_factory_docs(repo):
     subprocess.run(["git", "commit", "-m", "docs"], cwd=repo, check=True, capture_output=True, text=True)
 
 
+def _git(repo, *args):
+    return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True).stdout.strip()
+
+
+def _write_g1_docs(factory_dir: Path, *, reviewed: bool) -> None:
+    factory_dir.mkdir(parents=True, exist_ok=True)
+    reviewed_line = "reviewed: yes" if reviewed else "not reviewed yet"
+    index_reviewed = "reviewed: yes" if reviewed else "not reviewed yet"
+    for name in factory_pg.G1_BLOCKING_DOCUMENTS:
+        (factory_dir / name).write_text(f"# {name}\nvalidated: yes\n{reviewed_line}\n", encoding="utf-8")
+    (factory_dir / "DOCUMENTATION_INDEX.md").write_text(
+        "\n".join(f"- `{name}` — validated: yes; {index_reviewed}" for name in factory_pg.G1_BLOCKING_DOCUMENTS),
+        encoding="utf-8",
+    )
+
+
+def _commit_all(repo: Path, message: str) -> str:
+    _git(repo, "add", "factory")
+    _git(repo, "commit", "-m", message)
+    return _git(repo, "rev-parse", "HEAD")
+
+
+def _make_primary_with_reviewed_candidate(tmp_path: Path) -> tuple[Path, Path, str, str]:
+    repo = tmp_path / "repo"
+    candidate = tmp_path / "candidate"
+    repo.mkdir()
+    _git(repo, "init")
+    _git(repo, "config", "user.email", "factory@example.com")
+    _git(repo, "config", "user.name", "Factory Test")
+    _write_g1_docs(repo / "factory" / "projects" / "demo", reviewed=False)
+    _commit_all(repo, "primary pending docs")
+    _git(repo, "branch", "-M", "main")
+    branch = "factory/demo/reviewed-g1-candidate"
+    _git(repo, "worktree", "add", "-b", branch, str(candidate), "main")
+    _write_g1_docs(candidate / "factory" / "projects" / "demo", reviewed=True)
+    sha = _commit_all(candidate, "reviewed g1 candidate docs")
+    return repo, candidate, branch, sha
+
+
+def _reviewed_candidate_metadata(candidate: Path, branch: str, sha: str) -> dict:
+    return {
+        "path": str(candidate),
+        "branch": branch,
+        "sha": sha,
+        "review": {
+            "status": "passed",
+            "reviewer": "solution-architect",
+            "evidence_ref": "factory gate 690",
+            "independent": True,
+        },
+        "pull_request": {
+            "url": "https://github.com/SiteOneTech/hermes-agent-original/pull/690",
+            "state": "open",
+            "head_branch": branch,
+            "head_sha": sha,
+        },
+    }
+
+
 def test_cli_link_notion_uses_backend(monkeypatch, capsys):
     calls = {}
 
@@ -471,6 +530,118 @@ def test_document_status_explicit_status_wins_over_later_normative_negation(tmp_
     assert security_gates["validated"] is True
     assert security_gates["reviewed"] is True
     assert security_gates["blocking"] is False
+
+
+def test_document_status_can_resolve_from_exact_reviewed_g1_candidate(tmp_path):
+    repo, candidate, branch, sha = _make_primary_with_reviewed_candidate(tmp_path)
+    project = {
+        "project_id": "demo",
+        "repo_path": str(repo),
+        "metadata": {
+            "artifact_dir": "factory/projects/demo",
+            "reviewed_g1_candidate": _reviewed_candidate_metadata(candidate, branch, sha),
+        },
+    }
+
+    statuses = factory_pg.project_document_status(project)
+
+    g1_rows = [row for row in statuses if row["category"] == "g1_required"]
+    assert g1_rows
+    assert not any(row["blocking"] for row in g1_rows)
+    assert {row["readiness_source"] for row in g1_rows} == {"reviewed_candidate"}
+    assert {row["candidate_branch"] for row in g1_rows} == {branch}
+    assert {row["candidate_sha"] for row in g1_rows} == {sha}
+
+
+@pytest.mark.parametrize(
+    "mutator",
+    [
+        lambda meta: meta.pop("sha"),
+        lambda meta: meta.update({"sha": "0" * 40}),
+        lambda meta: meta.update({"branch": "factory/demo/wrong-branch"}),
+        lambda meta: meta.update({"review": {"status": "passed"}}),
+        lambda meta: meta["pull_request"].update({"state": "closed"}),
+        lambda meta: meta["pull_request"].update({"head_sha": "0" * 40}),
+        lambda meta: meta["pull_request"].update({"head_branch": "factory/demo/wrong-branch"}),
+    ],
+)
+def test_reviewed_g1_candidate_fails_closed_for_invalid_metadata(tmp_path, mutator):
+    repo, candidate, branch, sha = _make_primary_with_reviewed_candidate(tmp_path)
+    candidate_meta = _reviewed_candidate_metadata(candidate, branch, sha)
+    mutator(candidate_meta)
+    project = {
+        "project_id": "demo",
+        "repo_path": str(repo),
+        "metadata": {"artifact_dir": "factory/projects/demo", "reviewed_g1_candidate": candidate_meta},
+    }
+
+    statuses = factory_pg.project_document_status(project)
+
+    prd = next(row for row in statuses if row["file_name"] == "PRD.md")
+    assert prd["blocking"] is True
+    assert prd["reviewed"] is False
+    assert prd["readiness_source"] == "primary"
+
+
+def test_reviewed_g1_candidate_fails_closed_for_dirty_candidate_artifact(tmp_path):
+    repo, candidate, branch, sha = _make_primary_with_reviewed_candidate(tmp_path)
+    (candidate / "factory" / "projects" / "demo" / "PRD.md").write_text(
+        "# PRD\nvalidated: yes\nreviewed: yes\nuncommitted edit\n",
+        encoding="utf-8",
+    )
+    project = {
+        "project_id": "demo",
+        "repo_path": str(repo),
+        "metadata": {
+            "artifact_dir": "factory/projects/demo",
+            "reviewed_g1_candidate": _reviewed_candidate_metadata(candidate, branch, sha),
+        },
+    }
+
+    statuses = factory_pg.project_document_status(project)
+
+    prd = next(row for row in statuses if row["file_name"] == "PRD.md")
+    assert prd["blocking"] is True
+    assert prd["readiness_source"] == "primary"
+
+
+def test_reviewed_g1_candidate_fails_closed_for_negative_candidate_markers(tmp_path):
+    repo, candidate, branch, _sha = _make_primary_with_reviewed_candidate(tmp_path)
+    (candidate / "factory" / "projects" / "demo" / "PRD.md").write_text(
+        "# PRD\nvalidated: yes\nreviewed: false\n",
+        encoding="utf-8",
+    )
+    sha = _commit_all(candidate, "negative candidate marker")
+    project = {
+        "project_id": "demo",
+        "repo_path": str(repo),
+        "metadata": {
+            "artifact_dir": "factory/projects/demo",
+            "reviewed_g1_candidate": _reviewed_candidate_metadata(candidate, branch, sha),
+        },
+    }
+
+    statuses = factory_pg.project_document_status(project)
+
+    prd = next(row for row in statuses if row["file_name"] == "PRD.md")
+    assert prd["blocking"] is True
+    assert prd["readiness_source"] == "primary"
+
+
+def test_unverified_g1_worktree_does_not_clear_dispatch_preflight(tmp_path):
+    repo, _candidate, _branch, _sha = _make_primary_with_reviewed_candidate(tmp_path)
+    project = {"project_id": "demo", "repo_path": str(repo), "metadata": {"artifact_dir": "factory/projects/demo"}}
+
+    statuses = factory_pg.project_document_status(project)
+    docs_ready = not any(row["category"] == "g1_required" and row["blocking"] for row in statuses)
+    blockers = factory_pg._dispatch_preflight_blockers(
+        {"task_id": "demo-impl", "phase": "implementation", "status": "todo", "metadata": {}},
+        docs_ready=docs_ready,
+        notion_ready=True,
+    )
+
+    assert docs_ready is False
+    assert "missing_or_unindexed_docs" in blockers
 
 
 def test_reconciler_creates_task_for_unvalidated_required_docs(tmp_path):

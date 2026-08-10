@@ -26,6 +26,7 @@
 | FRE-015 Independent QA/security review | planned (TASK_GRAPH) | quality-reviewer + security-reviewer | factory-orchestrator | QA_REPORT.md, SECURITY_REVIEW.md |
 | FRE-016 PR-first delivery | planned (TASK_GRAPH) | devops-release + factory-orchestrator | factory-orchestrator | CHANGE_RECORDS.md, DELIVERY_REPORT.md |
 | FRE-017 Global cron verification | planned (TASK_GRAPH) | devops-release | factory-orchestrator | cron smoke evidence |
+| FRE-023 Reviewed G1 candidate visibility and fail-closed preflight | claimed/in implementation | claude-builder | security-reviewer + quality-reviewer | TDD coverage in `tests/hermes_cli/test_factory_control_plane_refactor.py`; resolver in `hermes_cli/factory_pg.py` |
 
 ## 2. Evidence log (real, 2026-08-10)
 
@@ -50,6 +51,26 @@
    classified=0/questions=0/alerts=0), `RETROSPECTIVE_INC_0008.md` (cron ownership),
    `TRACKER.md` (INC-0006..0009), `FACTORY_RUNTIME_EVOLUTION_PLAN.md` (L1/L2/L3),
    git `d3d08dc2e` + `bc7ab6af6`.
+5. FRE-023 TDD evidence (2026-08-10): RED
+   `scripts/run_tests.sh tests/hermes_cli/test_factory_control_plane_refactor.py -k 'reviewed_g1_candidate or unverified_g1_worktree'`
+   failed before implementation with `KeyError: 'readiness_source'` and the exact
+   candidate readiness assertion still blocking. GREEN after the resolver:
+   the same command passed `11 tests passed, 0 failed`; the full focused file
+   passed `101 tests passed, 0 failed`; sibling checks
+   `scripts/run_tests.sh tests/hermes_cli/test_factory_increment_integration.py tests/hermes_cli/test_factory.py tests/hermes_cli/test_factory_orchestrator_tick.py`
+   passed `20 tests passed, 0 failed`; the full factory set
+   `scripts/run_tests.sh tests/hermes_cli/test_factory*.py` passed
+   `138 tests passed, 0 failed`.
+6. FRE-023 implementation contract: primary checkout remains the default
+   document source; `reviewed_g1_candidate` metadata is accepted only when path,
+   branch, SHA, clean git readback, open PR head evidence, independent review
+   evidence, and committed positive G1 markers all match. Invalid metadata,
+   dirty artifacts, wrong SHA/branch, closed/stale/wrong-head PR evidence, and
+   negative document markers fall back to primary blockers.
+7. FRE-023 independent security review evidence (Claude Code Haiku review session
+   `2b4e6ba7-f234-4a4c-a6e4-8df87e798a50`): PASS. Reviewer found no bypass for
+   path/branch/SHA readback, clean checkout, open PR head, independent review,
+   primary-default behavior, unverified-worktree bypass, or external side effects.
 
 ## 3. Gate log
 

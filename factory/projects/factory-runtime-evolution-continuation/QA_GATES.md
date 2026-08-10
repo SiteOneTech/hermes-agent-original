@@ -41,6 +41,7 @@ Scope: documentation-only; no runtime code. QA gate = documentary verification:
 | FRE-014 | `scripts/run_tests.sh tests/hermes_cli/test_factory_project_reopen.py` + CLI smoke `hermes factory project reopen --help` | green; CLI registered |
 | FRE-015 | `scripts/run_tests.sh tests/hermes_cli/test_factory*.py` (full factory set) | all green or documented pre-existing failures |
 | FRE-017 | cron smoke per script + `hermes cronjob list` | exit 0; no unexpected alerts; evidence file |
+| FRE-023 | `scripts/run_tests.sh tests/hermes_cli/test_factory_control_plane_refactor.py -k 'reviewed_g1_candidate or unverified_g1_worktree'` + full focused file + sibling factory dispatch tests | RED captured for missing candidate visibility; GREEN proves exact reviewed candidate clears G1, invalid/unverified candidates fail closed, and product dispatch stays blocked without explicit metadata |
 
 ## 4. Evidence capture rules
 

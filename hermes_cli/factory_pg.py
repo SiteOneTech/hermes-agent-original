@@ -1340,6 +1340,13 @@ def _git_status_by_file(repo_path: str, artifact_dir: str) -> dict[str, str] | N
 
 
 _DOCUMENT_STATUS_TRUE_VALUES = {"true", "yes", "y", "1", "passed", "validated", "reviewed", "approved"}
+_DOCUMENT_STATUS_FALSE_VALUES = {"false", "no", "n", "0", "failed", "pending", "todo", "tbd", "unvalidated", "unreviewed"}
+
+
+def _document_has_explicit_negative_status(index_line: str, file_text: str, flag: str) -> bool:
+    status_header = index_line + "\n" + "\n".join(file_text.splitlines()[:40])
+    false_values = "|".join(sorted(re.escape(value) for value in _DOCUMENT_STATUS_FALSE_VALUES))
+    return bool(re.search(rf"\b{re.escape(flag)}\b\s*[:=]\s*(?:{false_values})\b", status_header, re.IGNORECASE))
 
 
 def _document_has_explicit_positive_status(index_line: str, file_text: str, flag: str) -> bool:
@@ -1362,6 +1369,8 @@ def _document_flag_from_text(metadata: dict[str, Any], index_line: str, file_tex
         return value
     if isinstance(value, str):
         return value.strip().lower() in _DOCUMENT_STATUS_TRUE_VALUES
+    if _document_has_explicit_negative_status(index_line, file_text, flag):
+        return False
     if _document_has_explicit_positive_status(index_line, file_text, flag):
         return True
     text = (index_line + "\n" + file_text[:2000]).lower()
@@ -1378,14 +1387,132 @@ def _document_flag_from_text(metadata: dict[str, Any], index_line: str, file_tex
     return False
 
 
-def project_document_status(project: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return first-class per-file Factory document readiness state.
+def _candidate_reviewed_g1_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    for key in ("reviewed_g1_candidate", "g1_reviewed_candidate", "document_readiness_candidate"):
+        value = metadata.get(key)
+        if isinstance(value, dict):
+            return value
+    return {}
 
-    G1 documents are blocking source-of-truth artifacts for implementation
-    dispatch. Lifecycle and PM projection docs are exposed for UI/reporting but
-    are not implementation blockers by default.
+
+def _git_probe(repo: Path, *args: str, timeout: int = 10) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo), *args],
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def _candidate_pr_evidence(candidate: dict[str, Any]) -> dict[str, Any]:
+    value = candidate.get("pull_request") or candidate.get("pr") or candidate.get("pr_evidence")
+    return value if isinstance(value, dict) else {}
+
+
+def _candidate_review_evidence(candidate: dict[str, Any]) -> dict[str, Any]:
+    value = candidate.get("review") or candidate.get("independent_review") or candidate.get("review_evidence")
+    return value if isinstance(value, dict) else {}
+
+
+def _reviewed_g1_candidate_readback(project: dict[str, Any], artifact_dir: str) -> dict[str, Any]:
+    """Validate an explicit reviewed G1 candidate checkout, failing closed.
+
+    The candidate is only trusted when project metadata names the exact path,
+    branch and immutable SHA, git readback matches all three, the project-local
+    artifact dir is clean, PR evidence points at the same open head, and durable
+    independent review evidence is present. No sibling worktree is discovered or
+    inferred implicitly.
     """
 
+    metadata = _metadata(project)
+    candidate = _candidate_reviewed_g1_metadata(metadata)
+    if not candidate:
+        return {"accepted": False, "reason": "missing_candidate_metadata"}
+
+    raw_path = str(candidate.get("path") or candidate.get("worktree_path") or candidate.get("repo_path") or "").strip()
+    branch = str(candidate.get("branch") or candidate.get("head_branch") or "").strip()
+    sha = str(candidate.get("sha") or candidate.get("head_sha") or candidate.get("commit_sha") or "").strip()
+    if not raw_path or not branch or not re.fullmatch(r"[0-9a-fA-F]{40}", sha):
+        return {"accepted": False, "reason": "malformed_candidate_metadata"}
+    candidate_path = Path(raw_path).expanduser()
+    if not candidate_path.is_absolute() or not candidate_path.exists():
+        return {"accepted": False, "reason": "candidate_path_unavailable"}
+    try:
+        resolved_candidate_path = candidate_path.resolve()
+    except Exception:
+        return {"accepted": False, "reason": "candidate_path_unavailable"}
+
+    worktree_root = _git_probe(resolved_candidate_path, "rev-parse", "--show-toplevel")
+    if not worktree_root:
+        return {"accepted": False, "reason": "candidate_not_git_worktree"}
+    try:
+        if Path(worktree_root).resolve() != resolved_candidate_path:
+            return {"accepted": False, "reason": "candidate_path_readback_mismatch"}
+    except Exception:
+        return {"accepted": False, "reason": "candidate_path_readback_mismatch"}
+    actual_branch = _git_probe(resolved_candidate_path, "rev-parse", "--abbrev-ref", "HEAD")
+    if actual_branch != branch:
+        return {"accepted": False, "reason": "candidate_branch_readback_mismatch"}
+    actual_sha = _git_probe(resolved_candidate_path, "rev-parse", "HEAD")
+    if actual_sha != sha:
+        return {"accepted": False, "reason": "candidate_sha_readback_mismatch"}
+
+    artifact_git_state = _git_status_by_file(str(resolved_candidate_path), artifact_dir)
+    if artifact_git_state is None:
+        return {"accepted": False, "reason": "candidate_artifact_git_state_unverified"}
+    if artifact_git_state:
+        return {"accepted": False, "reason": "dirty_candidate_artifacts", "git_status": artifact_git_state}
+    worktree_status = _git_probe(resolved_candidate_path, "status", "--porcelain")
+    if worktree_status:
+        return {"accepted": False, "reason": "dirty_candidate_checkout", "git_status": worktree_status.splitlines()}
+
+    pr = _candidate_pr_evidence(candidate)
+    pr_state = str(pr.get("state") or pr.get("status") or "").strip().lower()
+    pr_head_sha = str(pr.get("head_sha") or pr.get("headSha") or pr.get("pr_head_sha") or "").strip()
+    pr_head_branch = str(pr.get("head_branch") or pr.get("headRefName") or pr.get("head_ref") or "").strip()
+    pr_visible = bool(pr.get("url") or pr.get("html_url") or pr.get("number") or pr.get("pr_number"))
+    if not pr_visible or pr_state != "open" or pr.get("stale") is True or pr.get("is_stale") is True:
+        return {"accepted": False, "reason": "invalid_pr_evidence"}
+    if pr_head_sha != sha or pr_head_branch != branch:
+        return {"accepted": False, "reason": "pr_head_readback_mismatch"}
+
+    review = _candidate_review_evidence(candidate)
+    review_status = str(review.get("status") or review.get("gate_status") or review.get("decision") or "").strip().lower()
+    reviewer = str(review.get("reviewer") or review.get("reviewer_profile") or review.get("reviewed_by") or "").strip()
+    owner = str(review.get("owner") or review.get("owner_profile") or candidate.get("owner") or candidate.get("owner_profile") or "").strip()
+    durable_ref = review.get("evidence_ref") or review.get("gate_id") or review.get("review_url") or review.get("reviewed_at")
+    review_passed = review.get("reviewed") is True or review_status in {"passed", "approved", "success"}
+    if not review_passed or not reviewer or not durable_ref or review.get("independent") is not True:
+        return {"accepted": False, "reason": "missing_independent_review_evidence"}
+    if owner and reviewer == owner:
+        return {"accepted": False, "reason": "candidate_self_review"}
+
+    return {
+        "accepted": True,
+        "path": str(resolved_candidate_path),
+        "branch": branch,
+        "sha": sha,
+        "reviewer": reviewer,
+        "review_evidence_ref": durable_ref,
+        "pr_url": pr.get("url") or pr.get("html_url"),
+        "pr_number": pr.get("number") or pr.get("pr_number"),
+    }
+
+
+def _project_document_status_rows(
+    project: dict[str, Any],
+    *,
+    readiness_source: str,
+    candidate_summary: dict[str, Any] | None = None,
+    use_document_metadata: bool = True,
+) -> list[dict[str, Any]]:
     factory_dir, artifact_dir = _project_artifact_dir(project)
     repo_path = str(project.get("repo_path") or "").strip()
     index_text = _documentation_index_text(factory_dir)
@@ -1405,7 +1532,7 @@ def project_document_status(project: dict[str, Any]) -> list[dict[str, Any]]:
         index_line = _documentation_index_line(index_text, file_name)
         indexed = bool(index_line)
         committed = bool(exists and git_state is not None and file_name not in git_state)
-        doc_meta = _project_document_metadata(project, file_name)
+        doc_meta = _project_document_metadata(project, file_name) if use_document_metadata else {}
         validated = _document_flag_from_text(doc_meta, index_line, file_text, "validated")
         reviewed = _document_flag_from_text(doc_meta, index_line, file_text, "reviewed")
         owner = doc_meta.get("owner") or doc_meta.get("owner_profile")
@@ -1424,8 +1551,77 @@ def project_document_status(project: dict[str, Any]) -> list[dict[str, Any]]:
             "owner": owner,
             "reviewer": reviewer,
             "git_status": git_state.get(file_name) if git_state is not None else "unverified",
+            "readiness_source": readiness_source,
         })
+        if candidate_summary:
+            statuses[-1].update({
+                "candidate_path": candidate_summary.get("path"),
+                "candidate_branch": candidate_summary.get("branch"),
+                "candidate_sha": candidate_summary.get("sha"),
+                "candidate_reviewer": candidate_summary.get("reviewer"),
+                "candidate_review_evidence_ref": candidate_summary.get("review_evidence_ref"),
+                "candidate_pr_url": candidate_summary.get("pr_url"),
+                "candidate_pr_number": candidate_summary.get("pr_number"),
+            })
     return statuses
+
+
+def _annotate_candidate_rejection(rows: list[dict[str, Any]], reason: str, details: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    if reason == "missing_candidate_metadata":
+        return rows
+    for row in rows:
+        row["reviewed_candidate_accepted"] = False
+        row["reviewed_candidate_rejected_reason"] = reason
+        if details:
+            row["reviewed_candidate_rejection_details"] = details
+    return rows
+
+
+def project_document_status(project: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return first-class per-file Factory document readiness state.
+
+    G1 documents are blocking source-of-truth artifacts for implementation
+    dispatch. Lifecycle and PM projection docs are exposed for UI/reporting but
+    are not implementation blockers by default. Primary checkout data remains
+    the default; an explicit reviewed G1 candidate is consulted only when the
+    primary checkout still has G1 blockers and the candidate metadata, git
+    readback, PR evidence, review evidence, and document markers all pass.
+    """
+
+    primary_rows = _project_document_status_rows(project, readiness_source="primary")
+    primary_blockers = [row for row in primary_rows if row.get("category") == "g1_required" and row.get("blocking")]
+    if not primary_blockers:
+        return primary_rows
+
+    _factory_dir, artifact_dir = _project_artifact_dir(project)
+    candidate_summary = _reviewed_g1_candidate_readback(project, artifact_dir)
+    if not candidate_summary.get("accepted"):
+        return _annotate_candidate_rejection(primary_rows, str(candidate_summary.get("reason") or "candidate_rejected"), candidate_summary)
+
+    metadata = _metadata(project)
+    candidate_project = dict(project)
+    candidate_project["repo_path"] = candidate_summary["path"]
+    candidate_metadata = dict(metadata)
+    candidate_metadata.pop("document_status", None)
+    candidate_metadata.pop("documents", None)
+    candidate_metadata.pop("factory_documents", None)
+    candidate_project["metadata"] = candidate_metadata
+    candidate_rows = _project_document_status_rows(
+        candidate_project,
+        readiness_source="reviewed_candidate",
+        candidate_summary=candidate_summary,
+        use_document_metadata=False,
+    )
+    candidate_blockers = [row for row in candidate_rows if row.get("category") == "g1_required" and row.get("blocking")]
+    if candidate_blockers:
+        return _annotate_candidate_rejection(
+            primary_rows,
+            "candidate_document_blockers",
+            {"blocking_documents": [row.get("file_name") for row in candidate_blockers]},
+        )
+    for row in candidate_rows:
+        row["reviewed_candidate_accepted"] = True
+    return candidate_rows
 
 
 def _g1_document_blockers(project: dict[str, Any]) -> list[dict[str, Any]]:
