@@ -257,6 +257,11 @@ MANUAL_TAKEOVER_DEFAULT_TTL_MINUTES = 180
 MANUAL_TAKEOVER_MAX_TTL_MINUTES = 24 * 60
 BLOCKED_ALERT_DEFAULT_MINUTES = 60
 CLAIMED_NULL_ALERT_ROUNDS = 3
+QUESTION_OPEN_STATUSES = {
+    factory_contracts.QuestionStatus.PENDING.value,
+    factory_contracts.QuestionStatus.OPEN.value,
+}
+ALLOWED_JEAN_ESCALATION_CATEGORIES = {category.value for category in factory_contracts.JeanEscalationCategory}
 _BLOCKER_TECHNICAL_KEYWORDS = (
     "error", "exception", "traceback", "crash", "timeout", "fail", "failed", "failing", "import error",
     "syntax error", "typeerror", "attributeerror", "test failed", "pytest", "bug", "regression", "rework",
@@ -457,10 +462,60 @@ def list_agents() -> list[dict[str, Any]]:
     )
 
 
+def _lineage_values_for_create(project_id: str, metadata: dict[str, Any]) -> list[str]:
+    values: list[str] = []
+    for key in ("continuation_of", "lineage", "predecessor_project_id", "supersedes_project_id"):
+        raw = str(metadata.get(key) or "").strip()
+        if raw and raw != project_id and raw not in values:
+            values.append(raw)
+    if project_id.endswith("-continuation"):
+        inferred = project_id[: -len("-continuation")]
+        if inferred and inferred not in values:
+            values.append(inferred)
+    return values
+
+
+def _terminal_lineage_project_for_create(project_id: str, metadata: dict[str, Any]) -> dict[str, Any] | None:
+    lineage_values = _lineage_values_for_create(project_id, metadata)
+    if not lineage_values:
+        return None
+    terminal = ",".join(_q(status) for status in TERMINAL_PROJECT_STATUSES)
+    ids = ",".join(_q(value) for value in lineage_values)
+    row = sql.one(
+        f"""
+        SELECT project_id, status, metadata
+        FROM factory.projects
+        WHERE project_id IN ({ids})
+          AND status IN ({terminal})
+        ORDER BY updated_at DESC, project_id
+        """,
+        user=_user(),
+    )
+    return _normalize(row) if row else None
+
+
 def create_project(name: str, *, project_id: Optional[str] = None, repo_path: Optional[str] = None, repo_remote: Optional[str] = None, base_branch: Optional[str] = None, human_owner: Optional[str] = None, summary: Optional[str] = None, risk_level: str = "medium", autonomy_level: int = 3, methodology: str = "hybrid", create_default_lanes: bool = True, repo_scope: Optional[str] = None, work_intent: Optional[str] = None, metadata: Optional[dict[str, Any]] = None, **_: Any) -> dict[str, Any]:
     seed_agents()
     pid = project_id or slugify(name)
     meta = {"source_of_truth": "agent_core_postgres", "artifact_dir": f"factory/projects/{pid}", **(metadata or {})}
+    terminal_lineage = _terminal_lineage_project_for_create(pid, meta)
+    if terminal_lineage:
+        sql.psql(
+            f"""
+            INSERT INTO factory.events(project_id, actor, event_type, message, metadata)
+            VALUES ({_q(terminal_lineage.get('project_id'))}, 'factory-orchestrator', 'project_reopen_suggested',
+                    {_q('Factory create request matched a terminal lineage project; reopen/continue canonically instead of creating a detached successor')},
+                    {_j({'requested_project_id': pid, 'requested_name': name, 'lineage_metadata': meta})});
+            """,
+            user=_user(),
+        )
+        return {
+            "project_id": terminal_lineage.get("project_id"),
+            "requested_project_id": pid,
+            "suggest": "reopen",
+            "action": "project_create_suggests_reopen",
+            "status": terminal_lineage.get("status"),
+        }
     strategy = factory_contracts.build_repository_strategy(
         project_id=pid,
         project_name=name,
@@ -3027,6 +3082,134 @@ def resume_project(project_id: str) -> dict[str, Any]:
     return result
 
 
+def _project_has_continuation_lineage(project: dict[str, Any]) -> bool:
+    metadata = _metadata(project)
+    for key in ("lineage", "continuation_of", "canonical_project_id", "reopened_from_project_id"):
+        if str(metadata.get(key) or "").strip():
+            return True
+    return True if str(project.get("project_id") or "").strip() else False
+
+
+def _reopen_preflight_findings(project: dict[str, Any]) -> list[str]:
+    status_value = str(project.get("status") or "").strip().lower()
+    metadata = _metadata(project)
+    findings: list[str] = []
+    if status_value == factory_contracts.ProjectStatus.CANCELLED.value:
+        return ["jean_approval_required_for_cancelled_reopen"]
+    if status_value == "superseded":
+        return ["jean_approval_required_for_superseded_reopen"]
+    if status_value not in TERMINAL_PROJECT_STATUSES:
+        findings.append(f"project_not_terminal:{status_value or 'unknown'}")
+    if _manual_takeover_lease_active(metadata.get("manual_takeover_lease")):
+        findings.append("manual_takeover_active")
+    strategy = _repository_strategy(project)
+    if not factory_contracts.repository_strategy_is_complete(strategy):
+        missing = ", ".join(strategy.get("missing_fields") or ["repo_scope"])
+        findings.append(f"missing G0 repository strategy metadata: {missing}")
+    if not _project_has_continuation_lineage(project):
+        findings.append("missing_continuation_lineage")
+    if not _required_docs_explicitly_waived(metadata):
+        blockers = _g1_document_blockers(project)
+        if blockers:
+            findings.append("g1 documentary readiness blockers: " + ", ".join(str(row.get("file_name") or row) for row in blockers))
+    return findings
+
+
+def reopen_project(
+    project_id: str,
+    *,
+    reason: str,
+    actor: str = "factory-orchestrator",
+    continuation_of: Optional[str] = None,
+) -> dict[str, Any]:
+    """Canonically reopen a terminal Factory project for same-project continuation.
+
+    Reopen is intentionally different from create: it keeps the project_id,
+    lineage, task/gate history, and single-active guard intact instead of making a
+    detached successor after documentation-only completion.
+    """
+
+    ensure_runtime_schema()
+    pid = str(project_id or "").strip()
+    if not pid:
+        raise ValueError("project_id is required")
+    reason_text = str(reason or "").strip()
+    if not reason_text:
+        raise ValueError("reopen reason is required")
+    project = _project(pid)
+    if not project:
+        return {"action": "reopen_blocked", "project_id": pid, "reopen_blocked": True, "reason": "project_not_found", "preflight_findings": ["project_not_found"]}
+    findings = _reopen_preflight_findings(project)
+    if findings:
+        metadata = {"reason": reason_text, "preflight_findings": findings, "continuation_of": continuation_of}
+        sql.psql(
+            f"""
+            INSERT INTO factory.events(project_id, actor, event_type, message, metadata)
+            VALUES ({_q(pid)}, {_q(actor)}, 'project_reopen_preflight_failed',
+                    {_q('Canonical project reopen failed closed during preflight')},
+                    {_j(metadata)});
+            """,
+            user=_user(),
+        )
+        return {
+            "action": "reopen_blocked",
+            "project_id": pid,
+            "reopen_blocked": True,
+            "reason": findings[0],
+            "preflight_findings": findings,
+        }
+
+    reopened_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    lineage_project_id = continuation_of or _metadata(project).get("continuation_of") or _metadata(project).get("lineage") or pid
+    reopen_metadata = {
+        "canonical_reopen": True,
+        "reopen_reason": reason_text,
+        "reopened_by": actor,
+        "reopened_at": reopened_at,
+        "continuation_of": lineage_project_id,
+        "autonomous_enabled": True,
+        "autonomy_mode": "incremental_single_active",
+    }
+    gate_row = sql.statement_one(
+        f"""
+        INSERT INTO factory.gates (project_id, gate_type, status, reviewer, evidence, notes, timestamp)
+        VALUES ({_q(pid)}, 'reopen', 'passed', {_q(actor)}, {_j(reopen_metadata)}, {_q(reason_text)}, now())
+        RETURNING gate_id
+        """,
+        user=_user(),
+    )
+    gate_id = gate_row.get("gate_id") if gate_row else None
+    sql.psql(
+        f"""
+        UPDATE factory.projects
+        SET status='active', autonomous_enabled=true, paused_at=NULL,
+            metadata = (metadata || {_j({'reopen_gate_id': gate_id, **reopen_metadata})})
+                - 'administrative_closure'
+                - 'manual_attention_required'
+                - 'manual_attention_reason'
+                - 'manual_attention_blockers',
+            updated_at=now()
+        WHERE project_id={_q(pid)};
+        UPDATE factory.lanes
+        SET status='active', updated_at=now()
+        WHERE project_id={_q(pid)} AND status IN ('completed','planned','paused','intake','manual_attention','blocked');
+        INSERT INTO factory.events(project_id, actor, event_type, message, metadata)
+        VALUES ({_q(pid)}, {_q(actor)}, 'project_reopened', {_q('Factory project reopened canonically for continuation')}, {_j({'gate_id': gate_id, **reopen_metadata})});
+        INSERT INTO factory.events(project_id, actor, event_type, message, metadata)
+        VALUES ({_q(pid)}, {_q(actor)}, 'gate_passed', 'reopen gate passed', {_j({'gate_id': gate_id, 'gate_type': 'reopen'})});
+        """,
+        user=_user(),
+    )
+    paused_siblings = _pause_other_autonomous_projects(pid)
+    return {
+        "action": "reopen",
+        "project_id": pid,
+        "status": "active",
+        "gate_id": gate_id,
+        "paused_sibling_projects": [str(row.get("project_id")) for row in paused_siblings],
+    }
+
+
 def pause_project(project_id: str, *, reason: str = "user_paused") -> dict[str, Any]:
     ensure_runtime_schema()
     pause_metadata = {
@@ -3322,6 +3505,11 @@ def classify_factory_blocker(task: dict[str, Any], *, payload: Optional[dict[str
         recommended_action = "delegate_to_programming_worker_for_rework" if status_value == "blocked" else "run_orchestrator_tick"
         requires_human = False
 
+    escalation_category = None
+    evidence_refs: list[str] = []
+    if requires_human and human_question and human_options:
+        escalation_category = factory_contracts.JeanEscalationCategory.PRODUCT_BUSINESS_SCOPE.value
+        evidence_refs = [f"factory.tasks:{task_id}:result_summary"]
     alert_key = f"factory:{task.get('project_id')}:{task_id}:{action_category}"
     return {
         "task_id": task_id,
@@ -3338,6 +3526,8 @@ def classify_factory_blocker(task: dict[str, Any], *, payload: Optional[dict[str
         "result_summary": task.get("result_summary"),
         "human_question": human_question,
         "human_options": human_options,
+        "escalation_category": escalation_category,
+        "evidence_refs": evidence_refs,
     }
 
 
@@ -3381,6 +3571,8 @@ def record_factory_blocker_actions(classified: Optional[list[dict[str, Any]]] = 
             "recommended_action": item.get("recommended_action"),
             "requires_human": item.get("requires_human"),
             "alert_key": item.get("alert_key"),
+            "escalation_category": item.get("escalation_category"),
+            "evidence_refs": item.get("evidence_refs") or [],
         }
         sql.psql(
             f"""
@@ -3424,6 +3616,41 @@ def record_factory_blocker_actions(classified: Optional[list[dict[str, Any]]] = 
             question_id = "hq-" + uuid.uuid5(uuid.NAMESPACE_URL, f"factory:{task_id}:human-question").hex[:16]
             question = explicit_question
             question_options = item.get("human_options") if isinstance(item.get("human_options"), list) else []
+            escalation_category = item.get("escalation_category") or factory_contracts.JeanEscalationCategory.PRODUCT_BUSINESS_SCOPE.value
+            evidence_refs = item.get("evidence_refs") if isinstance(item.get("evidence_refs"), list) and item.get("evidence_refs") else [f"factory.tasks:{task_id}:result_summary"]
+            question_metadata = {
+                "alert_key": item.get("alert_key"),
+                "classification": compact,
+                "human_question_source": "blocker_result_summary" if item.get("human_question") else "classifier_fallback",
+                "escalation_category": escalation_category,
+                "evidence_refs": evidence_refs,
+            }
+            validation = validate_human_question({
+                "question_id": question_id,
+                "task_id": task_id,
+                "status": factory_contracts.QuestionStatus.PENDING.value,
+                "question": question,
+                "options": question_options,
+                "metadata": question_metadata,
+            })
+            if not validation.get("valid"):
+                sql.psql(
+                    f"""
+                    INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
+                    SELECT {_q(project_id)}, {_q(item.get('lane_id'))}, {_q(task_id)}, 'factory-blocker-detector', 'human_question_skipped_unactionable',
+                           {_q('Skipped human question because validation failed closed; keep autonomous repair loop')},
+                           {_j({'alert_key': item.get('alert_key'), 'classification': compact, 'validation': validation, 'reason': validation.get('reason')})}
+                    WHERE NOT EXISTS (
+                      SELECT 1 FROM factory.events
+                      WHERE task_id={_q(task_id)}
+                        AND event_type='human_question_skipped_unactionable'
+                        AND metadata->>'alert_key'={_q(item.get('alert_key'))}
+                        AND timestamp > now() - interval '60 minutes'
+                    );
+                    """,
+                    user=_user(),
+                )
+                continue
             before = sql.one(
                 f"SELECT question_id FROM factory.human_questions WHERE question_id={_q(question_id)} OR (task_id={_q(task_id)} AND status='pending')",
                 user=_user(),
@@ -3431,7 +3658,7 @@ def record_factory_blocker_actions(classified: Optional[list[dict[str, Any]]] = 
             sql.psql(
                 f"""
                 INSERT INTO factory.human_questions(question_id, project_id, task_id, severity, question, options, asked_via, status, metadata)
-                VALUES ({_q(question_id)}, {_q(project_id)}, {_q(task_id)}, 'high', {_q(question)}, {_j(question_options)}, 'factory_watchdog', 'pending', {_j({'alert_key': item.get('alert_key'), 'classification': compact, 'human_question_source': 'blocker_result_summary' if item.get('human_question') else 'classifier_fallback'})})
+                VALUES ({_q(question_id)}, {_q(project_id)}, {_q(task_id)}, 'high', {_q(question)}, {_j(question_options)}, 'factory_watchdog', 'pending', {_j(question_metadata)})
                 ON CONFLICT (question_id) DO UPDATE SET
                   question=CASE WHEN factory.human_questions.status='pending' THEN EXCLUDED.question ELSE factory.human_questions.question END,
                   options=CASE WHEN factory.human_questions.status='pending' THEN EXCLUDED.options ELSE factory.human_questions.options END,
@@ -3471,6 +3698,334 @@ def _task_supervisor_max_retries(task: dict[str, Any], default: int = SUPERVISOR
     except (TypeError, ValueError):
         value = 0
     return max(int(default or SUPERVISOR_TECHNICAL_REWORK_MAX_RETRIES), value) if value > 0 else int(default or SUPERVISOR_TECHNICAL_REWORK_MAX_RETRIES)
+
+
+def _question_metadata(question: dict[str, Any]) -> dict[str, Any]:
+    metadata = question.get("metadata")
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def _question_options(question: dict[str, Any]) -> list[Any]:
+    options = question.get("options")
+    if options is None:
+        options = question.get("human_options")
+    return options if isinstance(options, list) else []
+
+
+def _question_text(question: dict[str, Any]) -> str:
+    return str(question.get("question") or question.get("human_question") or "").strip()
+
+
+def _question_escalation_category(question: dict[str, Any]) -> str:
+    metadata = _question_metadata(question)
+    return str(question.get("escalation_category") or metadata.get("escalation_category") or metadata.get("category") or "").strip()
+
+
+def _question_evidence_refs(question: dict[str, Any]) -> list[Any]:
+    metadata = _question_metadata(question)
+    refs = question.get("evidence_refs") or metadata.get("evidence_refs") or metadata.get("evidence")
+    if isinstance(refs, list):
+        return [ref for ref in refs if str(ref or "").strip()]
+    if isinstance(refs, str) and refs.strip():
+        return [refs.strip()]
+    return []
+
+
+def validate_human_question(question: dict[str, Any], *, task: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Fail-closed validator for any transition that would ask Jean or stop autonomy."""
+
+    status_value = str(question.get("status") or factory_contracts.QuestionStatus.PENDING.value).strip().lower()
+    if status_value not in QUESTION_OPEN_STATUSES:
+        return {"valid": False, "reason": "question_not_open", "status": status_value}
+    if task is not None and str(task.get("status") or "") not in {"blocked", "review_pending_human"}:
+        return {"valid": False, "reason": "task_not_blocked", "status": status_value}
+    text = _question_text(question)
+    if not text:
+        return {"valid": False, "reason": "missing_question", "status": status_value}
+    options = _question_options(question)
+    if not options:
+        return {"valid": False, "reason": "missing_options", "status": status_value}
+    category = _question_escalation_category(question)
+    if category not in ALLOWED_JEAN_ESCALATION_CATEGORIES:
+        return {"valid": False, "reason": "missing_or_invalid_escalation_category", "status": status_value}
+    evidence_refs = _question_evidence_refs(question)
+    if not evidence_refs:
+        return {"valid": False, "reason": "missing_evidence_refs", "status": status_value, "category": category}
+    return {
+        "valid": True,
+        "reason": "valid",
+        "status": status_value,
+        "category": category,
+        "question": text,
+        "options": options,
+        "evidence_refs": evidence_refs,
+    }
+
+
+def _question_from_blocker(blocker: dict[str, Any]) -> dict[str, Any]:
+    metadata = _metadata(blocker)
+    category = blocker.get("escalation_category") or metadata.get("escalation_category")
+    evidence_refs = blocker.get("evidence_refs") or metadata.get("evidence_refs")
+    return {
+        "question_id": blocker.get("question_id"),
+        "task_id": blocker.get("task_id"),
+        "status": blocker.get("status") or factory_contracts.QuestionStatus.PENDING.value,
+        "question": blocker.get("question") or blocker.get("human_question"),
+        "options": blocker.get("options") or blocker.get("human_options") or [],
+        "metadata": {
+            **metadata,
+            **({"escalation_category": category} if category else {}),
+            **({"evidence_refs": evidence_refs} if evidence_refs else {}),
+        },
+    }
+
+
+def _manual_attention_valid_blockers(blockers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    valid: list[dict[str, Any]] = []
+    for blocker in blockers:
+        if not blocker.get("requires_human"):
+            continue
+        question = _question_from_blocker(blocker)
+        validation = validate_human_question(question)
+        if not validation.get("valid"):
+            continue
+        valid.append({**blocker, "validation": validation})
+    return valid
+
+
+def _classify_pending_human_questions(
+    pending_questions: list[dict[str, Any]],
+    tasks: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    tasks_by_id = {str(task.get("task_id") or ""): task for task in tasks}
+    valid: list[dict[str, Any]] = []
+    invalid: list[dict[str, Any]] = []
+    for question in pending_questions:
+        task_id = str(question.get("task_id") or "")
+        validation = validate_human_question(question, task=tasks_by_id.get(task_id))
+        row = {**question, "validation": validation}
+        if validation.get("valid"):
+            valid.append({
+                "task_id": task_id,
+                "project_id": question.get("project_id"),
+                "question_id": question.get("question_id"),
+                "action_category": "human_question_required",
+                "blocker_category": validation.get("category"),
+                "recommended_action": "answer_validated_human_question",
+                "requires_human": True,
+                "question": validation.get("question"),
+                "options": validation.get("options"),
+                "escalation_category": validation.get("category"),
+                "evidence_refs": validation.get("evidence_refs"),
+                "validation": validation,
+            })
+        else:
+            invalid.append(row)
+    return valid, invalid
+
+
+def retire_invalid_human_questions(project_id: str, invalid_questions: list[dict[str, Any]]) -> dict[str, Any]:
+    if not invalid_questions:
+        return {"retired": []}
+    retired: list[dict[str, Any]] = []
+    for question in invalid_questions:
+        question_id = str(question.get("question_id") or "")
+        if not question_id:
+            continue
+        validation_raw = question.get("validation")
+        validation: dict[str, Any] = validation_raw if isinstance(validation_raw, dict) else {}
+        reason = str(validation.get("reason") or "invalid_human_question")
+        new_status = factory_contracts.QuestionStatus.STALE.value if reason == "task_not_blocked" else factory_contracts.QuestionStatus.RETIRED.value
+        metadata = {
+            "retired_reason": reason,
+            "retired_by": "factory-supervisor",
+            "retired_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "retirement_category": "invalid_autonomous_repair",
+            "validation": validation,
+        }
+        sql.psql(
+            f"""
+            UPDATE factory.human_questions
+            SET status={_q(new_status)},
+                metadata = metadata || {_j(metadata)}
+            WHERE question_id={_q(question_id)}
+              AND status IN ('pending','open');
+            INSERT INTO factory.events(project_id, task_id, actor, event_type, message, metadata)
+            VALUES ({_q(project_id)}, {_q(question.get('task_id'))}, 'factory-supervisor', 'human_question_retired',
+                    {_q('Retired invalid/stale Factory human question; continuing autonomous technical repair')},
+                    {_j({'question_id': question_id, 'new_status': new_status, **metadata})});
+            """,
+            user=_user(),
+        )
+        retired.append({"question_id": question_id, "status": new_status, "reason": reason})
+    return {"retired": retired}
+
+
+def _technical_recovery_task_id(source_task_id: str) -> str:
+    return f"{source_task_id}-technical-recovery"
+
+
+def _technical_recovery_candidates(tasks: list[dict[str, Any]], source_task_id: str | None = None) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    for task in tasks:
+        if str(task.get("status") or "") not in {"todo", "ready", "rework"}:
+            continue
+        metadata = _metadata(task)
+        recovery_of = metadata.get("technical_recovery_of_task_id") or metadata.get("recovery_of_task_id") or metadata.get("replacement_for_task_id")
+        is_recovery = bool(metadata.get("technical_recovery") or recovery_of)
+        if not is_recovery:
+            continue
+        if source_task_id and str(recovery_of or "") != source_task_id:
+            continue
+        candidates.append(task)
+    return candidates
+
+
+def _restore_autonomous_technical_recovery_project(
+    project_id: str,
+    recovery_tasks: list[dict[str, Any]],
+    *,
+    reason: str,
+) -> dict[str, Any]:
+    recovery_ids = [str(task.get("task_id")) for task in recovery_tasks if task.get("task_id")]
+    metadata = {
+        "autonomous_enabled": True,
+        "autonomous_recovery_restored": True,
+        "restored_from_manual_attention_reason": reason,
+        "recovery_task_ids": recovery_ids,
+    }
+    sql.psql(
+        f"""
+        UPDATE factory.projects
+        SET status='active', autonomous_enabled=true, paused_at=NULL,
+            metadata = (metadata || {_j(metadata)})
+                - 'manual_attention_required'
+                - 'manual_attention_reason'
+                - 'manual_attention_blockers'
+                - 'pause_kind',
+            updated_at=now()
+        WHERE project_id={_q(project_id)};
+        UPDATE factory.lanes
+        SET status='active', updated_at=now()
+        WHERE project_id={_q(project_id)} AND status IN ('manual_attention','paused','blocked','planned','intake');
+        INSERT INTO factory.events(project_id, actor, event_type, message, metadata)
+        VALUES ({_q(project_id)}, 'factory-supervisor', 'autonomous_recovery_restored',
+                {_q('Restored project from stale technical manual_attention to autonomous recovery work')},
+                {_j(metadata)});
+        """,
+        user=_user(),
+    )
+    paused_siblings = _pause_other_autonomous_projects(project_id)
+    return {"project_id": project_id, "status": "active", "recovery_task_ids": recovery_ids, "paused_sibling_projects": [str(row.get("project_id")) for row in paused_siblings]}
+
+
+def _autonomous_recovery_preflight_findings(project: dict[str, Any]) -> list[str]:
+    metadata = _metadata(project)
+    findings: list[str] = []
+    if _manual_takeover_lease_active(metadata.get("manual_takeover_lease")):
+        findings.append("manual_takeover_active")
+    strategy = _repository_strategy(project)
+    if not factory_contracts.repository_strategy_is_complete(strategy):
+        missing = ", ".join(strategy.get("missing_fields") or ["repo_scope"])
+        findings.append(f"missing G0 repository strategy metadata: {missing}")
+    if not _required_docs_explicitly_waived(metadata):
+        blockers = _g1_document_blockers(project)
+        if blockers:
+            findings.append("g1 documentary readiness blockers: " + ", ".join(str(row.get("file_name") or row) for row in blockers))
+    return findings
+
+
+def _manual_attention_is_stale_technical_rework(project: dict[str, Any], valid_questions: list[dict[str, Any]]) -> bool:
+    metadata = _metadata(project)
+    reason = str(metadata.get("manual_attention_reason") or "").strip()
+    return str(project.get("status") or "") == MANUAL_ATTENTION_STATUS and reason == "technical_rework_retries_exhausted" and not valid_questions
+
+
+def _ensure_autonomous_technical_recovery(
+    project_id: str,
+    exhausted: list[dict[str, Any]],
+    tasks: list[dict[str, Any]],
+    classified: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not exhausted:
+        return {"created": [], "reused": []}
+    tasks_by_id = {str(task.get("task_id") or ""): task for task in tasks}
+    classified_by_id = {str(item.get("task_id") or ""): item for item in classified}
+    created: list[dict[str, Any]] = []
+    reused: list[dict[str, Any]] = []
+    for item in exhausted:
+        source_task_id = str(item.get("task_id") or "")
+        source = tasks_by_id.get(source_task_id)
+        if not source:
+            continue
+        existing = _technical_recovery_candidates(tasks, source_task_id)
+        recovery_task_id = str(existing[0].get("task_id")) if existing else _technical_recovery_task_id(source_task_id)
+        classification = classified_by_id.get(source_task_id, {})
+        recovery_metadata = {
+            "technical_recovery": True,
+            "technical_recovery_of_task_id": source_task_id,
+            "source_task_retry_count": item.get("retry_count"),
+            "source_task_max_retries": item.get("max_retries"),
+            "durable_autonomous_escalation": True,
+            "classification": classification,
+        }
+        if existing:
+            reused.append({"task_id": recovery_task_id, "source_task_id": source_task_id})
+        else:
+            title = f"R1 — Technical recovery for {str(source.get('title') or source_task_id)[:120]}"
+            description = (
+                "Factory supervisor escalated exhausted technical rework into a durable autonomous recovery task. "
+                "Do not ask Jean unless a validated human-question contract is present."
+            )
+            priority = int(source.get("priority") or 100) + 1
+            sql.psql(
+                f"""
+                INSERT INTO factory.tasks (task_id, project_id, lane_id, title, description, phase, status, owner_profile, reviewer_profile, engine, priority, dependencies, branch, worktree_path, acceptance_criteria, evidence_required, evidence_status, risk_level, metadata, increment_key, increment_order, created_at, updated_at)
+                VALUES ({_q(recovery_task_id)}, {_q(project_id)}, {_q(source.get('lane_id'))}, {_q(title)}, {_q(description)}, {_q(source.get('phase') or 'implementation')}, 'todo', {_q(source.get('owner_profile') or source.get('owner_agent_id'))}, {_q(source.get('reviewer_profile') or source.get('reviewer_agent_id'))}, {_q(source.get('engine') or 'claude_code')}, {priority}, {_j([])}, {_q(source.get('branch'))}, {_q(source.get('worktree_path'))}, {_j(['Root-cause repair for exhausted technical rework', 'Close with tests/evidence; no human question unless validated'])}, true, 'missing', {_q(source.get('risk_level') or 'medium')}, {_j(recovery_metadata)}, {_q(str(source.get('increment_key') or source_task_id) + '-technical-recovery')}, {priority}, now(), now())
+                ON CONFLICT (task_id) DO UPDATE SET
+                  metadata=factory.tasks.metadata || EXCLUDED.metadata,
+                  status=CASE WHEN factory.tasks.status IN ('done','verified','accepted','cancelled','superseded') THEN 'todo' ELSE factory.tasks.status END,
+                  updated_at=now();
+                """,
+                user=_user(),
+            )
+            created.append({"task_id": recovery_task_id, "source_task_id": source_task_id})
+        restore_metadata = {
+            "autonomous_enabled": True,
+            "technical_rework_escalated_autonomously": True,
+            "recovery_task_id": recovery_task_id,
+            "source_task_id": source_task_id,
+        }
+        sql.psql(
+            f"""
+            UPDATE factory.projects
+            SET status='active', autonomous_enabled=true, paused_at=NULL,
+                metadata = (metadata || {_j(restore_metadata)})
+                    - 'manual_attention_required'
+                    - 'manual_attention_reason'
+                    - 'manual_attention_blockers'
+                    - 'pause_kind',
+                updated_at=now()
+            WHERE project_id={_q(project_id)};
+            UPDATE factory.lanes
+            SET status='active', updated_at=now()
+            WHERE project_id={_q(project_id)} AND status IN ('manual_attention','paused','blocked','planned','intake');
+            INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
+            SELECT {_q(project_id)}, {_q(source.get('lane_id'))}, {_q(source_task_id)}, 'factory-supervisor', 'technical_rework_escalated_autonomously',
+                   {_q('Supervisor created or reused durable autonomous technical recovery instead of manual_attention')},
+                   {_j({'recovery_task_id': recovery_task_id, **restore_metadata, 'exhausted': item})}
+            WHERE NOT EXISTS (
+              SELECT 1 FROM factory.events
+              WHERE project_id={_q(project_id)}
+                AND task_id={_q(source_task_id)}
+                AND event_type='technical_rework_escalated_autonomously'
+                AND metadata->>'recovery_task_id'={_q(recovery_task_id)}
+                AND timestamp > now() - interval '60 minutes'
+            );
+            """,
+            user=_user(),
+        )
+    return {"created": created, "reused": reused}
 
 
 def _supervisor_requeue_technical_blockers(
@@ -3533,14 +4088,34 @@ def mark_project_manual_attention(project_id: str, *, reason: str, blockers: lis
     """Move a project out of the autonomous slot when it truly needs a person."""
 
     ensure_runtime_schema()
+    valid_blockers = _manual_attention_valid_blockers(blockers)
+    if not valid_blockers:
+        rejection_metadata = {
+            "manual_attention_rejected": True,
+            "manual_attention_reason": reason,
+            "rejection_reason": "invalid_or_missing_validated_human_question",
+            "blockers": blockers[:10],
+        }
+        sql.psql(
+            f"""
+            INSERT INTO factory.events(project_id, actor, event_type, message, metadata)
+            VALUES ({_q(project_id)}, 'factory-supervisor', 'manual_attention_rejected_invalid_human_question',
+                    {_q('Rejected manual_attention because no validated concrete human question was present')},
+                    {_j(rejection_metadata)});
+            """,
+            user=_user(),
+        )
+        return {"project_id": project_id, "status": "rejected", "rejected": True, "reason": rejection_metadata["rejection_reason"]}
     compact_blockers = [
         {
             "task_id": blocker.get("task_id"),
             "action_category": blocker.get("action_category"),
             "requires_human": blocker.get("requires_human"),
             "recommended_action": blocker.get("recommended_action"),
+            "escalation_category": blocker.get("escalation_category") or blocker.get("validation", {}).get("category"),
+            "evidence_refs": blocker.get("evidence_refs") or blocker.get("validation", {}).get("evidence_refs"),
         }
-        for blocker in blockers[:10]
+        for blocker in valid_blockers[:10]
     ]
     metadata = {
         "autonomous_enabled": False,
@@ -4627,7 +5202,7 @@ def supervisor_health_check(project_id: str, *, repair: bool = True) -> dict[str
         user=_user(),
     ))
     pending_questions = _normalize_rows(sql.rows(
-        f"SELECT question_id, task_id, status FROM factory.human_questions WHERE project_id={_q(project_id)} AND status IN ('pending','open')",
+        f"SELECT question_id, project_id, task_id, status, question, options, metadata, created_at FROM factory.human_questions WHERE project_id={_q(project_id)} AND status IN ('pending','open')",
         user=_user(),
     ))
     blocked_tasks = [task for task in tasks if str(task.get("status") or "") == "blocked"]
@@ -4642,6 +5217,29 @@ def supervisor_health_check(project_id: str, *, repair: bool = True) -> dict[str
         "gates": [],
         "human_questions": pending_questions,
     }
+    valid_pending_questions, invalid_pending_questions = _classify_pending_human_questions(pending_questions, tasks)
+    if _manual_attention_is_stale_technical_rework(project, valid_pending_questions):
+        recovery_tasks = _technical_recovery_candidates(tasks)
+        violations.append({
+            "invariant": "STALE_TECHNICAL_MANUAL_ATTENTION_WITH_AUTONOMOUS_RECOVERY",
+            "project_id": project_id,
+            "recovery_tasks": [task.get("task_id") for task in recovery_tasks],
+            "expected_runtime_action": "restore_autonomous_technical_recovery",
+        })
+        if repair:
+            preflight_findings = _autonomous_recovery_preflight_findings(project)
+            if recovery_tasks and not preflight_findings:
+                restored = _restore_autonomous_technical_recovery_project(
+                    project_id,
+                    recovery_tasks,
+                    reason="technical_rework_retries_exhausted",
+                )
+                repairs.append({"operation": "restore_autonomous_technical_recovery", "result": restored})
+            else:
+                repairs.append({
+                    "operation": "restore_autonomous_technical_recovery_blocked",
+                    "result": {"preflight_findings": preflight_findings, "recovery_task_count": len(recovery_tasks)},
+                })
     no_claimable_work = not _has_claimable_autonomous_work(tasks)
     blocked_without_runtime = autonomous and blocked_tasks and not active_runs and no_claimable_work
     delivery_hold_blocked = str(project.get("status") or "") == DELIVERY_HOLD_STATUS and blocked_without_runtime
@@ -4668,18 +5266,24 @@ def supervisor_health_check(project_id: str, *, repair: bool = True) -> dict[str
             classified = classify_factory_blockers(payload, project_id=project_id)
             blocker_actions = record_factory_blocker_actions(classified, payload=payload, create_questions=True)
             repairs.append({"operation": "record_factory_blocker_actions", "result": blocker_actions})
-            if pending_questions:
-                manual = mark_project_manual_attention(project_id, reason="pending_human_question", blockers=classified)
+            valid_pending_questions, invalid_pending_questions = _classify_pending_human_questions(pending_questions, tasks)
+            if invalid_pending_questions:
+                retired = retire_invalid_human_questions(project_id, invalid_pending_questions)
+                repairs.append({"operation": "retire_invalid_human_questions", "result": retired})
+            human_blockers = [item for item in classified if item.get("requires_human")]
+            requeue = _supervisor_requeue_technical_blockers(project_id, classified, tasks)
+            recovery = {"created": [], "reused": []}
+            if requeue.get("requeued"):
+                repairs.append({"operation": "supervisor_requeue_technical_blockers", "result": requeue})
+            if requeue.get("exhausted") and not requeue.get("requeued"):
+                recovery = _ensure_autonomous_technical_recovery(project_id, requeue.get("exhausted") or [], tasks, classified)
+                repairs.append({"operation": "ensure_autonomous_technical_recovery", "result": recovery})
+            manual_blockers = valid_pending_questions or human_blockers
+            recovery_happened = bool(recovery.get("created") or recovery.get("reused"))
+            if manual_blockers and not requeue.get("requeued") and not recovery_happened:
+                manual_reason = "pending_human_question" if valid_pending_questions else "human_question_required"
+                manual = mark_project_manual_attention(project_id, reason=manual_reason, blockers=manual_blockers)
                 repairs.append({"operation": "mark_project_manual_attention", "result": manual})
-            else:
-                human_blockers = [item for item in classified if item.get("requires_human")]
-                requeue = _supervisor_requeue_technical_blockers(project_id, classified, tasks)
-                if requeue.get("requeued"):
-                    repairs.append({"operation": "supervisor_requeue_technical_blockers", "result": requeue})
-                if human_blockers or (requeue.get("exhausted") and not requeue.get("requeued")):
-                    manual_reason = "human_question_required" if human_blockers else "technical_rework_retries_exhausted"
-                    manual = mark_project_manual_attention(project_id, reason=manual_reason, blockers=human_blockers or classified)
-                    repairs.append({"operation": "mark_project_manual_attention", "result": manual})
 
     health = "green"
     if violations and not repairs:

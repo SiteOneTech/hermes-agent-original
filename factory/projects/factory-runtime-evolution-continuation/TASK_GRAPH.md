@@ -16,6 +16,7 @@ FRE-010 (G1 pack) ──┬──> FRE-011 (question retirement/rework)
 FRE-011 ──┐
 FRE-012 ──┴──> FRE-013 (watchdog/cron integration)
 FRE-011+FRE-012+FRE-013+FRE-014 ──> FRE-015 (independent QA/security review)
+FRE-020 (emergency consolidation: FRE-011/FRE-012/FRE-014 live incident repair) ──> FRE-015/R5 review
 FRE-015 ──> FRE-016 (PR-first delivery / merge to main)
 FRE-013 + FRE-015 ──> FRE-017 (global cron verification)
 ```
@@ -34,6 +35,7 @@ FRE-013 + FRE-015 ──> FRE-017 (global cron verification)
 | FRE-015 | Independent QA/security review of FRE-011…FRE-014 | review | quality-reviewer + security-reviewer | factory-orchestrator | FRE-011..014 | (review lane) |
 | FRE-016 | PR-first delivery: merge approved increments to main | delivery | devops-release + factory-orchestrator | factory-orchestrator | FRE-015 | — |
 | FRE-017 | Global cron verification (incremental resume + smoke) | verification | devops-release | factory-orchestrator | FRE-013, FRE-015 | `factory/factory-runtime-evolution-continuation/inc-017-global-cron-verification` |
+| FRE-020 | Technical rework escalation and canonical continuation recovery | implementation | claude-builder | quality-reviewer + solution-architect | FRE-010, live Alpha incident | `factory/factory-runtime-evolution-continuation/inc-020-fre-020-technical-rework-escalat` |
 
 ## 2. Per-increment acceptance (TDD anchors)
 
@@ -98,6 +100,17 @@ FRE-013 + FRE-015 ──> FRE-017 (global cron verification)
   no unexpected alerts (idle silence).
 - DoD: verification evidence committed under project artifacts (e.g.
   `CRON_VERIFICATION.md` lifecycle doc); devops-release + orchestrator gates.
+
+### FRE-020 — Technical rework escalation and canonical continuation recovery
+- RED: committed behavioral tests first at `4e2d163ac`, then ran
+  `HERMES_PYTHON=/home/jean/Projects/hermes-agent-original/venv/bin/python scripts/run_tests.sh tests/hermes_cli/test_factory_control_plane_refactor.py tests/hermes_cli/test_factory_project_reopen.py tests/hermes_cli/test_factory.py -k 'technical_rework_creates_autonomous_recovery or invalid_existing_human_question or manual_attention_refuses_invalid or stranded_technical_manual_attention or project_reopen or project_create_suggests_reopen or registers_project_reopen'`.
+  Expected/observed RED: 9 failed / 0 passed; failures covered missing `reopen_project`, missing CLI reopen/continue parser, exhausted technical rework still manual_attention, stale/generic human questions not retired, and stranded `technical_rework_retries_exhausted` manual_attention not restored.
+- GREEN: same focused command plus `-q` after production change → 9 passed / 0 failed.
+- Focused Factory regression set:
+  `HERMES_PYTHON=/home/jean/Projects/hermes-agent-original/venv/bin/python scripts/run_tests.sh tests/hermes_cli/test_factory.py tests/hermes_cli/test_factory_project_reopen.py tests/hermes_cli/test_factory_control_plane_refactor.py tests/hermes_cli/test_factory_cron_control_plane.py tests/hermes_cli/test_factory_orchestrator_tick.py tests/hermes_cli/test_factory_increment_integration.py tests/hermes_cli/test_factory_ux_ui_designer_contract.py` → 134 passed / 0 failed.
+- GREEN implementation scope:
+  `hermes_cli/factory_pg.py` autonomous technical recovery path (`technical_rework_escalated_autonomously` audit, deterministic recovery task, no human/manual hold), invalid-question fail-closed retirement, stale manual_attention restoration, create-path reopen suggestion, and canonical `reopen_project` with preflight/gate/audit/single-active guard; `hermes_cli/factory.py` CLI `project reopen|continue`; `hermes_cli/factory_contracts.py` question/category contracts.
+- DoD: no direct Factory DB writes except approved Factory evidence gate, no deploy, no push/merge/PR/Factory task close; code/docs committed on assigned branch after verification.
 
 ## 3. Mapping to acceptance criteria (FRE-010)
 

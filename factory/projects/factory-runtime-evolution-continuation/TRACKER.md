@@ -9,7 +9,7 @@
 | Source of truth | Agent Core Postgres `zeus_agent.factory` |
 | Repo artifacts | `factory/projects/factory-runtime-evolution-continuation/` |
 | Repo | `SiteOneTech/hermes-agent-original` (zeus_only) |
-| Current state | `active` — FRE-010 planning-review passed (solution-architect, 2026-08-10, planning gate 690); FRE-010 has no active rework. |
+| Current state | `active` — FRE-020 control-plane implementation complete locally on assigned branch; tests green; pending reviewer/gate. |
 | Anomalies at start | `missing_project_artifact_dir`, `missing_required_docs` (resolved by this increment's dir + committed docs) |
 
 ## 1. Task tracker (mirrors Factory DB)
@@ -26,6 +26,7 @@
 | FRE-015 Independent QA/security review | planned (TASK_GRAPH) | quality-reviewer + security-reviewer | factory-orchestrator | QA_REPORT.md, SECURITY_REVIEW.md |
 | FRE-016 PR-first delivery | planned (TASK_GRAPH) | devops-release + factory-orchestrator | factory-orchestrator | CHANGE_RECORDS.md, DELIVERY_REPORT.md |
 | FRE-017 Global cron verification | planned (TASK_GRAPH) | devops-release | factory-orchestrator | cron smoke evidence |
+| FRE-020 Technical rework escalation and canonical continuation recovery | implemented (local branch; not pushed/closed) | claude-builder | quality-reviewer + solution-architect | TDD RED commit `4e2d163ac`; GREEN focused Factory tests 134/134; code/docs committed on assigned branch |
 
 ## 2. Evidence log (real, 2026-08-10)
 
@@ -50,6 +51,16 @@
    classified=0/questions=0/alerts=0), `RETROSPECTIVE_INC_0008.md` (cron ownership),
    `TRACKER.md` (INC-0006..0009), `FACTORY_RUNTIME_EVOLUTION_PLAN.md` (L1/L2/L3),
    git `d3d08dc2e` + `bc7ab6af6`.
+5. FRE-020 strict TDD RED evidence (tests committed first at `4e2d163ac`):
+   `HERMES_PYTHON=/home/jean/Projects/hermes-agent-original/venv/bin/python scripts/run_tests.sh tests/hermes_cli/test_factory_control_plane_refactor.py tests/hermes_cli/test_factory_project_reopen.py tests/hermes_cli/test_factory.py -k 'technical_rework_creates_autonomous_recovery or invalid_existing_human_question or manual_attention_refuses_invalid or stranded_technical_manual_attention or project_reopen or project_create_suggests_reopen or registers_project_reopen'` → 9 failed / 0 passed, including missing `reopen_project`, missing CLI `project reopen`, exhausted technical rework still becoming `mark_project_manual_attention`, and generic pending human questions not retired.
+6. FRE-020 GREEN evidence after production change:
+   same focused command plus `-q` → 9 passed / 0 failed; then full focused Factory set
+   `HERMES_PYTHON=/home/jean/Projects/hermes-agent-original/venv/bin/python scripts/run_tests.sh tests/hermes_cli/test_factory.py tests/hermes_cli/test_factory_project_reopen.py tests/hermes_cli/test_factory_control_plane_refactor.py tests/hermes_cli/test_factory_cron_control_plane.py tests/hermes_cli/test_factory_orchestrator_tick.py tests/hermes_cli/test_factory_increment_integration.py tests/hermes_cli/test_factory_ux_ui_designer_contract.py` → 134 passed / 0 failed.
+   CLI smoke against the worktree module: `PYTHONPATH=. /home/jean/Projects/hermes-agent-original/venv/bin/python -m hermes_cli.main factory project reopen --help` → exit 0 and shows `project_id`, `--reason`, `--actor`, `--continuation-of`, `--json`.
+7. FRE-020 implemented controls:
+   - `hermes_cli/factory_pg.py`: no exhausted non-human `technical_rework` path writes manual_attention; bounded exhaustion creates/reuses one durable autonomous recovery task plus `technical_rework_escalated_autonomously` audit event; stale `technical_rework_retries_exhausted` manual_attention with same-project recovery task restores active/autonomous with `autonomous_recovery_restored` audit.
+   - `hermes_cli/factory_pg.py` + `factory_contracts.py`: `QuestionStatus`, `JeanEscalationCategory`, and fail-closed human-question validation; invalid/generic/stale questions retire to autonomous repair.
+   - `hermes_cli/factory_pg.py` + `hermes_cli/factory.py`: canonical `reopen_project`/`hermes factory project reopen|continue` with G0/G1/manual-takeover preflight, reopen gate, lineage audit, no detached project insert; create-path suggests reopen when continuation lineage points at terminal project.
 
 ## 3. Gate log
 
@@ -59,6 +70,7 @@
 | G1 Documentary Readiness | passed | 14 docs exist/indexed/committed/validated:true/reviewed:true after solution-architect review; planning gate 690=passed |
 | Review (FRE-010) | passed | solution-architect review, 2026-08-10, planning gate 690 |
 | Delivery | not applicable yet | no product-runtime code in G1 |
+| FRE-020 test evidence | passed | Factory test gate recorded by claude-builder; TDD RED captured at `4e2d163ac`; GREEN Factory tests 134/134; no push/merge/PR/Factory close performed |
 
 ## 4. Risk register
 
@@ -66,5 +78,6 @@
 |---|---|
 | Document/DB review-marker drift after G1 review | Keep per-document `validated:true` and `reviewed:true` rows synchronized with the recorded Factory planning gate evidence before downstream dispatch |
 | Detached successor semantics confuse lineage | FRE-014 adds reopen/continue; this project records `continuation_of: factory-runtime-evolution` intent in its docs now |
+| Technical failures strand projects in manual_attention | FRE-020 fail-closes invalid human questions and routes retry exhaustion to autonomous recovery with audit, not human/manual hold |
 | Cron resume regressions | FRE-013/017 incremental resume with smoke evidence; idle-silence rule preserved |
 | Change-detector tests in new suites | QA_GATES.md bans them; reviewers enforce |

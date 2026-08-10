@@ -41,6 +41,7 @@ Scope: documentation-only; no runtime code. QA gate = documentary verification:
 | FRE-014 | `scripts/run_tests.sh tests/hermes_cli/test_factory_project_reopen.py` + CLI smoke `hermes factory project reopen --help` | green; CLI registered |
 | FRE-015 | `scripts/run_tests.sh tests/hermes_cli/test_factory*.py` (full factory set) | all green or documented pre-existing failures |
 | FRE-017 | cron smoke per script + `hermes cronjob list` | exit 0; no unexpected alerts; evidence file |
+| FRE-020 | TDD RED command in TRACKER §2.5; GREEN focused command and full Factory set in TRACKER §2.6 | RED observed before production change; GREEN 9/9 and 134/134 after change |
 
 ## 4. Evidence capture rules
 
@@ -51,7 +52,14 @@ Scope: documentation-only; no runtime code. QA gate = documentary verification:
 - FLAKY results (`⚠ FLAKY` from the runner) are a bug to fix, not evidence to accept.
 - Never fabricate output; if a check cannot run (missing dependency/env), report BLOCKER.
 
-## 5. QA ownership
+## 5. FRE-020 QA evidence (2026-08-10)
+
+- Environment note: the assigned worktree has no local `.venv`; `scripts/run_tests.sh` was executed with `HERMES_PYTHON=/home/jean/Projects/hermes-agent-original/venv/bin/python`, which the runner accepted as the Nix/dev venv with pytest.
+- RED: test-only commit `4e2d163ac`; targeted behavioral tests failed 9/9 before production changes.
+- GREEN: targeted FRE-020 tests passed 9/9; focused Factory regression set passed 134/134.
+- No source-reading tests were added; assertions exercise runtime functions/CLI parser behavior and emitted SQL/event effects via the existing FakeSql test harness.
+
+## 6. QA ownership
 
 - qa-verifier owns live smoke/E2E evidence (FRE-015/017); quality-reviewer owns spec
   compliance review of diffs; both are independent of the increment owner.

@@ -69,6 +69,22 @@ class GateStatus(_StrEnum):
     WAIVED = "waived"
 
 
+class QuestionStatus(_StrEnum):
+    PENDING = "pending"
+    OPEN = "open"
+    ANSWERED = "answered"
+    STALE = "stale"
+    RETIRED = "retired"
+
+
+class JeanEscalationCategory(_StrEnum):
+    EXTERNAL_AUTHORITY = "external_authority"
+    PRODUCT_BUSINESS_SCOPE = "product_business_scope"
+    SECURITY_APPROVAL = "security_approval"
+    PAYMENT_CREDENTIAL_ACCESS = "payment_credential_access"
+    BOUNDED_EXHAUSTED_REPAIR = "bounded_exhausted_repair"
+
+
 class FactoryInvariant(_StrEnum):
     RED_DELIVERY_HOLD_WITH_BLOCKED_WORK = "RED_DELIVERY_HOLD_WITH_BLOCKED_WORK"
     RED_AUTONOMOUS_WITHOUT_RUNNABLE_WORK_OR_QUESTION = "RED_AUTONOMOUS_WITHOUT_RUNNABLE_WORK_OR_QUESTION"
