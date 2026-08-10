@@ -2748,15 +2748,21 @@ def _source_delivery_contract_blockers(
         blockers.append("source_delivery_candidate_missing")
     elif branch_commit and candidate_commit != branch_commit:
         blockers.append("source_delivery_candidate_mismatch")
-    qa_guardian = record.get("qa_guardian_evidence") or record.get("qa_guardian") or record.get("qa_guardian_review")
+    qa_guardian = None
+    for key in ("qa_guardian_evidence", "qa_guardian", "qa_guardian_review"):
+        if key in record:
+            qa_guardian = record.get(key)
+            break
     if isinstance(qa_guardian, dict):
         qa_passed = any(_source_delivery_status_accepted(qa_guardian.get(key)) for key in ("accepted", "status", "result", "state", "passed"))
         qa_commit = _commit_value(qa_guardian, "candidate_commit", "branch_commit", "commit_sha", "head_commit")
         if not qa_passed:
             blockers.append("qa_guardian_evidence_not_accepted")
-        if qa_commit and branch_commit and qa_commit != branch_commit:
+        if not qa_commit:
+            blockers.append("qa_guardian_candidate_missing")
+        elif branch_commit and qa_commit != branch_commit:
             blockers.append("qa_guardian_candidate_mismatch")
-    elif not _source_delivery_status_accepted(qa_guardian):
+    else:
         blockers.append("qa_guardian_evidence_missing")
 
     pr_required = bool(record.get("pr_first_policy") or record.get("pr") or _metadata(task).get("pr_first_policy"))

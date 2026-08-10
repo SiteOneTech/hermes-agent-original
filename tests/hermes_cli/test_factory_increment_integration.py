@@ -355,6 +355,7 @@ def _source_delivery_metadata(
     replacement_for: str = "task-old",
     pr_state: str = "merged",
     qa_guardian: bool = True,
+    qa_guardian_evidence=None,
     pr_head_commit: str | None = None,
 ) -> dict:
     source_delivery = {
@@ -370,11 +371,15 @@ def _source_delivery_metadata(
         },
     }
     if qa_guardian:
-        source_delivery["qa_guardian_evidence"] = {
-            "status": "passed",
-            "candidate_commit": candidate_commit,
-            "reviewer": "qa-verifier",
-        }
+        source_delivery["qa_guardian_evidence"] = (
+            qa_guardian_evidence
+            if qa_guardian_evidence is not None
+            else {
+                "status": "passed",
+                "candidate_commit": candidate_commit,
+                "reviewer": "qa-verifier",
+            }
+        )
     return {
         "replacement_for_task": replacement_for,
         "source_delivery": source_delivery,
@@ -582,6 +587,109 @@ def test_next_runnable_task_blocks_replacement_without_qa_guardian_evidence(fake
     assert factory_pg._next_runnable_task("demo") is None
     joined = "\n".join(fake_sql.statements)
     assert "qa_guardian_evidence_missing" in joined
+
+
+def test_next_runnable_task_blocks_scalar_qa_guardian_evidence(fake_sql, tmp_path):
+    project, replacement, feature_commit = _make_source_delivery_repo(tmp_path, merged_to_base=True)
+    replacement["metadata"] = _source_delivery_metadata(feature_commit, qa_guardian_evidence=True)
+    dep = {
+        "project_id": "demo",
+        "task_id": "task-old",
+        "status": "superseded",
+        "metadata": {"replacement_task_id": "task-replacement"},
+    }
+    candidate = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "task-downstream",
+        "status": "todo",
+        "dependencies": ["task-old"],
+    }
+    fake_sql.rows_results = [[dep, replacement, candidate], [candidate]]
+    fake_sql.one_results = [project]
+
+    assert factory_pg._next_runnable_task("demo") is None
+    joined = "\n".join(fake_sql.statements)
+    assert "qa_guardian_evidence_missing" in joined
+
+
+def test_next_runnable_task_blocks_qa_guardian_evidence_without_commit(fake_sql, tmp_path):
+    project, replacement, feature_commit = _make_source_delivery_repo(tmp_path, merged_to_base=True)
+    replacement["metadata"] = _source_delivery_metadata(feature_commit, qa_guardian_evidence={"status": "passed"})
+    dep = {
+        "project_id": "demo",
+        "task_id": "task-old",
+        "status": "superseded",
+        "metadata": {"replacement_task_id": "task-replacement"},
+    }
+    candidate = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "task-downstream",
+        "status": "todo",
+        "dependencies": ["task-old"],
+    }
+    fake_sql.rows_results = [[dep, replacement, candidate], [candidate]]
+    fake_sql.one_results = [project]
+
+    assert factory_pg._next_runnable_task("demo") is None
+    joined = "\n".join(fake_sql.statements)
+    assert "qa_guardian_candidate_missing" in joined
+
+
+def test_next_runnable_task_blocks_qa_guardian_commit_mismatch(fake_sql, tmp_path):
+    project, replacement, feature_commit = _make_source_delivery_repo(tmp_path, merged_to_base=True)
+    replacement["metadata"] = _source_delivery_metadata(
+        feature_commit,
+        qa_guardian_evidence={"status": "passed", "candidate_commit": "deadbeef"},
+    )
+    dep = {
+        "project_id": "demo",
+        "task_id": "task-old",
+        "status": "superseded",
+        "metadata": {"replacement_task_id": "task-replacement"},
+    }
+    candidate = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "task-downstream",
+        "status": "todo",
+        "dependencies": ["task-old"],
+    }
+    fake_sql.rows_results = [[dep, replacement, candidate], [candidate]]
+    fake_sql.one_results = [project]
+
+    assert factory_pg._next_runnable_task("demo") is None
+    joined = "\n".join(fake_sql.statements)
+    assert "qa_guardian_candidate_mismatch" in joined
+
+
+def test_next_runnable_task_accepts_qa_guardian_commit_bound_evidence(fake_sql, tmp_path):
+    project, replacement, feature_commit = _make_source_delivery_repo(tmp_path, merged_to_base=True)
+    replacement["metadata"] = _source_delivery_metadata(
+        feature_commit,
+        qa_guardian_evidence={"status": "accepted", "commit_sha": feature_commit, "reviewer": "qa-verifier"},
+    )
+    dep = {
+        "project_id": "demo",
+        "task_id": "task-old",
+        "status": "superseded",
+        "metadata": {"replacement_task_id": "task-replacement"},
+    }
+    candidate = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "task-downstream",
+        "status": "todo",
+        "dependencies": ["task-old"],
+    }
+    fake_sql.rows_results = [[dep, replacement, candidate], [candidate]]
+    fake_sql.one_results = [project]
+
+    result = factory_pg._next_runnable_task("demo")
+
+    assert result is not None
+    assert result["task_id"] == "task-downstream"
 
 
 def test_next_runnable_task_blocks_wrong_head_replacement_pr(fake_sql, tmp_path):

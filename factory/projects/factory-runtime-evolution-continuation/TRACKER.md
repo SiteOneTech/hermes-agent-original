@@ -9,7 +9,7 @@
 | Source of truth | Agent Core Postgres `zeus_agent.factory` |
 | Repo artifacts | `factory/projects/factory-runtime-evolution-continuation/` |
 | Repo | `SiteOneTech/hermes-agent-original` (zeus_only) |
-| Current state | `active` — FRE-010 planning-review passed (solution-architect, 2026-08-10, planning gate 690); FRE-024 implementation gate 725 passed on scoped branch, pending independent review/merge. |
+| Current state | `active` — FRE-010 planning-review passed (solution-architect, 2026-08-10, planning gate 690); FRE-024 security gate 726 failed on QA Guardian commit-binding evidence and rework is implemented on scoped branch pending refreshed gate/review. |
 | Anomalies at start | `missing_project_artifact_dir`, `missing_required_docs` (resolved by this increment's dir + committed docs) |
 
 ## 1. Task tracker (mirrors Factory DB)
@@ -57,6 +57,11 @@
    - GREEN commands: `scripts/run_tests.sh tests/hermes_cli/test_factory_increment_integration.py -v --tb=short` → 25 passed; `scripts/run_tests.sh tests/hermes_cli/test_factory*.py --tb=short` → 139 passed; `.venv/bin/ruff check hermes_cli/factory_pg.py hermes_cli/factory_contracts.py tests/hermes_cli/test_factory_increment_integration.py` → all checks passed.
    - Environment note: canonical runner initially blocked because no pytest venv existed; created repo-local `.venv` via `uv sync --frozen --extra dev` for implementation verification.
    - Factory gate evidence: implementation gate 725 recorded as `passed` by `claude-builder`; PR opened at `https://github.com/SiteOneTech/hermes-agent-original/pull/26`.
+6. FRE-024 security rework evidence (2026-08-10, same branch):
+   - Security gate 726 failed because QA Guardian evidence accepted scalar/status-only values without exact candidate commit binding.
+   - RED command: `scripts/run_tests.sh tests/hermes_cli/test_factory_increment_integration.py -k 'scalar_qa_guardian_evidence or qa_guardian_evidence_without_commit or qa_guardian_commit_mismatch or qa_guardian_commit_bound_evidence' -v --tb=short` → 2 failed, 2 passed. Failures reproduced scalar `qa_guardian_evidence=True` and `{status: passed}` without commit dispatching downstream work.
+   - GREEN commands: same focused command → 4 passed; `scripts/run_tests.sh tests/hermes_cli/test_factory_increment_integration.py -v --tb=short` → 29 passed; `scripts/run_tests.sh tests/hermes_cli/test_factory*.py --tb=short` → 143 passed; `.venv/bin/ruff check hermes_cli/factory_pg.py hermes_cli/factory_contracts.py tests/hermes_cli/test_factory_increment_integration.py` → all checks passed; `git diff --check` → exit 0.
+   - Runtime contract tightened: source delivery QA Guardian evidence must be a dict with accepted/passed status and an exact commit matching the replacement branch head; scalar/missing/mismatched commit evidence fails closed.
 
 ## 3. Gate log
 
@@ -65,7 +70,7 @@
 | G0 Repository Strategy | passed | DB `project_created` event 172950 (repo_scope zeus_only, base main, per_deliverable worktrees) |
 | G1 Documentary Readiness | passed | 14 docs exist/indexed/committed/validated:true/reviewed:true after solution-architect review; planning gate 690=passed |
 | Review (FRE-010) | passed | solution-architect review, 2026-08-10, planning gate 690 |
-| Implementation (FRE-024) | passed | Factory gate 725; TDD RED/GREEN and factory-focused tests listed in evidence log item 5; independent review still required before delivery/merge |
+| Implementation (FRE-024) | rework implemented after failed security review | Factory gate 725 originally passed; security gate 726 failed; TDD RED/GREEN rework evidence listed in evidence log item 6; refreshed implementation gate and independent security review still required before delivery/merge |
 | Delivery | not applicable yet | no product-runtime code in G1 |
 
 ## 4. Risk register
