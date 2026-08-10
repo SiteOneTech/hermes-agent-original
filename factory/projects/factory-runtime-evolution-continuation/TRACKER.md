@@ -2,13 +2,14 @@
 
 | Field | Value |
 |---|---|
+| Document status | validated: true (implementation-planner, 2026-08-10); reviewed: false — assigned to `solution-architect` |
 | Project ID | `factory-runtime-evolution-continuation` |
 | Predecessor | `factory-runtime-evolution` (terminal: completed; continuation lineage pending FRE-014) |
 | Methodology | Hybrid (zeus_native lane + bmad_hybrid lane) |
 | Source of truth | Agent Core Postgres `zeus_agent.factory` |
 | Repo artifacts | `factory/projects/factory-runtime-evolution-continuation/` |
 | Repo | `SiteOneTech/hermes-agent-original` (zeus_only) |
-| Current state | `active` — G1 bootstrap in progress (FRE-010 running, run `run-1786340791-ee6589a6`) |
+| Current state | `active` — FRE-010 rework in progress (run `run-1786349721-4ca15040`); prior planning review gate `684` failed only because `FACTORY_INTAKE.md` and `TRACKER.md` lacked per-document `Document status` rows, fixed by this rework. |
 | Anomalies at start | `missing_project_artifact_dir`, `missing_required_docs` (resolved by this increment's dir + committed docs) |
 
 ## 1. Task tracker (mirrors Factory DB)
@@ -30,9 +31,10 @@
 
 1. `hermes factory status factory-runtime-evolution-continuation --json` (48,655 B):
    project active; 14 G1 docs blocking; human_questions=[]; gates=[]; anomalies as above.
-2. Events 172950–172962: G0 passed (project_created), lanes, task FRE-010 created,
-   R1/R2 ensured, autonomous_resume (single_active_increment=true), task_claimed
-   (run-1786340791-ee6589a6, worker implementation-planner).
+2. Rework status check (run `run-1786349721-4ca15040`): Agent Core Postgres
+   `db_backend=agent_core_postgres`, task FRE-010 `running`, R1/R2 `rework`, latest
+   failed planning gate `684` notes only the missing per-document status rows in
+   `FACTORY_INTAKE.md` and `TRACKER.md`; both rows are now present.
 3. Runtime analysis (baseline commit `20228c116`):
    - `hermes_cli/factory_pg.py:4523` supervisor_health_check; `:4584–4586` pending-question
      → manual_attention bypass; `:3423` bounded requeue; `:3479` mark_project_manual_attention;
