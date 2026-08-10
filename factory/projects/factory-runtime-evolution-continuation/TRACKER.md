@@ -9,7 +9,7 @@
 | Source of truth | Agent Core Postgres `zeus_agent.factory` |
 | Repo artifacts | `factory/projects/factory-runtime-evolution-continuation/` |
 | Repo | `SiteOneTech/hermes-agent-original` (zeus_only) |
-| Current state | `active` — FRE-010 planning-review passed (solution-architect, 2026-08-10, planning gate 690); FRE-024 security gate 726 failed on QA Guardian commit-binding evidence and rework is implemented on scoped branch pending refreshed gate/review. |
+| Current state | `active` — FRE-010 planning-review passed (solution-architect, 2026-08-10, planning gate 690); FRE-024 security gate 726 failed on QA Guardian commit-binding evidence, rework is implemented and pushed on the scoped branch, and a refreshed implementation gate is recorded in Factory DB pending independent security review/merge. |
 | Anomalies at start | `missing_project_artifact_dir`, `missing_required_docs` (resolved by this increment's dir + committed docs) |
 
 ## 1. Task tracker (mirrors Factory DB)
@@ -62,6 +62,7 @@
    - RED command: `scripts/run_tests.sh tests/hermes_cli/test_factory_increment_integration.py -k 'scalar_qa_guardian_evidence or qa_guardian_evidence_without_commit or qa_guardian_commit_mismatch or qa_guardian_commit_bound_evidence' -v --tb=short` → 2 failed, 2 passed. Failures reproduced scalar `qa_guardian_evidence=True` and `{status: passed}` without commit dispatching downstream work.
    - GREEN commands: same focused command → 4 passed; `scripts/run_tests.sh tests/hermes_cli/test_factory_increment_integration.py -v --tb=short` → 29 passed; `scripts/run_tests.sh tests/hermes_cli/test_factory*.py --tb=short` → 143 passed; `.venv/bin/ruff check hermes_cli/factory_pg.py hermes_cli/factory_contracts.py tests/hermes_cli/test_factory_increment_integration.py` → all checks passed; `git diff --check` → exit 0.
    - Runtime contract tightened: source delivery QA Guardian evidence must be a dict with accepted/passed status and an exact commit matching the replacement branch head; scalar/missing/mismatched commit evidence fails closed.
+   - Factory gate evidence: refreshed implementation gate recorded as `passed` after the rework branch push; latest gate id is in Agent Core Postgres `factory.gates`.
 
 ## 3. Gate log
 
@@ -70,7 +71,7 @@
 | G0 Repository Strategy | passed | DB `project_created` event 172950 (repo_scope zeus_only, base main, per_deliverable worktrees) |
 | G1 Documentary Readiness | passed | 14 docs exist/indexed/committed/validated:true/reviewed:true after solution-architect review; planning gate 690=passed |
 | Review (FRE-010) | passed | solution-architect review, 2026-08-10, planning gate 690 |
-| Implementation (FRE-024) | rework implemented after failed security review | Factory gate 725 originally passed; security gate 726 failed; TDD RED/GREEN rework evidence listed in evidence log item 6; refreshed implementation gate and independent security review still required before delivery/merge |
+| Implementation (FRE-024) | passed after security rework | Factory gate 725 originally passed; security gate 726 failed; TDD RED/GREEN rework evidence listed in evidence log item 6; refreshed implementation gate recorded after push; independent security review still required before delivery/merge |
 | Delivery | not applicable yet | no product-runtime code in G1 |
 
 ## 4. Risk register
