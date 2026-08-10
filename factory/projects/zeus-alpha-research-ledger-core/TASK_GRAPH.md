@@ -11,6 +11,10 @@ reviewed: pending
 ## Factory DB reconciliation snapshot
 Verified read-only against Agent Core Factory DB at `2026-08-10T00:56:23-04:00`. `ALR-060` is terminal `superseded`; it is retained as auditable history and is not a live compatibility flow. Every non-terminal source task has the Jean-authorized `increment_integration_waived` metadata that enforces PR-first/QA Guardian delivery rather than Factory direct merge.
 
+### Required deterministic ALR-020 metadata reconciliation — blocking
+
+The Factory DB currently records an ALR-020 acceptance clause for **bounded local sessions**, while this deliberately bounded v1 contract excludes every collaboration session/message entity. This is a task-plan incompatibility, not permission to expand v1 and not a documentation-only waiver. Before ALR-020 implementation can start, the authorized Factory metadata owner must make and read back a deterministic correction on the ALR-020 task: remove the bounded-local-sessions acceptance clause and replace it with this exact scope statement: `v1 persists programs, sources, immutable evidence, cycles, cards, lineage, reviews, result references, inert handoffs, and scheduler readiness only; collaboration session/message entities are excluded; bounded local normalized-evidence batches are intake, not sessions.` The reconciliation evidence must record task ID, changed acceptance field, old/new literal values, actor/time, and read-back equality to this statement. This task does not alter Factory DB; normal implementation remains blocked until that evidence exists.
+
 | Task ID | Phase / status | Owner → reviewer | Depends on | Branch | Worktree |
 |---|---|---|---|---|---|
 | `zeus-alpha-research-ledger-core-alr-010-g1-rebaseline-and-local-ledger-c` | planning / ready | implementation-planner → solution-architect | — | `factory/zeus-alpha-research-ledger-core/inc-010-alr-010-g1-rebaseline-and-local` | `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-010-alr-010-g1-rebaseline-and-local` |
@@ -34,6 +38,7 @@ The last row is Factory-generated reconciliation for documents not yet on canoni
 - ALR-063 produces distinct security/least-privilege/no-egress evidence.
 - ALR-070 may start only when all three exact review reports cite the candidate SHA and are accepted.
 - Every source increment produces a Zeus-signed `agent:zeus` PR. Its per-task waiver prevents Factory direct integration into `main`; QA Guardian merge evidence is mandatory before terminal closure. Zeus never merges or deploys.
+- ALR-020 additionally may not start until the required bounded-local-sessions metadata reconciliation above is recorded and read back exactly; it does not add a collaboration-session implementation task.
 
 ## Reconciliation command
 ```bash

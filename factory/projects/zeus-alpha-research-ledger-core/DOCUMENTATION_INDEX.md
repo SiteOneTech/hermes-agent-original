@@ -10,7 +10,7 @@ owner: factory-orchestrator
 # DOCUMENTATION INDEX — Zeus Alpha Research Ledger Core
 
 ## Controlling status
-Canonical G1 pack for the **private Zeus-side implementation** succeeding `zeus-independent-alpha-research`. It is not a Vonash implementation plan, grants no external runtime access and does not authorize market execution. The pack remains `reviewed: pending` until the reworked second independent specification and security pass both return PASS.
+Canonical G1 pack for the **private Zeus-side implementation** succeeding `zeus-independent-alpha-research`. It is not a Vonash implementation plan, grants no external runtime access and does not authorize market execution. The pack remains `reviewed: pending` until a revised committed candidate receives new independent specification and security reviews against its exact SHA; no current review is PASS.
 
 | File | Purpose | Owner | Validated | Reviewed |
 |---|---|---|---|---|

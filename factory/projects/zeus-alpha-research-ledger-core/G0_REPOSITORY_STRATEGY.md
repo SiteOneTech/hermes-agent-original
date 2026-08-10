@@ -14,7 +14,7 @@ reviewed: pending
 | `work_intent` | `add_functionality` |
 | primary repo | `SiteOneTech/hermes-agent-original` |
 | primary path | `/home/jean/Projects/hermes-agent-original` |
-| base branch | `main` at `origin/main` SHA `20228c1167814f36d952999f2cafe8b3f6f9ba3c` when ALR-010 began |
+| base branch | historical ALR-010 merge base: `main`/recorded `origin/main` SHA `20228c1167814f36d952999f2cafe8b3f6f9ba3c` when ALR-010 began; revalidate canonical base before any PR |
 | branch policy | `factory/zeus-alpha-research-ledger-core/<increment>` |
 | worktree policy | one isolated worktree per increment below `/home/jean/Projects/.worktrees/` |
 | propagation | none in v1; a future Vonash adapter is a separately approved project/increment |
