@@ -4827,10 +4827,14 @@ def mark_run_spawned(run_id: str, *, process_id: int, log_path: str, prompt_path
     )
 
 
-_SEMANTIC_DONE_MARKERS = ("STATE: DONE", "STATE:DONE")
-_SEMANTIC_BLOCKED_MARKERS = ("STATE: BLOCKED", "STATE:BLOCKED")
-_SEMANTIC_IN_PROGRESS_MARKERS = ("STATE: IN_PROGRESS", "STATE:IN_PROGRESS")
-_SEMANTIC_MARKERS = _SEMANTIC_DONE_MARKERS + _SEMANTIC_BLOCKED_MARKERS + _SEMANTIC_IN_PROGRESS_MARKERS
+_SEMANTIC_MARKER_STATES = {
+    "STATE: DONE": "done",
+    "STATE: BLOCKED": "blocked",
+    "STATE: IN_PROGRESS": "in_progress",
+    "FINAL: STATE: DONE": "done",
+    "FINAL: STATE: BLOCKED": "blocked",
+    "FINAL: STATE: IN_PROGRESS": "in_progress",
+}
 _FINAL_MARKER_STALL_SECONDS_DEFAULT = 90.0
 
 
@@ -4844,9 +4848,6 @@ def _final_marker_stall_seconds() -> float:
         return _FINAL_MARKER_STALL_SECONDS_DEFAULT
 
 
-_SEMANTIC_MARKER_LINE_RE = re.compile(r"^(?:FINAL:\s*)?STATE\s*:\s*(DONE|BLOCKED|IN_PROGRESS)\s*$", re.IGNORECASE)
-
-
 def _semantic_state_from_line(line: str) -> Optional[str]:
     """Return a semantic state only when a line itself is the final marker.
 
@@ -4858,15 +4859,7 @@ def _semantic_state_from_line(line: str) -> Optional[str]:
 
     clean = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", line or "").strip()
     clean = clean.lstrip(" >│┃┊┆|-•*\t")
-    match = _SEMANTIC_MARKER_LINE_RE.fullmatch(clean)
-    if not match:
-        return None
-    value = match.group(1).upper()
-    if value == "DONE":
-        return "done"
-    if value == "BLOCKED":
-        return "blocked"
-    return "in_progress"
+    return _SEMANTIC_MARKER_STATES.get(clean)
 
 
 def _final_semantic_state(text: str) -> Optional[str]:

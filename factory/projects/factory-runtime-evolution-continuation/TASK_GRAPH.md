@@ -17,7 +17,7 @@ FRE-011 ──┐
 FRE-012 ──┴──> FRE-013 (watchdog/cron integration)
 FRE-011+FRE-012+FRE-013+FRE-014 ──> FRE-015 (independent QA/security review)
 FRE-020 (emergency consolidation: FRE-011/FRE-012/FRE-014 live incident repair) ──> FRE-015/R5 review
-FRE-021 (review outcome semantic integrity and failed-review recovery) ──> FRE-015/R5 review
+FRE-021 (review outcome semantic integrity and failed-review recovery) ──> FRE-022 (strict canonical semantic marker lexical contract) ──> FRE-015/R5 review
 FRE-015 ──> FRE-016 (PR-first delivery / merge to main)
 FRE-013 + FRE-015 ──> FRE-017 (global cron verification)
 ```
@@ -38,6 +38,7 @@ FRE-013 + FRE-015 ──> FRE-017 (global cron verification)
 | FRE-017 | Global cron verification (incremental resume + smoke) | verification | devops-release | factory-orchestrator | FRE-013, FRE-015 | `factory/factory-runtime-evolution-continuation/inc-017-global-cron-verification` |
 | FRE-020 | Technical rework escalation and canonical continuation recovery | implementation | claude-builder | quality-reviewer + solution-architect | FRE-010, live Alpha incident | `factory/factory-runtime-evolution-continuation/inc-020-fre-020-technical-rework-escalat` |
 | FRE-021 | Review outcome semantic integrity and failed-review recovery | implementation | claude-builder | quality-reviewer | FRE-020, live review 429 incident | `factory/factory-runtime-evolution-continuation/inc-020-fre-020-technical-rework-escalat` |
+| FRE-022 | Strict canonical semantic marker lexical contract | implementation | claude-builder | security-reviewer | FRE-021, security review of `591312126a6f5865cb6c74327a0f48a8f4a483b2` | `factory/factory-runtime-evolution-continuation/inc-020-fre-020-technical-rework-escalat` |
 
 ## 2. Per-increment acceptance (TDD anchors)
 
@@ -130,6 +131,26 @@ FRE-013 + FRE-015 ──> FRE-017 (global cron verification)
   `HERMES_PYTHON=/home/jean/Projects/hermes-agent-original/venv/bin/python scripts/run_tests.sh tests/hermes_cli/test_factory.py tests/hermes_cli/test_factory_project_reopen.py tests/hermes_cli/test_factory_control_plane_refactor.py tests/hermes_cli/test_factory_cron_control_plane.py tests/hermes_cli/test_factory_orchestrator_tick.py tests/hermes_cli/test_factory_increment_integration.py tests/hermes_cli/test_factory_ux_ui_designer_contract.py` → 136 passed / 0 failed.
 - DoD: no deploy, no push/merge/PR/Factory task close; code/docs committed on the
   existing FRE-020 branch for independent exact-SHA review.
+
+### FRE-022 — Strict canonical semantic marker lexical contract
+- RED: added lexical-contract regression coverage for exact accepted markers and rejected
+  noncanonical variants (`STATE:DONE`, `STATE : DONE`, `state: done`, `FINAL:STATE: DONE`,
+  extra internal spaces, case variants, and suffixed prose) in
+  `tests/hermes_cli/test_factory_control_plane_refactor.py`. Expected/observed RED before
+  production change: 8 rejected-variant rows failed because the parser still accepted
+  case-insensitive/flexible-whitespace forms while the six exact canonical marker rows
+  remained accepted.
+- GREEN: semantic parser now maps only exact cleaned marker lines
+  `STATE: DONE|BLOCKED|IN_PROGRESS` and
+  `FINAL: STATE: DONE|BLOCKED|IN_PROGRESS` after the existing leading decoration cleanup;
+  regex case-insensitive/flexible-whitespace acceptance is removed.
+- Preservation evidence: wrapped 429 failed-review path remains `failed`/`rework` with
+  `review_run_failed`, and stale-worker recovery still finalizes a valid canonical
+  `STATE: DONE` marker.
+- Focused Factory regression set:
+  `HERMES_PYTHON=/home/jean/Projects/hermes-agent-original/venv/bin/python scripts/run_tests.sh tests/hermes_cli/test_factory.py tests/hermes_cli/test_factory_project_reopen.py tests/hermes_cli/test_factory_control_plane_refactor.py tests/hermes_cli/test_factory_cron_control_plane.py tests/hermes_cli/test_factory_orchestrator_tick.py tests/hermes_cli/test_factory_increment_integration.py tests/hermes_cli/test_factory_ux_ui_designer_contract.py` → 153 passed / 0 failed.
+- DoD: no deploy, no credential change, no direct main merge; code/docs committed on the
+  existing FRE-020 branch for independent exact-SHA security review.
 
 ## 3. Mapping to acceptance criteria (FRE-010)
 

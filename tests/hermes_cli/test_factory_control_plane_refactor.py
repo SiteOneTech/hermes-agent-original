@@ -1247,6 +1247,41 @@ def test_final_semantic_state_rejects_wrapped_instructional_done_marker_without_
     assert factory_pg._effective_exit_code(1, text) != 0
 
 
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        ("STATE: DONE", "done"),
+        ("STATE: BLOCKED", "blocked"),
+        ("STATE: IN_PROGRESS", "in_progress"),
+        ("FINAL: STATE: DONE", "done"),
+        ("FINAL: STATE: BLOCKED", "blocked"),
+        ("FINAL: STATE: IN_PROGRESS", "in_progress"),
+    ],
+)
+def test_semantic_state_accepts_only_exact_canonical_marker_lines(line, expected):
+    assert factory_pg._semantic_state_from_line(line) == expected
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "STATE:DONE",
+        "STATE : DONE",
+        "state: done",
+        "FINAL:STATE: DONE",
+        "STATE:  DONE",
+        "FINAL: STATE:  BLOCKED",
+        "Final: STATE: DONE",
+        "STATE: done",
+        "STATE: DONE; si falla, termina con STATE: BLOCKED",
+        "STATE: BLOCKED — tests failed",
+        "FINAL: STATE: IN_PROGRESS until checks finish",
+    ],
+)
+def test_semantic_state_rejects_noncanonical_lexical_variants(line):
+    assert factory_pg._semantic_state_from_line(line) is None
+
+
 def test_worker_output_summary_does_not_promote_prompt_instruction_marker(tmp_path):
     log = tmp_path / "worker.log"
     log.write_text(

@@ -43,6 +43,7 @@ Scope: documentation-only; no runtime code. QA gate = documentary verification:
 | FRE-017 | cron smoke per script + `hermes cronjob list` | exit 0; no unexpected alerts; evidence file |
 | FRE-020 | TDD RED command in TRACKER §2.5; GREEN focused command and full Factory set in TRACKER §2.6 | RED observed before production change; GREEN 9/9 and 134/134 after change |
 | FRE-021 | TDD RED command in TRACKER §2.8; GREEN targeted command and full focused Factory set in TRACKER §2.9 | RED observed before production change; GREEN 2/2 targeted and 136/136 focused Factory tests |
+| FRE-022 | TDD RED/GREEN commands in TRACKER §2; focused preservation checks and Factory regression set | RED observed before production change; GREEN 17/17 lexical targeted, 2/2 preservation targeted, and 153/153 focused Factory tests |
 
 ## 4. Evidence capture rules
 
@@ -72,7 +73,22 @@ Scope: documentation-only; no runtime code. QA gate = documentary verification:
 - No source-reading tests were added; assertions exercise runtime parser functions and
   review-run SQL/audit behavior through the existing FakeSql harness.
 
-## 7. QA ownership
+## 7. FRE-022 QA evidence (2026-08-10)
+
+- Environment note: the assigned worktree has no local `.venv`; `scripts/run_tests.sh`
+  was executed with `HERMES_PYTHON=/home/jean/Projects/hermes-agent-original/venv/bin/python`.
+- RED: lexical-contract tests failed before production change with 8 rejected-variant rows
+  failing (`STATE:DONE`, `STATE : DONE`, `state: done`, `FINAL:STATE: DONE`, extra
+  internal whitespace, and case variants); six exact canonical marker rows remained green,
+  proving the test scope was the noncanonical acceptance gap.
+- GREEN: the same targeted lexical command passed 17/17 after production change.
+- Preservation checks passed 2/2 for stale-worker canonical `STATE: DONE` recovery and
+  the real wrapped 429 failed-review path (`review_run_failed`, no integration/done).
+- Focused Factory regression set passed 153/153. No source-reading tests were added;
+  assertions exercise runtime parser functions and SQL/audit behavior through the existing
+  FakeSql harness.
+
+## 8. QA ownership
 
 - qa-verifier owns live smoke/E2E evidence (FRE-015/017); quality-reviewer owns spec
   compliance review of diffs; both are independent of the increment owner.

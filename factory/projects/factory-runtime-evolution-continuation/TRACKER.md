@@ -9,7 +9,7 @@
 | Source of truth | Agent Core Postgres `zeus_agent.factory` |
 | Repo artifacts | `factory/projects/factory-runtime-evolution-continuation/` |
 | Repo | `SiteOneTech/hermes-agent-original` (zeus_only) |
-| Current state | `paused` in Factory DB by operator pause; FRE-021 implementation complete locally on the assigned FRE-020 branch; tests green; pending reviewer/gate. |
+| Current state | `paused` in Factory DB by operator pause; FRE-022 implementation complete locally on the assigned FRE-020 branch; tests green; pending independent exact-SHA security review/gate. |
 | Anomalies at start | `missing_project_artifact_dir`, `missing_required_docs` (resolved by this increment's dir + committed docs) |
 
 ## 1. Task tracker (mirrors Factory DB)
@@ -28,6 +28,7 @@
 | FRE-017 Global cron verification | planned (TASK_GRAPH) | devops-release | factory-orchestrator | cron smoke evidence |
 | FRE-020 Technical rework escalation and canonical continuation recovery | implemented (local branch; not pushed/closed) | claude-builder | quality-reviewer + solution-architect | TDD RED commit `4e2d163ac`; GREEN focused Factory tests 134/134; code/docs committed on assigned branch |
 | FRE-021 Review outcome semantic integrity and failed-review recovery | implemented (local branch; not pushed/closed) | claude-builder | quality-reviewer | TDD RED observed before production change; GREEN targeted 2/2 and focused Factory tests 136/136; code/docs committed on assigned branch |
+| FRE-022 Strict canonical semantic marker lexical contract | implemented (local branch; not pushed/closed) | claude-builder | security-reviewer | TDD RED observed before production change; GREEN targeted 17/17, preservation 2/2, and focused Factory tests 153/153; code/docs committed on assigned branch |
 
 ## 2. Evidence log (real, 2026-08-10)
 
@@ -70,6 +71,17 @@
 10. FRE-021 implemented controls:
     - `hermes_cli/factory_pg.py`: semantic marker parsing now requires the whole cleaned line to be a canonical marker (`STATE: DONE`, `STATE: BLOCKED`, `STATE: IN_PROGRESS`, optional `FINAL:` prefix); wrapped/instructional prose is ignored and cannot override a nonzero review outcome.
     - `hermes_cli/factory_pg.py`: failed review runs without an actual final verdict remain `failed`/`rework`, skip increment integration/terminal close semantics, and write `review_run_failed` audit events with the failure summary tail.
+11. FRE-022 strict TDD RED evidence:
+    `HERMES_PYTHON=/home/jean/Projects/hermes-agent-original/venv/bin/python scripts/run_tests.sh tests/hermes_cli/test_factory_control_plane_refactor.py -k 'semantic_state_accepts_only_exact_canonical_marker_lines or semantic_state_rejects_noncanonical_lexical_variants' -v` → 8 failed / 9 passed before production change. Failures proved the listed noncanonical variants were still accepted (`STATE:DONE`, `STATE : DONE`, `state: done`, `FINAL:STATE: DONE`, extra internal spaces, case variants) while exact canonical marker forms remained accepted.
+12. FRE-022 GREEN evidence after production change:
+    same targeted lexical command → 17 passed / 0 failed.
+13. FRE-022 preservation evidence:
+    `HERMES_PYTHON=/home/jean/Projects/hermes-agent-original/venv/bin/python scripts/run_tests.sh tests/hermes_cli/test_factory_control_plane_refactor.py::test_monitor_runs_finalizes_stale_final_marker_without_exit_file tests/hermes_cli/test_factory_increment_integration.py::test_mark_run_finished_failed_review_with_wrapped_instruction_remains_rework -v` → 2 passed / 0 failed. This preserves stale-worker recovery for valid canonical `STATE: DONE` and the real wrapped 429 review behavior (`failed`/`rework`, no integration/done, `review_run_failed`).
+14. FRE-022 focused Factory regression set:
+    `HERMES_PYTHON=/home/jean/Projects/hermes-agent-original/venv/bin/python scripts/run_tests.sh tests/hermes_cli/test_factory.py tests/hermes_cli/test_factory_project_reopen.py tests/hermes_cli/test_factory_control_plane_refactor.py tests/hermes_cli/test_factory_cron_control_plane.py tests/hermes_cli/test_factory_orchestrator_tick.py tests/hermes_cli/test_factory_increment_integration.py tests/hermes_cli/test_factory_ux_ui_designer_contract.py` → 153 passed / 0 failed.
+15. FRE-022 implemented controls:
+    - `hermes_cli/factory_pg.py`: `_semantic_state_from_line()` now uses an exact canonical marker map after ANSI/leading-decoration cleanup; removed case-insensitive/flexible-whitespace regex matching and legacy no-space `STATE:DONE` marker acceptance.
+    - `tests/hermes_cli/test_factory_control_plane_refactor.py`: lexical contract tests assert six exact canonical forms accepted and listed noncanonical variants/suffixed prose rejected.
 
 ## 3. Gate log
 
@@ -81,6 +93,7 @@
 | Delivery | not applicable yet | no product-runtime code in G1 |
 | FRE-020 test evidence | passed | Factory test gate recorded by claude-builder; TDD RED captured at `4e2d163ac`; GREEN Factory tests 134/134; no push/merge/PR/Factory close performed |
 | FRE-021 test evidence | passed | TDD RED captured before production change; GREEN targeted 2/2 and focused Factory tests 136/136; no push/merge/PR/Factory close performed |
+| FRE-022 test evidence | passed | TDD RED captured before production change; GREEN lexical 17/17, preservation 2/2, focused Factory tests 153/153; no deploy/merge/Factory close performed |
 
 ## 4. Risk register
 
@@ -90,5 +103,6 @@
 | Detached successor semantics confuse lineage | FRE-014 adds reopen/continue; this project records `continuation_of: factory-runtime-evolution` intent in its docs now |
 | Technical failures strand projects in manual_attention | FRE-020 fail-closes invalid human questions and routes retry exhaustion to autonomous recovery with audit, not human/manual hold |
 | Wrapped/instructional final-marker prose closes failed reviews | FRE-021 strict standalone marker parsing + failed-review audit event keeps no-verdict review failures in failed/rework |
+| Noncanonical lexical marker variants bypass strict review semantics | FRE-022 exact canonical marker map rejects no-space, case-variant, extra-internal-space, and suffixed/instructional marker prose fail-closed |
 | Cron resume regressions | FRE-013/017 incremental resume with smoke evidence; idle-silence rule preserved |
 | Change-detector tests in new suites | QA_GATES.md bans them; reviewers enforce |
