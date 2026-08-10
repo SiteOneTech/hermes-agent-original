@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Document status | validated: true (implementation-planner, 2026-08-10); reviewed: false — assigned to `solution-architect` |
+| Document status | validated:true (implementation-planner, 2026-08-10); reviewed:true (solution-architect, 2026-08-10, planning gate 690) |
 | Method | Static analysis of `hermes_cli/factory_pg.py`, `hermes_cli/factory_contracts.py`, `scripts/factory/*` at commit `20228c116` (worktree base), plus Factory DB evidence (`hermes factory status --json`) and predecessor project artifacts. |
 
 ## 1. Current runtime anatomy (verified boundaries)

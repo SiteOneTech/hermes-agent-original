@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Document status | validated: true (implementation-planner, 2026-08-10); reviewed: false — assigned to `solution-architect` (+ security-reviewer for FRE-012) |
+| Document status | validated:true (implementation-planner, 2026-08-10); reviewed:true (solution-architect, 2026-08-10, planning gate 690) |
 
 ## 1. Escalation allowlist (only genuine Jean conditions)
 

@@ -2,26 +2,26 @@
 
 | Field | Value |
 |---|---|
-| Document status | validated: true (implementation-planner, 2026-08-10); reviewed: false — assigned to `solution-architect` |
+| Document status | validated:true (implementation-planner, 2026-08-10); reviewed:true (solution-architect, 2026-08-10, planning gate 690) |
 
 ## 1. Required G1 documents (canonical control pack)
 
 | File | Purpose | Exists | Indexed | Committed | Validated | Reviewed |
 |---|---|---|---|---|---|---|
-| `FACTORY_INTAKE.md` | Intake, trigger, G0, scope, intake evidence | yes | yes | yes (this branch) | true (planner) | pending → solution-architect |
-| `REQUIREMENTS_ANALYSIS.md` | Durable invariant, FR-1…FR-8, NFRs, traceability | yes | yes | yes | true (planner) | pending → solution-architect |
-| `PATTERN_ANALYSIS.md` | Runtime anatomy, failure-mode diagnosis, gap analysis, pattern decisions | yes | yes | yes | true (planner) | pending → solution-architect |
-| `ASSUMPTIONS_AND_OPEN_QUESTIONS.md` | Assumptions A1–A10, open questions Q1–Q5, non-decisions | yes | yes | yes | true (planner) | pending → solution-architect |
-| `PRD.md` | Problem, users, stories, scope C1–C8, acceptance, metrics, non-goals | yes | yes | yes | true (planner) | pending → solution-architect |
-| `ADRS.md` | ADR-010-1…010-6 (question lifecycle, re-validation, reopen, allowlist, cron, docs discipline) | yes | yes | yes | true (planner) | pending → solution-architect |
-| `METHODOLOGY_PLAN.md` | Hybrid methodology, increment lifecycle, DoR/DoD, gate policy, commands | yes | yes | yes | true (planner) | pending → solution-architect |
-| `TECHNICAL_BLUEPRINT.md` | Current-state boundaries (file:line), target architecture, data contracts, test surface | yes | yes | yes | true (planner) | pending → solution-architect |
-| `SPRINT_PLAN.md` | Sprints 1–4, owners/reviewers, exit criteria, rollout boundary | yes | yes | yes | true (planner) | pending → solution-architect |
-| `TASK_GRAPH.md` | Dependency graph, FRE-010…017 + R1/R2 inventory, per-increment acceptance, parallelization | yes | yes | yes | true (planner) | pending → solution-architect |
-| `TRACKER.md` | Task tracker mirroring DB, evidence log, gate log, risk register | yes | yes | yes | true (planner) | pending → solution-architect |
-| `DOCUMENTATION_INDEX.md` | This index: canonical builder/reviewer map | yes | yes | yes | true (planner) | pending → solution-architect |
-| `QA_GATES.md` | QA criteria per increment, test commands, evidence rules | yes | yes | yes | true (planner) | pending → solution-architect |
-| `SECURITY_GATES.md` | Security gates, escalation allowlist, fail-closed rules | yes | yes | yes | true (planner) | pending → solution-architect |
+| `FACTORY_INTAKE.md` | Intake, trigger, G0, scope, intake evidence | yes | yes | yes (this branch) | true (planner) | true (solution-architect, 2026-08-10, planning gate 690) |
+| `REQUIREMENTS_ANALYSIS.md` | Durable invariant, FR-1…FR-8, NFRs, traceability | yes | yes | yes | true (planner) | true (solution-architect, 2026-08-10, planning gate 690) |
+| `PATTERN_ANALYSIS.md` | Runtime anatomy, failure-mode diagnosis, gap analysis, pattern decisions | yes | yes | yes | true (planner) | true (solution-architect, 2026-08-10, planning gate 690) |
+| `ASSUMPTIONS_AND_OPEN_QUESTIONS.md` | Assumptions A1–A10, open questions Q1–Q5, non-decisions | yes | yes | yes | true (planner) | true (solution-architect, 2026-08-10, planning gate 690) |
+| `PRD.md` | Problem, users, stories, scope C1–C8, acceptance, metrics, non-goals | yes | yes | yes | true (planner) | true (solution-architect, 2026-08-10, planning gate 690) |
+| `ADRS.md` | ADR-010-1…010-6 (question lifecycle, re-validation, reopen, allowlist, cron, docs discipline) | yes | yes | yes | true (planner) | true (solution-architect, 2026-08-10, planning gate 690) |
+| `METHODOLOGY_PLAN.md` | Hybrid methodology, increment lifecycle, DoR/DoD, gate policy, commands | yes | yes | yes | true (planner) | true (solution-architect, 2026-08-10, planning gate 690) |
+| `TECHNICAL_BLUEPRINT.md` | Current-state boundaries (file:line), target architecture, data contracts, test surface | yes | yes | yes | true (planner) | true (solution-architect, 2026-08-10, planning gate 690) |
+| `SPRINT_PLAN.md` | Sprints 1–4, owners/reviewers, exit criteria, rollout boundary | yes | yes | yes | true (planner) | true (solution-architect, 2026-08-10, planning gate 690) |
+| `TASK_GRAPH.md` | Dependency graph, FRE-010…017 + R1/R2 inventory, per-increment acceptance, parallelization | yes | yes | yes | true (planner) | true (solution-architect, 2026-08-10, planning gate 690) |
+| `TRACKER.md` | Task tracker mirroring DB, evidence log, gate log, risk register | yes | yes | yes | true (planner) | true (solution-architect, 2026-08-10, planning gate 690) |
+| `DOCUMENTATION_INDEX.md` | This index: canonical builder/reviewer map | yes | yes | yes | true (planner) | true (solution-architect, 2026-08-10, planning gate 690) |
+| `QA_GATES.md` | QA criteria per increment, test commands, evidence rules | yes | yes | yes | true (planner) | true (solution-architect, 2026-08-10, planning gate 690) |
+| `SECURITY_GATES.md` | Security gates, escalation allowlist, fail-closed rules | yes | yes | yes | true (planner) | true (solution-architect, 2026-08-10, planning gate 690) |
 
 ## 2. Lifecycle documents (created as phases advance)
 
@@ -60,8 +60,9 @@
 
 ## 5. Review status note
 
-Per-document status block: `validated: true` means the planner verified content
+Per-document status block: `validated:true` means the planner verified content
 consistency against Factory DB evidence, runtime code (baseline `20228c116`), and the
-task acceptance criteria. `reviewed: pending` is explicit and tracked: the independent
-review gate is assigned to `solution-architect` (Factory DB reviewer for FRE-010) and
-must pass before any downstream code increment is claimable (fail-closed G1).
+task acceptance criteria. `reviewed:true` means the independent `solution-architect`
+review passed on 2026-08-10 via Factory planning gate 690. This document-only
+reconciliation replaces the stale negative/pending review markers so the G1 preflight
+reflects the already-recorded planning-review gate instead of re-blocking FRE-010.

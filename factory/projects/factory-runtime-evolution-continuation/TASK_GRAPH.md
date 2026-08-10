@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Document status | validated: true (implementation-planner, 2026-08-10); reviewed: false — assigned to `solution-architect` |
+| Document status | validated:true (implementation-planner, 2026-08-10); reviewed:true (solution-architect, 2026-08-10, planning gate 690) |
 | Rule | Every increment = own branch/worktree (`factory/factory-runtime-evolution-continuation/<inc-key>`), TDD RED→GREEN, reviewer gate, PR-first merge to `main` after gates. |
 
 ## 0. Dependency graph

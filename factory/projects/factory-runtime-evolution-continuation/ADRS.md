@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Document status | validated: true (implementation-planner, 2026-08-10); reviewed: false — assigned to `solution-architect` |
+| Document status | validated:true (implementation-planner, 2026-08-10); reviewed:true (solution-architect, 2026-08-10, planning gate 690) |
 
 ADR format: status, context, decision, consequences. Decisions below are planning-level
 (accepted for downstream increments); each increment confirms or amends its ADRs at
