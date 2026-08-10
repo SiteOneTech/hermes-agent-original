@@ -1339,12 +1339,31 @@ def _git_status_by_file(repo_path: str, artifact_dir: str) -> dict[str, str] | N
     return result
 
 
+_DOCUMENT_STATUS_TRUE_VALUES = {"true", "yes", "y", "1", "passed", "validated", "reviewed", "approved"}
+
+
+def _document_has_explicit_positive_status(index_line: str, file_text: str, flag: str) -> bool:
+    """Return whether the doc declares a machine-readable positive status.
+
+    Front-matter/status-table declarations are control-plane evidence. They must
+    win over later prose that describes fail-closed rules such as "not reviewed".
+    Keep this intentionally narrow so loose positive prose still goes through
+    the negation check below.
+    """
+
+    status_header = index_line + "\n" + "\n".join(file_text.splitlines()[:40])
+    true_values = "|".join(sorted(re.escape(value) for value in _DOCUMENT_STATUS_TRUE_VALUES))
+    return bool(re.search(rf"\b{re.escape(flag)}\b\s*[:=]\s*(?:{true_values})\b", status_header, re.IGNORECASE))
+
+
 def _document_flag_from_text(metadata: dict[str, Any], index_line: str, file_text: str, flag: str) -> bool:
     value = metadata.get(flag)
     if isinstance(value, bool):
         return value
     if isinstance(value, str):
-        return value.strip().lower() in {"true", "yes", "y", "1", "passed", "validated", "reviewed", "approved"}
+        return value.strip().lower() in _DOCUMENT_STATUS_TRUE_VALUES
+    if _document_has_explicit_positive_status(index_line, file_text, flag):
+        return True
     text = (index_line + "\n" + file_text[:2000]).lower()
     if re.search(rf"\b(not|no|pending|todo|tbd|unvalidated|unreviewed)\b[^\n]{{0,40}}\b{re.escape(flag)}\b", text):
         return False

@@ -436,6 +436,43 @@ def test_document_status_does_not_treat_negated_review_words_as_reviewed(tmp_pat
     assert prd["blocking"] is True
 
 
+def test_document_status_explicit_status_wins_over_later_normative_negation(tmp_path):
+    factory_dir = tmp_path / "factory" / "projects" / "demo"
+    factory_dir.mkdir(parents=True)
+    for name in factory_pg.G1_BLOCKING_DOCUMENTS:
+        (factory_dir / name).write_text(
+            "\n".join(
+                [
+                    f"# {name}",
+                    "",
+                    "| Field | Value |",
+                    "|---|---|",
+                    "| Document status | validated:true (planner); reviewed:true (architect) |",
+                    "",
+                    "## G1 rule",
+                    "G1 remains blocking when required documents are not reviewed.",
+                ]
+            ),
+            encoding="utf-8",
+        )
+    (factory_dir / "DOCUMENTATION_INDEX.md").write_text(
+        "\n".join(
+            f"| `{name}` | yes | yes | yes | true | true |" for name in factory_pg.G1_BLOCKING_DOCUMENTS
+        ),
+        encoding="utf-8",
+    )
+    _commit_factory_docs(tmp_path)
+
+    statuses = factory_pg.project_document_status(
+        {"project_id": "demo", "repo_path": str(tmp_path), "metadata": {"artifact_dir": "factory/projects/demo"}}
+    )
+    security_gates = next(row for row in statuses if row["file_name"] == "SECURITY_GATES.md")
+
+    assert security_gates["validated"] is True
+    assert security_gates["reviewed"] is True
+    assert security_gates["blocking"] is False
+
+
 def test_reconciler_creates_task_for_unvalidated_required_docs(tmp_path):
     factory_dir = tmp_path / "factory" / "projects" / "demo"
     factory_dir.mkdir(parents=True)
