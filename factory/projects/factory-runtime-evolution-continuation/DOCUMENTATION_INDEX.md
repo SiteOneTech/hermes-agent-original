@@ -44,7 +44,19 @@
 3. Git commits — immutable checkpoint evidence.
 4. Notion/dashboard — human PM projection; never a blocker source.
 
-## 4. Builder/reviewer reading order
+## 4. Directory ownership and reconciliation note
+
+- Canonical directory: `factory/projects/factory-runtime-evolution-continuation/`.
+- Owner role: `factory-reporter` maintains the project-local documentary index,
+  status notes, and human-readable reconciliation evidence for this directory.
+- Source of truth: Agent Core Postgres `zeus_agent.factory` remains operational truth;
+  this directory is the repo-local documentary control pack and must not override DB task,
+  run, gate, or event state.
+- Reconciliation rule: the directory is considered restored only when it exists in the
+  repo/worktree being validated, contains this `DOCUMENTATION_INDEX.md`, and the index
+  lists the required G1 documents with committed/validated/reviewed status.
+
+## 5. Builder/reviewer reading order
 
 1. `DOCUMENTATION_INDEX.md`
 2. `FACTORY_INTAKE.md`
@@ -58,7 +70,7 @@
 10. `QA_GATES.md` + `SECURITY_GATES.md`
 11. Task-specific acceptance criteria from Factory DB
 
-## 5. Review status note
+## 6. Review status note
 
 Per-document status block: `validated:true` means the planner verified content
 consistency against Factory DB evidence, runtime code (baseline `20228c116`), and the
