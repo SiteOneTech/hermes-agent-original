@@ -29,5 +29,9 @@ The independently produced local specification gate **686** and local security g
 
 This bounded documentary rework addresses those records only. A revised **committed** candidate must receive new, independent specification and security reviews against its exact SHA. No review is PASS, no G1 frontmatter may become reviewed yes, and no implementation, Factory metadata change, PR, merge, deploy, or normal task dispatch is authorized by this record.
 
+## Local documentary verification — non-approval
+
+At `2026-08-10T04:50:09-04:00`, the implementation-planner worker verified the project-local pack from the assigned worktree only. `git ls-files --error-unmatch` confirmed the 14 required G1 documents plus `G0_REPOSITORY_STRATEGY.md`, `REQUIREMENTS_TRACEABILITY.md`, `DATABASE_AND_RUNTIME_CONTRACT.md`, and `G1_REVIEW.md` are tracked. `DOCUMENTATION_INDEX.md` indexes required documents and records explicit validated/reviewed status. `G0_REPOSITORY_STRATEGY.md` records the Zeus-only source repo, `origin/main` reference, assigned branch/worktree policy, PR-first delivery, and predecessor linkage. This is implementation evidence, not an independent specification/security PASS.
+
 ## Status
 This is still a remediation record, not approval. After this revision is committed, obtain new independent specification and security reviews against that exact committed SHA; only then may their independent PASS results support changing required G1 frontmatter/index to `reviewed: yes`, opening the documentation PR, and the mandated QA Guardian path. Until then, `reviewed: pending` remains binding.

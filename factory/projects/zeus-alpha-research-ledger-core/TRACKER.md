@@ -11,9 +11,9 @@ reviewed: pending
 ## Current state
 | Area | State | Evidence / next action |
 |---|---|---|
-| G0 strategy | passed | Factory DB records Zeus-only repo and isolated worktree policy; `20228c1167814f36d952999f2cafe8b3f6f9ba3c` is historical only and canonical base must be revalidated before PR |
+| G0 strategy | passed | G0 records Zeus-only repo, `origin/main`, remote, branch/worktree policy and PR-first delivery; fetched `origin/main` was `00e7bb4ab0fcd9013ffa924ce6c5a8ae2c2ae2fc`, while `20228c1167814f36d952999f2cafe8b3f6f9ba3c` is historical only and canonical base must be revalidated before PR |
 | Predecessor linkage | passed | `zeus-independent-alpha-research` remains the documentation-only predecessor |
-| ALR-010 G1 | rework in progress | two independent reviews returned concrete blocking controls; this revision adds enforceable role/source/classification/no-egress/scheduler requirements |
+| ALR-010 G1 | branch-local candidate ready for independent review | required docs exist, are indexed/tracked, and carry explicit validated/reviewed status; reviewer state remains pending because prior spec/security gates failed and no new independent PASS exists |
 | ALR-020..050 | not started | blocked on reviewed and QA-merged G1 PR; ALR-020 is additionally blocked pending deterministic Factory metadata reconciliation removing incompatible bounded-local-sessions acceptance |
 | Source APIs | policy only | v1 supports local normalized evidence batch; no provider driver/credential is enabled in core |
 | Daily scheduler | disabled by design | must wait for recorded ALR-070 local prerequisites |
@@ -30,4 +30,4 @@ reviewed: pending
 - ALR-060 was superseded by three independent review tasks; ALR-070 depends on all three.
 
 ## Immediate next event
-Commit this bounded rework, then obtain new independent specification and security reviews against the exact revised SHA. Implementation remains blocked until `reviewed: yes` is validly supported, the G1 PR is merged by the mandated QA Guardian path, and the ALR-020 metadata reconciliation is recorded/read back exactly.
+Commit and push this bounded branch-local candidate, record the documentary evidence gate, then obtain new independent specification and security reviews against the exact revised SHA. Implementation remains blocked until `reviewed: yes` is validly supported, the G1 PR is merged by the mandated QA Guardian path, and the ALR-020 metadata reconciliation is recorded/read back exactly.

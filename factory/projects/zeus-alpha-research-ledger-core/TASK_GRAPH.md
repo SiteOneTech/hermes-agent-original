@@ -9,7 +9,7 @@ reviewed: pending
 # TASK GRAPH
 
 ## Factory DB reconciliation snapshot
-Verified read-only against Agent Core Factory DB at `2026-08-10T00:56:23-04:00`. `ALR-060` is terminal `superseded`; it is retained as auditable history and is not a live compatibility flow. Every non-terminal source task has the Jean-authorized `increment_integration_waived` metadata that enforces PR-first/QA Guardian delivery rather than Factory direct merge.
+Verified read-only with `hermes factory status zeus-alpha-research-ledger-core --json` against Agent Core Factory DB at `2026-08-10T04:50:09-04:00` (`db_backend=agent_core_postgres`, `database=zeus_agent`). Current ALR-010 is claimed by `implementation-planner`; `ALR-060` is terminal `superseded` and retained only as auditable history, not a live compatibility flow. Every non-terminal source task has the Jean-authorized `increment_integration_waived` metadata that enforces PR-first/QA Guardian delivery rather than Factory direct merge. Factory reconciliation still reports `missing_project_artifact_dir` / `missing_required_docs` until this branch-local pack is pushed, reviewed, PR-handled and exposed on canonical base.
 
 ### Required deterministic ALR-020 metadata reconciliation — blocking
 
@@ -17,7 +17,7 @@ The Factory DB currently records an ALR-020 acceptance clause for **bounded loca
 
 | Task ID | Phase / status | Owner → reviewer | Depends on | Branch | Worktree |
 |---|---|---|---|---|---|
-| `zeus-alpha-research-ledger-core-alr-010-g1-rebaseline-and-local-ledger-c` | planning / ready | implementation-planner → solution-architect | — | `factory/zeus-alpha-research-ledger-core/inc-010-alr-010-g1-rebaseline-and-local` | `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-010-alr-010-g1-rebaseline-and-local` |
+| `zeus-alpha-research-ledger-core-alr-010-g1-rebaseline-and-local-ledger-c` | planning / claimed | implementation-planner → solution-architect | — | `factory/zeus-alpha-research-ledger-core/inc-010-alr-010-g1-rebaseline-and-local` | `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-010-alr-010-g1-rebaseline-and-local` |
 | `zeus-alpha-research-ledger-core-alr-020-agent-core-schema-and-dedicated-` | implementation / todo | claude-builder → security-reviewer | ALR-010 | `factory/zeus-alpha-research-ledger-core/inc-020-alr-020-agent-core-schema-and-de` | `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-020-alr-020-agent-core-schema-and-de` |
 | `zeus-alpha-research-ledger-core-alr-030-research-ledger-json-tools-and-l` | implementation / todo | codex-builder → quality-reviewer | ALR-020 | `factory/zeus-alpha-research-ledger-core/inc-030-alr-030-research-ledger-json-too` | `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-030-alr-030-research-ledger-json-too` |
 | `zeus-alpha-research-ledger-core-alr-040-source-provenance-adapters-and-r` | implementation / todo | claude-builder → quality-reviewer | ALR-030 | `factory/zeus-alpha-research-ledger-core/inc-040-alr-040-source-provenance-adapte` | `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-040-alr-040-source-provenance-adapte` |

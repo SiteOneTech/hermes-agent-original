@@ -10,7 +10,7 @@ owner: factory-orchestrator
 # DOCUMENTATION INDEX — Zeus Alpha Research Ledger Core
 
 ## Controlling status
-Canonical G1 pack for the **private Zeus-side implementation** succeeding `zeus-independent-alpha-research`. It is not a Vonash implementation plan, grants no external runtime access and does not authorize market execution. The pack remains `reviewed: pending` until a revised committed candidate receives new independent specification and security reviews against its exact SHA; no current review is PASS.
+Canonical G1 pack for the **private Zeus-side implementation** succeeding `zeus-independent-alpha-research`. It is not a Vonash implementation plan, grants no external runtime access and does not authorize market execution. Every required document carries explicit `validated` and `reviewed` status metadata plus the index matrix below. The reviewer state remains `reviewed: pending` until a revised committed candidate receives new independent specification and security PASS reviews against its exact SHA; no current review is PASS and this worker does not self-approve.
 
 | File | Purpose | Owner | Validated | Reviewed |
 |---|---|---|---|---|
@@ -34,6 +34,11 @@ Canonical G1 pack for the **private Zeus-side implementation** succeeding `zeus-
 - `REQUIREMENTS_TRACEABILITY.md` maps requirements to tasks/tests/reviews.
 - `DATABASE_AND_RUNTIME_CONTRACT.md` is binding for exact DB, runtime, no-egress and scheduler implementation behavior.
 - `G1_REVIEW.md` records independent review findings/remediation.
+
+## Status semantics
+- `validated: yes` means the implementation-planner/local worker confirmed the file exists, is tracked, is indexed where required, and is internally consistent with this G1 contract.
+- `reviewed: pending` is an explicit reviewed-status value, not a missing field. It may become `reviewed: yes` only after independent reviewers record PASS evidence against the exact committed SHA.
+- A branch-local reviewed status never authorizes normal implementation by itself; canonical base exposure and QA Guardian process remain required.
 
 ## Required reading order
 1. `DOCUMENTATION_INDEX.md`, `FACTORY_INTAKE.md`, `G0_REPOSITORY_STRATEGY.md`
