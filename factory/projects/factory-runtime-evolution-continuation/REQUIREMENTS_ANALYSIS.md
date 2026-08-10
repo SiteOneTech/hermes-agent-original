@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Document status | validated: true (implementation-planner, 2026-08-10); reviewed: false — assigned to `solution-architect` |
+| Document status | validated:true (implementation-planner, 2026-08-10); reviewed:true (solution-architect, 2026-08-10, planning gate 690) |
 | Source | Jean García directive + Factory DB status + predecessor `factory-runtime-evolution` evidence |
 | Scope | G1 control pack (FRE-010) + downstream increments (FRE-011…FRE-017, see `TASK_GRAPH.md`) |
 

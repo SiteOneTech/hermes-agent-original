@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Document status | validated: true (implementation-planner, 2026-08-10); reviewed: false — assigned to `solution-architect` |
+| Document status | validated:true (implementation-planner, 2026-08-10); reviewed:true (solution-architect, 2026-08-10, planning gate 690) |
 | Project ID | `factory-runtime-evolution-continuation` |
 | Project name | Factory Runtime Evolution — Continuation |
 | Trigger | Jean García directive (2026-08-10): the Factory must treat blocked projects as evidence problems to diagnose, repair, requeue, or dispatch — never as generic/stale/self-generated "human decisions" to bounce back to Jean. |

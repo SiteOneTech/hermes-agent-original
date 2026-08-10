@@ -2,21 +2,21 @@
 
 | Field | Value |
 |---|---|
-| Document status | validated: true (implementation-planner, 2026-08-10); reviewed: false — assigned to `solution-architect` |
+| Document status | validated:true (implementation-planner, 2026-08-10); reviewed:true (solution-architect, 2026-08-10, planning gate 690) |
 | Project ID | `factory-runtime-evolution-continuation` |
 | Predecessor | `factory-runtime-evolution` (terminal: completed; continuation lineage pending FRE-014) |
 | Methodology | Hybrid (zeus_native lane + bmad_hybrid lane) |
 | Source of truth | Agent Core Postgres `zeus_agent.factory` |
 | Repo artifacts | `factory/projects/factory-runtime-evolution-continuation/` |
 | Repo | `SiteOneTech/hermes-agent-original` (zeus_only) |
-| Current state | `active` — FRE-010 rework in progress (run `run-1786349721-4ca15040`); prior planning review gate `684` failed only because `FACTORY_INTAKE.md` and `TRACKER.md` lacked per-document `Document status` rows, fixed by this rework. |
+| Current state | `active` — FRE-010 planning-review passed (solution-architect, 2026-08-10, planning gate 690); FRE-010 has no active rework. |
 | Anomalies at start | `missing_project_artifact_dir`, `missing_required_docs` (resolved by this increment's dir + committed docs) |
 
 ## 1. Task tracker (mirrors Factory DB)
 
 | Task | Status | Owner | Reviewer | Evidence |
 |---|---|---|---|---|
-| FRE-010 G1 autonomous supervisor hardening contract and test-first task graph | running → done (this increment) | implementation-planner | solution-architect | 14 G1 docs + commit + branch push; DB `hermes factory status` |
+| FRE-010 G1 autonomous supervisor hardening contract and test-first task graph | done — planning-review passed (gate 690) | implementation-planner | solution-architect | 14 G1 docs + commit + branch push; planning gate 690=passed |
 | R1 — Reconciliation: restore project-local artifact directory | todo (closes when dir exists+indexed) | factory-reporter | factory-orchestrator | artifact dir created by FRE-010 |
 | R2 — Reconciliation: complete required Factory methodology documentation | todo (closes when docs committed) | factory-reporter | factory-orchestrator | 14 docs committed by FRE-010 |
 | FRE-011 Generic human-question retirement/rework | planned (TASK_GRAPH) | zeus builder | quality-reviewer | TDD RED/GREEN in `test_factory_control_plane_refactor.py` |
@@ -31,10 +31,10 @@
 
 1. `hermes factory status factory-runtime-evolution-continuation --json` (48,655 B):
    project active; 14 G1 docs blocking; human_questions=[]; gates=[]; anomalies as above.
-2. Rework status check (run `run-1786349721-4ca15040`): Agent Core Postgres
-   `db_backend=agent_core_postgres`, task FRE-010 `running`, R1/R2 `rework`, latest
-   failed planning gate `684` notes only the missing per-document status rows in
-   `FACTORY_INTAKE.md` and `TRACKER.md`; both rows are now present.
+2. Planning-review reconciliation: independent content review passed in Factory
+   planning gate `690` on 2026-08-10. This doc-only follow-up aligns every
+   required document with `reviewed:true` markers after prior gate `684` failed on
+   missing per-document status rows; no active FRE-010 rework remains.
 3. Runtime analysis (baseline commit `20228c116`):
    - `hermes_cli/factory_pg.py:4523` supervisor_health_check; `:4584–4586` pending-question
      → manual_attention bypass; `:3423` bounded requeue; `:3479` mark_project_manual_attention;
@@ -56,15 +56,15 @@
 | Gate | Status | Evidence |
 |---|---|---|
 | G0 Repository Strategy | passed | DB `project_created` event 172950 (repo_scope zeus_only, base main, per_deliverable worktrees) |
-| G1 Documentary Readiness | in progress | FRE-010 creates the 14 docs; `reviewed` flips after solution-architect review gate |
-| Review (FRE-010) | pending | assigned `solution-architect` in Factory DB |
+| G1 Documentary Readiness | passed | 14 docs exist/indexed/committed/validated:true/reviewed:true after solution-architect review; planning gate 690=passed |
+| Review (FRE-010) | passed | solution-architect review, 2026-08-10, planning gate 690 |
 | Delivery | not applicable yet | no product-runtime code in G1 |
 
 ## 4. Risk register
 
 | Risk | Mitigation |
 |---|---|
-| Reviewer gate delay for G1 docs | Docs carry explicit validated/reviewed state; review is a separate, tracked gate (fail-closed: no code increment before G1 green) |
+| Document/DB review-marker drift after G1 review | Keep per-document `validated:true` and `reviewed:true` rows synchronized with the recorded Factory planning gate evidence before downstream dispatch |
 | Detached successor semantics confuse lineage | FRE-014 adds reopen/continue; this project records `continuation_of: factory-runtime-evolution` intent in its docs now |
 | Cron resume regressions | FRE-013/017 incremental resume with smoke evidence; idle-silence rule preserved |
 | Change-detector tests in new suites | QA_GATES.md bans them; reviewers enforce |

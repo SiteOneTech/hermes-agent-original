@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Document status | validated: true (implementation-planner, 2026-08-10); reviewed: false — assigned to `solution-architect` |
+| Document status | validated:true (implementation-planner, 2026-08-10); reviewed:true (solution-architect, 2026-08-10, planning gate 690) |
 | Baseline | Worktree at `20228c116` (origin/main), files cited with line numbers are current at baseline. |
 
 ## 1. Current-state architecture (boundaries)
