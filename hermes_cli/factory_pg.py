@@ -1339,12 +1339,31 @@ def _git_status_by_file(repo_path: str, artifact_dir: str) -> dict[str, str] | N
     return result
 
 
+_DOCUMENT_STATUS_TRUE_VALUES = {"true", "yes", "y", "1", "passed", "validated", "reviewed", "approved"}
+
+
+def _document_has_explicit_positive_status(index_line: str, file_text: str, flag: str) -> bool:
+    """Return whether the doc declares a machine-readable positive status.
+
+    Front-matter/status-table declarations are control-plane evidence. They must
+    win over later prose that describes fail-closed rules such as "not reviewed".
+    Keep this intentionally narrow so loose positive prose still goes through
+    the negation check below.
+    """
+
+    status_header = index_line + "\n" + "\n".join(file_text.splitlines()[:40])
+    true_values = "|".join(sorted(re.escape(value) for value in _DOCUMENT_STATUS_TRUE_VALUES))
+    return bool(re.search(rf"\b{re.escape(flag)}\b\s*[:=]\s*(?:{true_values})\b", status_header, re.IGNORECASE))
+
+
 def _document_flag_from_text(metadata: dict[str, Any], index_line: str, file_text: str, flag: str) -> bool:
     value = metadata.get(flag)
     if isinstance(value, bool):
         return value
     if isinstance(value, str):
-        return value.strip().lower() in {"true", "yes", "y", "1", "passed", "validated", "reviewed", "approved"}
+        return value.strip().lower() in _DOCUMENT_STATUS_TRUE_VALUES
+    if _document_has_explicit_positive_status(index_line, file_text, flag):
+        return True
     text = (index_line + "\n" + file_text[:2000]).lower()
     if re.search(rf"\b(not|no|pending|todo|tbd|unvalidated|unreviewed)\b[^\n]{{0,40}}\b{re.escape(flag)}\b", text):
         return False
@@ -2572,6 +2591,15 @@ def _has_runnable_autonomous_work(tasks: list[dict[str, Any]]) -> bool:
     return any(str(task.get("status") or "") in runnable_statuses for task in tasks)
 
 
+def _task_dependencies_are_terminal(task: dict[str, Any], terminal_task_ids: set[str]) -> bool:
+    dependencies = task.get("dependencies") or []
+    if isinstance(dependencies, str):
+        dependencies = [dependencies]
+    if not isinstance(dependencies, list):
+        dependencies = []
+    return all(str(dep) in terminal_task_ids for dep in dependencies)
+
+
 def _has_claimable_autonomous_work(tasks: list[dict[str, Any]]) -> bool:
     """Return True only when the dispatcher can claim work from this snapshot.
 
@@ -2593,12 +2621,7 @@ def _has_claimable_autonomous_work(tasks: list[dict[str, Any]]) -> bool:
             return True
         if status_value not in {"todo", "ready"}:
             continue
-        dependencies = task.get("dependencies") or []
-        if isinstance(dependencies, str):
-            dependencies = [dependencies]
-        if not isinstance(dependencies, list):
-            dependencies = []
-        if all(str(dep) in terminal_task_ids for dep in dependencies):
+        if _task_dependencies_are_terminal(task, terminal_task_ids):
             return True
     return False
 
@@ -2713,7 +2736,11 @@ def _candidate_requires_validation_readiness_before_dispatch(candidate: dict[str
     return phase.startswith("delivery") or phase in {"release", "final", "final_report"} or "delivery report" in text or "final" in text
 
 
-def _next_runnable_task(project_id: str) -> dict[str, Any] | None:
+def _next_runnable_task(
+    project_id: str,
+    *,
+    dispatch_preflight: tuple[bool, bool, bool, bool] | None = None,
+) -> dict[str, Any] | None:
     tasks = _tasks(project_id)
     if _has_in_flight_increment(tasks):
         return None
@@ -2733,8 +2760,34 @@ def _next_runnable_task(project_id: str) -> dict[str, Any] | None:
         user=_user(),
     )
     project = _project(project_id) or {"project_id": project_id, "metadata": {}}
-    for row in candidates:
-        candidate = _normalize(row)
+    normalized_candidates = [_normalize(row) for row in candidates]
+    if dispatch_preflight is not None:
+        docs_ready, notion_ready, notion_required, docs_first_waived = dispatch_preflight
+
+        def preflight_rank(candidate: dict[str, Any]) -> int:
+            blockers = _dispatch_preflight_blockers(
+                candidate,
+                docs_ready=docs_ready,
+                notion_ready=notion_ready,
+                notion_required=notion_required,
+                docs_first_waived=docs_first_waived,
+            )
+            return 1 if blockers else 0
+
+        # Preserve SQL priority/created_at ordering inside each bucket, but put
+        # dependency-ready docs/reconciliation repair before product work that a
+        # docs-first preflight would deny. Otherwise the dispatcher repeatedly
+        # selects the lower-priority-number product row, records a denial, and
+        # returns claimed=null even though a repair task is ready.
+        normalized_candidates = [
+            candidate
+            for _idx, candidate in sorted(
+                enumerate(normalized_candidates),
+                key=lambda item: (preflight_rank(item[1]), item[0]),
+            )
+        ]
+
+    for candidate in normalized_candidates:
         phase = str(candidate.get("phase") or "").lower().replace("-", "_")
         text = _task_text(candidate)
         if active_rework_exists and not (_is_reconciliation_task(candidate) or phase in {"documentation", "planning"} or phase.startswith(("g0", "g1"))):
@@ -3619,16 +3672,41 @@ def factory_watchdog_alerts(payload: Optional[dict[str, Any]] = None, *, blocked
     return alerts
 
 
-def _payload_has_claimable_task(project_id: str, tasks: list[dict[str, Any]]) -> bool:
+def _payload_project_docs_ready(project: dict[str, Any]) -> bool:
+    statuses = project.get("document_status")
+    if isinstance(statuses, list):
+        return not any(
+            isinstance(row, dict)
+            and row.get("category") == "g1_required"
+            and bool(row.get("blocking"))
+            for row in statuses
+        )
+    if "document_status" not in project and not str(project.get("repo_path") or "").strip():
+        # Minimal test/watchdog payloads from older callers do not always carry
+        # document_status. Treat absence as unknown/ready so generic non-product
+        # watchdog semantics remain backward-compatible; canonical status()
+        # payloads include first-class document_status and enforce docs-first.
+        return True
+    return not bool(_g1_document_blockers(project))
+
+
+def _payload_has_claimable_task(project_id: str, tasks: list[dict[str, Any]], project: dict[str, Any] | None = None) -> bool:
     """Mirror the dependency semantics used by ``_next_runnable_task``.
 
     The watchdog runs from a status payload, not directly from SQL. Counting
     every ``todo`` row as runnable creates false positives when the only open
     work is behind a blocked dependency. The cron claimed-null alert should fire
     only when a task is actually claimable by the dispatcher: status todo/ready
-    and all declared dependencies are terminal.
+    and all declared dependencies are terminal, after applying the same
+    docs-first preflight that blocks product execution while G1 is red.
     """
 
+    project = project or {"project_id": project_id, "metadata": {}}
+    metadata = _metadata(project)
+    docs_ready = _payload_project_docs_ready(project)
+    notion_ready = _notion_projection_issue(metadata) is None
+    notion_required = _metadata_bool(metadata, "notion_required")
+    docs_first_waived = _dispatch_docs_first_waived(metadata)
     project_tasks = [task for task in tasks if str(task.get("project_id") or "") == project_id]
     terminal_task_ids = {
         str(task.get("task_id") or "")
@@ -3638,13 +3716,17 @@ def _payload_has_claimable_task(project_id: str, tasks: list[dict[str, Any]]) ->
     for task in project_tasks:
         if str(task.get("status") or "") not in {"todo", "ready"}:
             continue
-        dependencies = task.get("dependencies") or []
-        if isinstance(dependencies, str):
-            dependencies = [dependencies]
-        if not isinstance(dependencies, list):
-            dependencies = []
-        if all(str(dep) in terminal_task_ids for dep in dependencies):
-            return True
+        if not _task_dependencies_are_terminal(task, terminal_task_ids):
+            continue
+        if _dispatch_preflight_blockers(
+            task,
+            docs_ready=docs_ready,
+            notion_ready=notion_ready,
+            notion_required=notion_required,
+            docs_first_waived=docs_first_waived,
+        ):
+            continue
+        return True
     return False
 
 
@@ -3677,7 +3759,7 @@ def _claimed_null_alert_expected(payload: dict[str, Any], *, project_id: Optiona
             continue
         if pid in active_run_projects:
             continue
-        if _payload_has_claimable_task(pid, tasks):
+        if _payload_has_claimable_task(pid, tasks, project):
             return True
     return False
 
@@ -4097,17 +4179,22 @@ def claim_next_task(project_id: Optional[str] = None, *, worker: str = "factory-
         tasks = _tasks(pid)
         if _has_active_increment(tasks):
             continue
-        task = _next_runnable_task(pid)
-        if not task:
-            reconcile_project(pid)
-            continue
         full_project = _project(pid) or {"project_id": pid, "metadata": {}}
+        pending_gates = _active_pending_gates(pid)
+        latest_gates = _latest_gate_rows(pid)
         docs_ready, notion_ready, notion_required, docs_first_waived = _project_docs_notion_preflight(
             full_project,
             tasks,
-            _active_pending_gates(pid),
-            _latest_gate_rows(pid),
+            pending_gates,
+            latest_gates,
         )
+        task = _next_runnable_task(
+            pid,
+            dispatch_preflight=(docs_ready, notion_ready, notion_required, docs_first_waived),
+        )
+        if not task:
+            reconcile_project(pid)
+            continue
         preflight_blockers = _dispatch_preflight_blockers(
             task,
             docs_ready=docs_ready,
@@ -4118,7 +4205,7 @@ def claim_next_task(project_id: Optional[str] = None, *, worker: str = "factory-
         if preflight_blockers:
             ensure_reconciliation_tasks(
                 full_project,
-                reconciliation_findings(full_project, tasks, _active_pending_gates(pid), _latest_gate_rows(pid)),
+                reconciliation_findings(full_project, tasks, pending_gates, latest_gates),
                 tasks,
             )
             _record_dispatch_preflight_denied(pid, task, preflight_blockers, worker=worker)
