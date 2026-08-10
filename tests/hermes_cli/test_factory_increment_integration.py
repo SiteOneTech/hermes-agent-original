@@ -500,6 +500,21 @@ def test_candidate_dependencies_integrated_blocks_mismatched_replacement(fake_sq
     assert "replacement_mismatch" in joined
 
 
+def test_candidate_dependencies_integrated_blocks_unbound_replacement(fake_sql):
+    dep = {"project_id": "demo", "task_id": "task-old", "status": "superseded", "metadata": {"replacement_task_id": "task-replacement"}}
+    replacement = {
+        "project_id": "demo",
+        "task_id": "task-replacement",
+        "status": "done",
+        "metadata": {},
+    }
+    candidate = {"project_id": "demo", "lane_id": "lane", "task_id": "task-downstream", "status": "todo", "dependencies": ["task-old"]}
+
+    assert factory_pg._candidate_dependencies_integrated("demo", candidate, [dep, replacement, candidate], {"project_id": "demo", "metadata": {}}) is False
+    joined = "\n".join(fake_sql.statements)
+    assert "replacement_unbound" in joined
+
+
 def test_candidate_dependencies_integrated_blocks_replacement_cycle(fake_sql):
     dep = {"project_id": "demo", "task_id": "task-old", "status": "superseded", "metadata": {"replacement_task_id": "task-replacement"}}
     replacement = {
@@ -539,6 +554,60 @@ def test_next_runnable_task_blocks_superseded_dependency_replacement_pr_open_not
     assert "increment_dependency_integration_blocked" in joined
     assert "pr_open" in joined
     assert "source_not_in_base" in joined
+
+
+def test_next_runnable_task_blocks_replacement_source_delivery_without_pr_even_without_policy(fake_sql, tmp_path):
+    project, replacement, feature_commit = _make_source_delivery_repo(tmp_path, merged_to_base=True)
+    metadata = _source_delivery_metadata(feature_commit)
+    metadata["source_delivery"].pop("pr_first_policy")
+    metadata["source_delivery"].pop("pr")
+    replacement["metadata"] = metadata
+    dep = {
+        "project_id": "demo",
+        "task_id": "task-old",
+        "status": "superseded",
+        "metadata": {"replacement_task_id": "task-replacement"},
+    }
+    candidate = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "task-downstream",
+        "status": "todo",
+        "dependencies": ["task-old"],
+    }
+    fake_sql.rows_results = [[dep, replacement, candidate], [candidate]]
+    fake_sql.one_results = [project]
+
+    assert factory_pg._next_runnable_task("demo") is None
+    joined = "\n".join(fake_sql.statements)
+    assert "pr_missing" in joined
+
+
+def test_next_runnable_task_blocks_contradictory_source_delivery_acceptance(fake_sql, tmp_path):
+    project, replacement, feature_commit = _make_source_delivery_repo(tmp_path, merged_to_base=True)
+    metadata = _source_delivery_metadata(feature_commit)
+    metadata["source_delivery"]["accepted"] = True
+    metadata["source_delivery"]["status"] = "rejected"
+    replacement["metadata"] = metadata
+    dep = {
+        "project_id": "demo",
+        "task_id": "task-old",
+        "status": "superseded",
+        "metadata": {"replacement_task_id": "task-replacement"},
+    }
+    candidate = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "task-downstream",
+        "status": "todo",
+        "dependencies": ["task-old"],
+    }
+    fake_sql.rows_results = [[dep, replacement, candidate], [candidate]]
+    fake_sql.one_results = [project]
+
+    assert factory_pg._next_runnable_task("demo") is None
+    joined = "\n".join(fake_sql.statements)
+    assert "source_delivery_contract_not_accepted" in joined
 
 
 def test_next_runnable_task_dispatches_superseded_dependency_accepted_replacement(fake_sql, tmp_path):
@@ -766,6 +835,38 @@ def test_next_runnable_task_blocks_dirty_replacement_pr(fake_sql, tmp_path):
     assert factory_pg._next_runnable_task("demo") is None
     joined = "\n".join(fake_sql.statements)
     assert "pr_dirty" in joined
+
+
+def test_dependency_increment_blockers_rejects_option_like_branch_before_fetch(fake_sql, monkeypatch, tmp_path):
+    repo = tmp_path / "repo"
+    worktree = tmp_path / "worktree"
+    repo.mkdir()
+    worktree.mkdir()
+    task = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "task-replacement",
+        "status": "done",
+        "branch": "--upload-pack=touch /tmp/factory-pwned",
+        "worktree_path": str(worktree),
+        "metadata": _source_delivery_metadata("abc123"),
+    }
+    project = {
+        "project_id": "demo",
+        "repo_path": str(repo),
+        "base_branch": "main",
+        "metadata": {"repo_strategy": {"primary_repo_path": str(repo), "base_branch": "main"}},
+    }
+    calls: list[list[str]] = []
+
+    def record_git(_repo_path, args, *, timeout=120):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(factory_pg, "_run_git", record_git)
+
+    assert factory_pg._dependency_increment_blockers(task, project) == ["unverified_branch_metadata"]
+    assert not any("--upload-pack" in " ".join(args) for args in calls)
 
 
 def test_integrate_increment_to_base_rejects_dirty_worktree_before_gate(fake_sql, monkeypatch, tmp_path):

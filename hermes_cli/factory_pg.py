@@ -257,6 +257,41 @@ TERMINAL_PROJECT_STATUSES = {
     "closed",
 }
 RESUME_RUNNABLE_TASK_STATUSES = factory_contracts.RUNNABLE_TASK_STATUSES | {"ready", "todo"}
+_UNSAFE_FACTORY_REF_CHARS = re.compile(r"[\x00-\x20\x7f~^:?*\[\\]")
+_SOURCE_DELIVERY_ACCEPTED_VALUES = {
+    "1",
+    "accepted",
+    "approved",
+    "done",
+    "integrated",
+    "merged",
+    "ok",
+    "pass",
+    "passed",
+    "reviewed",
+    "success",
+    "succeeded",
+    "true",
+    "y",
+    "yes",
+}
+_SOURCE_DELIVERY_REJECTED_VALUES = {
+    "0",
+    "blocked",
+    "canceled",
+    "cancelled",
+    "denied",
+    "dirty",
+    "error",
+    "fail",
+    "failed",
+    "false",
+    "n",
+    "no",
+    "open",
+    "pending",
+    "rejected",
+}
 SUPERVISOR_TECHNICAL_REWORK_MAX_RETRIES = 2
 MANUAL_TAKEOVER_DEFAULT_TTL_MINUTES = 180
 MANUAL_TAKEOVER_MAX_TTL_MINUTES = 24 * 60
@@ -2187,6 +2222,9 @@ def _integrate_increment_to_base(task_id: str, *, actor: str = "factory-orchestr
     worktree_path = str(task.get("worktree_path") or "").strip()
     if not branch or not worktree_path:
         return {"increment_integration_status": "skipped", "increment_integration_required": False, "reason": "missing_branch_or_worktree"}
+    branch_blocker = _factory_branch_ref_blocker(branch)
+    if branch_blocker:
+        raise IncrementIntegrationError("unverified branch metadata")
     worktree = Path(worktree_path).expanduser()
     if not worktree.exists():
         raise IncrementIntegrationError(f"increment worktree does not exist: {worktree}")
@@ -2642,6 +2680,8 @@ def _replacement_reference_values(metadata: dict[str, Any]) -> set[str]:
 def _replacement_mismatch_reason(original: dict[str, Any], replacement: dict[str, Any]) -> str | None:
     original_id = str(original.get("task_id") or "").strip()
     references = _replacement_reference_values(_metadata(replacement))
+    if not references:
+        return "replacement_unbound"
     if references and original_id not in references:
         return "replacement_mismatch"
     return None
@@ -2670,6 +2710,8 @@ def _resolve_effective_dependency(dep_id: str, by_id: dict[str, dict[str, Any]])
             replacement = by_id.get(replacement_id)
             if not replacement:
                 return {"ok": False, "reason": "dangling_replacement", "dependency_id": dep_id, "effective_task_id": current_id, "replacement_task_id": replacement_id, "replacement_chain": [*chain, replacement_id]}
+            if replacement_id in seen:
+                return {"ok": False, "reason": "replacement_cycle", "dependency_id": dep_id, "replacement_chain": [*chain, replacement_id]}
             mismatch = _replacement_mismatch_reason(current, replacement)
             if mismatch:
                 return {"ok": False, "reason": mismatch, "dependency_id": dep_id, "effective_task_id": replacement_id, "replacement_chain": [*chain, replacement_id]}
@@ -2715,10 +2757,49 @@ def _commit_value(container: dict[str, Any], *keys: str) -> str:
     return ""
 
 
+def _factory_branch_ref_blocker(branch: str) -> str | None:
+    value = str(branch or "").strip()
+    if not value:
+        return "unverified_branch_metadata"
+    ref_parts = value.split("/")
+    if (
+        value.startswith("-")
+        or value.startswith("/")
+        or value.endswith("/")
+        or value.endswith(".")
+        or value.endswith(".lock")
+        or ".." in value
+        or "@{" in value
+        or "//" in value
+        or _UNSAFE_FACTORY_REF_CHARS.search(value)
+        or any(part in {"", ".", ".."} or part.startswith(".") for part in ref_parts)
+    ):
+        return "unverified_branch_metadata"
+    return None
+
+
 def _source_delivery_status_accepted(value: Any) -> bool:
-    if _evidence_status_passed(value):
-        return True
-    return str(value or "").strip().lower() in {"accepted", "reviewed", "approved", "merged", "integrated"}
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return False
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in _SOURCE_DELIVERY_REJECTED_VALUES:
+            return False
+        return normalized in _SOURCE_DELIVERY_ACCEPTED_VALUES
+    if isinstance(value, dict):
+        return _source_delivery_outcome_accepted(value, ("accepted", "status", "result", "state", "passed", "ok"))
+    return False
+
+
+def _source_delivery_outcome_accepted(container: dict[str, Any], keys: tuple[str, ...]) -> bool:
+    outcomes = [
+        _source_delivery_status_accepted(container.get(key))
+        for key in keys
+        if key in container
+    ]
+    return bool(outcomes) and all(outcomes)
 
 
 def _source_delivery_contract_blockers(
@@ -2731,10 +2812,7 @@ def _source_delivery_contract_blockers(
     if not record:
         return ["source_delivery_contract_missing"]
     blockers: list[str] = []
-    if not any(
-        _source_delivery_status_accepted(record.get(key))
-        for key in ("accepted", "status", "result", "state")
-    ):
+    if not _source_delivery_outcome_accepted(record, ("accepted", "status", "result", "state")):
         blockers.append("source_delivery_contract_not_accepted")
     candidate_commit = _commit_value(
         record,
@@ -2754,7 +2832,7 @@ def _source_delivery_contract_blockers(
             qa_guardian = record.get(key)
             break
     if isinstance(qa_guardian, dict):
-        qa_passed = any(_source_delivery_status_accepted(qa_guardian.get(key)) for key in ("accepted", "status", "result", "state", "passed"))
+        qa_passed = _source_delivery_outcome_accepted(qa_guardian, ("accepted", "status", "result", "state", "passed", "ok"))
         qa_commit = _commit_value(qa_guardian, "candidate_commit", "branch_commit", "commit_sha", "head_commit")
         if not qa_passed:
             blockers.append("qa_guardian_evidence_not_accepted")
@@ -2765,7 +2843,7 @@ def _source_delivery_contract_blockers(
     else:
         blockers.append("qa_guardian_evidence_missing")
 
-    pr_required = bool(record.get("pr_first_policy") or record.get("pr") or _metadata(task).get("pr_first_policy"))
+    pr_required = True
     if pr_required:
         pr = record.get("pr") if isinstance(record.get("pr"), dict) else {}
         if not pr:
@@ -2806,6 +2884,9 @@ def _dependency_increment_blockers(dep_task: dict[str, Any], project: dict[str, 
     worktree_raw = str(dep_task.get("worktree_path") or "").strip()
     if not branch or not worktree_raw:
         return ["unverified_branch_metadata"]
+    branch_blocker = _factory_branch_ref_blocker(branch)
+    if branch_blocker:
+        return [branch_blocker]
     worktree_path = Path(worktree_raw).expanduser()
     if not worktree_path.exists():
         return ["worktree_path_missing"]
