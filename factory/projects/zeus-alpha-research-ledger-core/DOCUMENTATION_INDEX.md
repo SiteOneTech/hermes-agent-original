@@ -10,35 +10,36 @@ owner: factory-orchestrator
 # DOCUMENTATION INDEX — Zeus Alpha Research Ledger Core
 
 ## Controlling status
-This is the canonical G1 documentary pack for the **private Zeus-side implementation** succeeding `zeus-independent-alpha-research`. It is not a Vonash implementation plan, grants no external runtime access and does not authorize market execution. The pack is under remediation after two independent reviews; `reviewed: pending` remains authoritative until the second pass returns PASS.
+Canonical G1 pack for the **private Zeus-side implementation** succeeding `zeus-independent-alpha-research`. It is not a Vonash implementation plan, grants no external runtime access and does not authorize market execution. The pack remains `reviewed: pending` until the reworked second independent specification and security pass both return PASS.
 
 | File | Purpose | Owner | Validated | Reviewed |
 |---|---|---|---|---|
-| `FACTORY_INTAKE.md` | owner mandate, boundaries and source of truth | factory-orchestrator | yes | pending |
+| `FACTORY_INTAKE.md` | mandate, boundaries, source of truth | factory-orchestrator | yes | pending |
 | `G0_REPOSITORY_STRATEGY.md` | repo/scope/worktree/PR decision | solution-architect | yes | pending |
-| `REQUIREMENTS_ANALYSIS.md` | functional/non-functional/no-execution requirements | product-analyst | yes | pending |
-| `PATTERN_ANALYSIS.md` | reusable patterns and rejected shortcuts | product-analyst | yes | pending |
-| `ASSUMPTIONS_AND_OPEN_QUESTIONS.md` | verified inputs and unknowns | solution-architect | yes | pending |
-| `PRD.md` | product outcome and release acceptance | product-analyst | yes | pending |
+| `REQUIREMENTS_ANALYSIS.md` | R1–R10/no-authority requirements | product-analyst | yes | pending |
+| `PATTERN_ANALYSIS.md` | patterns and rejected shortcuts | product-analyst | yes | pending |
+| `ASSUMPTIONS_AND_OPEN_QUESTIONS.md` | verified inputs/unknowns | solution-architect | yes | pending |
+| `PRD.md` | outcome and release acceptance | product-analyst | yes | pending |
 | `ADRS.md` | architectural decisions | solution-architect | yes | pending |
-| `METHODOLOGY_PLAN.md` | Factory/TDD/review delivery approach | implementation-planner | yes | pending |
-| `TECHNICAL_BLUEPRINT.md` | entities, boundaries, wiring and toolset | solution-architect | yes | pending |
-| `SPRINT_PLAN.md` | implementation increments | implementation-planner | yes | pending |
-| `TASK_GRAPH.md` | Factory DB reconciliation, branches/worktrees and reviews | implementation-planner | yes | pending |
-| `TRACKER.md` | live status and risk register | factory-reporter | yes | pending |
-| `QA_GATES.md` | documentary, test, smoke and delivery gates | qa-verifier | yes | pending |
-| `SECURITY_GATES.md` | privilege/data/prohibited-surface gates | security-reviewer | yes | pending |
-| `DOCUMENTATION_INDEX.md` | this entrypoint and status matrix | factory-orchestrator | yes | pending |
+| `METHODOLOGY_PLAN.md` | Factory/TDD/review approach | implementation-planner | yes | pending |
+| `TECHNICAL_BLUEPRINT.md` | component placement and architecture | solution-architect | yes | pending |
+| `SPRINT_PLAN.md` | increments | implementation-planner | yes | pending |
+| `TASK_GRAPH.md` | Factory reconciliation/reviews | implementation-planner | yes | pending |
+| `TRACKER.md` | status/risk register | factory-reporter | yes | pending |
+| `QA_GATES.md` | RED/GREEN, smoke and delivery gates | qa-verifier | yes | pending |
+| `SECURITY_GATES.md` | security pass/fail evidence | security-reviewer | yes | pending |
+| `DOCUMENTATION_INDEX.md` | entrypoint/status matrix | factory-orchestrator | yes | pending |
 
 ## Supplemental controlling artifacts
-- `REQUIREMENTS_TRACEABILITY.md` maps R1–R10 and boundaries to tasks, RED/GREEN proof, independent evidence and gates.
-- `G1_REVIEW.md` records independent review findings and their remediation.
+- `REQUIREMENTS_TRACEABILITY.md` maps requirements to tasks/tests/reviews.
+- `DATABASE_AND_RUNTIME_CONTRACT.md` is binding for exact DB, runtime, no-egress and scheduler implementation behavior.
+- `G1_REVIEW.md` records independent review findings/remediation.
 
 ## Required reading order
-1. `DOCUMENTATION_INDEX.md`, `FACTORY_INTAKE.md` and `G0_REPOSITORY_STRATEGY.md`
+1. `DOCUMENTATION_INDEX.md`, `FACTORY_INTAKE.md`, `G0_REPOSITORY_STRATEGY.md`
 2. `REQUIREMENTS_ANALYSIS.md`, `REQUIREMENTS_TRACEABILITY.md`, `PRD.md`, `ADRS.md`
-3. `TECHNICAL_BLUEPRINT.md`, `TASK_GRAPH.md`, `SPRINT_PLAN.md`
+3. `DATABASE_AND_RUNTIME_CONTRACT.md`, `TECHNICAL_BLUEPRINT.md`, `TASK_GRAPH.md`, `SPRINT_PLAN.md`
 4. `QA_GATES.md`, `SECURITY_GATES.md`, `G1_REVIEW.md`
 
 ## G1 rule
-No normal implementation task starts until every required G1 document has `reviewed: yes`, is committed, and the canonical base branch exposes the pack to Factory document-status checks. Supplemental review/traceability artifacts must also be committed and PASS-reviewed. A branch-only pack is never sufficient.
+No normal implementation starts until every required G1 document is `reviewed: yes`, committed and exposed on canonical base; the three supplemental controlling artifacts must be committed and PASS-reviewed too. A branch-only pack is never sufficient.

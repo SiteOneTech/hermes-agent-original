@@ -8,19 +8,19 @@ reviewed: pending
 
 # REQUIREMENTS TRACEABILITY
 
-| Requirement / boundary | Owner task(s) | Enforced behavior | RED then GREEN proof | Independent evidence | Final gate |
+| Requirement / boundary | Owner task(s) | Binding contract | RED then GREEN proof | Independent evidence | Final gate |
 |---|---|---|---|---|---|
-| R1 schema entities/no collaboration messages | ALR-020 | schema objects/FKs only; no session/message tables | migration object/absence tests | ALR-061 | ALR-070 |
-| R2 provenance and append-only evidence | ALR-020/040 | unique hash+locator, source FK, supersession trigger | direct SQL duplicate/update/delete failures | ALR-061/063 | ALR-070 |
-| R3 lineage | ALR-020/030 | family/parent checks, no self relation | direct SQL and handler lineage negatives | ALR-061 | ALR-070 |
-| R4 card completeness/classification | ALR-020/030 | required fields + research-only checks | invalid transition/validated-alpha tests | ALR-061/063 | ALR-070 |
-| R5 separate immutable review | ALR-020/030 | reviewer/disposition checks, append-only review | same-author/mutation rejection tests | ALR-061/063 | ALR-070 |
-| R6 local daily cycle | ALR-050 | local batch idempotency, terminal empty/reject/fail | missing/stale/duplicate/empty cycle tests | ALR-062/063 | ALR-070 |
-| R7 inert handoff | ALR-020/030/050 | fixed research-only/not-dispatched state | action/URL/token/recipient rejection tests | ALR-061/063 | ALR-070 |
-| R8 leaf toolset only | ALR-030 | exact handler allowlist, absent by default | resolver absence/allowlist tests | ALR-062/063 | ALR-070 |
-| R9 source policy/intake | ALR-020/040 | approved terms/freshness required | disabled/unknown/stale source tests | ALR-061/063 | ALR-070 |
-| R10 dedicated secret/role | ALR-020/030/050 | no fallback; activation disabled | role denial/missing-secret/no-scheduler tests | ALR-063 | ALR-070 |
-| no external egress/platform writes | ALR-030/050 | no forbidden imports/DSNs/dispatch | static + runtime-negative tests | ALR-063 | ALR-070 |
-| PR-first/QA Guardian | ALR-010..080 | per-task Factory integration waiver | Factory DB/PR evidence check | ALR-061/062 | ALR-080 |
+| R1 entities/no session messages | ALR-020 | DB §1/§2/§5 | object/absence/constraint tests | ALR-061 | ALR-070 |
+| R2 provenance/append-only | ALR-020/040 | DB §2 | source/evidence direct SQL negatives | ALR-061/063 | ALR-070 |
+| R3 lineage | ALR-020/030 | DB §2 | missing/self/duplicate lineage tests | ALR-061 | ALR-070 |
+| R4 card completeness/classification | ALR-020/030 | DB §3 | transition/tuple/prohibited-label tests | ALR-061/063 | ALR-070 |
+| R5 immutable separate review | ALR-020/030 | DB §1/§3 | role/author/mutation rejection tests | ALR-061/063 | ALR-070 |
+| R6 local daily cycle | ALR-050 | DB §5 | local idempotent empty/reject/fail tests | ALR-062/063 | ALR-070 |
+| R7 inert handoff | ALR-020/030/050 | DB §3 | fixed state/unknown action field tests | ALR-061/063 | ALR-070 |
+| R8 leaf toolset | ALR-030 | DB §4 | default absence/exact allowlist tests | ALR-062/063 | ALR-070 |
+| R9 source policy | ALR-020/040 | DB §2 | enum/terms/freshness negatives | ALR-061/063 | ALR-070 |
+| R10 secret/role/scheduler | ALR-020/030/050 | DB §1/§4/§5 | role/DSN/readiness negatives | ALR-063 | ALR-070 |
+| no egress/platform writes | ALR-030/050 | DB §4 | static + every-handler/scheduler interception harness | ALR-063 | ALR-070 |
+| PR-first/QA Guardian | ALR-010..080 | TASK_GRAPH/QA gates | Factory DB + PR evidence | ALR-061/062 | ALR-080 |
 
-A task cannot mark a requirement satisfied through prose alone: its test and review evidence must cite the exact candidate SHA.
+No task may mark a requirement satisfied with prose: test/review evidence cites the exact candidate SHA and the listed contract section.

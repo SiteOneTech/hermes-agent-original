@@ -9,30 +9,35 @@ reviewed: pending
 # QA GATES
 
 ## ALR-010 documentary gate
-- All 14 G1 documents plus G0, `REQUIREMENTS_TRACEABILITY.md` and `G1_REVIEW.md` exist, are indexed and independently reviewed.
-- The Factory DB reconciliation table in `TASK_GRAPH.md` matches current task IDs, phases, owner/reviewer profiles, dependencies, branches, worktrees and explicit PR-first integration waiver.
-- No document implies direct Vonash/trading authority, in-tree third-party provider integration or a Factory direct merge.
+- All 14 G1 documents plus G0, `REQUIREMENTS_TRACEABILITY.md`, `DATABASE_AND_RUNTIME_CONTRACT.md` and `G1_REVIEW.md` exist, are indexed, committed and independently PASS-reviewed.
+- `TASK_GRAPH.md` reconciliation matches current Factory task IDs, phases, owner/reviewer profiles, dependencies, branches, worktrees and PR-first waiver.
+- No document implies direct Vonash/trading authority, provider integration in core or Factory direct merge.
 
-## Implementation RED/GREEN gates
-- Each production behavior has a test observed failing before code, then passing after minimal implementation.
-- Migration tests prove schema registration; FKs/checks/uniques; append-only evidence/review denial; source enabled/terms/freshness enforcement; lineage integrity; research classification and inert-handoff constraints.
-- Role tests use the actual `alpha_research_runtime` role: permitted table operations succeed and denied cross-schema/create/update/delete/privilege operations fail.
-- Tool tests prove required-field validation precedes DB calls, default-toolset absence, exact leaf allowlist, forbidden labels/fields rejection and missing-secret activation failure.
-- No-egress tests combine static import/dependency assertions and runtime-negative probes for network clients, sockets, remote DSNs, internal shared secrets, prohibited platform clients and subprocess dispatch.
-- Scheduler tests prove no registration/run on disabled default, missing secret/role, failed migration, no approved source policy or failed no-egress smoke.
+## ALR-020 database/role RED-GREEN gate
+- Start with tests for every contract §1/§2/§3 constraint, trigger, catalog grant and named direct-SQL negative; observe RED before migration implementation.
+- Green proves exact role properties/object grants, no `PUBLIC` access, source freshness predicate, evidence/review append-only behavior, lineage integrity and all-card/review/handoff classification tuple enforcement.
 
-## Review gate
-- **ALR-061** independently maps requirements/boundaries to exact code/tests and rejects scope drift.
-- **ALR-062** independently verifies TDD evidence, quality and module conventions.
-- **ALR-063** independently verifies grants, direct-SQL negatives, secret handling, tool isolation and no-egress proof.
-- Each report cites the exact candidate SHA and creates bounded rework rather than vague approval.
+## ALR-030 tools RED-GREEN gate
+- Start with every-handler input/envelope/unknown-field/default-toolset/leaf-allowlist/missing-secret negative. Observe RED before registration/handler implementation.
+- Green proves JSON envelope and exact no-advice contract in contract §3 plus all named prohibited labels/action fields.
+
+## ALR-050 scheduler/no-egress RED-GREEN gate
+- Start with static scan failures for each banned dependency/SQL form and runtime harness failures for every handler/scheduler path under interception.
+- Green proves contract §4 path coverage, banned pattern rejection and exact-local-DSN-only DB connection.
+- Start with config false/missing and every missing/failed/expired/wrong-commit readiness component; green proves no registration/no run and structured `scheduler_not_ready` under contract §5.
+
+## Independent review gate
+- **ALR-061** maps R1–R10/boundaries to exact implementation SHA, direct tests and scope limits.
+- **ALR-062** verifies RED/GREEN artifacts, quality, test determinism and cleanup.
+- **ALR-063** verifies the contract §1–§5 security proof against the exact candidate SHA.
+- Each report cites the candidate SHA and creates bounded rework rather than broad approval.
 
 ## Live local gate
-- DB migration and dedicated role verification run against the actual local Agent Core database without secret output.
-- Synthetic local batch → evidence → card → separate review → cycle → inert handoff smoke succeeds and cleanup is verified.
-- Negative smoke proves zero network dispatch, external runtime write, broker/trading/risk operation, paper/live activation or credential output.
+- Actual local Agent Core migration and dedicated-role tests run without secret output.
+- Synthetic local batch → evidence → card → separate review → cycle → inert handoff passes and cleanup is verified.
+- Negative live smoke proves no outbound connection/subprocess dispatch, external runtime write, trading/risk/paper/live action or credential output.
 
 ## Delivery gate
-- Exact branch commit, test commands/results and independent review reports are recorded.
+- Exact branch commit, test commands/results and independent reports are recorded.
 - Actual GitHub PR exists with Zeus signature and `agent:zeus` label.
-- QA Guardian merge evidence is mandatory before terminal task closure. The per-task integration waiver blocks Factory’s default direct branch-to-base merge; Zeus does not merge/deploy.
+- QA Guardian merge evidence is mandatory before terminal closure; the per-task waiver blocks Factory direct branch-to-base integration and Zeus never merges/deploys.

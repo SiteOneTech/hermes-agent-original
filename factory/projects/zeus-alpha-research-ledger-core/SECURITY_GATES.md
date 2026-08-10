@@ -8,27 +8,30 @@ reviewed: pending
 
 # SECURITY GATES
 
+`DATABASE_AND_RUNTIME_CONTRACT.md` §§1–5 is the detailed acceptance contract. This gate lists the mandatory pass/fail evidence, not a weaker alternate design.
+
 ## Least-privilege gate
-- Migration/admin ownership and `alpha_research_runtime` are separate. The runtime role receives only enumerated `alpha_research` grants; it has no `CREATE`, ownership, membership/inherit escalation, `GRANT`, FDW/dblink or broad Agent Core access.
-- Migration revokes `PUBLIC` access and establishes restricted default privileges for future schema objects.
-- Direct-role tests connect as `alpha_research_runtime` and prove denied `INSERT`/`UPDATE`/`DELETE` on `factory`, `public` and all non-allowlisted schemas; denied evidence/review mutation/deletion; denied schema creation and privilege escalation.
-- Dedicated role credential comes only from Infisical. Missing dedicated reference disables toolset/scheduler activation. There is no sibling/shared-role or fallback DSN pathway.
+- Migration verifies all exact role attributes, zero role memberships, search path, per-object grants, function allowlist, `PUBLIC` revocations and default privileges from contract §1.
+- A transaction as `alpha_research_runtime` proves each allowlisted operation works and every named direct-SQL denial in contract §1 fails. Catalog assertions prove no DML grant in other user schemas and no `PUBLIC` privilege in `alpha_research`.
+- Dedicated role secret is Infisical-only. Resolver accepts only the exact local DSN shape in contract §4; missing reference/role/allowlist fails before toolset or scheduler activation.
 
-## Source and provenance gate
-- A registry source must be enabled, terms-approved and governed by a non-null freshness policy before local evidence intake accepts it.
-- Evidence requires source FK, content hash, locator, UTC retrieval/freshness times and a per-source uniqueness key. Supersession is append-only.
-- Direct SQL and handler tests reject disabled, terms-unknown, stale, malformed and duplicate evidence.
-- Raw restricted content is never sent to generic memory, Telegram or any external service. Concrete third-party drivers remain out-of-tree and cannot enter this core delivery.
+## Source/provenance gate
+- Migration and handlers enforce the exact source classes, terms states, freshness modes, max-age bounds, timestamp predicate and uniqueness/supersession contract in §2.
+- Direct SQL and handler suites execute every §2 negative case: source state combinations, stale/future/malformed time, duplicate, append-only evidence mutation/delete and lineage violation.
+- Raw restricted content is never sent to generic memory or an external service. Provider fetch/parse code remains out of tree.
 
-## Research classification gate
-- Cards, reviews, tool JSON and handoffs include immutable `research_only`, `unvalidated` and `not_investment_advice` classification/disclaimer fields.
-- Database checks and handler validation reject `validated_alpha`, advice/recommendation, strategy approval, promotion, operational directives, risk/order, paper/live activation and external-action fields.
-- Handoff packages only serialize local references and fixed disclaimers; `authority_scope=research_only` and `dispatch_state=not_dispatched` are database-enforced.
+## Typed research-only gate
+- `alpha_cards`, `research_reviews`, `inert_handoff_packages` and every JSON envelope implement the exact typed tuple/default/check/immutability contract in §3.
+- Direct SQL and handler suites reject omitted/mutated/wrong tuples and every named validated/advice/approval/promotion/operation/activation/unknown field across all three persisted carriers and handoffs.
 
 ## No-egress/tool isolation gate
-- Exact `alpha_research` tool handlers are absent from default toolsets and present only in the non-default leaf allowlist.
-- Static/dependency scans and runtime-negative tests reject network client imports, sockets, remote DSNs, `APC_INTERNAL_SECRET`, broker or Vonash/Magnus/VAOS/RAG/KB clients, outbound messaging and subprocess dispatch in module tools/scripts.
-- Local scheduler is disabled by default and cannot register/run without all recorded local prerequisites.
+- Default toolsets contain none of the ten handlers; the non-default leaf contains exactly them.
+- Static scan covers every exact project-owned path and banned import/SQL pattern in §4.
+- Runtime harness executes all handlers and scheduler registration/run with outbound socket/HTTP/subprocess denial. Any attempt fails the test; only the exact local Postgres DSN is permitted.
+
+## Scheduler gate
+- `agent_core.alpha_research.scheduler.enabled` is false absent explicit configuration.
+- Registration and each invocation call the contract §5 verifier without cache. Tests cover every false/missing/failed/expired/wrong-commit readiness component and prove no batch read/run follows `scheduler_not_ready`.
 
 ## Failure behavior
-Missing role/secret, missing grant, unknown terms, disabled/stale source, malformed/duplicate intake, prohibited classification or unsupported handoff field fails closed into a structured local rejection. No fallback enables external operation.
+All gate failures are structured local rejections. No fallback can enable an external operation, shared runtime role or stale scheduler.

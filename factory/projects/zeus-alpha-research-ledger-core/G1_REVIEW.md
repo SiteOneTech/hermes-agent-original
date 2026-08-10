@@ -8,18 +8,18 @@ reviewed: pending
 
 # G1 REVIEW RECORD
 
-## Review round 1 — revisions required
-Two independent read-only reviews returned `REQUEST_CHANGES`:
+## Review round 1 — remediated
+Independent specification and security reviews required traceability, Factory DB task reconciliation, bounded local collection, removal of collaboration messages, least privilege, DB invariants, typed non-advice state, no-egress proof and disabled scheduler. The first remediation commit `743f4c404` addressed the architecture direction but was not sufficiently exact.
 
-1. **Specification/G1 review** required traceability, exact Factory DB reconciliation, a bounded local definition of collection, and removal of unapproved collaboration-message persistence.
-2. **Security/architecture review** required concrete role grants/denials, database invariants, typed non-advice classification, no-egress/toolset tests and fail-closed scheduler activation.
+## Review round 2 — security rework incorporated
+The second security review returned `REQUEST_CHANGES` because the initial remediation still lacked exact object grants, enum/predicate definitions, carrier-wide typed fields, executable no-egress harness and durable scheduler configuration/readiness state.
 
-## Remediation in this revision
-- `REQUIREMENTS_TRACEABILITY.md` maps every R1–R10 and boundary to tasks, tests, reviewers and final gates.
-- `TASK_GRAPH.md` now reconciles exact Factory task IDs, profiles, branches/worktrees and the PR-first metadata policy.
-- The blueprint removes collaboration sessions/messages, defines local normalized-evidence intake and adds required DB/role/runtime invariants.
-- QA/security gates enumerate direct-role, direct-SQL, toolset, no-egress, scheduler and prohibited-label tests.
-- Factory ALR-060 was superseded by ALR-061/062/063 to make independent review artifacts explicit.
+This revision adds `DATABASE_AND_RUNTIME_CONTRACT.md`, which now fixes:
+- role attributes, per-object operations, function allowlist, `PUBLIC` revocations/default privileges and named direct SQL denials;
+- exact source/terms/freshness enums, stale predicate, time/duplicate/supersession/lineage negatives;
+- typed fields/defaults/checks/immutability and exact JSON field rejection for cards, reviews and handoffs;
+- scanned path/banned-pattern list plus every-handler/scheduler interception harness and local DSN-only check;
+- default-false config, readiness-table fields/components, no-cache verifier and all false-path scheduler tests.
 
 ## Status
-This is a remediation record, not an approval. A second independent review must return PASS before frontmatter/index status changes from `reviewed: pending` to `reviewed: yes`.
+This is still a remediation record, not approval. Obtain an independent second-pass **PASS** for both specification and security after this revision; only then change required G1 frontmatter/index to `reviewed: yes`, amend/commit, push and open the documentation PR.
