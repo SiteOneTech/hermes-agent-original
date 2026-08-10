@@ -41,6 +41,35 @@ def test_factory_cli_parser_has_no_legacy_sqlite_db_option():
     assert "db" not in option_dests
 
 
+def test_factory_cli_registers_project_reopen_and_continue_aliases():
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(dest="command")
+    factory.add_parser(subparsers)
+
+    reopen_args = parser.parse_args([
+        "factory",
+        "project",
+        "reopen",
+        "factory-runtime-evolution",
+        "--reason",
+        "canonical continuation recovery",
+        "--json",
+    ])
+    continue_args = parser.parse_args([
+        "factory",
+        "project",
+        "continue",
+        "factory-runtime-evolution",
+        "--reason",
+        "canonical continuation recovery",
+        "--json",
+    ])
+
+    assert reopen_args.factory_project_command == "reopen"
+    assert continue_args.factory_project_command == "continue"
+    assert reopen_args.reason == "canonical continuation recovery"
+
+
 def test_factory_cli_project_create_uses_canonical_backend(monkeypatch, capsys):
     calls = {}
 
