@@ -811,20 +811,37 @@ class TestOptionalSkillSourceLiveRepoFallback:
 
     @staticmethod
     def _fake_github_with_tree(remote_dirs, extra_files=()):
-        """MagicMock GitHubSource whose repo tree contains each skill dir's
-        SKILL.md plus any extra files, served byte-exact by _fetch_file_bytes."""
+        """MagicMock GitHubSource whose repo tree contains immutable blobs.
+
+        Each tree entry has a blob SHA so tests can ensure that a live-repo
+        fallback reads exactly the revision it enumerated, rather than a later
+        mutable branch state.
+        """
         entries = []
         contents = {}
+        next_sha = 1
+
+        def add_blob(path, data):
+            nonlocal next_sha
+            blob_sha = f"{next_sha:040x}"
+            next_sha += 1
+            entries.append({
+                "type": "blob", "path": path, "mode": "100644", "sha": blob_sha,
+            })
+            contents[(path, blob_sha)] = data
+
         for rel_dir in remote_dirs:
             p = f"optional-skills/{rel_dir}/SKILL.md"
-            entries.append({"type": "blob", "path": p, "mode": "100644"})
-            contents[p] = b"---\nname: " + rel_dir.rsplit("/", 1)[-1].encode() + b"\n---\nBody"
+            add_blob(p, b"---\nname: " + rel_dir.rsplit("/", 1)[-1].encode() + b"\n---\nBody")
         for rel_path, data in extra_files:
-            entries.append({"type": "blob", "path": rel_path, "mode": "100644"})
-            contents[rel_path] = data
+            add_blob(rel_path, data)
+
         fake = MagicMock()
         fake._get_repo_tree.return_value = ("main", entries)
-        fake._fetch_file_bytes.side_effect = lambda repo, path: contents.get(path)
+        fake._tree_revisions = {"NousResearch/hermes-agent": "f" * 40}
+        fake._fetch_file_bytes.side_effect = (
+            lambda repo, path, *, blob_sha=None: contents.get((path, blob_sha))
+        )
         return fake
 
     def test_fetch_falls_back_to_live_repo_when_missing_locally(self, tmp_path):
@@ -847,6 +864,45 @@ class TestOptionalSkillSourceLiveRepoFallback:
         # FULL directory arrives — including root-level files GitHubSource.fetch drops
         assert bundle.files["install.sh"] == b"#!/bin/sh\n"
         assert bundle.files["LICENSE"] == b"MIT"
+        # Every file must be fetched via the immutable blob referenced by the
+        # Tree API, never by a mutable default-branch path.
+        fetched_shas = [call.kwargs.get("blob_sha") for call in src._github._fetch_file_bytes.call_args_list]
+        assert fetched_shas == [f"{i:040x}" for i in (1, 2, 3)]
+        assert bundle.metadata["source_revision"] == "f" * 40
+        assert bundle.metadata["source_url"].endswith("/git/trees/" + "f" * 40)
+
+    @patch("tools.skills_hub._write_index_cache")
+    @patch("tools.skills_hub._read_index_cache", return_value=None)
+    def test_remote_index_excludes_nested_support_skill_markdown(
+        self, _read_cache, _write_cache, tmp_path
+    ):
+        src = OptionalSkillSource()
+        src._optional_dir = tmp_path / "optional-skills"
+        src._remote_dirs = None
+        src._github = self._fake_github_with_tree(
+            ["research/real-skill"],
+            extra_files=[
+                (
+                    "optional-skills/research/real-skill/references/archived/SKILL.md",
+                    b"---\nname: archived\n---\nBody",
+                ),
+                (
+                    "optional-skills/research/.hidden/SKILL.md",
+                    b"---\nname: hidden\n---\nBody",
+                ),
+            ],
+        )
+
+        assert src._list_remote_skill_dirs() == {"research/real-skill": True}
+
+    def test_fetch_revalidates_cached_support_path_against_live_tree(self, tmp_path):
+        nested = "research/real-skill/references/archived"
+        src = self._make_source(tmp_path, ["research/real-skill", nested])
+        src._github = self._fake_github_with_tree(["research/real-skill", nested])
+
+        # A prior vulnerable release (or stale cache) may still offer the
+        # nested path; the fresh tree is authoritative for installation.
+        assert src.fetch(f"official/{nested}") is None
 
     def test_fetch_bare_name_resolves_via_remote_tree(self, tmp_path):
         src = self._make_source(tmp_path, ["software-development/ast-grep"])
@@ -918,6 +974,24 @@ class TestOptionalSkillSourceLiveRepoFallback:
 
         assert src.fetch("official/never-heard-of-it") is None
         assert src.search("never-heard-of-it") == []
+
+
+class TestGitHubSourceImmutableBlobFetch:
+    def test_fetch_file_bytes_with_blob_sha_uses_git_blob_endpoint(self):
+        auth = MagicMock()
+        auth.get_headers.return_value = {"Authorization": "token test"}
+        source = GitHubSource(auth=auth)
+        response = MagicMock(status_code=200, content=b"immutable bytes")
+        blob_sha = "a" * 40
+
+        with patch("tools.skills_hub.httpx.get", return_value=response) as get:
+            assert source._fetch_file_bytes(
+                "owner/repo", "optional-skills/demo/SKILL.md", blob_sha=blob_sha,
+            ) == b"immutable bytes"
+
+        assert get.call_args.args[0] == (
+            f"https://api.github.com/repos/owner/repo/git/blobs/{blob_sha}"
+        )
 
 
 class TestQuarantineBundleBinaryAssets:

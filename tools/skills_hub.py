@@ -27,7 +27,9 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from hermes_constants import get_hermes_home
 from hermes_cli._subprocess_compat import windows_hide_flags
-from agent.skill_utils import is_excluded_skill_path
+from agent.skill_utils import (
+    EXCLUDED_SKILL_DIRS, SKILL_SUPPORT_DIRS, is_excluded_skill_path,
+)
 from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import unquote, urljoin, urlparse, urlsplit, urlunparse
 
@@ -52,6 +54,7 @@ logger = logging.getLogger(__name__)
 # so external `from tools.skills_hub import SKILLS_DIR` callers still work.
 
 INDEX_CACHE_TTL = 3600  # 1 hour
+_GIT_OBJECT_SHA_RE = re.compile(r"[0-9a-fA-F]{40,64}\Z")
 
 
 # _override lets a test-injected real module attribute (patch.object/monkeypatch
@@ -1077,9 +1080,22 @@ class GitHubSource(SkillSource):
         except UnicodeDecodeError:
             return None
 
-    def _fetch_file_bytes(self, repo: str, path: str) -> Optional[bytes]:
-        """Fetch exact file bytes from GitHub without text decoding."""
-        url = f"https://api.github.com/repos/{repo}/contents/{path}"
+    def _fetch_file_bytes(
+        self, repo: str, path: str, *, blob_sha: Optional[str] = None,
+    ) -> Optional[bytes]:
+        """Fetch exact file bytes from GitHub without text decoding.
+
+        ``blob_sha`` pins the response to a Git object returned by the Trees
+        API.  Callers that already enumerated a tree must use it instead of a
+        mutable branch path, so a concurrent push cannot mix revisions inside
+        one downloaded bundle.
+        """
+        if blob_sha is not None:
+            if not isinstance(blob_sha, str) or not _GIT_OBJECT_SHA_RE.fullmatch(blob_sha):
+                return None
+            url = f"https://api.github.com/repos/{repo}/git/blobs/{blob_sha}"
+        else:
+            url = f"https://api.github.com/repos/{repo}/contents/{path}"
         resp = self._github_get(
             url,
             headers={**self.auth.get_headers(), "Accept": "application/vnd.github.v3.raw"},
@@ -3474,19 +3490,30 @@ class OptionalSkillSource(SkillSource):
         if tree is None:
             return None
         _branch, entries = tree
+        if rel not in self._remote_optional_skill_dirs(entries):
+            # Revalidate cached discovery against the live tree before any
+            # download so stale or locally-poisoned index entries cannot fetch
+            # a support package as an installable skill.
+            return None
+        tree_revision = github._tree_revisions.get(self.OFFICIAL_REPO)
+        if not isinstance(tree_revision, str) or not _GIT_OBJECT_SHA_RE.fullmatch(tree_revision):
+            logger.warning("Live-repo optional skill tree lacks an immutable revision")
+            return None
         prefix = f"{repo_path}/"
         files: Dict[str, Union[str, bytes]] = {}
         for item in entries:
-            if item.get("type") != "blob" or item.get("mode") == "120000":
+            if not isinstance(item, dict) or item.get("type") != "blob" or item.get("mode") == "120000":
                 continue
-            item_path = item.get("path", "")
-            if not item_path.startswith(prefix):
+            item_path = item.get("path")
+            if not isinstance(item_path, str) or not item_path.startswith(prefix):
                 continue
             rel_file = item_path[len(prefix):]
             base = rel_file.rsplit("/", 1)[-1]
             if base.startswith(".") or base.endswith(".pyc") or "__pycache__" in rel_file.split("/"):
                 continue
-            content = github._fetch_file_bytes(self.OFFICIAL_REPO, item_path)
+            content = github._fetch_file_bytes(
+                self.OFFICIAL_REPO, item_path, blob_sha=item.get("sha"),
+            )
             if content is None:
                 logger.warning("Live-repo optional skill fetch failed for %s", item_path)
                 return None
@@ -3502,7 +3529,54 @@ class OptionalSkillSource(SkillSource):
             source="official",
             identifier=f"official/{rel}",
             trust_level="builtin",
+            metadata={
+                "source_revision": tree_revision,
+                "source_url": (
+                    f"https://api.github.com/repos/{self.OFFICIAL_REPO}/git/trees/"
+                    f"{tree_revision}"
+                ),
+            },
         )
+
+    @staticmethod
+    def _remote_optional_skill_dirs(entries: List[dict]) -> Dict[str, bool]:
+        """Return active optional-skill directories from one Git tree.
+
+        The repository tree is not a filesystem, so ``is_excluded_skill_path``
+        cannot determine whether a ``references/``-like component belongs to a
+        real skill root. Build the complete candidate set first, then exclude a
+        support subtree only when its parent is itself a skill root. This keeps
+        legitimate category paths such as ``scripts/example-skill`` valid.
+        """
+        candidates: set[str] = set()
+        prefix = f"{OptionalSkillSource.OPTIONAL_SKILLS_PREFIX}/"
+        suffix = "/SKILL.md"
+        for item in entries:
+            if not isinstance(item, dict) or item.get("type") != "blob":
+                continue
+            path = item.get("path")
+            if not isinstance(path, str) or not path.startswith(prefix) or not path.endswith(suffix):
+                continue
+            rel_dir = path[len(prefix):-len(suffix)]
+            parts = PurePosixPath(rel_dir).parts
+            if (
+                not parts
+                or any(part in ("", ".", "..") or "\\" in part for part in parts)
+                or any(part.startswith(".") or part in EXCLUDED_SKILL_DIRS for part in parts)
+            ):
+                continue
+            candidates.add("/".join(parts))
+
+        active: Dict[str, bool] = {}
+        for rel_dir in candidates:
+            parts = rel_dir.split("/")
+            if any(
+                part in SKILL_SUPPORT_DIRS and idx > 0 and "/".join(parts[:idx]) in candidates
+                for idx, part in enumerate(parts)
+            ):
+                continue
+            active[rel_dir] = True
+        return active
 
     def _list_remote_skill_dirs(self) -> Dict[str, bool]:
         """Map of ``category/skill`` dirs under optional-skills/ on live main.
@@ -3517,27 +3591,18 @@ class OptionalSkillSource(SkillSource):
         cache_key = "official_optional_dirs"
         cached = _read_index_cache(cache_key)
         if isinstance(cached, dict) and cached:
-            self._remote_dirs = cached
-            return cached
+            self._remote_dirs = self._remote_optional_skill_dirs([
+                {"type": "blob", "path": f"{self.OPTIONAL_SKILLS_PREFIX}/{rel}/SKILL.md"}
+                for rel in cached
+                if isinstance(rel, str)
+            ])
+            return self._remote_dirs
 
         dirs: Dict[str, bool] = {}
         tree = self._get_github()._get_repo_tree(self.OFFICIAL_REPO)
         if tree is not None:
             _branch, entries = tree
-            prefix = f"{self.OPTIONAL_SKILLS_PREFIX}/"
-            suffix = "/SKILL.md"
-            for item in entries:
-                path = item.get("path", "")
-                if (
-                    item.get("type") == "blob"
-                    and path.startswith(prefix)
-                    and path.endswith(suffix)
-                ):
-                    rel_dir = path[len(prefix):-len(suffix)]
-                    if rel_dir and not is_excluded_skill_path(
-                        PurePosixPath(rel_dir + suffix)
-                    ):
-                        dirs[rel_dir] = True
+            dirs = self._remote_optional_skill_dirs(entries)
             if dirs:
                 _write_index_cache(cache_key, dirs)
 
