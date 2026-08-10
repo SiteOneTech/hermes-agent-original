@@ -86,6 +86,30 @@ def _reload_updated_runtime_modules() -> None:
         logger.debug("Could not refresh update runtime modules: %s", exc)
 
 
+def _reload_module_from_source(module, module_name: str) -> bool:
+    """Reload a module after removing its timestamp-based bytecode cache.
+
+    A git pull can replace a module within the same filesystem timestamp
+    second and preserve its byte size. In that case CPython may accept the old
+    ``.pyc`` on ``importlib.reload`` even after ``invalidate_caches()``.
+    """
+    import importlib
+
+    cached = getattr(module, "__cached__", None)
+    if isinstance(cached, str) and cached:
+        try:
+            Path(cached).unlink(missing_ok=True)
+        except OSError as exc:
+            logger.debug("Could not remove stale bytecode for %s: %s", module_name, exc)
+    try:
+        importlib.invalidate_caches()
+        importlib.reload(module)
+        return True
+    except Exception as exc:
+        logger.debug("Could not reload %s from source: %s", module_name, exc)
+        return False
+
+
 def _reload_config_modules() -> None:
     """Force-reload config modules from disk after git pull.
 
@@ -106,10 +130,7 @@ def _reload_config_modules() -> None:
     for mod_name in ("hermes_cli.config_defaults", "hermes_cli.config", "hermes_cli.config_migrations"):
         mod = sys.modules.get(mod_name)
         if mod is not None:
-            try:
-                importlib.reload(mod)
-            except Exception as exc:
-                logger.debug("Could not reload %s for fresh config check: %s", mod_name, exc)
+            _reload_module_from_source(mod, mod_name)
 
 
 def _run_config_check_fresh() -> tuple:

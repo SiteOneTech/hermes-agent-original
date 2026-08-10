@@ -1,5 +1,7 @@
 """Tests for tools/file_operations.py — deny list, result dataclasses, helpers."""
 
+import base64
+import json
 import os
 import re
 import pytest
@@ -20,6 +22,20 @@ from tools.file_operations import (
     normalize_read_pagination,
     normalize_search_pagination,
 )
+
+
+def _safe_read_page_output(content: bytes, *, total_lines: int | None = None) -> str:
+    """Emulate the descriptor-safe reader's marked backend response."""
+    if total_lines is None:
+        total_lines = content.count(b"\n")
+    encoded = base64.b64encode(content).decode("ascii")
+    return "__HERMES_SAFE_READ__" + json.dumps({
+        "state": "regular",
+        "file_size": len(content),
+        "total_lines": total_lines,
+        "sample": base64.b64encode(content[:1000]).decode("ascii"),
+        "content": encoded,
+    }, separators=(",", ":"))
 
 
 # =========================================================================
@@ -297,23 +313,16 @@ class TestShellFileOpsHelpers:
 
     @pytest.mark.windows_only
     def test_read_file_uses_bash_safe_windows_paths(self, mock_env):
-        """Windows-only: proves read_file's shell commands carry the MSYS path
-        form Git Bash needs — a translation that is a no-op off Windows."""
+        """The descriptor-safe backend still receives the MSYS path form."""
         commands = []
 
         def side_effect(command, **kwargs):
             commands.append(command)
-            if command.startswith("wc -c"):
-                return {"output": "5\n", "returncode": 0}
-            if command.startswith("head -c") and "| base64" in command:
-                import base64 as b64
-                return {"output": b64.b64encode(b"hello").decode(), "returncode": 0}
-            if command.startswith("head -c"):
-                return {"output": "hello", "returncode": 0}
-            if command.startswith("sed -n"):
-                return {"output": "hello\n", "returncode": 0}
-            if command.startswith("wc -l"):
-                return {"output": "1\n", "returncode": 0}
+            if command.startswith(("python3 -c", "python -c")):
+                return {
+                    "output": _safe_read_page_output(b"hello"),
+                    "returncode": 0,
+                }
             return {"output": "", "returncode": 0}
 
         mock_env.execute.side_effect = side_effect
@@ -321,10 +330,9 @@ class TestShellFileOpsHelpers:
         result = ops.read_file(r"C:\Users\alice\notes.txt")
 
         assert result.error is None
-        assert commands[0] == "wc -c < '/c/Users/alice/notes.txt' 2>/dev/null"
-        assert commands[1] == "head -c 1000 '/c/Users/alice/notes.txt' 2>/dev/null | base64"
-        assert commands[2] == "sed -n '1,2000p' '/c/Users/alice/notes.txt'"
-        assert commands[3] == "wc -l < '/c/Users/alice/notes.txt'"
+        assert len(commands) == 1
+        assert commands[0].startswith("python3 -c ")
+        assert "'/c/Users/alice/notes.txt' 1 2000 -1 0" in commands[0]
 
     def test_is_likely_binary_by_extension(self, file_ops):
         assert file_ops._is_likely_binary("photo.png") is True
@@ -340,21 +348,14 @@ class TestShellFileOpsHelpers:
 
     def test_read_file_strips_leaked_terminal_fence_markers(self, mock_env):
         leaked = (
-            "'\x07\x1b]0;cat "
-            "'/tmp/test/a.py' 2> /dev/null\x07\n"
-            "print('ok')\n"
-            "\x07'\n"
+            "'\x07\x1b]0;python3 -c safe-reader\x07\n"
+            + _safe_read_page_output(b"print('ok')\n")
+            + "\n\x07'\n"
         )
 
         def side_effect(command, **kwargs):
-            if command.startswith("wc -c"):
-                return {"output": "12\n", "returncode": 0}
-            if command.startswith("head -c"):
-                return {"output": "print('ok')\n", "returncode": 0}
-            if command.startswith("sed -n"):
+            if command.startswith(("python3 -c", "python -c")):
                 return {"output": leaked, "returncode": 0}
-            if command.startswith("wc -l"):
-                return {"output": "1\n", "returncode": 0}
             return {"output": "", "returncode": 0}
 
         mock_env.execute.side_effect = side_effect
@@ -370,16 +371,12 @@ class TestShellFileOpsHelpers:
     def test_read_file_raw_strips_leaked_terminal_fence_markers(self, mock_env):
         leaked = (
             "\x07'\n"
-            "alpha\n"
-            "\x1b]0;cat '/tmp/test/a.txt'\x07\n"
+            + _safe_read_page_output(b"alpha\n")
+            + "\n\x1b]0;python3 -c safe-reader\x07\n"
         )
 
         def side_effect(command, **kwargs):
-            if command.startswith("wc -c"):
-                return {"output": "6\n", "returncode": 0}
-            if command.startswith("head -c"):
-                return {"output": "alpha\n", "returncode": 0}
-            if command.startswith("cat "):
+            if command.startswith(("python3 -c", "python -c")):
                 return {"output": leaked, "returncode": 0}
             return {"output": "", "returncode": 0}
 
@@ -765,17 +762,12 @@ class TestByteLayerBinaryDetection:
     # --- integration: read_file over the mocked terminal ------------------
 
     def _dispatch(self, cjk_bytes):
-        import base64 as b64
-
         def side_effect(command, **kwargs):
-            if command.startswith("wc -c"):
-                return {"output": f"{len(cjk_bytes)}\n", "returncode": 0}
-            if command.startswith("head -c") and "| base64" in command:
-                return {"output": b64.b64encode(cjk_bytes[:1000]).decode(), "returncode": 0}
-            if command.startswith("sed -n"):
-                return {"output": cjk_bytes.decode("utf-8", errors="replace"), "returncode": 0}
-            if command.startswith("wc -l"):
-                return {"output": "1\n", "returncode": 0}
+            if command.startswith(("python3 -c", "python -c")):
+                return {
+                    "output": _safe_read_page_output(cjk_bytes),
+                    "returncode": 0,
+                }
             return {"output": "", "returncode": 0}
 
         return side_effect

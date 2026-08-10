@@ -195,33 +195,26 @@ class TestCheckLintDelta:
 
 
 class TestPaginationBounds:
-    """Invalid pagination inputs should not leak into shell commands."""
+    """Invalid pagination inputs should be normalized before backend reads."""
 
-    def test_read_file_clamps_offset_and_limit_before_building_sed_range(self):
+    def test_read_file_clamps_offset_and_limit_before_safe_reader(self):
         env = MagicMock()
         env.cwd = "/tmp"
         ops = ShellFileOperations(env)
-        commands = []
+        page = {
+            "state": "regular",
+            "file_size": 12,
+            "total_lines": 2,
+            "sample": "bGluZTEKbGluZTIK",
+            "content": "bGluZTEK",
+        }
 
-        def fake_exec(command, *args, **kwargs):
-            commands.append(command)
-            if command.startswith("wc -c"):
-                return MagicMock(exit_code=0, stdout="12")
-            if command.startswith("head -c"):
-                return MagicMock(exit_code=0, stdout="line1\nline2\n")
-            if command.startswith("sed -n"):
-                return MagicMock(exit_code=0, stdout="line1\n")
-            if command.startswith("wc -l"):
-                return MagicMock(exit_code=0, stdout="2")
-            return MagicMock(exit_code=0, stdout="")
-
-        with patch.object(ops, "_exec", side_effect=fake_exec):
+        with patch.object(ops, "_read_regular_file_page", return_value=page) as safe_reader:
             result = ops.read_file("notes.txt", offset=0, limit=0)
 
         assert result.error is None
         assert "1|line1" in result.content
-        sed_commands = [cmd for cmd in commands if cmd.startswith("sed -n")]
-        assert sed_commands == ["sed -n '1,1p' 'notes.txt'"]
+        safe_reader.assert_called_once_with("notes.txt", 1, 1, metadata_only=False)
 
     def test_search_clamps_offset_and_limit_before_building_head_pipeline(self):
         env = MagicMock()

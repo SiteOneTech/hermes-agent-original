@@ -1,7 +1,11 @@
 """Tests for cmd_update — branch fallback when remote branch doesn't exist."""
 
 import hashlib
+import importlib
+import os
 import subprocess
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -377,6 +381,34 @@ class TestConfigVersionCheckUsesFreshModules:
             update_cmd._run_config_check_fresh()
 
         mock_reload.assert_called_once()
+
+    def test_reload_module_from_source_discards_same_timestamp_bytecode(self, tmp_path, monkeypatch):
+        """A git pull can preserve source size and second-level mtime.
+
+        In that case CPython accepts the old timestamp-based ``.pyc`` unless
+        the updater explicitly removes it before reloading from source.
+        """
+        import hermes_cli.update_cmd as update_cmd
+
+        module_name = "_hermes_update_stale_pyc_regression"
+        source = tmp_path / f"{module_name}.py"
+        source.write_text("VALUE = 'old'\n", encoding="utf-8")
+        monkeypatch.syspath_prepend(str(tmp_path))
+        sys.modules.pop(module_name, None)
+        try:
+            module = importlib.import_module(module_name)
+            cached = Path(module.__cached__)
+            original = source.stat()
+            assert cached.exists()
+
+            # Same byte length and mtime reproduce CPython's stale-pyc check.
+            source.write_text("VALUE = 'new'\n", encoding="utf-8")
+            os.utime(source, ns=(original.st_atime_ns, original.st_mtime_ns))
+
+            assert update_cmd._reload_module_from_source(module, module_name) is True
+            assert module.VALUE == "new"
+        finally:
+            sys.modules.pop(module_name, None)
 
 
 class TestCmdUpdateProfileSkillSync:

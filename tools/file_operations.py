@@ -27,10 +27,11 @@ Usage:
 
 import base64
 import binascii
-import os
-import re
 import difflib
 import hashlib
+import json
+import os
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any, ClassVar
@@ -726,6 +727,10 @@ _FAIL_CLOSED_INPROC_EXTS = frozenset({'.json', '.yaml', '.yml', '.toml'})
 MAX_LINES = 2000
 MAX_LINE_LENGTH = 2000
 MAX_FILE_SIZE = 50 * 1024  # 50KB
+_SAFE_FILE_READER_PYTHON_ERROR = (
+    "Safe file reader requires Python in the target environment; "
+    "no insecure shell fallback was used."
+)
 DEFAULT_READ_OFFSET = 1
 DEFAULT_READ_LIMIT = 2000
 DEFAULT_SEARCH_OFFSET = 0
@@ -809,9 +814,15 @@ def _maybe_warn_line_oriented_newline_pattern(result: SearchResult, pattern: str
 class ShellFileOperations(FileOperations):
     """
     File operations implemented via shell commands.
-    
-    Works with ANY terminal backend that has execute(command, cwd) method.
-    This includes local, docker, singularity, ssh, modal, and daytona environments.
+
+    Works with terminal backends that provide a POSIX-compatible shell and a
+    ``python3`` or ``python`` interpreter in the target environment. Reads
+    deliberately fail closed without that interpreter: descriptor-level
+    ``O_NONBLOCK``/``fstat`` validation is required to prevent FIFO/device
+    hangs and cannot be replaced safely by a pathname shell fallback.
+
+    This includes the supported local, docker, singularity, ssh, modal, and
+    daytona environments provisioned for Hermes.
     """
     
     def __init__(self, terminal_env, cwd: str = None):
@@ -1215,6 +1226,106 @@ class ShellFileOperations(FileOperations):
         )
         return ''.join(diff)
     
+    def _read_regular_file_page(
+        self,
+        path: str,
+        offset: int,
+        limit: int,
+        *,
+        max_bytes: Optional[int] = None,
+        metadata_only: bool = False,
+    ) -> Optional[dict]:
+        """Read a text page through one descriptor in the target environment.
+
+        The shell backend may target a container or remote host, so host-side
+        ``os.stat`` cannot protect it. This helper opens the path with
+        ``O_NONBLOCK``, checks that *the opened descriptor* is a regular file,
+        and reads through that same descriptor. It prevents FIFO/socket/device
+        hangs and avoids the stat-then-reopen race of ``wc``/``head``/``sed``.
+        """
+        marker = "__HERMES_SAFE_READ__"
+        script = r'''
+import base64, json, os, stat, sys
+
+marker = "__HERMES_SAFE_READ__"
+path = sys.argv[1]
+offset = int(sys.argv[2])
+limit = int(sys.argv[3])
+max_bytes = int(sys.argv[4])
+metadata_only = sys.argv[5] == "1"
+
+def emit(payload):
+    print(marker + json.dumps(payload, separators=(",", ":")))
+
+def special_kind(mode):
+    if stat.S_ISFIFO(mode):
+        return "a FIFO (named pipe)"
+    if stat.S_ISSOCK(mode):
+        return "a socket"
+    if stat.S_ISCHR(mode):
+        return "a character device"
+    if stat.S_ISBLK(mode):
+        return "a block device"
+    return "a special (non-regular) file"
+
+fd = None
+try:
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+    info = os.fstat(fd)
+    if stat.S_ISDIR(info.st_mode):
+        emit({"state": "not_file"})
+    elif not stat.S_ISREG(info.st_mode):
+        emit({"state": "special", "kind": special_kind(info.st_mode)})
+    elif max_bytes >= 0 and info.st_size > max_bytes:
+        emit({"state": "too_large", "file_size": info.st_size})
+    elif metadata_only:
+        emit({"state": "regular", "file_size": info.st_size})
+    else:
+        end_line = offset + limit - 1
+        selected = []
+        total_lines = 0
+        with os.fdopen(fd, "rb", closefd=False) as stream:
+            sample = stream.read(1000)
+            stream.seek(0)
+            for line_number, line in enumerate(stream, start=1):
+                total_lines += line.count(b"\n")
+                if offset <= line_number <= end_line:
+                    selected.append(line)
+        emit({
+            "state": "regular",
+            "file_size": info.st_size,
+            "total_lines": total_lines,
+            "sample": base64.b64encode(sample).decode("ascii"),
+            "content": base64.b64encode(b"".join(selected)).decode("ascii"),
+        })
+except OSError as exc:
+    emit({"state": "error", "error": str(exc)})
+finally:
+    if fd is not None:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+'''
+        for interpreter in ("python3", "python"):
+            max_arg = max_bytes if max_bytes is not None else -1
+            metadata_arg = "1" if metadata_only else "0"
+            result = self._exec(
+                f"{interpreter} -c {self._escape_shell_arg(script)} "
+                f"{self._escape_shell_arg(path)} {offset} {limit} {max_arg} {metadata_arg}"
+            )
+            output = _strip_terminal_fence_leaks(result.stdout)
+            for line in reversed(output.splitlines()):
+                if not line.startswith(marker):
+                    continue
+                try:
+                    payload = json.loads(line[len(marker):])
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(payload, dict):
+                    return payload
+        return None
+
     # =========================================================================
     # READ Implementation
     # =========================================================================
@@ -1235,28 +1346,42 @@ class ShellFileOperations(FileOperations):
         path = self._expand_path(path)
         
         offset, limit = normalize_read_pagination(offset, limit)
-        
-        # Check if file exists and get size (wc -c is POSIX, works on Linux + macOS)
-        stat_cmd = f"wc -c < {self._escape_shell_arg(path)} 2>/dev/null"
-        stat_result = self._exec(stat_cmd)
-        
-        if stat_result.exit_code != 0:
-            # File not found - try to suggest similar files
+
+        is_image = self._is_image(path)
+        ext_binary = os.path.splitext(path)[1].lower() in BINARY_EXTENSIONS
+
+        # Open, validate, and read in the target backend through one
+        # descriptor. This is intentionally before image/binary handling: a
+        # path with a benign extension can still be a FIFO or device. For
+        # known image/binary extensions, validate and return metadata only so
+        # no large binary payload crosses the terminal transport.
+        page = self._read_regular_file_page(
+            path, offset, limit, metadata_only=is_image or ext_binary,
+        )
+        if page is None:
+            return ReadResult(error=_SAFE_FILE_READER_PYTHON_ERROR)
+        state = page.get("state")
+        if state == "special":
+            return ReadResult(
+                error=(
+                    f"Cannot read '{path}': it is {page.get('kind', 'a special file')}, "
+                    "not a regular file."
+                )
+            )
+        if state != "regular":
             return self._suggest_similar_files(path)
-        
-        stat_output = _strip_terminal_fence_leaks(stat_result.stdout)
-        try:
-            file_size = int(stat_output.strip())
-        except ValueError:
+
+        file_size = page.get("file_size", 0)
+        if not isinstance(file_size, int):
             file_size = 0
-        
         # Check if file is too large
         if file_size > MAX_FILE_SIZE:
             # Still try to read, but warn
             pass
-        
-        # Images are never inlined — redirect to the vision tool
-        if self._is_image(path):
+
+        # Images and declared binary extensions are never materialized into
+        # the terminal response. The descriptor has still been validated.
+        if is_image:
             return ReadResult(
                 is_image=True,
                 is_binary=True,
@@ -1266,55 +1391,53 @@ class ShellFileOperations(FileOperations):
                     "Use vision_analyze with this file path to inspect the image contents."
                 ),
             )
-        
-        # Read a sample to check for binary content — at the byte layer when
-        # the transport allows, falling back to the legacy text heuristic.
-        sample_bytes = self._sample_file_bytes(path)
-        if sample_bytes is not None:
-            ext_binary = os.path.splitext(path)[1].lower() in BINARY_EXTENSIONS
-            is_binary = ext_binary or self._is_likely_binary_bytes(sample_bytes)
-        else:
-            sample_cmd = f"head -c 1000 {self._escape_shell_arg(path)} 2>/dev/null"
-            sample_result = self._exec(sample_cmd)
-            sample_output = _strip_terminal_fence_leaks(sample_result.stdout)
-            is_binary = self._is_likely_binary(path, sample_output)
+        if ext_binary:
+            return ReadResult(
+                is_binary=True,
+                file_size=file_size,
+                error="Binary file - cannot display as text. Use appropriate tools to handle this file type."
+            )
 
+        try:
+            sample_bytes = base64.b64decode(page.get("sample", ""), validate=True)
+            selected_bytes = base64.b64decode(page.get("content", ""), validate=True)
+        except (ValueError, binascii.Error):
+            return ReadResult(error="Safe file reader returned invalid encoded data.")
+
+        is_binary = self._is_likely_binary_bytes(sample_bytes)
         if is_binary:
             return ReadResult(
                 is_binary=True,
                 file_size=file_size,
                 error="Binary file - cannot display as text. Use appropriate tools to handle this file type."
             )
+
+        try:
+            read_output = selected_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            return ReadResult(
+                is_binary=True,
+                file_size=file_size,
+                error="Binary file - cannot display as text. Use appropriate tools to handle this file type."
+            )
         
-        # Read with pagination using sed
         end_line = offset + limit - 1
-        read_cmd = f"sed -n '{offset},{end_line}p' {self._escape_shell_arg(path)}"
-        read_result = self._exec(read_cmd)
-        
-        if read_result.exit_code != 0:
-            return ReadResult(error=f"Failed to read file: {read_result.stdout}")
-        read_output = _strip_terminal_fence_leaks(read_result.stdout)
         # Strip a leading UTF-8 BOM so the model never sees a phantom U+FEFF
         # before the first real character. Only meaningful on the first
         # chunk (the marker lives at byte 0); later pages can't carry it.
         if offset == 1:
             read_output, _ = _strip_bom(read_output)
-        
-        # Get total line count
-        wc_cmd = f"wc -l < {self._escape_shell_arg(path)}"
-        wc_result = self._exec(wc_cmd)
-        wc_output = _strip_terminal_fence_leaks(wc_result.stdout)
-        try:
-            total_lines = int(wc_output.strip())
-        except ValueError:
+
+        total_lines = page.get("total_lines", 0)
+        if not isinstance(total_lines, int):
             total_lines = 0
-        
+
         # Check if truncated
         truncated = total_lines > end_line
         hint = None
         if truncated:
             hint = f"Use offset={end_line + 1} to continue reading (showing {offset}-{end_line} of {total_lines} lines)"
-        
+
         return ReadResult(
             content=self._add_line_numbers(read_output, offset),
             total_lines=total_lines,
@@ -1376,78 +1499,102 @@ class ShellFileOperations(FileOperations):
         )
     
     def read_file_raw(self, path: str) -> ReadResult:
-        """Read the complete file content as a plain string.
+        """Read complete text through one validated descriptor.
 
-        No pagination, no line-number prefixes, no per-line truncation.
-        Uses cat so the full file is returned regardless of size.
+        Used by patch parsing, so it shares the same special-file and TOCTOU
+        protection as :meth:`read_file` instead of reopening the pathname via
+        shell commands.
         """
         path = self._expand_path(path)
-        stat_cmd = f"wc -c < {self._escape_shell_arg(path)} 2>/dev/null"
-        stat_result = self._exec(stat_cmd)
-        if stat_result.exit_code != 0:
+        is_image = self._is_image(path)
+        ext_binary = os.path.splitext(path)[1].lower() in BINARY_EXTENSIONS
+        page = self._read_regular_file_page(
+            path, 1, 2**31 - 1, metadata_only=is_image or ext_binary,
+        )
+        if page is None:
+            return ReadResult(error=_SAFE_FILE_READER_PYTHON_ERROR)
+        state = page.get("state")
+        if state == "special":
+            return ReadResult(
+                error=(
+                    f"Cannot read '{path}': it is {page.get('kind', 'a special file')}, "
+                    "not a regular file."
+                )
+            )
+        if state != "regular":
             return self._suggest_similar_files(path)
-        stat_output = _strip_terminal_fence_leaks(stat_result.stdout)
-        try:
-            file_size = int(stat_output.strip())
-        except ValueError:
+
+        file_size = page.get("file_size", 0)
+        if not isinstance(file_size, int):
             file_size = 0
-        if self._is_image(path):
+        if is_image:
             return ReadResult(is_image=True, is_binary=True, file_size=file_size)
-        sample_bytes = self._sample_file_bytes(path)
-        if sample_bytes is not None:
-            ext_binary = os.path.splitext(path)[1].lower() in BINARY_EXTENSIONS
-            is_binary = ext_binary or self._is_likely_binary_bytes(sample_bytes)
-        else:
-            sample_result = self._exec(f"head -c 1000 {self._escape_shell_arg(path)} 2>/dev/null")
-            sample_output = _strip_terminal_fence_leaks(sample_result.stdout)
-            is_binary = self._is_likely_binary(path, sample_output)
-        if is_binary:
+        if ext_binary:
             return ReadResult(
                 is_binary=True, file_size=file_size,
                 error="Binary file — cannot display as text."
             )
-        cat_result = self._exec(f"cat {self._escape_shell_arg(path)}")
-        if cat_result.exit_code != 0:
-            return ReadResult(error=f"Failed to read file: {cat_result.stdout}")
-        # Strip a leading UTF-8 BOM so patch's fuzzy matcher operates on
-        # clean content (a phantom U+FEFF before line 1 would defeat an
-        # exact first-line match). write_file restores the BOM on the way
-        # back out — it re-probes the on-disk file, which still has the
-        # marker — so the round-trip preserves it.
-        raw_content, _ = _strip_bom(_strip_terminal_fence_leaks(cat_result.stdout))
-        return ReadResult(
-            content=raw_content,
-            file_size=file_size,
-        )
+        try:
+            sample_bytes = base64.b64decode(page.get("sample", ""), validate=True)
+            content_bytes = base64.b64decode(page.get("content", ""), validate=True)
+        except (ValueError, binascii.Error):
+            return ReadResult(error="Safe file reader returned invalid encoded data.")
+        if self._is_likely_binary_bytes(sample_bytes):
+            return ReadResult(
+                is_binary=True, file_size=file_size,
+                error="Binary file — cannot display as text."
+            )
+        try:
+            raw_content = content_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            return ReadResult(
+                is_binary=True, file_size=file_size,
+                error="Binary file — cannot display as text."
+            )
+        raw_content, _ = _strip_bom(raw_content)
+        return ReadResult(content=raw_content, file_size=file_size)
 
     def read_file_bytes(self, path: str, max_bytes: Optional[int] = None) -> ReadResult:
-        """Read binary-safe bytes from any shell-backed environment."""
+        """Read binary-safe bytes from one validated backend descriptor."""
         path = self._expand_path(path)
-        stat_result = self._exec(
-            f"wc -c < {self._escape_shell_arg(path)} 2>/dev/null"
+        page = self._read_regular_file_page(
+            path, 1, 2**31 - 1, max_bytes=max_bytes,
         )
-        if stat_result.exit_code != 0:
+        if page is None:
+            return ReadResult(error=_SAFE_FILE_READER_PYTHON_ERROR)
+        state = page.get("state")
+        if state == "special":
+            return ReadResult(
+                error=(
+                    f"Cannot read '{path}': it is {page.get('kind', 'a special file')}, "
+                    "not a regular file."
+                )
+            )
+        if state == "too_large":
+            file_size = page.get("file_size", 0)
+            if not isinstance(file_size, int) or max_bytes is None:
+                return ReadResult(error=f"Could not determine file size: {path}")
+            return ReadResult(
+                file_size=file_size,
+                error=f"File is too large ({file_size:,} bytes, limit is {max_bytes:,})",
+            )
+        if state != "regular":
             return ReadResult(error=f"File not found: {path}")
-        try:
-            file_size = int(_strip_terminal_fence_leaks(stat_result.stdout).strip())
-        except ValueError:
+
+        file_size = page.get("file_size", 0)
+        if not isinstance(file_size, int):
             return ReadResult(error=f"Could not determine file size: {path}")
         if max_bytes is not None and file_size > max_bytes:
             return ReadResult(
                 file_size=file_size,
                 error=f"File is too large ({file_size:,} bytes, limit is {max_bytes:,})",
             )
-
-        encoded = self._exec(f"base64 < {self._escape_shell_arg(path)}")
-        if encoded.exit_code != 0:
-            return ReadResult(error=f"Failed to read binary file: {encoded.stdout}")
-        compact = "".join(_strip_terminal_fence_leaks(encoded.stdout).split())
         try:
-            base64.b64decode(compact, validate=True)
-        except (ValueError, base64.binascii.Error):
+            content_bytes = base64.b64decode(page.get("content", ""), validate=True)
+        except (ValueError, binascii.Error):
             return ReadResult(error=f"Backend returned invalid binary data for: {path}")
         return ReadResult(
-            base64_content=compact,
+            base64_content=base64.b64encode(content_bytes).decode("ascii"),
             file_size=file_size,
             is_binary=True,
         )
