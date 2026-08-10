@@ -3,7 +3,7 @@ project_id: zeus-alpha-research-ledger-core
 phase: local_advisory_ledger_v1
 status: g1_rebaseline
 validated: yes
-reviewed: yes
+reviewed: pending
 ---
 
 # ASSUMPTIONS AND OPEN QUESTIONS
@@ -20,7 +20,7 @@ reviewed: yes
 2. Existing tool registration and test fixture patterns on the current base SHA.
 3. Local Agent Core DB health, migration execution and Infisical secret-sync path without printing secret values.
 4. Provider terms, rate limits, permitted universe, and the minimum legal attribution/provenance fields before any source is enabled.
-5. Factory ALR-020 metadata read-back after the required deterministic removal of its incompatible bounded-local-sessions acceptance clause; v1 continues to exclude collaboration session/message entities.
+5. Resolved metadata input: Factory event 174440 read-back confirms deterministic removal of ALR-020's incompatible bounded-local-sessions acceptance clause; v1 continues to exclude collaboration session/message entities. The current documentary candidate still requires fresh independent exact-SHA review.
 
 ## Deliberately unresolved
 - Which paid/read-only provider(s) Jean will authorize after source due diligence.

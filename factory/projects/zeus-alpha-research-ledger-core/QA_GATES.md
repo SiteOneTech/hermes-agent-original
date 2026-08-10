@@ -3,14 +3,14 @@ project_id: zeus-alpha-research-ledger-core
 phase: local_advisory_ledger_v1
 status: g1_rebaseline
 validated: yes
-reviewed: yes
+reviewed: pending
 ---
 
 # QA GATES
 
 ## ALR-010 documentary gate
 - All 14 G1 documents plus G0, `REQUIREMENTS_TRACEABILITY.md`, `DATABASE_AND_RUNTIME_CONTRACT.md` and `G1_REVIEW.md` exist, are indexed, committed and independently PASS-reviewed.
-- `TASK_GRAPH.md` reconciliation matches current Factory task IDs, phases, owner/reviewer profiles, dependencies, branches, worktrees, PR-first metadata and both observed ALR-010-R1 direct integration events (`173433` and `173494`); before ALR-020, the incompatible bounded-local-sessions acceptance clause has the exact documented metadata correction/read-back evidence and v1 session/message exclusion remains intact.
+- `TASK_GRAPH.md` reconciliation matches current Factory task IDs, phases, owner/reviewer profiles, dependencies, branches, worktrees, PR-first metadata and both observed ALR-010-R1 direct integration events (`173433` and `173494`); Factory event 174440 records the exact ALR-020 acceptance metadata correction/read-back that removes the incompatible bounded-local-sessions clause while preserving v1 session/message exclusion. The event is not implementation or approval authority.
 - No document implies direct Vonash/trading authority, provider integration in core, or that either observed ALR-010-R1 direct Factory merge is approval/waiver/repeatable policy.
 
 ## ALR-020 database/role RED-GREEN gate

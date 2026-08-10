@@ -3,7 +3,7 @@ project_id: zeus-alpha-research-ledger-core
 phase: local_advisory_ledger_v1
 status: g1_rebaseline
 validated: yes
-reviewed: yes
+reviewed: pending
 ---
 
 # PATTERN ANALYSIS
