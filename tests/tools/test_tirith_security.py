@@ -359,25 +359,22 @@ class TestUnsupportedPlatform:
     no disk failure marker, no spawn attempts, no CLI banner. Pattern-matching
     guards still cover the gap; tirith content scanning is just absent."""
 
-    def test_is_platform_supported_true_on_linux_x86_64(self):
-        with patch("tools.tirith_security.platform.system", return_value="Linux"), \
-             patch("tools.tirith_security.platform.machine", return_value="x86_64"):
-            assert _tirith_mod.is_platform_supported() is True
-
-    def test_is_platform_supported_true_on_darwin_arm64(self):
-        with patch("tools.tirith_security.platform.system", return_value="Darwin"), \
-             patch("tools.tirith_security.platform.machine", return_value="arm64"):
-            assert _tirith_mod.is_platform_supported() is True
-
-    def test_is_platform_supported_false_on_windows(self):
-        with patch("tools.tirith_security.platform.system", return_value="Windows"), \
-             patch("tools.tirith_security.platform.machine", return_value="AMD64"):
-            assert _tirith_mod.is_platform_supported() is False
-
-    def test_is_platform_supported_false_on_unknown_arch(self):
-        with patch("tools.tirith_security.platform.system", return_value="Linux"), \
-             patch("tools.tirith_security.platform.machine", return_value="riscv64"):
-            assert _tirith_mod.is_platform_supported() is False
+    @pytest.mark.parametrize("system, machine, expected", [
+        ("Linux", "x86_64", True),
+        ("Darwin", "arm64", True),
+        ("Windows", "AMD64", False),
+        ("Linux", "riscv64", False),
+    ])
+    def test_is_platform_supported(self, system, machine, expected):
+        # The patched (system, machine) pairs are table inputs, not a host
+        # fake: is_platform_supported() is a pure string mapping that touches
+        # no OS facility beneath the check, so there is nothing for a real
+        # host to falsify. Two of the rows (Windows/AMD64, Linux/riscv64)
+        # could never execute honestly anyway — the second has no CI runner
+        # on any lane.
+        with patch("tools.tirith_security.platform.system", return_value=system), \
+             patch("tools.tirith_security.platform.machine", return_value=machine):
+            assert _tirith_mod.is_platform_supported() is expected
 
     @patch("tools.tirith_security._load_security_config")
     def test_ensure_installed_unsupported_returns_none_no_thread(self, mock_cfg):
