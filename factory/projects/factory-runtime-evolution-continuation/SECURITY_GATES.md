@@ -25,9 +25,9 @@ failures, resolved-gate mentions, missing-doc/artifact reconciliation findings
 ## 2. Fail-closed rules (preserved, never weakened)
 
 - G0: no dispatch when repository strategy has missing fields.
-- G1: no implementation task claimable while required docs are missing/not indexed/not
-  committed/not validated/not reviewed (unless Jean authorizes an exception for the
-  exact project).
+- G1: implementation tasks remain unclaimable while any required readiness marker is
+  absent (exists, indexed, committed, validated, reviewed), unless Jean authorizes an
+  exception for the exact project.
 - Autonomy: `manual_attention`, terminal statuses, and manual-takeover leases force
   autonomy off (`_project_status_forces_autonomy_off`, `_manual_takeover_dispatch_filter`).
 - Escalation: missing/invalid category ⇒ autonomous repair path, never a Jean question

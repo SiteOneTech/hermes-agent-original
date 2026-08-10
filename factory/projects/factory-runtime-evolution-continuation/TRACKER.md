@@ -33,7 +33,7 @@
    project active; 14 G1 docs blocking; human_questions=[]; gates=[]; anomalies as above.
 2. Planning-review reconciliation: independent content review passed in Factory
    planning gate `690` on 2026-08-10. This doc-only follow-up aligns every
-   required document with `reviewed:true` markers after prior gate `684` failed on
+   required document with `reviewed: yes` markers after prior gate `684` failed on
    missing per-document status rows; no active FRE-010 rework remains.
 3. Runtime analysis (baseline commit `20228c116`):
    - `hermes_cli/factory_pg.py:4523` supervisor_health_check; `:4584–4586` pending-question
@@ -56,7 +56,7 @@
 | Gate | Status | Evidence |
 |---|---|---|
 | G0 Repository Strategy | passed | DB `project_created` event 172950 (repo_scope zeus_only, base main, per_deliverable worktrees) |
-| G1 Documentary Readiness | passed | 14 docs exist/indexed/committed/validated:true/reviewed:true after solution-architect review; planning gate 690=passed |
+| G1 Documentary Readiness | passed | 14 docs exist/indexed/committed/validated: yes/reviewed: yes after solution-architect review; planning gate 690=passed |
 | Review (FRE-010) | passed | solution-architect review, 2026-08-10, planning gate 690 |
 | Delivery | not applicable yet | no product-runtime code in G1 |
 
@@ -64,7 +64,7 @@
 
 | Risk | Mitigation |
 |---|---|
-| Document/DB review-marker drift after G1 review | Keep per-document `validated:true` and `reviewed:true` rows synchronized with the recorded Factory planning gate evidence before downstream dispatch |
+| Document/DB review-marker drift after G1 review | Keep per-document `validated: yes` and `reviewed: yes` rows synchronized with the recorded Factory planning gate evidence before downstream dispatch |
 | Detached successor semantics confuse lineage | FRE-014 adds reopen/continue; this project records `continuation_of: factory-runtime-evolution` intent in its docs now |
 | Cron resume regressions | FRE-013/017 incremental resume with smoke evidence; idle-silence rule preserved |
 | Change-detector tests in new suites | QA_GATES.md bans them; reviewers enforce |
