@@ -3,7 +3,7 @@ project_id: zeus-alpha-research-ledger-core
 phase: local_advisory_ledger_v1
 status: g1_rebaseline
 validated: yes
-reviewed: pending
+reviewed: yes
 ---
 
 # G1 REVIEW RECORD
@@ -77,5 +77,15 @@ The concrete findings were that `TRACKER.md` still stated that exact-SHA reviews
 
 The bounded same-project repair is Factory event **174440** at `2026-08-10T16:32:37.76002+00:00`: it changed the ALR-020 acceptance criterion from the old `bounded local sessions` literal to the exact session/message-excluded, scheduler-readiness and non-session local-intake statement, and the Agent Core read-back proved the old literal absent and the new literal present. That event is project-local task metadata only; it changes no source/runtime file and does not itself satisfy the required independent review of the next documentation SHA.
 
+## Review round 8 — corrected exact-SHA independent PASS evidence
+
+**Corrected substantive candidate reviewed:** committed SHA `3e6c14f8aa368ec6e3623d16640bf4b558ce0c7a` (`docs(factory): reconcile ALR G1 review rework`), visible on open, non-draft GitHub PR #20 from the existing Zeus-signed, `agent:zeus` branch to `main`.
+
+- Factory gate **709**, `gate_type=spec`, `status=passed`, independently reviewed the corrected tracker/task graph/index/G1 evidence.
+- Factory gate **710**, `gate_type=security`, `status=passed`, independently reviewed the no-egress/no-authority boundary and the fact that event 174440 is task metadata only.
+- Factory gate **711**, `gate_type=quality`, `status=passed`, independently verified the concrete gate-708 rework, exact ALR-020 read-back, clean Markdown-only diff, and retained `reviewed: pending` state of candidate `3e6c14f8aa368ec6e3623d16640bf4b558ce0c7a`.
+
+The frontmatter/index marker transition in this commit records those completed gates. It is not a self-review and does not claim QA Guardian approval, merge/deploy authority, external-runtime authority, or any exception to downstream per-increment TDD, independent review and PR-first requirements.
+
 ## Status
-The G1 pack is validated but remains `reviewed: pending`. Gates 699/706/707 remain real PASS evidence for substantive candidate `dad375f27568c38be771fc597b579d087f034e1d`; gate 708 is real `REQUEST_CHANGES` evidence for `0d57631de23f84db3135764bea538fa349dc7462`. Commit the bounded tracker/task-graph/index reconciliation, update the existing Zeus-signed `agent:zeus` PR #20, and obtain a fresh independent exact-SHA review before any normal implementation dispatch. This does not close the project or waive any source, QA Guardian, local smoke, no-egress, PR or delivery requirement for ALR-020 through ALR-080.
+The G1 pack is validated and reviewed on corrected substantive candidate `3e6c14f8aa368ec6e3623d16640bf4b558ce0c7a`, with PR #20 visibility and Factory gates 709/710/711. This resolves only the documentation-readiness condition. It does not close the project or waive source TDD, independent review, QA Guardian, local smoke, no-egress, PR or delivery requirements for ALR-020 through ALR-080.

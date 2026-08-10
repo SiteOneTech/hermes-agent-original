@@ -3,13 +3,13 @@ project_id: zeus-alpha-research-ledger-core
 phase: local_advisory_ledger_v1
 status: g1_rebaseline
 validated: yes
-reviewed: pending
+reviewed: yes
 ---
 
 # TASK GRAPH
 
 ## Factory DB reconciliation snapshot
-Verified read-only with `hermes factory status zeus-alpha-research-ledger-core --json` against Agent Core Factory DB (`db_backend=agent_core_postgres`, `database=zeus_agent`) and local Git inspection. The baseline ALR-010 task and ALR-010-R2 planning task are `done`; ALR-010-R1 and ALR-060 are terminal `superseded`. The active bounded recovery is `zeus-alpha-research-ledger-core-reconcile-unvalidated-required-docs`: exact metadata candidate `0d57631de23f84db3135764bea538fa349dc7462` received independent quality gate 708 `REQUEST_CHANGES`. ALR-020 is `ready` but must not dispatch while the G1 markers remain pending and the manual Factory takeover is active. Factory events `173433` and `173494` record non-approval direct integrations of ALR-010-R1 commits to `main`; event `174440` records the later, project-local ALR-020 acceptance correction. None grants PR/QA approval, source/runtime authority, merge/deploy authority, or downstream implementation authority.
+Verified read-only with `hermes factory status zeus-alpha-research-ledger-core --json` against Agent Core Factory DB (`db_backend=agent_core_postgres`, `database=zeus_agent`) and local Git inspection. The baseline ALR-010 task and ALR-010-R2 planning task are `done`; ALR-010-R1 and ALR-060 are terminal `superseded`. The bounded gate-708 recovery is independently accepted on substantive SHA `3e6c14f8aa368ec6e3623d16640bf4b558ce0c7a` by Factory gates 709 (spec), 710 (security) and 711 (quality); this marker commit records that evidence for canonical resolver consumption. ALR-020 is `ready` but remains held by the temporary manual takeover until resolve-state sees the committed markers. Factory events `173433` and `173494` record non-approval direct integrations of ALR-010-R1 commits to `main`; event `174440` records the later, project-local ALR-020 acceptance correction. None grants PR/QA approval, source/runtime authority, merge/deploy authority, or downstream implementation authority.
 
 ### Deterministic ALR-020 acceptance metadata reconciliation — completed/read back
 
@@ -37,9 +37,9 @@ Factory event `174440` at `2026-08-10T16:32:37.76002+00:00`, actor `zeus`, corre
 | `zeus-alpha-research-ledger-core-alr-063-independent-security-and-no-egre` | security_review / todo | security-reviewer → factory-orchestrator | ALR-020..050 | `factory/zeus-alpha-research-ledger-core/inc-062-alr-063-independent-security-and` | `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-062-alr-063-independent-security-and` |
 | `zeus-alpha-research-ledger-core-alr-070-live-local-db-and-tool-smoke-wit` | qa / todo | qa-verifier → quality-reviewer | ALR-061, ALR-062, ALR-063 | `factory/zeus-alpha-research-ledger-core/inc-070-alr-070-live-local-db-and-tool-s` | `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-070-alr-070-live-local-db-and-tool-s` |
 | `zeus-alpha-research-ledger-core-alr-080-zeus-signed-pr-and-qa-guardian-h` | delivery / todo | factory-reporter → qa-verifier | ALR-070 | `factory/zeus-alpha-research-ledger-core/inc-080-alr-080-zeus-signed-pr-and-qa-gu` | `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-080-alr-080-zeus-signed-pr-and-qa-gu` |
-| `zeus-alpha-research-ledger-core-reconcile-unvalidated-required-docs` | documentation / todo | factory-reporter → quality-reviewer | gate 708 `REQUEST_CHANGES`; commit and exact-SHA review required | existing R2 PR branch | `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-011-alr-010-r2-pr-first-g1-reconciliation` |
+| `zeus-alpha-research-ledger-core-reconcile-unvalidated-required-docs` | documentation / resolver-driven | factory-reporter → quality-reviewer | gate 708 rework passed gates 709/710/711; committed reviewed markers await canonical resolve-state | existing R2 PR branch | `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-011-alr-010-r2-pr-first-g1-reconciliation` |
 
-The last row is Factory-generated reconciliation for document-readiness drift. It cannot close an implementation gate by itself. The existing Zeus-signed `agent:zeus` PR #20 must be updated with the fresh committed SHA, independently reviewed against that exact SHA, and reconciled before the manual takeover can release ALR-020; observed integrations 173433/173494 remain non-approval audit evidence.
+The last row is Factory-generated reconciliation for document-readiness drift. It resolves only when canonical resolve-state reads this committed marker transition, after which the manual takeover can release and the single-task Factory tick may dispatch ALR-020. The existing Zeus-signed `agent:zeus` PR #20 must remain visible; observed integrations 173433/173494 remain non-approval audit evidence.
 
 ## Review and delivery contract
 - ALR-061 produces a distinct specification/architecture mapping for every requirement and boundary.
