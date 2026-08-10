@@ -3,7 +3,7 @@ project_id: zeus-alpha-research-ledger-core
 phase: local_advisory_ledger_v1
 status: g1_rebaseline
 validated: yes
-reviewed: pending
+reviewed: yes
 ---
 
 # G1 REVIEW RECORD
@@ -60,5 +60,14 @@ The correction does **not** claim that either direct merge was authorized, does 
 
 At `2026-08-10T04:50:09-04:00`, the implementation-planner worker verified the project-local pack from the assigned worktree only. `git ls-files --error-unmatch` confirmed the 14 required G1 documents plus `G0_REPOSITORY_STRATEGY.md`, `REQUIREMENTS_TRACEABILITY.md`, `DATABASE_AND_RUNTIME_CONTRACT.md`, and `G1_REVIEW.md` are tracked. R2 must rerun tracked-document verification, `git diff --check`, and stale-claim scans after this edit and before the fresh candidate commit. This is implementation evidence, not an independent specification/security PASS.
 
+## Review round 6 — exact-SHA independent PASS evidence
+
+**Substantive candidate reviewed:** committed SHA `dad375f27568c38be771fc597b579d087f034e1d` (`docs(factory): reconcile ALR PR-first merge evidence`), visible on open, non-draft GitHub PR [#20](https://github.com/SiteOneTech/hermes-agent-original/pull/20) from `factory/zeus-alpha-research-ledger-core/inc-011-alr-010-r2-pr-first-g1-reconciliation` to `main`, labeled `agent:zeus` with the recorded Zeus sign-off.
+
+- Factory gate **699**, `gate_type=spec`, `status=passed`, reviewer `solution-architect`, independently reviewed this exact SHA and its Gate-695/Gate-697 reconciliation.
+- Factory gates **706** and **707**, `gate_type=security`, `status=passed`, independently reviewed this exact SHA, its project-local diff, no-egress/no-authority boundaries, and the fact that the prior direct integrations are audit evidence only.
+
+The frontmatter/index marker transition in this commit is a deterministic record of those completed gates, not a self-review and not a claim that the post-review metadata-only commit was itself independently reviewed. It does not grant QA Guardian approval, merge/deploy authority, external-runtime authority, or any exception to downstream per-increment TDD, independent review and PR-first requirements.
+
 ## Status
-This is still a remediation record, not approval. After this revision is committed and exposed through the Zeus-signed `agent:zeus` PR, obtain new independent specification and security reviews against that exact committed SHA, including the gate-695/gate-697 merge reconciliation and Git ancestry evidence. Only then may their independent PASS results support changing required G1 frontmatter/index to `reviewed: yes` and unblocking downstream implementation according to the reconciled delivery policy. Until then, `reviewed: pending` remains binding.
+The required G1 controls are validated and reviewed on the stated substantive candidate, with the required Zeus-signed `agent:zeus` PR visibility and reconciled Factory evidence. This resolves only the documentation readiness condition. It does not close the project or waive the independently reviewed source, QA Guardian, local smoke, no-egress, PR and delivery requirements for ALR-020 through ALR-080.
