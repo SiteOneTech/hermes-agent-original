@@ -4844,7 +4844,7 @@ def _final_marker_stall_seconds() -> float:
         return _FINAL_MARKER_STALL_SECONDS_DEFAULT
 
 
-_SEMANTIC_MARKER_LINE_RE = re.compile(r"^(?:FINAL:\s*)?STATE\s*:\s*(DONE|BLOCKED|IN_PROGRESS)\b", re.IGNORECASE)
+_SEMANTIC_MARKER_LINE_RE = re.compile(r"^(?:FINAL:\s*)?STATE\s*:\s*(DONE|BLOCKED|IN_PROGRESS)\s*$", re.IGNORECASE)
 
 
 def _semantic_state_from_line(line: str) -> Optional[str]:
@@ -4858,7 +4858,7 @@ def _semantic_state_from_line(line: str) -> Optional[str]:
 
     clean = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", line or "").strip()
     clean = clean.lstrip(" >│┃┊┆|-•*\t")
-    match = _SEMANTIC_MARKER_LINE_RE.match(clean)
+    match = _SEMANTIC_MARKER_LINE_RE.fullmatch(clean)
     if not match:
         return None
     value = match.group(1).upper()
@@ -5033,7 +5033,24 @@ def mark_run_finished(run_id: str, *, exit_code: int, output_summary: str = "") 
     )
     row = sql.one(f"SELECT project_id FROM factory.task_runs WHERE run_id={_q(run_id)}", user=_user())
     if row:
-        reconcile_project(row["project_id"])
+        project_id = row["project_id"]
+        if run_type == "review" and effective_exit_code != 0:
+            task_id = str(run_row.get("task_id") or "").strip()
+            audit_metadata = {
+                "run_id": run_id,
+                "run_type": run_type,
+                "exit_code": effective_exit_code,
+                "task_status": status_value,
+                "failure_summary_tail": output_summary[-2000:],
+            }
+            sql.psql(
+                f"""
+                INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
+                VALUES ({_q(project_id)}, NULL, {_q(task_id)}, 'factory-monitor', 'review_run_failed', {_q(f'Review run {run_id} failed; task remains {status_value}')}, {_j(audit_metadata)});
+                """,
+                user=_user(),
+            )
+        reconcile_project(project_id)
 
 
 def _repair_orphan_in_flight_tasks(project_id: Optional[str] = None) -> list[dict[str, Any]]:

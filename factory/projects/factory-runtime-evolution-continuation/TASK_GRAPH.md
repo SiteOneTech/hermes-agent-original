@@ -17,6 +17,7 @@ FRE-011 ──┐
 FRE-012 ──┴──> FRE-013 (watchdog/cron integration)
 FRE-011+FRE-012+FRE-013+FRE-014 ──> FRE-015 (independent QA/security review)
 FRE-020 (emergency consolidation: FRE-011/FRE-012/FRE-014 live incident repair) ──> FRE-015/R5 review
+FRE-021 (review outcome semantic integrity and failed-review recovery) ──> FRE-015/R5 review
 FRE-015 ──> FRE-016 (PR-first delivery / merge to main)
 FRE-013 + FRE-015 ──> FRE-017 (global cron verification)
 ```
@@ -36,6 +37,7 @@ FRE-013 + FRE-015 ──> FRE-017 (global cron verification)
 | FRE-016 | PR-first delivery: merge approved increments to main | delivery | devops-release + factory-orchestrator | factory-orchestrator | FRE-015 | — |
 | FRE-017 | Global cron verification (incremental resume + smoke) | verification | devops-release | factory-orchestrator | FRE-013, FRE-015 | `factory/factory-runtime-evolution-continuation/inc-017-global-cron-verification` |
 | FRE-020 | Technical rework escalation and canonical continuation recovery | implementation | claude-builder | quality-reviewer + solution-architect | FRE-010, live Alpha incident | `factory/factory-runtime-evolution-continuation/inc-020-fre-020-technical-rework-escalat` |
+| FRE-021 | Review outcome semantic integrity and failed-review recovery | implementation | claude-builder | quality-reviewer | FRE-020, live review 429 incident | `factory/factory-runtime-evolution-continuation/inc-020-fre-020-technical-rework-escalat` |
 
 ## 2. Per-increment acceptance (TDD anchors)
 
@@ -111,6 +113,23 @@ FRE-013 + FRE-015 ──> FRE-017 (global cron verification)
 - GREEN implementation scope:
   `hermes_cli/factory_pg.py` autonomous technical recovery path (`technical_rework_escalated_autonomously` audit, deterministic recovery task, no human/manual hold), invalid-question fail-closed retirement, stale manual_attention restoration, create-path reopen suggestion, and canonical `reopen_project` with preflight/gate/audit/single-active guard; `hermes_cli/factory.py` CLI `project reopen|continue`; `hermes_cli/factory_contracts.py` question/category contracts.
 - DoD: no direct Factory DB writes except approved Factory evidence gate, no deploy, no push/merge/PR/Factory task close; code/docs committed on assigned branch after verification.
+
+### FRE-021 — Review outcome semantic integrity and failed-review recovery
+- RED: added behavioral regression coverage for the reproduced wrapped/instructional
+  review failure text `STATE: DONE; si falla, termina con STATE: BLOCKED...`.
+  Expected/observed RED before production change: semantic parser accepted the wrapped
+  line as `done`, `mark_run_finished(... run_type=review, exit_code=1, output_summary=<429>)`
+  invoked increment integration and attempted terminal done semantics.
+- GREEN: strict canonical marker parsing accepts only standalone `STATE: DONE`,
+  `STATE: BLOCKED`, `STATE: IN_PROGRESS` (optionally prefixed by `FINAL:`) after
+  leading terminal/Markdown decoration is stripped; wrapped or instructional prose is
+  ignored. Failed review runs without an actual final verdict remain `failed`/`rework`,
+  skip increment integration, and emit `review_run_failed` audit events with the failure
+  summary tail.
+- Focused Factory regression set:
+  `HERMES_PYTHON=/home/jean/Projects/hermes-agent-original/venv/bin/python scripts/run_tests.sh tests/hermes_cli/test_factory.py tests/hermes_cli/test_factory_project_reopen.py tests/hermes_cli/test_factory_control_plane_refactor.py tests/hermes_cli/test_factory_cron_control_plane.py tests/hermes_cli/test_factory_orchestrator_tick.py tests/hermes_cli/test_factory_increment_integration.py tests/hermes_cli/test_factory_ux_ui_designer_contract.py` → 136 passed / 0 failed.
+- DoD: no deploy, no push/merge/PR/Factory task close; code/docs committed on the
+  existing FRE-020 branch for independent exact-SHA review.
 
 ## 3. Mapping to acceptance criteria (FRE-010)
 

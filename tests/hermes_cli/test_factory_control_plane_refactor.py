@@ -1232,6 +1232,21 @@ def test_final_semantic_state_ignores_instructional_mid_sentence_marker_without_
     assert factory_pg._effective_exit_code(0, text) == 0
 
 
+def test_final_semantic_state_rejects_wrapped_instructional_done_marker_without_final_verdict():
+    text = (
+        "STATE: DONE; si falla, termina con STATE: BLOCKED y razones/rework.\n"
+        "Initializing agent...\n"
+        "RateLimitError [HTTP 429]: Token Plan usage limit reached.\n"
+        "API call failed after 3 retries."
+    )
+
+    assert factory_pg._semantic_state_from_line("STATE: DONE") == "done"
+    assert factory_pg._semantic_state_from_line("FINAL: STATE: BLOCKED") == "blocked"
+    assert factory_pg._semantic_state_from_line("STATE: DONE; si falla, termina con STATE: BLOCKED") is None
+    assert factory_pg._final_semantic_state(text) is None
+    assert factory_pg._effective_exit_code(1, text) != 0
+
+
 def test_worker_output_summary_does_not_promote_prompt_instruction_marker(tmp_path):
     log = tmp_path / "worker.log"
     log.write_text(

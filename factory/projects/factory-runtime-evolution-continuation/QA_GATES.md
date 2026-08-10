@@ -42,6 +42,7 @@ Scope: documentation-only; no runtime code. QA gate = documentary verification:
 | FRE-015 | `scripts/run_tests.sh tests/hermes_cli/test_factory*.py` (full factory set) | all green or documented pre-existing failures |
 | FRE-017 | cron smoke per script + `hermes cronjob list` | exit 0; no unexpected alerts; evidence file |
 | FRE-020 | TDD RED command in TRACKER §2.5; GREEN focused command and full Factory set in TRACKER §2.6 | RED observed before production change; GREEN 9/9 and 134/134 after change |
+| FRE-021 | TDD RED command in TRACKER §2.8; GREEN targeted command and full focused Factory set in TRACKER §2.9 | RED observed before production change; GREEN 2/2 targeted and 136/136 focused Factory tests |
 
 ## 4. Evidence capture rules
 
@@ -59,7 +60,19 @@ Scope: documentation-only; no runtime code. QA gate = documentary verification:
 - GREEN: targeted FRE-020 tests passed 9/9; focused Factory regression set passed 134/134.
 - No source-reading tests were added; assertions exercise runtime functions/CLI parser behavior and emitted SQL/event effects via the existing FakeSql test harness.
 
-## 6. QA ownership
+## 6. FRE-021 QA evidence (2026-08-10)
+
+- Environment note: the assigned worktree has no local `.venv`; `scripts/run_tests.sh`
+  was executed with `HERMES_PYTHON=/home/jean/Projects/hermes-agent-original/venv/bin/python`.
+- RED: the new semantic/review tests failed before production changes because
+  `_semantic_state_from_line("STATE: DONE; si falla...")` returned `done`, and the failed
+  review path invoked increment integration from a wrapped instruction.
+- GREEN: the same targeted tests passed 2/2 after the production change; the focused
+  Factory regression set passed 136/136.
+- No source-reading tests were added; assertions exercise runtime parser functions and
+  review-run SQL/audit behavior through the existing FakeSql harness.
+
+## 7. QA ownership
 
 - qa-verifier owns live smoke/E2E evidence (FRE-015/017); quality-reviewer owns spec
   compliance review of diffs; both are independent of the increment owner.
