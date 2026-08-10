@@ -30,6 +30,7 @@ DEFAULTS = {
     "AGENT_FITNESS_DB_NAME": "zeus_agent",
     "AGENT_SIGNATURE_DB_NAME": "zeus_agent",
     "AGENT_AGENT_MANAGEMENT_DB_NAME": "zeus_agent",
+    "AGENT_ALPHA_RESEARCH_DB_NAME": "zeus_agent",
 }
 
 MODULES = {
@@ -64,6 +65,43 @@ MODULES = {
     "signature": {
         "database_env": "AGENT_SIGNATURE_DB_NAME",
         "migrations": REPO_ROOT / "db" / "modules" / "signature",
+    },
+    "alpha_research": {
+        "database_env": "AGENT_ALPHA_RESEARCH_DB_NAME",
+        "migrations": REPO_ROOT / "db" / "modules" / "alpha_research",
+        # Private local research ledger contract. Everything below is local to
+        # the Agent Core DB; the module holds no authority outside it.
+        "contract": {
+            "schema": "alpha_research",
+            "tables": (
+                "research_programs",
+                "source_registry",
+                "source_policy_revisions",
+                "evidence_items",
+                "research_cycles",
+                "alpha_cards",
+                "alpha_card_evidence",
+                "alpha_lineage",
+                "research_reviews",
+                "experiment_result_refs",
+                "inert_handoff_packages",
+                "runtime_readiness",
+            ),
+            "author_role": "alpha_research_runtime",
+            "reviewer_role": "alpha_research_reviewer",
+            "source_classes": (
+                "local_normalized_batch",
+                "manual_reference_metadata",
+                "licensed_local_document",
+            ),
+            "classification": {
+                "classification_scope": "research_only",
+                "validation_state": "unvalidated",
+                "not_investment_advice": True,
+                "advisory_disclaimer": "Research only; unvalidated; not investment advice.",
+            },
+            "external_authority": (),
+        },
     },
 }
 
@@ -218,7 +256,7 @@ def apply_external_sql_dir(env: dict[str, str], module: str, database: str, dire
 def status(env: dict[str, str]) -> None:
     compose_proc = compose(env, ["ps"])
     print(compose_proc.stdout)
-    for database in sorted({env["AGENT_DB_NAME"], env["AGENT_CALENDAR_DB_NAME"], env.get("AGENT_CRM_DB_NAME", env["AGENT_DB_NAME"]), env.get("AGENT_FITNESS_DB_NAME", env["AGENT_DB_NAME"]), env.get("AGENT_SIGNATURE_DB_NAME", env["AGENT_DB_NAME"]), env.get("AGENT_AGENT_MANAGEMENT_DB_NAME", env["AGENT_DB_NAME"])}):
+    for database in sorted({env["AGENT_DB_NAME"], env["AGENT_CALENDAR_DB_NAME"], env.get("AGENT_CRM_DB_NAME", env["AGENT_DB_NAME"]), env.get("AGENT_FITNESS_DB_NAME", env["AGENT_DB_NAME"]), env.get("AGENT_SIGNATURE_DB_NAME", env["AGENT_DB_NAME"]), env.get("AGENT_AGENT_MANAGEMENT_DB_NAME", env["AGENT_DB_NAME"]), env.get("AGENT_ALPHA_RESEARCH_DB_NAME", env["AGENT_DB_NAME"])}):
         ensure_database(env, database)
         ensure_migration_ledger(env, database)
         proc = psql(env, database, "SELECT current_database(), module, version, applied_at FROM agent_core.schema_migrations ORDER BY module, version;")
@@ -255,7 +293,8 @@ def main() -> None:
         ensure_database(env, env.get("AGENT_FITNESS_DB_NAME", env["AGENT_DB_NAME"]))
         ensure_database(env, env.get("AGENT_SIGNATURE_DB_NAME", env["AGENT_DB_NAME"]))
         ensure_database(env, env.get("AGENT_AGENT_MANAGEMENT_DB_NAME", env["AGENT_DB_NAME"]))
-        for module in ["agent_core", "factory", "agent_management", "calendar", "crm", "sales_operator", "fitness", "signature"]:
+        ensure_database(env, env.get("AGENT_ALPHA_RESEARCH_DB_NAME", env["AGENT_DB_NAME"]))
+        for module in ["agent_core", "factory", "agent_management", "calendar", "crm", "sales_operator", "fitness", "signature", "alpha_research"]:
             apply_module(env, module)
     elif args.command == "status":
         status(env)

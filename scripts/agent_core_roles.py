@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import secrets
 import string
 import subprocess
@@ -34,6 +35,8 @@ DEFAULTS = {
     "FITNESS_DB_RUNTIME_USER": "fitness_runtime",
     "SIGNATURE_DB_RUNTIME_USER": "signature_runtime",
     "AGENT_MANAGEMENT_DB_RUNTIME_USER": "agent_management_runtime",
+    "ALPHA_RESEARCH_DB_RUNTIME_USER": "alpha_research_runtime",
+    "ALPHA_RESEARCH_DB_REVIEWER_USER": "alpha_research_reviewer",
 }
 
 SECRET_KEYS = [
@@ -47,6 +50,8 @@ SECRET_KEYS = [
     "ACCOUNTING_DB_RUNTIME_PASSWORD",
     "FITNESS_DB_RUNTIME_PASSWORD",
     "AGENT_MANAGEMENT_DB_RUNTIME_PASSWORD",
+    "ALPHA_RESEARCH_DB_RUNTIME_PASSWORD",
+    "ALPHA_RESEARCH_DB_REVIEWER_PASSWORD",
 ]
 OPTIONAL_RUNTIME_PASSWORD_KEYS = {"SIGNATURE_DB_RUNTIME_PASSWORD", "SALES_OPERATOR_DB_RUNTIME_PASSWORD"}
 SHARED_RUNTIME_PASSWORD_FALLBACKS = {
@@ -61,6 +66,10 @@ SHARED_RUNTIME_PASSWORD_FALLBACKS = {
     # generating an ad-hoc local secret. Once AGENT_MANAGEMENT_* exists in
     # Infisical, the dedicated value wins.
     "AGENT_MANAGEMENT_DB_RUNTIME_PASSWORD": "AGENT_DB_RUNTIME_PASSWORD",
+    # Alpha Research roles are deliberately absent here: the private research
+    # ledger never inherits a broad shared runtime password. Its author and
+    # reviewer credentials must come from dedicated Infisical secrets or their
+    # dedicated database URLs.
 }
 
 
@@ -90,7 +99,9 @@ def save_env_file(values: dict[str, str]) -> None:
         "VOICE_DB_RUNTIME_USER", "VOICE_DB_RUNTIME_PASSWORD",
         "SALES_DB_RUNTIME_USER", "SALES_DB_RUNTIME_PASSWORD", "SALES_OPERATOR_DB_RUNTIME_USER", "SALES_OPERATOR_DB_RUNTIME_PASSWORD", "ACCOUNTING_DB_RUNTIME_USER", "ACCOUNTING_DB_RUNTIME_PASSWORD",
         "FITNESS_DB_RUNTIME_USER", "FITNESS_DB_RUNTIME_PASSWORD", "SIGNATURE_DB_RUNTIME_USER", "SIGNATURE_DB_RUNTIME_PASSWORD", "AGENT_MANAGEMENT_DB_RUNTIME_USER", "AGENT_MANAGEMENT_DB_RUNTIME_PASSWORD",
+        "ALPHA_RESEARCH_DB_RUNTIME_USER", "ALPHA_RESEARCH_DB_RUNTIME_PASSWORD", "ALPHA_RESEARCH_DB_REVIEWER_USER", "ALPHA_RESEARCH_DB_REVIEWER_PASSWORD",
         "AGENT_DATABASE_URL", "FACTORY_DATABASE_URL", "CALENDAR_DATABASE_URL", "CRM_DATABASE_URL", "VOICE_DATABASE_URL", "SALES_DATABASE_URL", "SALES_OPERATOR_DATABASE_URL", "ACCOUNTING_DATABASE_URL", "FITNESS_DATABASE_URL", "SIGNATURE_DATABASE_URL", "AGENT_MANAGEMENT_DATABASE_URL",
+        "ALPHA_RESEARCH_DATABASE_URL", "ALPHA_RESEARCH_REVIEWER_DATABASE_URL",
     ]:
         if key in merged:
             lines.append(f"{key}={merged[key]}")
@@ -114,6 +125,8 @@ def _fill_passwords_from_urls(env: dict[str, str]) -> None:
         "FITNESS_DB_RUNTIME_PASSWORD": "FITNESS_DATABASE_URL",
         "SIGNATURE_DB_RUNTIME_PASSWORD": "SIGNATURE_DATABASE_URL",
         "AGENT_MANAGEMENT_DB_RUNTIME_PASSWORD": "AGENT_MANAGEMENT_DATABASE_URL",
+        "ALPHA_RESEARCH_DB_RUNTIME_PASSWORD": "ALPHA_RESEARCH_DATABASE_URL",
+        "ALPHA_RESEARCH_DB_REVIEWER_PASSWORD": "ALPHA_RESEARCH_REVIEWER_DATABASE_URL",
     }
     for password_key, url_key in pairs.items():
         if env.get(password_key):
@@ -150,6 +163,8 @@ def runtime_env(write_missing: bool = False) -> dict[str, str]:
         ("FITNESS_DB_RUNTIME_USER", "fitness_runtime"),
         ("SIGNATURE_DB_RUNTIME_USER", "signature_runtime"),
         ("AGENT_MANAGEMENT_DB_RUNTIME_USER", "agent_management_runtime"),
+        ("ALPHA_RESEARCH_DB_RUNTIME_USER", "alpha_research_runtime"),
+        ("ALPHA_RESEARCH_DB_REVIEWER_USER", "alpha_research_reviewer"),
     ]:
         env.setdefault(key, default_user)
     _fill_passwords_from_urls(env)
@@ -171,7 +186,9 @@ def runtime_env(write_missing: bool = False) -> dict[str, str]:
         env["FITNESS_DATABASE_URL"] = f"postgresql://{env['FITNESS_DB_RUNTIME_USER']}:***@{host}:{port}/{env['AGENT_DB_NAME']}"
         env["SIGNATURE_DATABASE_URL"] = f"postgresql://{env['SIGNATURE_DB_RUNTIME_USER']}:***@{host}:{port}/{env['AGENT_DB_NAME']}"
         env["AGENT_MANAGEMENT_DATABASE_URL"] = f"postgresql://{env['AGENT_MANAGEMENT_DB_RUNTIME_USER']}:***@{host}:{port}/{env['AGENT_DB_NAME']}"
-        save_env_file({k: env[k] for k in env if k.startswith(("AGENT_", "FACTORY_", "CALENDAR_", "CRM_", "VOICE_", "SALES_", "ACCOUNTING_", "FITNESS_", "SIGNATURE_"))})
+        env["ALPHA_RESEARCH_DATABASE_URL"] = f"postgresql://{env['ALPHA_RESEARCH_DB_RUNTIME_USER']}:***@{host}:{port}/{env['AGENT_DB_NAME']}"
+        env["ALPHA_RESEARCH_REVIEWER_DATABASE_URL"] = f"postgresql://{env['ALPHA_RESEARCH_DB_REVIEWER_USER']}:***@{host}:{port}/{env['AGENT_DB_NAME']}"
+        save_env_file({k: env[k] for k in env if k.startswith(("AGENT_", "FACTORY_", "CALENDAR_", "CRM_", "VOICE_", "SALES_", "ACCOUNTING_", "FITNESS_", "SIGNATURE_", "ALPHA_RESEARCH_"))})
     missing = [key for key in ["AGENT_DB_ADMIN_PASSWORD", *SECRET_KEYS] if not env.get(key) and key not in OPTIONAL_RUNTIME_PASSWORD_KEYS]
     if missing:
         raise SystemExit(f"Missing required secrets: {', '.join(missing)}. Inject them or run with --write-missing-local-env for local dev.")
@@ -220,6 +237,43 @@ BEGIN
 END $$;
 """
     run_psql(env, "postgres", sql)
+
+
+ALPHA_RESEARCH_ROLE_KEYS = (
+    ("ALPHA_RESEARCH_DB_RUNTIME_USER", "ALPHA_RESEARCH_DB_RUNTIME_PASSWORD"),
+    ("ALPHA_RESEARCH_DB_REVIEWER_USER", "ALPHA_RESEARCH_DB_REVIEWER_PASSWORD"),
+)
+
+# Least privilege for the private research ledger: login only, every elevated
+# attribute explicitly off, and a small connection budget.
+ALPHA_RESEARCH_ROLE_ATTRIBUTES = (
+    "LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 5"
+)
+
+
+def ensure_alpha_research_roles(env: dict[str, str]) -> None:
+    """Create/rotate the dedicated Alpha Research author and reviewer roles.
+
+    Roles carry no memberships and receive no grants here; table privileges
+    come exclusively from the alpha_research module migration. search_path is
+    pinned so both roles resolve only the private alpha_research schema.
+    """
+    for role_key, password_key in ALPHA_RESEARCH_ROLE_KEYS:
+        role = env[role_key]
+        if not re.fullmatch(r"[a-z_][a-z0-9_]*", role):
+            raise SystemExit(f"Unsafe role name for {role_key}: {role!r}")
+        password = quote_literal(env[password_key])
+        run_psql(env, "postgres", f"""
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = {quote_literal(role)}) THEN
+    CREATE ROLE {role} {ALPHA_RESEARCH_ROLE_ATTRIBUTES} PASSWORD {password};
+  ELSE
+    ALTER ROLE {role} WITH {ALPHA_RESEARCH_ROLE_ATTRIBUTES} PASSWORD {password};
+  END IF;
+END $$;
+ALTER ROLE {role} SET search_path = alpha_research, pg_catalog;
+""")
 
 
 def apply_grants(env: dict[str, str]) -> None:
@@ -323,7 +377,9 @@ def print_infisical(env: dict[str, str]) -> None:
         "VOICE_DB_RUNTIME_USER", "VOICE_DB_RUNTIME_PASSWORD",
         "SALES_DB_RUNTIME_USER", "SALES_DB_RUNTIME_PASSWORD", "SALES_OPERATOR_DB_RUNTIME_USER", "SALES_OPERATOR_DB_RUNTIME_PASSWORD", "ACCOUNTING_DB_RUNTIME_USER", "ACCOUNTING_DB_RUNTIME_PASSWORD",
         "FITNESS_DB_RUNTIME_USER", "FITNESS_DB_RUNTIME_PASSWORD", "SIGNATURE_DB_RUNTIME_USER", "SIGNATURE_DB_RUNTIME_PASSWORD", "AGENT_MANAGEMENT_DB_RUNTIME_USER", "AGENT_MANAGEMENT_DB_RUNTIME_PASSWORD",
+        "ALPHA_RESEARCH_DB_RUNTIME_USER", "ALPHA_RESEARCH_DB_RUNTIME_PASSWORD", "ALPHA_RESEARCH_DB_REVIEWER_USER", "ALPHA_RESEARCH_DB_REVIEWER_PASSWORD",
         "AGENT_DATABASE_URL", "FACTORY_DATABASE_URL", "CALENDAR_DATABASE_URL", "CRM_DATABASE_URL", "VOICE_DATABASE_URL", "SALES_DATABASE_URL", "SALES_OPERATOR_DATABASE_URL", "ACCOUNTING_DATABASE_URL", "FITNESS_DATABASE_URL", "SIGNATURE_DATABASE_URL", "AGENT_MANAGEMENT_DATABASE_URL",
+        "ALPHA_RESEARCH_DATABASE_URL", "ALPHA_RESEARCH_REVIEWER_DATABASE_URL",
     ]
     for key in keys:
         if key in env:
@@ -337,7 +393,8 @@ def main() -> None:
     args = parser.parse_args()
     env = runtime_env(write_missing=args.write_missing_local_env)
     apply_grants(env)
-    print("Agent Core runtime roles ready: agent_runtime, factory_runtime, calendar_runtime, crm_runtime, voice_runtime, sales_runtime, sales_operator_runtime, accounting_runtime, fitness_runtime, signature_runtime, agent_management_runtime")
+    ensure_alpha_research_roles(env)
+    print("Agent Core runtime roles ready: agent_runtime, factory_runtime, calendar_runtime, crm_runtime, voice_runtime, sales_runtime, sales_operator_runtime, accounting_runtime, fitness_runtime, signature_runtime, agent_management_runtime, alpha_research_runtime, alpha_research_reviewer")
     if args.print_infisical:
         print_infisical(env)
 
