@@ -17,8 +17,8 @@ reviewed: pending
 | `primary_repo_path` | `/home/jean/Projects/hermes-agent-original` |
 | `successor_project_path` | `factory/projects/zeus-alpha-research-ledger-core/` |
 | `predecessor_project_id` | `zeus-independent-alpha-research` (documentation-only predecessor; no runtime module delivered) |
-| `base_branch` | `origin/main` is the required PR target; this bounded R1 rework does not assert a live current remote SHA because it performs no base merge |
-| `last_verified_origin_main` | ALR-010 local verification fetched `origin/main` at `2026-08-10T04:50:09-04:00` as `00e7bb4ab0fcd9013ffa924ce6c5a8ae2c2ae2fc`; that is historical evidence only |
+| `base_branch` | `origin/main` remains the canonical base. R2 read-only verification records that the prior ALR-010-R1 branch commit `b9396bcd7d14ee6f212bd0fd0609e468cecf567f` is already an ancestor of `origin/main` via merge commit `e3d04ff94b67e6e21be1d5515bdb71400fbedf0a`; this is evidence to reconcile, not permission for another merge. |
+| `last_verified_origin_main` | R2 local verification observed `origin/main` as `e3d04ff94b67e6e21be1d5515bdb71400fbedf0a` (`Merge Factory increment zeus-alpha-research-ledger-core-alr-010-r1-bounded-g1-contract-rework into main`). Earlier `00e7bb4ab0fcd9013ffa924ce6c5a8ae2c2ae2fc` evidence is historical only. |
 | `historical_planning_base` | `20228c1167814f36d952999f2cafe8b3f6f9ba3c` was the ALR-010 planning-time `origin/main` reference only; do not treat it as current base |
 | `branch_merge_base_at_alr010_verification` | `ed8dbe3bcf3a99fee48f24a5301240fb5282661e` was the local merge base observed during ALR-010 verification; PR/review must revalidate or update against then-current `origin/main` before QA Guardian merge |
 | `deliverable_branch` | `factory/zeus-alpha-research-ledger-core/inc-010-alr-010-g1-rebaseline-and-local` |
@@ -27,7 +27,8 @@ reviewed: pending
 | `worktree_policy` | one isolated worktree per increment below `/home/jean/Projects/.worktrees/` |
 | `propagation` | none in v1; a future Vonash adapter/exchange is a separately approved project/increment |
 | `runtime_impact` | local Zeus Agent Core only; never a Vonash deployment |
-| `delivery` | signed, labeled GitHub PR → independent QA → QA Guardian merge decision; Zeus never merges/deploys |
+| `observed_increment_integration` | Agent Core Postgres event `173433` records `increment_integrated`, method `merge_no_ff_push_origin`, branch commit `b9396bcd7d14ee6f212bd0fd0609e468cecf567f`, base before `00e7bb4ab0fcd9013ffa924ce6c5a8ae2c2ae2fc`, base after `e3d04ff94b67e6e21be1d5515bdb71400fbedf0a`, actor `implementation-planner`, at `2026-08-10T09:22:51.090409Z`. |
+| `delivery` | Target policy remains signed, labeled GitHub PR → independent QA → QA Guardian merge decision. The observed ALR-010-R1 direct Factory integration is recorded as operational evidence and gate-695 rework context; it is not a PASS, PR, waiver, deploy authorization, or downstream implementation authority. |
 
 ## Rationale
 The ledger is a local Agent Core module, so it belongs in the Zeus source repository rather than a new service, copied Vonash codebase, or data store. The existing shared Agent Core database is canonical for Zeus modules. The module must use its own schema and runtime role: it may share the database instance but not a broad credential or an external platform’s database.
@@ -39,4 +40,6 @@ This project succeeds `zeus-independent-alpha-research` by creating the first **
 The v1 ledger stores local research provenance and inert handoffs only. It cannot write to Vonash/Magnus/VAOS/APC/KB/broker runtimes, cannot dispatch network messages, cannot trade, cannot change portfolio/risk state, and cannot mark research as approved strategy, paper/live activation, investment advice or operational instruction.
 
 ## PR-first Factory override
-Jean explicitly requires source changes to reach QA Guardian through a Zeus-signed PR before any base-branch merge. Therefore every task in this project carries the Factory per-task `increment_integration_waived` metadata with `authorized_by=Jean García` and a recorded PR-first reason. This suppresses Factory’s otherwise automatic branch-to-`main` integration; it does **not** waive review or permit a task to be closed before the actual PR/QA Guardian merge evidence exists.
+Jean explicitly requires source changes to reach QA Guardian through a Zeus-signed PR before any base-branch merge. Therefore every task in this project carries the Factory per-task `increment_integration_waived` metadata with `authorized_by=Jean García` and a recorded PR-first reason.
+
+The live Factory/Git record diverged from that policy for ALR-010-R1: Agent Core Postgres event `173433` and `git show e3d04ff94b67e6e21be1d5515bdb71400fbedf0a` show that `b9396bcd7d14ee6f212bd0fd0609e468cecf567f` was merged directly into `origin/main`. This document records the merge fact so artifacts no longer claim a branch-only/no-merge state. It does **not** retroactively approve the merge, waive independent reviews, open a PR, deploy, or permit downstream ALR-020+ work; gate 695 remains the audit record requiring exact-SHA re-review after this correction.

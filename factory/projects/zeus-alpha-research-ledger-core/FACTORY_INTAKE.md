@@ -9,7 +9,7 @@ reviewed: pending
 # FACTORY INTAKE — Zeus Alpha Research Ledger Core
 
 ## Owner mandate
-Jean García authorized Zeus to independently build and operate the **Zeus-side** research process: daily research analysis, provenance records, Alpha Cards, skeptical reviews and an eventual research-only handoff package. V1 local “collection” is strictly typed intake of already-normalized local evidence; third-party retrieval belongs to a later separately scoped integration. The deliverable remains a Zeus-signed PR and independent QA; no direct production merge or deploy is authorized.
+Jean García authorized Zeus to independently build and operate the **Zeus-side** research process: daily research analysis, provenance records, Alpha Cards, skeptical reviews and an eventual research-only handoff package. V1 local “collection” is strictly typed intake of already-normalized local evidence; third-party retrieval belongs to a later separately scoped integration. The target delivery policy remains Zeus-signed PR and independent QA. Agent Core/Git evidence shows the prior ALR-010-R1 documentary commit was directly integrated into `origin/main`; this is recorded as gate-695 reconciliation evidence, not as production approval, deploy authority or downstream implementation authority.
 
 ## Why this is a successor, not a duplicate
 `zeus-independent-alpha-research` is the completed, documentation-only predecessor. It established the Vonash separation boundary and a future exchange design, but explicitly delivered no Zeus runtime module. This project is the first implementation phase of the private ledger that prepares results for a later external integration. `predecessor_project_id=zeus-independent-alpha-research` is recorded in Factory DB.

@@ -10,7 +10,7 @@ owner: factory-orchestrator
 # DOCUMENTATION INDEX — Zeus Alpha Research Ledger Core
 
 ## Controlling status
-Canonical G1 pack for the **private Zeus-side implementation** succeeding `zeus-independent-alpha-research`. It is not a Vonash implementation plan, grants no external runtime access and does not authorize market execution. Every required document carries explicit `validated` and `reviewed` status metadata plus the index matrix below. The reviewer state remains `reviewed: pending` until the revised R1 committed candidate receives new independent specification and security PASS reviews against its exact SHA. Earlier Factory gate rows are evidence only: gates 686/687 were `REQUEST_CHANGES`, and any PASS on a pre-R1 SHA is not reused for this revision. This worker does not self-approve.
+Canonical G1 pack for the **private Zeus-side implementation** succeeding `zeus-independent-alpha-research`. It is not a Vonash implementation plan, grants no external runtime access and does not authorize market execution. Every required document carries explicit `validated` and `reviewed` status metadata plus the index matrix below. The reviewer state remains `reviewed: pending` until the revised committed candidate receives new independent specification and security PASS reviews against its exact SHA. Earlier Factory gate rows are evidence only: gates 686/687 were `REQUEST_CHANGES`; gate 695 was a failed spec review requiring reconciliation of the observed ALR-010-R1 direct merge into `origin/main`; and any PASS on a pre-correction SHA is not reused for this revision. This worker does not self-approve.
 
 | File | Purpose | Owner | Validated | Reviewed |
 |---|---|---|---|---|
@@ -38,7 +38,7 @@ Canonical G1 pack for the **private Zeus-side implementation** succeeding `zeus-
 ## Status semantics
 - `validated: yes` means the implementation-planner/local worker confirmed the file exists, is tracked, is indexed where required, and is internally consistent with this G1 contract.
 - `reviewed: pending` is an explicit reviewed-status value, not a missing field. It may become `reviewed: yes` only after independent reviewers record PASS evidence against the exact committed SHA.
-- A branch-local reviewed status never authorizes normal implementation by itself; canonical base exposure and QA Guardian process remain required.
+- A branch-local reviewed status or the observed ALR-010-R1 base-branch merge never authorizes normal implementation by itself; exact-SHA independent reviews and reconciled delivery evidence remain required.
 
 ## Required reading order
 1. `DOCUMENTATION_INDEX.md`, `FACTORY_INTAKE.md`, `G0_REPOSITORY_STRATEGY.md`
@@ -47,4 +47,4 @@ Canonical G1 pack for the **private Zeus-side implementation** succeeding `zeus-
 4. `QA_GATES.md`, `SECURITY_GATES.md`, `G1_REVIEW.md`
 
 ## G1 rule
-No normal implementation starts until every required G1 document is `reviewed: yes`, committed and exposed on canonical base; the three supplemental controlling artifacts must be committed and PASS-reviewed against the exact revised SHA too. A branch-only pack is never sufficient.
+No normal implementation starts until every required G1 document is `reviewed: yes`; the three supplemental controlling artifacts must be committed and PASS-reviewed against the exact revised SHA too. Base exposure alone is not sufficient: the observed ALR-010-R1 merge is non-approval evidence until gate-695 reconciliation is independently accepted, and a branch-only pack is likewise never sufficient.
