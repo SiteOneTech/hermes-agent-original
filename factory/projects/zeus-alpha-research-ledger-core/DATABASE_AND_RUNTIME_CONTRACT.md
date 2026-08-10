@@ -36,9 +36,9 @@ Migration requirements: revoke all schema/table/sequence/function privileges in 
 | `inert_handoff_packages` | yes / yes / no / no | yes / no / no / no | insert-only fixed package |
 | `runtime_readiness` | yes / no / no / no | yes / no / no / no | admin-only writes |
 
-The exact non-default leaf allowlist is `alpha_research_status`, `program_create`, `source_submit`, `evidence_record`, `alpha_card_create`, `alpha_card_review`, `cycle_start`, `cycle_close`, `inert_handoff_prepare`, `handoff_list`; no alias, upsert handler, or default-toolset registration is allowed.
+The exact non-default leaf allowlist is `alpha_research_status`, `program_create`, `source_submit`, `evidence_record`, `alpha_card_create`, `alpha_card_review`, `cycle_start`, `cycle_close`, `inert_handoff_prepare`, `handoff_list`; no alias, upsert handler, or default-toolset registration is allowed. `program_create` and `source_submit` are the canonical creation/intake names; `program_submit`, `program_upsert`, `source_create`, `source_register`, `source_upsert`, or any other synonym fail catalog/registration tests.
 
-Author has `EXECUTE` only on `transition_alpha_card(uuid, alpha_card_status)` and `transition_research_cycle(uuid, cycle_outcome, text)`. Reviewer has no function execution grant. UUIDs are server-generated; no runtime sequence grant exists. The migration asserts catalog-wide that the two roles have no unlisted grant/function/membership and `PUBLIC` has no privilege in `alpha_research`.
+Author has `EXECUTE` only on `transition_alpha_card(uuid, alpha_card_status)` and `transition_research_cycle(uuid, cycle_outcome, text)` after explicit `REVOKE ALL ON FUNCTION ... FROM PUBLIC` and exact signature grants. Reviewer has no function execution grant. UUIDs are server-generated; no runtime sequence grant exists. The migration asserts catalog-wide that the two roles have no unlisted grant/function/membership and `PUBLIC` has no privilege in `alpha_research`.
 
 ### Privilege and policy negative matrix
 

@@ -10,7 +10,7 @@ owner: factory-orchestrator
 # DOCUMENTATION INDEX — Zeus Alpha Research Ledger Core
 
 ## Controlling status
-Canonical G1 pack for the **private Zeus-side implementation** succeeding `zeus-independent-alpha-research`. It is not a Vonash implementation plan, grants no external runtime access and does not authorize market execution. Every required document carries explicit `validated` and `reviewed` status metadata plus the index matrix below. The reviewer state remains `reviewed: pending` until a revised committed candidate receives new independent specification and security PASS reviews against its exact SHA; no current review is PASS and this worker does not self-approve.
+Canonical G1 pack for the **private Zeus-side implementation** succeeding `zeus-independent-alpha-research`. It is not a Vonash implementation plan, grants no external runtime access and does not authorize market execution. Every required document carries explicit `validated` and `reviewed` status metadata plus the index matrix below. The reviewer state remains `reviewed: pending` until the revised R1 committed candidate receives new independent specification and security PASS reviews against its exact SHA. Earlier Factory gate rows are evidence only: gates 686/687 were `REQUEST_CHANGES`, and any PASS on a pre-R1 SHA is not reused for this revision. This worker does not self-approve.
 
 | File | Purpose | Owner | Validated | Reviewed |
 |---|---|---|---|---|
@@ -47,4 +47,4 @@ Canonical G1 pack for the **private Zeus-side implementation** succeeding `zeus-
 4. `QA_GATES.md`, `SECURITY_GATES.md`, `G1_REVIEW.md`
 
 ## G1 rule
-No normal implementation starts until every required G1 document is `reviewed: yes`, committed and exposed on canonical base; the three supplemental controlling artifacts must be committed and PASS-reviewed too. A branch-only pack is never sufficient.
+No normal implementation starts until every required G1 document is `reviewed: yes`, committed and exposed on canonical base; the three supplemental controlling artifacts must be committed and PASS-reviewed against the exact revised SHA too. A branch-only pack is never sufficient.

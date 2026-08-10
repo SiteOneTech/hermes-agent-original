@@ -17,9 +17,10 @@ reviewed: pending
 | `primary_repo_path` | `/home/jean/Projects/hermes-agent-original` |
 | `successor_project_path` | `factory/projects/zeus-alpha-research-ledger-core/` |
 | `predecessor_project_id` | `zeus-independent-alpha-research` (documentation-only predecessor; no runtime module delivered) |
-| `base_branch` | `origin/main`; fetched during ALR-010 local verification at `2026-08-10T04:50:09-04:00` as `00e7bb4ab0fcd9013ffa924ce6c5a8ae2c2ae2fc` |
+| `base_branch` | `origin/main` is the required PR target; this bounded R1 rework does not assert a live current remote SHA because it performs no base merge |
+| `last_verified_origin_main` | ALR-010 local verification fetched `origin/main` at `2026-08-10T04:50:09-04:00` as `00e7bb4ab0fcd9013ffa924ce6c5a8ae2c2ae2fc`; that is historical evidence only |
 | `historical_planning_base` | `20228c1167814f36d952999f2cafe8b3f6f9ba3c` was the ALR-010 planning-time `origin/main` reference only; do not treat it as current base |
-| `current_local_merge_base` | `ed8dbe3bcf3a99fee48f24a5301240fb5282661e`; live Hermes checkout guard blocked an in-session `git merge origin/main`, so PR/review must revalidate or update against then-current `origin/main` before QA Guardian merge |
+| `branch_merge_base_at_alr010_verification` | `ed8dbe3bcf3a99fee48f24a5301240fb5282661e` was the local merge base observed during ALR-010 verification; PR/review must revalidate or update against then-current `origin/main` before QA Guardian merge |
 | `deliverable_branch` | `factory/zeus-alpha-research-ledger-core/inc-010-alr-010-g1-rebaseline-and-local` |
 | `deliverable_worktree` | `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-010-alr-010-g1-rebaseline-and-local` |
 | `branch_policy` | `factory/zeus-alpha-research-ledger-core/<increment>`; one branch per deliverable |
