@@ -9,7 +9,7 @@
 | Source of truth | Agent Core Postgres `zeus_agent.factory` |
 | Repo artifacts | `factory/projects/factory-runtime-evolution-continuation/` |
 | Repo | `SiteOneTech/hermes-agent-original` (zeus_only) |
-| Current state | `active` — FRE-010 planning-review passed (solution-architect, 2026-08-10, planning gate 690); FRE-010 has no active rework. |
+| Current state | `active` — FRE-010 planning-review passed (solution-architect, 2026-08-10, planning gate 690); FRE-024 implemented on scoped branch pending review/gate. |
 | Anomalies at start | `missing_project_artifact_dir`, `missing_required_docs` (resolved by this increment's dir + committed docs) |
 
 ## 1. Task tracker (mirrors Factory DB)
@@ -26,6 +26,7 @@
 | FRE-015 Independent QA/security review | planned (TASK_GRAPH) | quality-reviewer + security-reviewer | factory-orchestrator | QA_REPORT.md, SECURITY_REVIEW.md |
 | FRE-016 PR-first delivery | planned (TASK_GRAPH) | devops-release + factory-orchestrator | factory-orchestrator | CHANGE_RECORDS.md, DELIVERY_REPORT.md |
 | FRE-017 Global cron verification | planned (TASK_GRAPH) | devops-release | factory-orchestrator | cron smoke evidence |
+| FRE-024 Source delivery dependency integrity and replacement-safe dispatch | implemented (this branch) | claude-builder | independent reviewer required | `tests/hermes_cli/test_factory_increment_integration.py`; fail-closed dependency/source-delivery dispatch checks |
 
 ## 2. Evidence log (real, 2026-08-10)
 
@@ -50,6 +51,11 @@
    classified=0/questions=0/alerts=0), `RETROSPECTIVE_INC_0008.md` (cron ownership),
    `TRACKER.md` (INC-0006..0009), `FACTORY_RUNTIME_EVOLUTION_PLAN.md` (L1/L2/L3),
    git `d3d08dc2e` + `bc7ab6af6`.
+5. FRE-024 implementation evidence (2026-08-10, branch
+   `factory/factory-runtime-evolution-continuation/inc-024-fre-024-source-delivery-dependen`):
+   - RED command: `scripts/run_tests.sh tests/hermes_cli/test_factory_increment_integration.py -k 'cancelled_dependency_without_replacement or missing_dependency_task or claimable_autonomous_work_ignores_superseded or replacement_pr_open_not_in_base or accepted_replacement or without_qa_guardian or wrong_head_replacement' -v --tb=short` → 6 failed, 1 passed, 13 deselected. Failures reproduced cancelled/superseded dependency dispatch, missing dependency, open/not-in-base replacement PR, absent QA Guardian evidence, and wrong-head PR.
+   - GREEN commands: `scripts/run_tests.sh tests/hermes_cli/test_factory_increment_integration.py -v --tb=short` → 25 passed; `scripts/run_tests.sh tests/hermes_cli/test_factory*.py --tb=short` → 139 passed; `.venv/bin/ruff check hermes_cli/factory_pg.py hermes_cli/factory_contracts.py tests/hermes_cli/test_factory_increment_integration.py` → all checks passed.
+   - Environment note: canonical runner initially blocked because no pytest venv existed; created repo-local `.venv` via `uv sync --frozen --extra dev` for implementation verification.
 
 ## 3. Gate log
 
@@ -58,6 +64,7 @@
 | G0 Repository Strategy | passed | DB `project_created` event 172950 (repo_scope zeus_only, base main, per_deliverable worktrees) |
 | G1 Documentary Readiness | passed | 14 docs exist/indexed/committed/validated:true/reviewed:true after solution-architect review; planning gate 690=passed |
 | Review (FRE-010) | passed | solution-architect review, 2026-08-10, planning gate 690 |
+| Implementation (FRE-024) | local passed | TDD RED/GREEN and factory-focused tests listed in evidence log item 5; independent review still required before delivery/merge |
 | Delivery | not applicable yet | no product-runtime code in G1 |
 
 ## 4. Risk register

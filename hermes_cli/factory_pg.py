@@ -236,6 +236,11 @@ POSITIVE_TERMINAL_TASK_STATUSES = {
     factory_contracts.TaskStatus.VERIFIED.value,
     factory_contracts.TaskStatus.ACCEPTED.value,
 }
+NEGATIVE_TERMINAL_TASK_STATUSES = getattr(
+    factory_contracts,
+    "NEGATIVE_TERMINAL_TASK_STATUSES",
+    {factory_contracts.TaskStatus.CANCELLED.value, factory_contracts.TaskStatus.SUPERSEDED.value},
+)
 IN_FLIGHT_TASK_STATUSES = factory_contracts.IN_FLIGHT_TASK_STATUSES
 ACTIVE_TASK_STATUSES = factory_contracts.ACTIVE_TASK_STATUSES
 DISPATCHABLE_PROJECT_STATUSES = factory_contracts.DISPATCHABLE_PROJECT_STATUSES
@@ -2591,13 +2596,272 @@ def _has_runnable_autonomous_work(tasks: list[dict[str, Any]]) -> bool:
     return any(str(task.get("status") or "") in runnable_statuses for task in tasks)
 
 
-def _task_dependencies_are_terminal(task: dict[str, Any], terminal_task_ids: set[str]) -> bool:
+def _task_dependencies(task: dict[str, Any]) -> list[str]:
     dependencies = task.get("dependencies") or []
     if isinstance(dependencies, str):
         dependencies = [dependencies]
     if not isinstance(dependencies, list):
-        dependencies = []
-    return all(str(dep) in terminal_task_ids for dep in dependencies)
+        return []
+    return [str(dep or "").strip() for dep in dependencies if str(dep or "").strip()]
+
+
+def _task_replacement_id(task: dict[str, Any]) -> str:
+    metadata = _metadata(task)
+    for key in (
+        "replacement_task_id",
+        "superseded_by_task",
+        "superseded_by_task_id",
+        "replaced_by_task_id",
+        "bounded_replacement_task_id",
+    ):
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _replacement_reference_values(metadata: dict[str, Any]) -> set[str]:
+    values: set[str] = set()
+    for key in (
+        "replacement_for_task",
+        "replacement_for_task_id",
+        "replaces_task",
+        "replaces_task_id",
+        "supersedes_task",
+        "supersedes_task_id",
+        "superseded_task_id",
+    ):
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            values.add(value.strip())
+        elif isinstance(value, (list, tuple, set)):
+            values.update(str(item or "").strip() for item in value if str(item or "").strip())
+    return values
+
+
+def _replacement_mismatch_reason(original: dict[str, Any], replacement: dict[str, Any]) -> str | None:
+    original_id = str(original.get("task_id") or "").strip()
+    references = _replacement_reference_values(_metadata(replacement))
+    if references and original_id not in references:
+        return "replacement_mismatch"
+    return None
+
+
+def _resolve_effective_dependency(dep_id: str, by_id: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    current = by_id.get(dep_id)
+    if not current:
+        return {"ok": False, "reason": "missing_dependency_task", "dependency_id": dep_id, "replacement_chain": [dep_id]}
+    seen: set[str] = set()
+    chain: list[str] = []
+    used_replacement = False
+    while True:
+        current_id = str(current.get("task_id") or "").strip()
+        if not current_id:
+            return {"ok": False, "reason": "missing_dependency_task", "dependency_id": dep_id, "replacement_chain": chain or [dep_id]}
+        if current_id in seen:
+            return {"ok": False, "reason": "replacement_cycle", "dependency_id": dep_id, "replacement_chain": [*chain, current_id]}
+        seen.add(current_id)
+        chain.append(current_id)
+        status = str(current.get("status") or "").lower()
+        if status in NEGATIVE_TERMINAL_TASK_STATUSES:
+            replacement_id = _task_replacement_id(current)
+            if not replacement_id:
+                return {"ok": False, "reason": "unreplaced_negative_terminal", "dependency_id": dep_id, "effective_task_id": current_id, "replacement_chain": chain}
+            replacement = by_id.get(replacement_id)
+            if not replacement:
+                return {"ok": False, "reason": "dangling_replacement", "dependency_id": dep_id, "effective_task_id": current_id, "replacement_task_id": replacement_id, "replacement_chain": [*chain, replacement_id]}
+            mismatch = _replacement_mismatch_reason(current, replacement)
+            if mismatch:
+                return {"ok": False, "reason": mismatch, "dependency_id": dep_id, "effective_task_id": replacement_id, "replacement_chain": [*chain, replacement_id]}
+            current = replacement
+            used_replacement = True
+            continue
+        if status not in POSITIVE_TERMINAL_TASK_STATUSES:
+            return {
+                "ok": False,
+                "reason": "replacement_nonterminal" if used_replacement else "dependency_nonterminal",
+                "dependency_id": dep_id,
+                "effective_task_id": current_id,
+                "effective_status": status or "unknown",
+                "replacement_chain": chain,
+            }
+        return {
+            "ok": True,
+            "dependency_id": dep_id,
+            "effective_task": current,
+            "effective_task_id": current_id,
+            "replacement_chain": chain,
+            "replacement_used": used_replacement,
+        }
+
+
+def _source_delivery_record(task: dict[str, Any]) -> dict[str, Any]:
+    metadata = _metadata(task)
+    for container in (metadata, metadata.get("evidence") if isinstance(metadata.get("evidence"), dict) else {}):
+        if not isinstance(container, dict):
+            continue
+        for key in ("source_delivery", "source_delivery_contract", "delivery_source", "source_review_delivery"):
+            value = container.get(key)
+            if isinstance(value, dict):
+                return value
+    return {}
+
+
+def _commit_value(container: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = container.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _source_delivery_status_accepted(value: Any) -> bool:
+    if _evidence_status_passed(value):
+        return True
+    return str(value or "").strip().lower() in {"accepted", "reviewed", "approved", "merged", "integrated"}
+
+
+def _source_delivery_contract_blockers(
+    task: dict[str, Any],
+    *,
+    branch_commit: str,
+    base_branch: str,
+) -> list[str]:
+    record = _source_delivery_record(task)
+    if not record:
+        return ["source_delivery_contract_missing"]
+    blockers: list[str] = []
+    if not any(
+        _source_delivery_status_accepted(record.get(key))
+        for key in ("accepted", "status", "result", "state")
+    ):
+        blockers.append("source_delivery_contract_not_accepted")
+    candidate_commit = _commit_value(
+        record,
+        "candidate_commit",
+        "immutable_candidate_commit",
+        "branch_commit",
+        "commit_sha",
+        "head_commit",
+    )
+    if not candidate_commit:
+        blockers.append("source_delivery_candidate_missing")
+    elif branch_commit and candidate_commit != branch_commit:
+        blockers.append("source_delivery_candidate_mismatch")
+    qa_guardian = record.get("qa_guardian_evidence") or record.get("qa_guardian") or record.get("qa_guardian_review")
+    if isinstance(qa_guardian, dict):
+        qa_passed = any(_source_delivery_status_accepted(qa_guardian.get(key)) for key in ("accepted", "status", "result", "state", "passed"))
+        qa_commit = _commit_value(qa_guardian, "candidate_commit", "branch_commit", "commit_sha", "head_commit")
+        if not qa_passed:
+            blockers.append("qa_guardian_evidence_not_accepted")
+        if qa_commit and branch_commit and qa_commit != branch_commit:
+            blockers.append("qa_guardian_candidate_mismatch")
+    elif not _source_delivery_status_accepted(qa_guardian):
+        blockers.append("qa_guardian_evidence_missing")
+
+    pr_required = bool(record.get("pr_first_policy") or record.get("pr") or _metadata(task).get("pr_first_policy"))
+    if pr_required:
+        pr = record.get("pr") if isinstance(record.get("pr"), dict) else {}
+        if not pr:
+            blockers.append("pr_missing")
+        else:
+            if not (pr.get("url") or pr.get("html_url") or pr.get("number")):
+                blockers.append("pr_missing")
+            state = str(pr.get("state") or pr.get("status") or "").strip().lower()
+            merged = bool(pr.get("merged")) or state in {"merged", "closed_merged", "accepted"}
+            if not merged:
+                blockers.append(f"pr_{state or 'unmerged'}")
+            mergeable_state = str(pr.get("mergeable_state") or pr.get("clean") or pr.get("merge_status") or "").strip().lower()
+            if mergeable_state in {"dirty", "blocked", "conflicting", "conflicts", "unknown"} or pr.get("clean") is False or pr.get("mergeable") is False:
+                blockers.append("pr_dirty")
+            pr_head = _commit_value(pr, "head_commit", "head_sha", "head_ref_oid", "commit_sha")
+            if pr_head and branch_commit and pr_head != branch_commit:
+                blockers.append("pr_head_mismatch")
+            pr_base = str(pr.get("base_branch") or pr.get("base_ref") or pr.get("base") or "").strip()
+            if pr_base and pr_base != base_branch:
+                blockers.append("pr_base_mismatch")
+    return blockers
+
+
+def _dependency_increment_blockers(dep_task: dict[str, Any], project: dict[str, Any]) -> list[str]:
+    dep_status = str(dep_task.get("status") or "").lower()
+    if dep_status not in POSITIVE_TERMINAL_TASK_STATUSES:
+        return ["dependency_not_positive_terminal"]
+    if not _increment_integration_required(dep_task, project, dep_status):
+        return []
+    strategy = factory_contracts.repository_strategy_from_project(project)
+    repo_raw = str(strategy.get("primary_repo_path") or project.get("repo_path") or "").strip()
+    if not repo_raw:
+        return ["repo_path_missing"]
+    repo_path = Path(repo_raw).expanduser()
+    if not repo_path.exists():
+        return ["repo_path_missing"]
+    branch = str(dep_task.get("branch") or "").strip()
+    worktree_raw = str(dep_task.get("worktree_path") or "").strip()
+    if not branch or not worktree_raw:
+        return ["unverified_branch_metadata"]
+    worktree_path = Path(worktree_raw).expanduser()
+    if not worktree_path.exists():
+        return ["worktree_path_missing"]
+    base_branch = str(strategy.get("base_branch") or project.get("base_branch") or "main").strip() or "main"
+    blockers: list[str] = []
+    try:
+        fetch_base = _run_git(repo_path, ["fetch", "origin", base_branch], timeout=120)
+        if fetch_base.returncode != 0:
+            return ["base_fetch_failed"]
+        fetch_branch = _run_git(repo_path, ["fetch", "origin", f"{branch}:refs/remotes/origin/{branch}"], timeout=120)
+        if fetch_branch.returncode != 0:
+            return ["unverified_branch_metadata"]
+        source_ref, branch_commit = _resolve_git_ref(repo_path, branch)
+        base_ref = f"origin/{base_branch}"
+        base_commit = _git_stdout(repo_path, ["rev-parse", "--verify", f"{base_ref}^{{commit}}"], timeout=30)
+    except Exception:
+        return ["unverified_branch_metadata"]
+    blockers.extend(_source_delivery_contract_blockers(dep_task, branch_commit=branch_commit, base_branch=base_branch))
+    ancestor = _run_git(repo_path, ["merge-base", "--is-ancestor", branch_commit, base_ref], timeout=30)
+    if ancestor.returncode != 0:
+        blockers.append("source_not_in_base")
+    if blockers:
+        return blockers
+    metadata = _metadata(dep_task)
+    if metadata.get("increment_integration_status") != "integrated" or metadata.get("increment_branch_commit") != branch_commit:
+        evidence = _increment_integration_metadata(
+            status="integrated",
+            task=dep_task,
+            project=project,
+            branch=branch,
+            source_ref=source_ref,
+            branch_commit=branch_commit,
+            base_branch=base_branch,
+            base_commit_before=base_commit,
+            base_commit_after=base_commit,
+            method="legacy_ancestor_detected_dispatch_guard",
+            actor="factory-dispatcher",
+        )
+        _record_increment_integration_result(dep_task, project, evidence, actor="factory-dispatcher")
+    return []
+
+
+def _dependency_dispatch_blocker(dep_id: str, by_id: dict[str, dict[str, Any]], project: dict[str, Any]) -> dict[str, Any] | None:
+    resolution = _resolve_effective_dependency(dep_id, by_id)
+    if not resolution.get("ok"):
+        return resolution
+    dep_task = resolution["effective_task"]
+    blockers = _dependency_increment_blockers(dep_task, project)
+    if blockers:
+        return {
+            "ok": False,
+            "reason": "source_delivery_not_accepted",
+            "dependency_id": dep_id,
+            "effective_task_id": resolution.get("effective_task_id"),
+            "replacement_chain": resolution.get("replacement_chain"),
+            "source_delivery_blockers": blockers,
+        }
+    return None
+
+
+def _task_dependencies_are_terminal(task: dict[str, Any], by_id: dict[str, dict[str, Any]]) -> bool:
+    return all(_resolve_effective_dependency(dep_id, by_id).get("ok") for dep_id in _task_dependencies(task))
 
 
 def _has_claimable_autonomous_work(tasks: list[dict[str, Any]]) -> bool:
@@ -2610,18 +2874,14 @@ def _has_claimable_autonomous_work(tasks: list[dict[str, Any]]) -> bool:
     all real progress is behind one or more ``blocked`` tasks.
     """
 
-    terminal_task_ids = {
-        str(task.get("task_id") or "")
-        for task in tasks
-        if str(task.get("status") or "") in TERMINAL_TASK_STATUSES
-    }
+    by_id = {str(task.get("task_id") or ""): task for task in tasks}
     for task in tasks:
         status_value = str(task.get("status") or "")
         if status_value in IN_FLIGHT_TASK_STATUSES or status_value in {"rework", "review_ready"}:
             return True
         if status_value not in {"todo", "ready"}:
             continue
-        if _task_dependencies_are_terminal(task, terminal_task_ids):
+        if _task_dependencies_are_terminal(task, by_id):
             return True
     return False
 
@@ -2650,46 +2910,7 @@ def _dependency_increment_integrated(dep_task: dict[str, Any], project: dict[str
     must still verify the base branch contains dependency work before starting.
     """
 
-    dep_status = str(dep_task.get("status") or "")
-    if not _increment_integration_required(dep_task, project, dep_status):
-        return True
-    metadata = _metadata(dep_task)
-    if metadata.get("increment_integration_status") == "integrated":
-        return True
-    strategy = factory_contracts.repository_strategy_from_project(project)
-    repo_raw = str(strategy.get("primary_repo_path") or project.get("repo_path") or "").strip()
-    if not repo_raw:
-        return False
-    repo_path = Path(repo_raw).expanduser()
-    if not repo_path.exists():
-        return False
-    branch = str(dep_task.get("branch") or "").strip()
-    base_branch = str(strategy.get("base_branch") or project.get("base_branch") or "main").strip() or "main"
-    try:
-        _run_git(repo_path, ["fetch", "origin", base_branch], timeout=120)
-        source_ref, branch_commit = _resolve_git_ref(repo_path, branch)
-        base_ref = f"origin/{base_branch}"
-        base_commit = _git_stdout(repo_path, ["rev-parse", "--verify", f"{base_ref}^{{commit}}"], timeout=30)
-        ancestor = _run_git(repo_path, ["merge-base", "--is-ancestor", branch_commit, base_ref], timeout=30)
-    except Exception:
-        return False
-    if ancestor.returncode != 0:
-        return False
-    evidence = _increment_integration_metadata(
-        status="integrated",
-        task=dep_task,
-        project=project,
-        branch=branch,
-        source_ref=source_ref,
-        branch_commit=branch_commit,
-        base_branch=base_branch,
-        base_commit_before=base_commit,
-        base_commit_after=base_commit,
-        method="legacy_ancestor_detected_dispatch_guard",
-        actor="factory-dispatcher",
-    )
-    _record_increment_integration_result(dep_task, project, evidence, actor="factory-dispatcher")
-    return True
+    return not _dependency_increment_blockers(dep_task, project)
 
 
 def _candidate_dependencies_integrated(project_id: str, candidate: dict[str, Any], tasks: list[dict[str, Any]], project: dict[str, Any]) -> bool:
@@ -2698,11 +2919,11 @@ def _candidate_dependencies_integrated(project_id: str, candidate: dict[str, Any
     if not dependencies:
         return True
     by_id = {str(task.get("task_id") or ""): task for task in tasks}
-    blocked: list[str] = []
+    blocked: list[dict[str, Any]] = []
     for dep_id in [str(dep or "").strip() for dep in dependencies if str(dep or "").strip()]:
-        dep_task = by_id.get(dep_id)
-        if dep_task and not _dependency_increment_integrated(dep_task, project):
-            blocked.append(dep_id)
+        blocker = _dependency_dispatch_blocker(dep_id, by_id, project)
+        if blocker:
+            blocked.append(blocker)
     if not blocked:
         return True
     sql.psql(
@@ -2710,7 +2931,7 @@ def _candidate_dependencies_integrated(project_id: str, candidate: dict[str, Any
         INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
         VALUES ({_q(project_id)}, {_q(candidate.get('lane_id'))}, {_q(candidate.get('task_id'))}, 'factory-dispatcher', 'increment_dependency_integration_blocked',
                 'Dispatch blocked because terminal dependencies are not integrated into origin base branch',
-                {_j({'blocked_dependencies': blocked, 'runtime_contract': 'factory_increment_merge_to_origin_base_before_dependent_dispatch'})});
+                {_j({'blocked_dependencies': [item.get('dependency_id') for item in blocked], 'dependency_blockers': blocked, 'runtime_contract': 'factory_increment_merge_to_origin_base_before_dependent_dispatch'})});
         """,
         user=_user(),
     )
@@ -3708,15 +3929,11 @@ def _payload_has_claimable_task(project_id: str, tasks: list[dict[str, Any]], pr
     notion_required = _metadata_bool(metadata, "notion_required")
     docs_first_waived = _dispatch_docs_first_waived(metadata)
     project_tasks = [task for task in tasks if str(task.get("project_id") or "") == project_id]
-    terminal_task_ids = {
-        str(task.get("task_id") or "")
-        for task in project_tasks
-        if str(task.get("status") or "") in TERMINAL_TASK_STATUSES
-    }
+    by_id = {str(task.get("task_id") or ""): task for task in project_tasks}
     for task in project_tasks:
         if str(task.get("status") or "") not in {"todo", "ready"}:
             continue
-        if not _task_dependencies_are_terminal(task, terminal_task_ids):
+        if not _task_dependencies_are_terminal(task, by_id):
             continue
         if _dispatch_preflight_blockers(
             task,

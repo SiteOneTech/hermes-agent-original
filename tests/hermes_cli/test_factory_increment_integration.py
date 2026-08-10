@@ -349,6 +349,317 @@ def _git(path, *args):
     return subprocess.run(["git", "-C", str(path), *args], text=True, capture_output=True, check=True)
 
 
+def _source_delivery_metadata(
+    candidate_commit: str,
+    *,
+    replacement_for: str = "task-old",
+    pr_state: str = "merged",
+    qa_guardian: bool = True,
+    pr_head_commit: str | None = None,
+) -> dict:
+    source_delivery = {
+        "status": "accepted",
+        "candidate_commit": candidate_commit,
+        "pr_first_policy": True,
+        "pr": {
+            "url": "https://github.com/SiteOneTech/hermes-agent-original/pull/123",
+            "state": pr_state,
+            "head_commit": pr_head_commit or candidate_commit,
+            "base_branch": "main",
+            "mergeable_state": "clean",
+        },
+    }
+    if qa_guardian:
+        source_delivery["qa_guardian_evidence"] = {
+            "status": "passed",
+            "candidate_commit": candidate_commit,
+            "reviewer": "qa-verifier",
+        }
+    return {
+        "replacement_for_task": replacement_for,
+        "source_delivery": source_delivery,
+    }
+
+
+def _make_source_delivery_repo(tmp_path, *, merged_to_base: bool) -> tuple[dict, dict, str]:
+    origin = tmp_path / "origin.git"
+    repo = tmp_path / "repo"
+    worktree = tmp_path / "worktrees" / "task-replacement"
+    branch = "factory/demo/task-replacement"
+    subprocess.run(["git", "init", "--bare", str(origin)], text=True, capture_output=True, check=True)
+    subprocess.run(["git", "clone", str(origin), str(repo)], text=True, capture_output=True, check=True)
+    _git(repo, "config", "user.email", "factory@example.test")
+    _git(repo, "config", "user.name", "Factory Test")
+    (repo / "README.md").write_text("base\n", encoding="utf-8")
+    _git(repo, "add", "README.md")
+    _git(repo, "commit", "-m", "base")
+    _git(repo, "branch", "-M", "main")
+    _git(repo, "push", "origin", "main")
+    _git(repo, "checkout", "-b", branch)
+    (repo / "feature.txt").write_text("replacement source\n", encoding="utf-8")
+    _git(repo, "add", "feature.txt")
+    _git(repo, "commit", "-m", "replacement source")
+    feature_commit = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _git(repo, "push", "origin", branch)
+    _git(repo, "checkout", "main")
+    if merged_to_base:
+        _git(repo, "merge", "--no-ff", branch, "-m", "merge replacement source")
+        _git(repo, "push", "origin", "main")
+    _git(repo, "worktree", "add", str(worktree), branch)
+    project = {
+        "project_id": "demo",
+        "repo_path": str(repo),
+        "base_branch": "main",
+        "metadata": {"repo_strategy": {"primary_repo_path": str(repo), "base_branch": "main"}},
+    }
+    replacement = {
+        "project_id": "demo",
+        "task_id": "task-replacement",
+        "status": "done",
+        "branch": branch,
+        "worktree_path": str(worktree),
+        "metadata": _source_delivery_metadata(feature_commit),
+    }
+    return project, replacement, feature_commit
+
+
+def test_next_runnable_task_blocks_cancelled_dependency_without_replacement(fake_sql):
+    dep = {"project_id": "demo", "task_id": "task-old", "status": "cancelled", "metadata": {}}
+    candidate = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "task-downstream",
+        "status": "todo",
+        "dependencies": ["task-old"],
+    }
+    fake_sql.rows_results = [[dep, candidate], [candidate]]
+    fake_sql.one_results = [{"project_id": "demo", "metadata": {}}]
+
+    assert factory_pg._next_runnable_task("demo") is None
+    joined = "\n".join(fake_sql.statements)
+    assert "increment_dependency_integration_blocked" in joined
+    assert "unreplaced_negative_terminal" in joined
+
+
+def test_candidate_dependencies_integrated_blocks_missing_dependency_task(fake_sql):
+    candidate = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "task-downstream",
+        "status": "todo",
+        "dependencies": ["task-missing"],
+    }
+
+    assert factory_pg._candidate_dependencies_integrated("demo", candidate, [candidate], {"project_id": "demo", "metadata": {}}) is False
+    joined = "\n".join(fake_sql.statements)
+    assert "increment_dependency_integration_blocked" in joined
+    assert "missing_dependency_task" in joined
+
+
+def test_has_claimable_autonomous_work_ignores_superseded_dependency_without_replacement():
+    tasks = [
+        {"task_id": "task-old", "status": "superseded", "metadata": {}},
+        {"task_id": "task-downstream", "status": "todo", "dependencies": ["task-old"]},
+    ]
+
+    assert factory_pg._has_claimable_autonomous_work(tasks) is False
+
+
+def test_candidate_dependencies_integrated_blocks_nonterminal_replacement(fake_sql):
+    dep = {"project_id": "demo", "task_id": "task-old", "status": "superseded", "metadata": {"replacement_task_id": "task-replacement"}}
+    replacement = {
+        "project_id": "demo",
+        "task_id": "task-replacement",
+        "status": "review_ready",
+        "metadata": {"replacement_for_task": "task-old"},
+    }
+    candidate = {"project_id": "demo", "lane_id": "lane", "task_id": "task-downstream", "status": "todo", "dependencies": ["task-old"]}
+
+    assert factory_pg._candidate_dependencies_integrated("demo", candidate, [dep, replacement, candidate], {"project_id": "demo", "metadata": {}}) is False
+    joined = "\n".join(fake_sql.statements)
+    assert "replacement_nonterminal" in joined
+
+
+def test_candidate_dependencies_integrated_blocks_mismatched_replacement(fake_sql):
+    dep = {"project_id": "demo", "task_id": "task-old", "status": "superseded", "metadata": {"replacement_task_id": "task-replacement"}}
+    replacement = {
+        "project_id": "demo",
+        "task_id": "task-replacement",
+        "status": "done",
+        "metadata": {"replacement_for_task": "another-task"},
+    }
+    candidate = {"project_id": "demo", "lane_id": "lane", "task_id": "task-downstream", "status": "todo", "dependencies": ["task-old"]}
+
+    assert factory_pg._candidate_dependencies_integrated("demo", candidate, [dep, replacement, candidate], {"project_id": "demo", "metadata": {}}) is False
+    joined = "\n".join(fake_sql.statements)
+    assert "replacement_mismatch" in joined
+
+
+def test_candidate_dependencies_integrated_blocks_replacement_cycle(fake_sql):
+    dep = {"project_id": "demo", "task_id": "task-old", "status": "superseded", "metadata": {"replacement_task_id": "task-replacement"}}
+    replacement = {
+        "project_id": "demo",
+        "task_id": "task-replacement",
+        "status": "superseded",
+        "metadata": {"replacement_task_id": "task-old", "replacement_for_task": "task-old"},
+    }
+    candidate = {"project_id": "demo", "lane_id": "lane", "task_id": "task-downstream", "status": "todo", "dependencies": ["task-old"]}
+
+    assert factory_pg._candidate_dependencies_integrated("demo", candidate, [dep, replacement, candidate], {"project_id": "demo", "metadata": {}}) is False
+    joined = "\n".join(fake_sql.statements)
+    assert "replacement_cycle" in joined
+
+
+def test_next_runnable_task_blocks_superseded_dependency_replacement_pr_open_not_in_base(fake_sql, tmp_path):
+    project, replacement, feature_commit = _make_source_delivery_repo(tmp_path, merged_to_base=False)
+    replacement["metadata"] = _source_delivery_metadata(feature_commit, pr_state="open")
+    dep = {
+        "project_id": "demo",
+        "task_id": "task-old",
+        "status": "superseded",
+        "metadata": {"replacement_task_id": "task-replacement"},
+    }
+    candidate = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "task-downstream",
+        "status": "todo",
+        "dependencies": ["task-old"],
+    }
+    fake_sql.rows_results = [[dep, replacement, candidate], [candidate]]
+    fake_sql.one_results = [project]
+
+    assert factory_pg._next_runnable_task("demo") is None
+    joined = "\n".join(fake_sql.statements)
+    assert "increment_dependency_integration_blocked" in joined
+    assert "pr_open" in joined
+    assert "source_not_in_base" in joined
+
+
+def test_next_runnable_task_dispatches_superseded_dependency_accepted_replacement(fake_sql, tmp_path):
+    project, replacement, _feature_commit = _make_source_delivery_repo(tmp_path, merged_to_base=True)
+    dep = {
+        "project_id": "demo",
+        "task_id": "task-old",
+        "status": "superseded",
+        "metadata": {"replacement_task_id": "task-replacement"},
+    }
+    candidate = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "task-downstream",
+        "status": "todo",
+        "dependencies": ["task-old"],
+    }
+    fake_sql.rows_results = [[dep, replacement, candidate], [candidate]]
+    fake_sql.one_results = [project]
+
+    result = factory_pg._next_runnable_task("demo")
+
+    assert result is not None
+    assert result["task_id"] == "task-downstream"
+
+
+def test_next_runnable_task_blocks_replacement_without_qa_guardian_evidence(fake_sql, tmp_path):
+    project, replacement, feature_commit = _make_source_delivery_repo(tmp_path, merged_to_base=True)
+    replacement["metadata"] = _source_delivery_metadata(feature_commit, qa_guardian=False)
+    dep = {
+        "project_id": "demo",
+        "task_id": "task-old",
+        "status": "superseded",
+        "metadata": {"replacement_task_id": "task-replacement"},
+    }
+    candidate = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "task-downstream",
+        "status": "todo",
+        "dependencies": ["task-old"],
+    }
+    fake_sql.rows_results = [[dep, replacement, candidate], [candidate]]
+    fake_sql.one_results = [project]
+
+    assert factory_pg._next_runnable_task("demo") is None
+    joined = "\n".join(fake_sql.statements)
+    assert "qa_guardian_evidence_missing" in joined
+
+
+def test_next_runnable_task_blocks_wrong_head_replacement_pr(fake_sql, tmp_path):
+    project, replacement, feature_commit = _make_source_delivery_repo(tmp_path, merged_to_base=True)
+    replacement["metadata"] = _source_delivery_metadata(feature_commit, pr_head_commit="deadbeef")
+    dep = {
+        "project_id": "demo",
+        "task_id": "task-old",
+        "status": "superseded",
+        "metadata": {"replacement_task_id": "task-replacement"},
+    }
+    candidate = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "task-downstream",
+        "status": "todo",
+        "dependencies": ["task-old"],
+    }
+    fake_sql.rows_results = [[dep, replacement, candidate], [candidate]]
+    fake_sql.one_results = [project]
+
+    assert factory_pg._next_runnable_task("demo") is None
+    joined = "\n".join(fake_sql.statements)
+    assert "pr_head_mismatch" in joined
+
+
+def test_next_runnable_task_blocks_missing_replacement_pr(fake_sql, tmp_path):
+    project, replacement, feature_commit = _make_source_delivery_repo(tmp_path, merged_to_base=True)
+    metadata = _source_delivery_metadata(feature_commit)
+    metadata["source_delivery"].pop("pr")
+    replacement["metadata"] = metadata
+    dep = {
+        "project_id": "demo",
+        "task_id": "task-old",
+        "status": "superseded",
+        "metadata": {"replacement_task_id": "task-replacement"},
+    }
+    candidate = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "task-downstream",
+        "status": "todo",
+        "dependencies": ["task-old"],
+    }
+    fake_sql.rows_results = [[dep, replacement, candidate], [candidate]]
+    fake_sql.one_results = [project]
+
+    assert factory_pg._next_runnable_task("demo") is None
+    joined = "\n".join(fake_sql.statements)
+    assert "pr_missing" in joined
+
+
+def test_next_runnable_task_blocks_dirty_replacement_pr(fake_sql, tmp_path):
+    project, replacement, feature_commit = _make_source_delivery_repo(tmp_path, merged_to_base=True)
+    metadata = _source_delivery_metadata(feature_commit)
+    metadata["source_delivery"]["pr"]["mergeable_state"] = "dirty"
+    replacement["metadata"] = metadata
+    dep = {
+        "project_id": "demo",
+        "task_id": "task-old",
+        "status": "superseded",
+        "metadata": {"replacement_task_id": "task-replacement"},
+    }
+    candidate = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "task-downstream",
+        "status": "todo",
+        "dependencies": ["task-old"],
+    }
+    fake_sql.rows_results = [[dep, replacement, candidate], [candidate]]
+    fake_sql.one_results = [project]
+
+    assert factory_pg._next_runnable_task("demo") is None
+    joined = "\n".join(fake_sql.statements)
+    assert "pr_dirty" in joined
+
+
 def test_integrate_increment_to_base_rejects_dirty_worktree_before_gate(fake_sql, monkeypatch, tmp_path):
     origin = tmp_path / "origin.git"
     repo = tmp_path / "repo"
