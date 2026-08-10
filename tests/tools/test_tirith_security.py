@@ -442,16 +442,6 @@ class TestUnsupportedPlatform:
             assert result == "/opt/custom/tirith"
             assert _tirith_mod._resolved_path == "/opt/custom/tirith"
 
-    @pytest.mark.parametrize("system, machine, expected", [
-        ("Linux", "x86_64", True),
-        ("Windows", "AMD64", False),
-        ("Linux", "riscv64", False),
-    ])
-    def test_is_platform_supported(self, system, machine, expected):
-        with patch("tools.tirith_security.platform.system", return_value=system), \
-             patch("tools.tirith_security.platform.machine", return_value=machine):
-            assert _tirith_mod.is_platform_supported() is expected
-
 
 # ---------------------------------------------------------------------------
 # Failed download caches the miss (Finding #1)

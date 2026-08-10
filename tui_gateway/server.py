@@ -5134,7 +5134,9 @@ def _current_profile_name() -> str:
 # v3: adds approvals.mode config RPCs and session.info reconciliation.
 # v4: session.create fast=false is an explicit per-session normal-tier override.
 # v5: uvicorn ws_max_size raised for one-shot base64 file.attach frames (>16 MiB).
-DESKTOP_BACKEND_CONTRACT = 5
+# v6: plugins.manage list rows carry the canonical registry key; toggles are
+#     key-addressed (keyless rows render read-only in Desktop Settings).
+DESKTOP_BACKEND_CONTRACT = 6
 
 
 def _session_usage_snapshot(session: dict | None) -> dict:
@@ -8081,6 +8083,12 @@ def _fallback_session_info(session: dict) -> dict:
         "model": _resolve_model(),
         "skills": {},
         "tools": {},
+        # A lazy session (agent not built yet) is still served by *this* backend,
+        # so it must advertise the current contract. Desktop feeds this straight
+        # into reportBackendContract(); a missing field is read as contract 0 and
+        # a current backend is falsely flagged "out of date" (#68392). The sibling
+        # session.create shape (_lazy_resume_info) already carries it (#36112).
+        "desktop_contract": DESKTOP_BACKEND_CONTRACT,
     }
 
 
@@ -11928,6 +11936,11 @@ def _project_tree_row(r: dict) -> dict:
         "tool_call_count": r.get("tool_call_count") or 0,
         "input_tokens": r.get("input_tokens") or 0,
         "output_tokens": r.get("output_tokens") or 0,
+        # Cost is one of the fields SidebarSessionRow renders, so a lane row has
+        # to carry it too — without it, switching Show → cost filled in every
+        # figure in Recents and left the same sessions blank under a project.
+        "actual_cost_usd": r.get("actual_cost_usd"),
+        "estimated_cost_usd": r.get("estimated_cost_usd"),
         "model": r.get("model"),
         "is_active": False,
         "cwd": r.get("cwd"),

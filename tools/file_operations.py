@@ -28,10 +28,12 @@ Usage:
 import base64
 import binascii
 import difflib
+import errno
 import hashlib
 import json
 import os
 import re
+import unicodedata
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any, ClassVar
@@ -1234,6 +1236,7 @@ class ShellFileOperations(FileOperations):
         *,
         max_bytes: Optional[int] = None,
         metadata_only: bool = False,
+        line_clamp: Optional[int] = None,
     ) -> Optional[dict]:
         """Read a text page through one descriptor in the target environment.
 
@@ -1245,7 +1248,7 @@ class ShellFileOperations(FileOperations):
         """
         marker = "__HERMES_SAFE_READ__"
         script = r'''
-import base64, json, os, stat, sys
+import base64, codecs, json, os, stat, sys
 
 marker = "__HERMES_SAFE_READ__"
 path = sys.argv[1]
@@ -1253,6 +1256,7 @@ offset = int(sys.argv[2])
 limit = int(sys.argv[3])
 max_bytes = int(sys.argv[4])
 metadata_only = sys.argv[5] == "1"
+line_clamp = int(sys.argv[6])
 
 def emit(payload):
     print(marker + json.dumps(payload, separators=(",", ":")))
@@ -1281,16 +1285,79 @@ try:
     elif metadata_only:
         emit({"state": "regular", "file_size": info.st_size})
     else:
+        # Process a bounded chunk at a time. Python's ``for line in stream``
+        # accumulates an entire physical line before yielding it, so it can
+        # still allocate hundreds of MB for a minified one-line file. Count
+        # logical lines and keep selected line payloads bounded while reading
+        # the same already-validated descriptor.
         end_line = offset + limit - 1
         selected = []
+        line_number = 1
         total_lines = 0
+        saw_bytes = False
+        last_was_newline = False
+        line_buffer = bytearray()
+        line_was_truncated = False
+        line_cap = -1 if line_clamp < 0 else max(1, line_clamp * 4)
+
+        def selected_line():
+            return offset <= line_number <= end_line
+
+        def append_byte(value):
+            global line_was_truncated
+            if not selected_line():
+                return
+            if line_cap < 0 or len(line_buffer) < line_cap:
+                line_buffer.append(value)
+            else:
+                line_was_truncated = True
+
+        def finish_line(has_newline):
+            global line_number, total_lines, line_buffer, line_was_truncated
+            if selected_line():
+                raw = bytes(line_buffer)
+                if has_newline:
+                    raw += b"\n"
+                # A byte-boundary clamp must never make valid UTF-8 look
+                # binary. Incremental decoding accepts only an incomplete
+                # final codepoint while still rejecting genuinely invalid
+                # bytes already present in the captured prefix.
+                if line_was_truncated:
+                    body = raw[:-1] if has_newline else raw
+                    try:
+                        decoder = codecs.getincrementaldecoder("utf-8")("strict")
+                        text = decoder.decode(body, final=False)
+                    except UnicodeDecodeError:
+                        # Preserve malformed bytes for the caller's binary
+                        # classifier instead of silently laundering them.
+                        pass
+                    else:
+                        raw = text.encode("utf-8") + (b"\n" if has_newline else b"")
+                selected.append(raw)
+            total_lines = line_number
+            line_number += 1
+            line_buffer = bytearray()
+            line_was_truncated = False
+
         with os.fdopen(fd, "rb", closefd=False) as stream:
             sample = stream.read(1000)
             stream.seek(0)
-            for line_number, line in enumerate(stream, start=1):
-                total_lines += line.count(b"\n")
-                if offset <= line_number <= end_line:
-                    selected.append(line)
+            while True:
+                chunk = stream.read(64 * 1024)
+                if not chunk:
+                    break
+                saw_bytes = True
+                for byte in chunk:
+                    if byte == 0x0A:
+                        finish_line(True)
+                        last_was_newline = True
+                    else:
+                        append_byte(byte)
+                        last_was_newline = False
+            # ``a\nb`` has two logical lines; a terminal newline does not
+            # invent a third empty line. Empty files retain a total of zero.
+            if saw_bytes and not last_was_newline:
+                finish_line(False)
         emit({
             "state": "regular",
             "file_size": info.st_size,
@@ -1299,7 +1366,7 @@ try:
             "content": base64.b64encode(b"".join(selected)).decode("ascii"),
         })
 except OSError as exc:
-    emit({"state": "error", "error": str(exc)})
+    emit({"state": "error", "error": str(exc), "errno": exc.errno})
 finally:
     if fd is not None:
         try:
@@ -1310,9 +1377,11 @@ finally:
         for interpreter in ("python3", "python"):
             max_arg = max_bytes if max_bytes is not None else -1
             metadata_arg = "1" if metadata_only else "0"
+            clamp_arg = line_clamp if line_clamp is not None else -1
             result = self._exec(
                 f"{interpreter} -c {self._escape_shell_arg(script)} "
-                f"{self._escape_shell_arg(path)} {offset} {limit} {max_arg} {metadata_arg}"
+                f"{self._escape_shell_arg(path)} {offset} {limit} {max_arg} "
+                f"{metadata_arg} {clamp_arg}"
             )
             output = _strip_terminal_fence_leaks(result.stdout)
             for line in reversed(output.splitlines()):
@@ -1329,7 +1398,7 @@ finally:
     # =========================================================================
     # READ Implementation
     # =========================================================================
-    
+
     def read_file(self, path: str, offset: int = 1, limit: int = 2000) -> ReadResult:
         """
         Read a file with pagination, binary detection, and line numbers.
@@ -1354,9 +1423,14 @@ finally:
         # descriptor. This is intentionally before image/binary handling: a
         # path with a benign extension can still be a FIFO or device. For
         # known image/binary extensions, validate and return metadata only so
-        # no large binary payload crosses the terminal transport.
+        # no large binary payload crosses the terminal transport. The line
+        # clamp bounds a pathological single line inside that same descriptor
+        # read, before it crosses the terminal transport.
+        from tools.tool_output_limits import get_max_line_length
         page = self._read_regular_file_page(
-            path, offset, limit, metadata_only=is_image or ext_binary,
+            path, offset, limit,
+            metadata_only=is_image or ext_binary,
+            line_clamp=get_max_line_length() + 1,
         )
         if page is None:
             return ReadResult(error=_SAFE_FILE_READER_PYTHON_ERROR)
@@ -1368,8 +1442,31 @@ finally:
                     "not a regular file."
                 )
             )
+        if state == "not_file":
+            return ReadResult(
+                error=f"Cannot read '{path}': it is not a regular file."
+            )
+        if state == "error":
+            # Unicode repair is a recovery only for a truly absent path. A
+            # permission/I/O error is authoritative and must not be disguised
+            # as a spelling suggestion.
+            if page.get("errno") == errno.ENOENT:
+                variant = self._unicode_variant_match(path)
+                if variant is not None:
+                    result = self.read_file(variant, offset=offset, limit=limit)
+                    note = (
+                        f"Note: '{path}' not found byte-for-byte; resolved to "
+                        f"the unicode-equivalent file '{variant}' (invisible "
+                        "encoding difference: NFC/NFD or special space/quote "
+                        "characters)."
+                    )
+                    result.hint = f"{note} {result.hint}" if result.hint else note
+                    return result
+                return self._suggest_similar_files(path)
+            detail = page.get("error") or "unknown target-side I/O error"
+            return ReadResult(error=f"Could not read '{path}': {detail}")
         if state != "regular":
-            return self._suggest_similar_files(path)
+            return ReadResult(error=f"Could not read '{path}': unknown safe-reader state {state!r}")
 
         file_size = page.get("file_size", 0)
         if not isinstance(file_size, int):
@@ -1421,6 +1518,11 @@ finally:
                 error="Binary file - cannot display as text. Use appropriate tools to handle this file type."
             )
         
+        # The oversized-line clamp already ran inside the descriptor-safe
+        # helper (see ``_read_regular_file_page``), so a pathological single
+        # line never crossed the exec transport in the first place. The
+        # Python clamp in ``_add_line_numbers`` still runs below and appends
+        # its "... [truncated]" marker.
         end_line = offset + limit - 1
         # Strip a leading UTF-8 BOM so the model never sees a phantom U+FEFF
         # before the first real character. Only meaningful on the first
@@ -1438,6 +1540,29 @@ finally:
         if truncated:
             hint = f"Use offset={end_line + 1} to continue reading (showing {offset}-{end_line} of {total_lines} lines)"
 
+        # Ambiguous-silence guards: an empty content string is
+        # indistinguishable, from inside the model, from a broken tool —
+        # it re-reads, widens the window, tries another path. Name the
+        # dead end and its recovery instead.
+        if file_size == 0:
+            return ReadResult(
+                content="",
+                total_lines=0,
+                file_size=0,
+                hint="File is empty (0 bytes).",
+            )
+        if offset > total_lines > 0:
+            return ReadResult(
+                content="",
+                total_lines=total_lines,
+                file_size=file_size,
+                hint=(
+                    f"Note: offset {offset} is beyond the end of the file "
+                    f"({total_lines} lines total). Retry with offset <= "
+                    f"{total_lines}."
+                ),
+            )
+
         return ReadResult(
             content=self._add_line_numbers(read_output, offset),
             total_lines=total_lines,
@@ -1446,6 +1571,98 @@ finally:
             hint=hint
         )
     
+    def _unicode_variant_match(self, path: str) -> Optional[str]:
+        """Find an existing file whose name is unicode-equivalent to ``path``.
+
+        macOS names screenshots with a NARROW NO-BREAK SPACE (U+202F) before
+        AM/PM, stores names NFD-decomposed, and Finder renames turn ' into
+        \u2019 — all invisible in rendered text. Compare directory entries
+        under a normalization that erases exactly those differences and
+        return the on-disk spelling when exactly one entry matches.
+        """
+        dir_path = os.path.dirname(path) or "."
+        filename = os.path.basename(path)
+        if not filename:
+            return None
+
+        def _canon(name: str) -> str:
+            # NFC first so composed/decomposed collapse together, then the
+            # confusable space/quote characters seen in real filenames.
+            out = unicodedata.normalize("NFC", name)
+            for src, dst in (
+                ("\u202f", " "),  # narrow no-break space
+                ("\u00a0", " "),  # no-break space
+                ("\u2019", "'"),  # right single quotation mark
+                ("\u2018", "'"),  # left single quotation mark
+            ):
+                out = out.replace(src, dst)
+            return out
+
+        target = _canon(filename)
+        # Enumerate names on the target through Python and transport every name
+        # as base64 JSON. ``ls -1`` is not safe here: newlines are legal in
+        # filenames and a directory beginning with ``-`` changes its parsing.
+        marker = "__HERMES_UNICODE_ENTRIES__"
+        list_script = r'''
+import base64, json, os, sys
+marker = "__HERMES_UNICODE_ENTRIES__"
+try:
+    names = []
+    with os.scandir(sys.argv[1]) as entries:
+        for entry in entries:
+            if len(names) >= 5000:
+                print(marker + json.dumps({"state": "too_many"}, separators=(",", ":")))
+                raise SystemExit(0)
+            names.append(base64.b64encode(os.fsencode(entry.name)).decode("ascii"))
+    print(marker + json.dumps({"state": "ok", "names": names}, separators=(",", ":")))
+except OSError as exc:
+    print(marker + json.dumps({"state": "error", "errno": exc.errno}, separators=(",", ":")))
+'''
+        names: Optional[list[str]] = None
+        for interpreter in ("python3", "python"):
+            result = self._exec(
+                f"{interpreter} -c {self._escape_shell_arg(list_script)} "
+                f"{self._escape_shell_arg(dir_path)}"
+            )
+            output = _strip_terminal_fence_leaks(result.stdout)
+            for line in reversed(output.splitlines()):
+                if not line.startswith(marker):
+                    continue
+                try:
+                    payload = json.loads(line[len(marker):])
+                except json.JSONDecodeError:
+                    continue
+                if (
+                    not isinstance(payload, dict)
+                    or payload.get("state") != "ok"
+                    or not isinstance(payload.get("names"), list)
+                ):
+                    break
+                decoded: list[str] = []
+                try:
+                    for encoded in payload["names"]:
+                        if isinstance(encoded, str):
+                            decoded.append(os.fsdecode(base64.b64decode(encoded, validate=True)))
+                except (ValueError, binascii.Error):
+                    break
+                names = decoded
+                break
+            if names is not None:
+                break
+        if names is None:
+            return None
+        candidates = [
+            entry
+            for entry in names
+            if entry and entry != filename and _canon(entry) == target
+        ]
+        # Exactly one equivalent spelling = unambiguous repair. Zero or
+        # several = fall through to suggestions; guessing among homoglyph
+        # collisions would silently read the wrong file.
+        if len(candidates) == 1:
+            return os.path.join(dir_path, candidates[0]) if dir_path != "." or "/" in path else candidates[0]
+        return None
+
     def _suggest_similar_files(self, path: str) -> ReadResult:
         """Suggest similar files when the requested file is not found."""
         dir_path = os.path.dirname(path) or "."
@@ -1486,6 +1703,13 @@ finally:
                     common = set(lower_name) & set(lf)
                     if len(common) >= max(len(lower_name), len(lf)) * 0.4:
                         score = 30
+                # Near-miss spelling (AGENT.md -> AGENTS.md): substring
+                # checks above find nothing, but a high sequence ratio
+                # catches 1-2 edit typos without a homegrown levenshtein.
+                if score == 0 and difflib.SequenceMatcher(
+                    None, lower_name, lf
+                ).ratio() >= 0.8:
+                    score = 50
 
                 if score > 0:
                     scored.append((score, os.path.join(dir_path, f)))
@@ -1521,8 +1745,12 @@ finally:
                     "not a regular file."
                 )
             )
+        if state == "not_file":
+            return ReadResult(error=f"Cannot read '{path}': it is not a regular file.")
         if state != "regular":
-            return self._suggest_similar_files(path)
+            if state == "error":
+                return ReadResult(error=f"Could not read '{path}': {page.get('error') or 'unknown target-side I/O error'}")
+            return ReadResult(error=f"Could not read '{path}': unknown safe-reader state {state!r}")
 
         file_size = page.get("file_size", 0)
         if not isinstance(file_size, int):
@@ -1578,8 +1806,12 @@ finally:
                 file_size=file_size,
                 error=f"File is too large ({file_size:,} bytes, limit is {max_bytes:,})",
             )
+        if state == "not_file":
+            return ReadResult(error=f"Cannot read '{path}': it is not a regular file.")
         if state != "regular":
-            return ReadResult(error=f"File not found: {path}")
+            if state == "error":
+                return ReadResult(error=f"Could not read '{path}': {page.get('error') or 'unknown target-side I/O error'}")
+            return ReadResult(error=f"Could not read '{path}': unknown safe-reader state {state!r}")
 
         file_size = page.get("file_size", 0)
         if not isinstance(file_size, int):

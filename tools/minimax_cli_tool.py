@@ -47,7 +47,7 @@ def _runtime_env() -> dict[str, str]:
     env = hermes_subprocess_env(inherit_credentials=True)
     runtime = get_hermes_home() / "runtime-secrets.env"
     if runtime.exists():
-        for raw in runtime.read_text(errors="ignore").splitlines():
+        for raw in runtime.read_text(encoding="utf-8", errors="ignore").splitlines():
             if not raw or raw.startswith("#") or "=" not in raw:
                 continue
             key, value = raw.split("=", 1)

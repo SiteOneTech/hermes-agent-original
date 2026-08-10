@@ -35,6 +35,28 @@ def test_minimax_cli_status_reports_quota_and_auth(monkeypatch, tmp_path):
     assert calls == [["mmx", "auth", "status"], ["mmx", "quota"]]
 
 
+def test_runtime_env_reads_runtime_secrets_as_utf8(monkeypatch, tmp_path):
+    """Runtime secrets can carry non-ASCII values on every supported OS."""
+    runtime = tmp_path / "runtime-secrets.env"
+    runtime.write_bytes(b"MINIMAX_LABEL=caf\xc3\xa9\nBROKEN=\xff\n")
+    monkeypatch.setattr(mmx, "get_hermes_home", lambda: tmp_path)
+    monkeypatch.setattr(mmx, "hermes_subprocess_env", lambda **_kwargs: {})
+
+    real_read_text = Path.read_text
+    calls = []
+
+    def capture_read_text(path, *args, **kwargs):
+        calls.append((path, args, kwargs))
+        return real_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", capture_read_text)
+
+    assert mmx._runtime_env()["MINIMAX_LABEL"] == "café"
+    runtime_call = next(call for call in calls if call[0] == runtime)
+    assert runtime_call[2]["encoding"] == "utf-8"
+    assert runtime_call[2]["errors"] == "ignore"
+
+
 def test_minimax_image_generate_saves_to_managed_cache(monkeypatch, tmp_path):
     monkeypatch.setattr(mmx, "_cache_dir", lambda: tmp_path)
     monkeypatch.setattr(mmx.shutil, "which", lambda name: "/usr/bin/mmx" if name == "mmx" else None)

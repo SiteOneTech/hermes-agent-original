@@ -9,6 +9,7 @@ import pytest
 from unittest.mock import MagicMock, patch
 
 from tools.file_operations import ShellFileOperations, _parse_search_context_line
+from tools.tool_output_limits import get_max_line_length
 
 
 # =========================================================================
@@ -214,7 +215,13 @@ class TestPaginationBounds:
 
         assert result.error is None
         assert "1|line1" in result.content
-        safe_reader.assert_called_once_with("notes.txt", 1, 1, metadata_only=False)
+        # Pagination is clamped (0/0 -> 1/1) before it reaches the
+        # descriptor-safe reader; the per-line clamp travels with it.
+        safe_reader.assert_called_once_with(
+            "notes.txt", 1, 1,
+            metadata_only=False,
+            line_clamp=get_max_line_length() + 1,
+        )
 
     def test_search_clamps_offset_and_limit_before_building_head_pipeline(self):
         env = MagicMock()

@@ -205,7 +205,7 @@ def configure_profile(profile_id: str, spec: dict, profiles_root: Path) -> None:
             spec["description"],
         )
     config_path = profile_dir / "config.yaml"
-    config = yaml.safe_load(config_path.read_text()) if config_path.exists() else {}
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
     config["toolsets"] = spec["toolsets"]
     config.setdefault("agent", {})["name"] = spec["name"]
     terminal = config.setdefault("terminal", {})

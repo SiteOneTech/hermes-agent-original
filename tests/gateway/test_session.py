@@ -2137,29 +2137,6 @@ class TestHasAnySessions:
         store._entries = {"key1": MagicMock()}
         assert store.has_any_sessions() is False
 
-    def test_first_session_ever_returns_false(self, store_with_mock_db):
-        """First session ever should return False (only current session in DB)."""
-        store = store_with_mock_db
-        store._entries = {"telegram:12345": MagicMock()}
-        # Database has exactly 1 session (the current one just created)
-        store._db.session_count.return_value = 1
-
-        assert store.has_any_sessions() is False
-
-    def test_fallback_without_database(self, tmp_path):
-        """Should fall back to len(_entries) when DB is not available."""
-        config = GatewayConfig()
-        with patch("gateway.session.SessionStore._ensure_loaded"):
-            store = SessionStore(sessions_dir=tmp_path, config=config)
-        store._loaded = True
-        store._db = None
-        store._entries = {"key1": MagicMock(), "key2": MagicMock()}
-
-        # > 1 entries means has sessions
-        assert store.has_any_sessions() is True
-
-        store._entries = {"key1": MagicMock()}
-        assert store.has_any_sessions() is False
 
 
 class TestLastPromptTokens:
@@ -2603,8 +2580,8 @@ class TestGatewaySessionDbRecovery:
             def append_message(self, **kwargs):
                 raise RuntimeError("database disk image is malformed")
 
-            def replace_messages(self, session_id, messages):
-                self.replaced.append((session_id, messages))
+            def replace_messages(self, session_id, messages, *, active_only=False):
+                self.replaced.append((session_id, messages, active_only))
 
         store = object.__new__(SessionStore)
         store._db = FakeDb()

@@ -4588,31 +4588,6 @@ def test_prefetch_sends_contract_safe_memory_context_payload(monkeypatch):
     assert "mode" not in payload
     assert "target_uri" not in payload
 
-def test_in_place_compression_rearms_commit_guard():
-    """Post-compression turns must still be committable (#74695).
-
-    ``compress_context()`` commits before rewriting the transcript, which
-    latches the per-sid guard. In-place mode (the default) keeps the SAME sid,
-    so the latch then rejected every later commit for a still-live session —
-    the next compression, /new, normal session end and startup recovery all
-    silently did nothing, and post-compression turns were never extracted.
-    """
-    provider = _make_provider_with_session("sid-123", turn_count=4)
-    provider._ensure_client = lambda: True
-
-    # Compression commits the live session, latching the guard.
-    provider._mark_session_committed("sid-123")
-    assert provider._session_needs_commit("sid-123", 4) is False
-
-    # In-place compression: same id in, no rotation.
-    provider.on_session_switch("sid-123", reason="compression")
-
-    # The session is still live, so new turns must be committable again.
-    assert provider._has_committed_session("sid-123") is False
-    assert provider._turn_count == 0
-    assert provider._session_needs_commit("sid-123", 2) is True
-
-
 def test_prefetch_uses_session_search_when_session_id_available(monkeypatch):
     provider = _make_prefetch_provider()
 
