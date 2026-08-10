@@ -10,8 +10,8 @@ reviewed: pending
 
 | Increment | Outcome | Dependencies | Exit evidence |
 |---|---|---|---|
-| ALR-010 | G1 rebaseline + G0 + traceability + gate-695 merge-evidence reconciliation | — | committed corrected docs plus independent exact-SHA spec/security PASS reviews; no reviewed=yes before those reviews |
-| ALR-020 | schema, constraints, dedicated role/grants | ALR-010 exact-SHA reviews accepted; ALR-020 acceptance metadata corrected/read back | RED/GREEN migration and direct-role tests |
+| ALR-010-R2 | G1 rebaseline + G0 + traceability + gate-695/gate-697 direct-integration reconciliation and PR-first candidate visibility | — | committed corrected docs on assigned branch, Zeus-signed `agent:zeus` PR, independent exact-SHA spec/security PASS reviews; no reviewed=yes before those reviews |
+| ALR-020 | schema, constraints, dedicated role/grants | ALR-010-R2 exact-SHA reviews accepted; Zeus PR/review/base-visibility evidence recorded; ALR-020 acceptance metadata corrected/read back | RED/GREEN migration and direct-role tests |
 | ALR-030 | JSON tools + non-default leaf toolset | ALR-020 accepted | tool/allowlist/forbidden-field tests |
 | ALR-040 | source policy and adapter-neutral local evidence intake | ALR-030 accepted | source-state/duplicate/stale tests; no third-party driver |
 | ALR-050 | default-disabled daily local cycle + inert handoff | ALR-030/040 accepted | no-registration/no-egress/deterministic cycle tests |

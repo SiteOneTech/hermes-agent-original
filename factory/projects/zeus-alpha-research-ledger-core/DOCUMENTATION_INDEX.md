@@ -10,7 +10,7 @@ owner: factory-orchestrator
 # DOCUMENTATION INDEX — Zeus Alpha Research Ledger Core
 
 ## Controlling status
-Canonical G1 pack for the **private Zeus-side implementation** succeeding `zeus-independent-alpha-research`. It is not a Vonash implementation plan, grants no external runtime access and does not authorize market execution. Every required document carries explicit `validated` and `reviewed` status metadata plus the index matrix below. The reviewer state remains `reviewed: pending` until the revised committed candidate receives new independent specification and security PASS reviews against its exact SHA. Earlier Factory gate rows are evidence only: gates 686/687 were `REQUEST_CHANGES`; gate 695 was a failed spec review requiring reconciliation of the observed ALR-010-R1 direct merge into `origin/main`; and any PASS on a pre-correction SHA is not reused for this revision. This worker does not self-approve.
+Canonical G1 pack for the **private Zeus-side implementation** succeeding `zeus-independent-alpha-research`. It is not a Vonash implementation plan, grants no external runtime access and does not authorize market execution. Every required document carries explicit `validated` and `reviewed` status metadata plus the index matrix below. The reviewer state remains `reviewed: pending` until the revised committed candidate receives new independent specification and security PASS reviews against its exact SHA. Earlier Factory gate rows are evidence only: gates 686/687 were `REQUEST_CHANGES`; gate 695 required reconciliation of direct integration event `173433` (`b9396bcd7d14ee6f212bd0fd0609e468cecf567f` → merge `e3d04ff94b67e6e21be1d5515bdb71400fbedf0a`); gate 697 failed because Factory/Git also showed direct integration event `173494` (`6ee8b4fdb886d0834bfbc62c7e152ee35d505e66` → merge `9f975acb0625750b8d46648766d1395c89392dca`) plus stale no-new-merge/branch-only wording. Neither direct integration is an authorized PR, QA Guardian approval, deployment, `reviewed: yes` transition, or ALR-020 authority, and any PASS on a pre-correction SHA is not reused for this revision. This worker does not self-approve.
 
 | File | Purpose | Owner | Validated | Reviewed |
 |---|---|---|---|---|
@@ -38,7 +38,7 @@ Canonical G1 pack for the **private Zeus-side implementation** succeeding `zeus-
 ## Status semantics
 - `validated: yes` means the implementation-planner/local worker confirmed the file exists, is tracked, is indexed where required, and is internally consistent with this G1 contract.
 - `reviewed: pending` is an explicit reviewed-status value, not a missing field. It may become `reviewed: yes` only after independent reviewers record PASS evidence against the exact committed SHA.
-- A branch-local reviewed status or the observed ALR-010-R1 base-branch merge never authorizes normal implementation by itself; exact-SHA independent reviews and reconciled delivery evidence remain required.
+- A branch-local reviewed status or the observed ALR-010-R1 base-branch merges never authorize normal implementation by themselves; exact-SHA independent reviews, Zeus-signed `agent:zeus` PR visibility, and reconciled delivery evidence remain required.
 
 ## Required reading order
 1. `DOCUMENTATION_INDEX.md`, `FACTORY_INTAKE.md`, `G0_REPOSITORY_STRATEGY.md`
@@ -47,4 +47,4 @@ Canonical G1 pack for the **private Zeus-side implementation** succeeding `zeus-
 4. `QA_GATES.md`, `SECURITY_GATES.md`, `G1_REVIEW.md`
 
 ## G1 rule
-No normal implementation starts until every required G1 document is `reviewed: yes`; the three supplemental controlling artifacts must be committed and PASS-reviewed against the exact revised SHA too. Base exposure alone is not sufficient: the observed ALR-010-R1 merge is non-approval evidence until gate-695 reconciliation is independently accepted, and a branch-only pack is likewise never sufficient.
+No normal implementation starts until every required G1 document is `reviewed: yes`; the three supplemental controlling artifacts must be committed and PASS-reviewed against the exact revised SHA too. Base exposure alone is not sufficient: observed direct integrations `173433`/`173494` are non-approval audit evidence until the R2 reconciliation is independently accepted against the exact revised SHA, and a branch-only pack without a Zeus-signed `agent:zeus` PR is likewise never sufficient.
