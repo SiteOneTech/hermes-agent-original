@@ -9,7 +9,7 @@
 | Source of truth | Agent Core Postgres `zeus_agent.factory` |
 | Repo artifacts | `factory/projects/factory-runtime-evolution-continuation/` |
 | Repo | `SiteOneTech/hermes-agent-original` (zeus_only) |
-| Current state | `active` — FRE-010 planning-review passed (solution-architect, 2026-08-10, planning gate 690); FRE-024 security gates 726/729/732/734 failed during independent review; latest rework hardens source-delivery PR metadata parsing so downstream dispatch fails closed on non-boolean merged flags and missing PR head/base/clean evidence, with refreshed implementation evidence pending commit/push and independent security review still pending. |
+| Current state | `active` — FRE-010 planning-review passed (solution-architect, 2026-08-10, planning gate 690); FRE-024 security gates 726/729/732/734 failed during independent review; latest rework hardens source-delivery PR metadata parsing so downstream dispatch fails closed on non-boolean merged flags and missing PR head/base/clean evidence, with refreshed implementation gate 735 passed after push and independent security review still pending. |
 | Anomalies at start | `missing_project_artifact_dir`, `missing_required_docs` (resolved by this increment's dir + committed docs) |
 
 ## 1. Task tracker (mirrors Factory DB)
@@ -80,6 +80,7 @@
    - RED command: `scripts/run_tests.sh tests/hermes_cli/test_factory_increment_integration.py -k 'string_false_merged_replacement_pr or pr_without_head_commit or pr_without_base_branch or pr_without_clean_evidence' -v --tb=short` → 4 failed, 36 deselected. Failures reproduced downstream dispatch for a superseded predecessor whose replacement PR was open with string `merged="false"`, or whose accepted PR record lacked exact head/base/clean evidence.
    - GREEN commands: same focused command → 4 passed; `scripts/run_tests.sh tests/hermes_cli/test_factory_increment_integration.py -v --tb=short` → 40 passed; `scripts/run_tests.sh tests/hermes_cli/test_factory*.py --tb=short` → 154 passed; `.venv/bin/ruff check hermes_cli/factory_pg.py hermes_cli/factory_contracts.py tests/hermes_cli/test_factory_increment_integration.py && git diff --check` → all checks passed.
    - Runtime contract tightened: replacement/source-delivery PR evidence now normalizes boolean-like fields fail-closed, requires exact PR head commit, requires PR base branch to match the Factory base branch, and requires explicit clean/mergeable evidence before downstream dispatch.
+   - Factory gate evidence: implementation gate `735` recorded as `passed` after commit `e008ff45f` was pushed; independent security review remains required.
 
 ## 3. Gate log
 
@@ -88,7 +89,7 @@
 | G0 Repository Strategy | passed | DB `project_created` event 172950 (repo_scope zeus_only, base main, per_deliverable worktrees) |
 | G1 Documentary Readiness | passed | 14 docs exist/indexed/committed/validated:true/reviewed:true after solution-architect review; planning gate 690=passed |
 | Review (FRE-010) | passed | solution-architect review, 2026-08-10, planning gate 690 |
-| Implementation (FRE-024) | rework implemented after fourth security review | Factory gate 725 originally passed; security gates 726/729/732/734 failed; TDD RED/GREEN rework evidence listed in evidence log items 6–9; refreshed implementation evidence must be recorded after commit/push; independent security review still required before delivery/merge |
+| Implementation (FRE-024) | rework implemented after fourth security review | Factory gate 725 originally passed; security gates 726/729/732/734 failed; TDD RED/GREEN rework evidence listed in evidence log items 6–9; refreshed implementation gate 735 passed after commit/push; independent security review still required before delivery/merge |
 | Delivery | not applicable yet | no product-runtime code in G1 |
 
 ## 4. Risk register
