@@ -9,7 +9,7 @@
 | Source of truth | Agent Core Postgres `zeus_agent.factory` |
 | Repo artifacts | `factory/projects/factory-runtime-evolution-continuation/` |
 | Repo | `SiteOneTech/hermes-agent-original` (zeus_only) |
-| Current state | `active` — FRE-010 planning-review passed (solution-architect, 2026-08-10, planning gate 690); FRE-024 security gates 726/729 failed during independent review; latest rework hardens PR-first replacement binding, contradictory acceptance, and unsafe branch metadata, with implementation gate 730 recorded after push and independent security review still pending. |
+| Current state | `active` — FRE-010 planning-review passed (solution-architect, 2026-08-10, planning gate 690); FRE-024 security gates 726/729/732 failed during independent review; latest rework hardens source-delivery replacement branch/worktree/base-branch metadata so downstream dispatch fails closed with concrete blockers, with refreshed implementation evidence recorded after push and independent security review still pending. |
 | Anomalies at start | `missing_project_artifact_dir`, `missing_required_docs` (resolved by this increment's dir + committed docs) |
 
 ## 1. Task tracker (mirrors Factory DB)
@@ -69,6 +69,12 @@
    - GREEN commands: same focused command → 4 passed; `scripts/run_tests.sh tests/hermes_cli/test_factory_increment_integration.py -v --tb=short` → 33 passed; `scripts/run_tests.sh tests/hermes_cli/test_factory*.py --tb=short` → 147 passed; `.venv/bin/ruff check hermes_cli/factory_pg.py hermes_cli/factory_contracts.py tests/hermes_cli/test_factory_increment_integration.py` → all checks passed; `git diff --check` → exit 0.
    - Runtime contract tightened: replacement tasks must back-reference the superseded/cancelled task, PR evidence is required by default for source delivery, contradictory source-delivery outcomes fail closed, and unsafe/option-like branch metadata is rejected before dependency dispatch or increment integration git operations.
    - Factory gate evidence: implementation gate `730` recorded as `passed` after commit `91538698f051e69e594974b079939d5109ef2c7a` was pushed; security gate remains pending for independent reviewer after rework.
+8. FRE-024 third security rework evidence (2026-08-10, same branch):
+   - Security gate 732 failed because positive-terminal source replacements with `source_delivery` or replacement metadata still bypassed source-delivery PR/QA/base checks when branch, worktree, or base-branch metadata made `_increment_integration_required()` return false before `_dependency_increment_blockers()` validated them.
+   - RED command: `scripts/run_tests.sh tests/hermes_cli/test_factory_increment_integration.py -k 'without_branch or without_worktree or on_base_branch' -v --tb=short` → 3 failed, 33 deselected. Failures reproduced downstream dispatch for a superseded predecessor whose positive replacement had source-delivery evidence but no branch, no worktree path, or branch equal to `main`.
+   - GREEN commands: same focused command → 3 passed; `scripts/run_tests.sh tests/hermes_cli/test_factory_increment_integration.py -v --tb=short` → 36 passed; `scripts/run_tests.sh tests/hermes_cli/test_factory*.py --tb=short` → 150 passed; `.venv/bin/ruff check hermes_cli/factory_pg.py tests/hermes_cli/test_factory_increment_integration.py` → all checks passed.
+   - Runtime contract tightened: dependencies with `source_delivery` or explicit replacement metadata now require source-delivery integrity even when terminal integration would otherwise skip; missing branch, missing worktree path, or branch equal to base returns `unverified_branch_metadata` before downstream product dispatch.
+   - Factory gate evidence: refreshed implementation gate recorded after commit/push; latest gate id is in Agent Core Postgres `factory.gates`.
 
 ## 3. Gate log
 
@@ -77,7 +83,7 @@
 | G0 Repository Strategy | passed | DB `project_created` event 172950 (repo_scope zeus_only, base main, per_deliverable worktrees) |
 | G1 Documentary Readiness | passed | 14 docs exist/indexed/committed/validated:true/reviewed:true after solution-architect review; planning gate 690=passed |
 | Review (FRE-010) | passed | solution-architect review, 2026-08-10, planning gate 690 |
-| Implementation (FRE-024) | passed after second security rework | Factory gate 725 originally passed; security gates 726/729 failed; TDD RED/GREEN rework evidence listed in evidence log items 6–7; refreshed implementation gate 730=passed after commit/push; independent security review still required before delivery/merge |
+| Implementation (FRE-024) | rework implemented after third security review | Factory gate 725 originally passed; security gates 726/729/732 failed; TDD RED/GREEN rework evidence listed in evidence log items 6–8; refreshed implementation evidence recorded after commit/push; independent security review still required before delivery/merge |
 | Delivery | not applicable yet | no product-runtime code in G1 |
 
 ## 4. Risk register

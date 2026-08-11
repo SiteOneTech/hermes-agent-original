@@ -556,6 +556,81 @@ def test_next_runnable_task_blocks_superseded_dependency_replacement_pr_open_not
     assert "source_not_in_base" in joined
 
 
+def test_next_runnable_task_blocks_replacement_source_delivery_without_branch(fake_sql, tmp_path):
+    project, replacement, _feature_commit = _make_source_delivery_repo(tmp_path, merged_to_base=True)
+    replacement.pop("branch")
+    dep = {
+        "project_id": "demo",
+        "task_id": "task-old",
+        "status": "superseded",
+        "metadata": {"replacement_task_id": "task-replacement"},
+    }
+    candidate = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "task-downstream",
+        "status": "todo",
+        "dependencies": ["task-old"],
+    }
+    fake_sql.rows_results = [[dep, replacement, candidate], [candidate]]
+    fake_sql.one_results = [project]
+
+    assert factory_pg._next_runnable_task("demo") is None
+    joined = "\n".join(fake_sql.statements)
+    assert "increment_dependency_integration_blocked" in joined
+    assert "unverified_branch_metadata" in joined
+
+
+def test_next_runnable_task_blocks_replacement_source_delivery_without_worktree(fake_sql, tmp_path):
+    project, replacement, _feature_commit = _make_source_delivery_repo(tmp_path, merged_to_base=True)
+    replacement.pop("worktree_path")
+    dep = {
+        "project_id": "demo",
+        "task_id": "task-old",
+        "status": "superseded",
+        "metadata": {"replacement_task_id": "task-replacement"},
+    }
+    candidate = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "task-downstream",
+        "status": "todo",
+        "dependencies": ["task-old"],
+    }
+    fake_sql.rows_results = [[dep, replacement, candidate], [candidate]]
+    fake_sql.one_results = [project]
+
+    assert factory_pg._next_runnable_task("demo") is None
+    joined = "\n".join(fake_sql.statements)
+    assert "increment_dependency_integration_blocked" in joined
+    assert "unverified_branch_metadata" in joined
+
+
+def test_next_runnable_task_blocks_replacement_source_delivery_on_base_branch(fake_sql, tmp_path):
+    project, replacement, _feature_commit = _make_source_delivery_repo(tmp_path, merged_to_base=True)
+    replacement["branch"] = "main"
+    dep = {
+        "project_id": "demo",
+        "task_id": "task-old",
+        "status": "superseded",
+        "metadata": {"replacement_task_id": "task-replacement"},
+    }
+    candidate = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "task-downstream",
+        "status": "todo",
+        "dependencies": ["task-old"],
+    }
+    fake_sql.rows_results = [[dep, replacement, candidate], [candidate]]
+    fake_sql.one_results = [project]
+
+    assert factory_pg._next_runnable_task("demo") is None
+    joined = "\n".join(fake_sql.statements)
+    assert "increment_dependency_integration_blocked" in joined
+    assert "unverified_branch_metadata" in joined
+
+
 def test_next_runnable_task_blocks_replacement_source_delivery_without_pr_even_without_policy(fake_sql, tmp_path):
     project, replacement, feature_commit = _make_source_delivery_repo(tmp_path, merged_to_base=True)
     metadata = _source_delivery_metadata(feature_commit)

@@ -2749,6 +2749,15 @@ def _source_delivery_record(task: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def _dependency_source_delivery_integrity_required(task: dict[str, Any]) -> bool:
+    metadata = _metadata(task)
+    return bool(
+        _source_delivery_record(task)
+        or _replacement_reference_values(metadata)
+        or _task_replacement_id(task)
+    )
+
+
 def _commit_value(container: dict[str, Any], *keys: str) -> str:
     for key in keys:
         value = container.get(key)
@@ -2871,7 +2880,8 @@ def _dependency_increment_blockers(dep_task: dict[str, Any], project: dict[str, 
     dep_status = str(dep_task.get("status") or "").lower()
     if dep_status not in POSITIVE_TERMINAL_TASK_STATUSES:
         return ["dependency_not_positive_terminal"]
-    if not _increment_integration_required(dep_task, project, dep_status):
+    requires_source_delivery_integrity = _dependency_source_delivery_integrity_required(dep_task)
+    if not _increment_integration_required(dep_task, project, dep_status) and not requires_source_delivery_integrity:
         return []
     strategy = factory_contracts.repository_strategy_from_project(project)
     repo_raw = str(strategy.get("primary_repo_path") or project.get("repo_path") or "").strip()
@@ -2882,7 +2892,8 @@ def _dependency_increment_blockers(dep_task: dict[str, Any], project: dict[str, 
         return ["repo_path_missing"]
     branch = str(dep_task.get("branch") or "").strip()
     worktree_raw = str(dep_task.get("worktree_path") or "").strip()
-    if not branch or not worktree_raw:
+    base_branch = str(strategy.get("base_branch") or project.get("base_branch") or "main").strip() or "main"
+    if not branch or not worktree_raw or branch in {base_branch, f"origin/{base_branch}"}:
         return ["unverified_branch_metadata"]
     branch_blocker = _factory_branch_ref_blocker(branch)
     if branch_blocker:
@@ -2890,7 +2901,6 @@ def _dependency_increment_blockers(dep_task: dict[str, Any], project: dict[str, 
     worktree_path = Path(worktree_raw).expanduser()
     if not worktree_path.exists():
         return ["worktree_path_missing"]
-    base_branch = str(strategy.get("base_branch") or project.get("base_branch") or "main").strip() or "main"
     blockers: list[str] = []
     try:
         fetch_base = _run_git(repo_path, ["fetch", "origin", base_branch], timeout=120)
