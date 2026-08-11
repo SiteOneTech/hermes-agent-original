@@ -428,6 +428,20 @@ def _make_source_delivery_repo(tmp_path, *, merged_to_base: bool) -> tuple[dict,
     return project, replacement, feature_commit
 
 
+_BASE_ALIAS_OR_PSEUDO_REFS = (
+    "main",
+    "origin/main",
+    "refs/heads/main",
+    "refs/remotes/origin/main",
+    "HEAD",
+    "FETCH_HEAD",
+    "ORIG_HEAD",
+    "MERGE_HEAD",
+    "origin/HEAD",
+    "refs/remotes/origin/HEAD",
+)
+
+
 def test_next_runnable_task_blocks_cancelled_dependency_without_replacement(fake_sql):
     dep = {"project_id": "demo", "task_id": "task-old", "status": "cancelled", "metadata": {}}
     candidate = {
@@ -1073,6 +1087,93 @@ def test_dependency_increment_blockers_rejects_option_like_branch_before_fetch(f
 
     assert factory_pg._dependency_increment_blockers(task, project) == ["unverified_branch_metadata"]
     assert not any("--upload-pack" in " ".join(args) for args in calls)
+
+
+@pytest.mark.parametrize("branch", _BASE_ALIAS_OR_PSEUDO_REFS)
+def test_dependency_increment_blockers_rejects_base_alias_and_pseudoref_before_fetch(fake_sql, monkeypatch, tmp_path, branch):
+    repo = tmp_path / "repo"
+    worktree = tmp_path / "worktree"
+    repo.mkdir()
+    worktree.mkdir()
+    task = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "task-replacement",
+        "status": "done",
+        "branch": branch,
+        "worktree_path": str(worktree),
+        "metadata": _source_delivery_metadata("abc123"),
+    }
+    project = {
+        "project_id": "demo",
+        "repo_path": str(repo),
+        "base_branch": "main",
+        "metadata": {"repo_strategy": {"primary_repo_path": str(repo), "base_branch": "main"}},
+    }
+    calls: list[list[str]] = []
+
+    def record_git(_repo_path, args, *, timeout=120):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(factory_pg, "_run_git", record_git)
+
+    assert factory_pg._dependency_increment_blockers(task, project) == ["unverified_branch_metadata"]
+    assert calls == []
+
+
+@pytest.mark.parametrize("branch", _BASE_ALIAS_OR_PSEUDO_REFS)
+def test_increment_integration_required_rejects_base_alias_and_pseudoref(branch):
+    task = {
+        "project_id": "demo",
+        "task_id": "task-1",
+        "status": "review_ready",
+        "branch": branch,
+        "worktree_path": "/tmp/factory-worktree",
+        "metadata": {},
+    }
+    project = {
+        "project_id": "demo",
+        "repo_path": "/tmp/factory-repo",
+        "base_branch": "main",
+        "metadata": {"repo_strategy": {"primary_repo_path": "/tmp/factory-repo", "base_branch": "main"}},
+    }
+
+    assert factory_pg._increment_integration_required(task, project, "done") is False
+
+
+@pytest.mark.parametrize("branch", _BASE_ALIAS_OR_PSEUDO_REFS)
+def test_integrate_increment_to_base_rejects_base_alias_and_pseudoref_before_git(fake_sql, monkeypatch, tmp_path, branch):
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    task = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "task-1",
+        "status": "review_ready",
+        "branch": branch,
+        "worktree_path": str(worktree),
+        "metadata": {},
+    }
+    project = {
+        "project_id": "demo",
+        "repo_path": str(tmp_path / "repo"),
+        "base_branch": "main",
+        "metadata": {"repo_strategy": {"primary_repo_path": str(tmp_path / "repo"), "base_branch": "main"}},
+    }
+    fake_sql.one_results = [task]
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    calls: list[list[str]] = []
+
+    def record_git(_repo_path, args, *, timeout=120):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(factory_pg, "_run_git", record_git)
+
+    with pytest.raises(factory_pg.IncrementIntegrationError, match="unverified branch metadata"):
+        factory_pg._integrate_increment_to_base("task-1", actor="qa", final_status="done")
+    assert calls == []
 
 
 def test_integrate_increment_to_base_rejects_dirty_worktree_before_gate(fake_sql, monkeypatch, tmp_path):

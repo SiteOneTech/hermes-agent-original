@@ -258,6 +258,7 @@ TERMINAL_PROJECT_STATUSES = {
 }
 RESUME_RUNNABLE_TASK_STATUSES = factory_contracts.RUNNABLE_TASK_STATUSES | {"ready", "todo"}
 _UNSAFE_FACTORY_REF_CHARS = re.compile(r"[\x00-\x20\x7f~^:?*\[\\]")
+_FACTORY_PSEUDO_REFS = {"HEAD", "FETCH_HEAD", "ORIG_HEAD", "MERGE_HEAD"}
 _SOURCE_DELIVERY_ACCEPTED_VALUES = {
     "1",
     "accepted",
@@ -2109,9 +2110,11 @@ def _git_stdout(repo_or_worktree: Path, args: list[str], *, timeout: int = 120) 
     return result.stdout.strip()
 
 
-def _resolve_git_ref(repo_path: Path, branch: str) -> tuple[str, str]:
+def _resolve_git_ref(repo_path: Path, branch: str, *, base_branch: str | None = None) -> tuple[str, str]:
     """Resolve a local or remote branch to (ref, commit)."""
 
+    if _factory_branch_ref_blocker(branch, base_branch=base_branch):
+        raise IncrementIntegrationError("unverified branch metadata")
     candidates = [branch]
     if not branch.startswith("origin/"):
         candidates.append(f"origin/{branch}")
@@ -2142,7 +2145,7 @@ def _increment_integration_required(task: dict[str, Any], project: dict[str, Any
         return False
     strategy = factory_contracts.repository_strategy_from_project(project)
     base_branch = str(strategy.get("base_branch") or project.get("base_branch") or "main").strip() or "main"
-    return branch not in {base_branch, f"origin/{base_branch}"}
+    return _factory_branch_ref_blocker(branch, base_branch=base_branch) is None
 
 
 def _increment_integration_metadata(
@@ -2222,7 +2225,13 @@ def _integrate_increment_to_base(task_id: str, *, actor: str = "factory-orchestr
     worktree_path = str(task.get("worktree_path") or "").strip()
     if not branch or not worktree_path:
         return {"increment_integration_status": "skipped", "increment_integration_required": False, "reason": "missing_branch_or_worktree"}
-    branch_blocker = _factory_branch_ref_blocker(branch)
+    project_id = str(task.get("project_id") or "")
+    project = _project(project_id) or {}
+    if not project:
+        raise IncrementIntegrationError(f"Factory project not found for task: {task_id}")
+    strategy = factory_contracts.repository_strategy_from_project(project)
+    base_branch = str(strategy.get("base_branch") or project.get("base_branch") or "main").strip() or "main"
+    branch_blocker = _factory_branch_ref_blocker(branch, base_branch=base_branch)
     if branch_blocker:
         raise IncrementIntegrationError("unverified branch metadata")
     worktree = Path(worktree_path).expanduser()
@@ -2233,14 +2242,9 @@ def _integrate_increment_to_base(task_id: str, *, actor: str = "factory-orchestr
         raise IncrementIntegrationError(f"increment worktree status failed: {(worktree_status.stderr or worktree_status.stdout).strip()[-1000:]}")
     if (worktree_status.stdout or "").strip():
         raise IncrementIntegrationError("increment worktree has uncommitted changes; commit/push the increment branch before recording a passed gate or terminal status")
-    project_id = str(task.get("project_id") or "")
-    project = _project(project_id) or {}
-    if not project:
-        raise IncrementIntegrationError(f"Factory project not found for task: {task_id}")
     if not _increment_integration_required(task, project, final_status):
         return {"increment_integration_status": "skipped", "increment_integration_required": False}
 
-    strategy = factory_contracts.repository_strategy_from_project(project)
     repo_raw = str(strategy.get("primary_repo_path") or project.get("repo_path") or "").strip()
     if not repo_raw:
         raise IncrementIntegrationError("project repository path is required for increment integration")
@@ -2251,8 +2255,6 @@ def _integrate_increment_to_base(task_id: str, *, actor: str = "factory-orchestr
     if inside.returncode != 0:
         raise IncrementIntegrationError(f"project repository path is not a git worktree: {repo_path}")
 
-    branch = str(task.get("branch") or "").strip()
-    base_branch = str(strategy.get("base_branch") or project.get("base_branch") or "main").strip() or "main"
     fetch_base = _run_git(repo_path, ["fetch", "origin", base_branch], timeout=120)
     if fetch_base.returncode != 0:
         raise IncrementIntegrationError(f"git fetch origin {base_branch} failed: {(fetch_base.stderr or fetch_base.stdout).strip()[-1000:]}")
@@ -2260,7 +2262,7 @@ def _integrate_increment_to_base(task_id: str, *, actor: str = "factory-orchestr
     # A local branch may exist even if the remote branch is not present yet; do
     # not fail solely on the branch fetch. _resolve_git_ref below is the source
     # of truth.
-    source_ref, branch_commit = _resolve_git_ref(repo_path, branch)
+    source_ref, branch_commit = _resolve_git_ref(repo_path, branch, base_branch=base_branch)
     base_ref = f"origin/{base_branch}"
     base_commit_before = _git_stdout(repo_path, ["rev-parse", "--verify", f"{base_ref}^{{commit}}"], timeout=30)
 
@@ -2766,7 +2768,23 @@ def _commit_value(container: dict[str, Any], *keys: str) -> str:
     return ""
 
 
-def _factory_branch_ref_blocker(branch: str) -> str | None:
+def _normalize_factory_ref_alias(ref: str) -> str:
+    value = str(ref or "").strip()
+    if value.startswith("refs/heads/"):
+        return value.removeprefix("refs/heads/")
+    if value.startswith("refs/remotes/"):
+        return value.removeprefix("refs/remotes/")
+    return value
+
+
+def _canonical_factory_base_branch(base_branch: str | None) -> str:
+    normalized = _normalize_factory_ref_alias(str(base_branch or ""))
+    if normalized.startswith("origin/"):
+        return normalized.removeprefix("origin/")
+    return normalized
+
+
+def _factory_branch_ref_blocker(branch: str, *, base_branch: str | None = None) -> str | None:
     value = str(branch or "").strip()
     if not value:
         return "unverified_branch_metadata"
@@ -2783,6 +2801,12 @@ def _factory_branch_ref_blocker(branch: str) -> str | None:
         or _UNSAFE_FACTORY_REF_CHARS.search(value)
         or any(part in {"", ".", ".."} or part.startswith(".") for part in ref_parts)
     ):
+        return "unverified_branch_metadata"
+    normalized = _normalize_factory_ref_alias(value)
+    if normalized in _FACTORY_PSEUDO_REFS or normalized.endswith("/HEAD"):
+        return "unverified_branch_metadata"
+    canonical_base = _canonical_factory_base_branch(base_branch)
+    if canonical_base and normalized in {canonical_base, f"origin/{canonical_base}"}:
         return "unverified_branch_metadata"
     return None
 
@@ -2920,24 +2944,25 @@ def _dependency_increment_blockers(dep_task: dict[str, Any], project: dict[str, 
     dep_status = str(dep_task.get("status") or "").lower()
     if dep_status not in POSITIVE_TERMINAL_TASK_STATUSES:
         return ["dependency_not_positive_terminal"]
+    strategy = factory_contracts.repository_strategy_from_project(project)
+    branch = str(dep_task.get("branch") or "").strip()
+    worktree_raw = str(dep_task.get("worktree_path") or "").strip()
+    base_branch = str(strategy.get("base_branch") or project.get("base_branch") or "main").strip() or "main"
+    if branch:
+        branch_blocker = _factory_branch_ref_blocker(branch, base_branch=base_branch)
+        if branch_blocker:
+            return [branch_blocker]
     requires_source_delivery_integrity = _dependency_source_delivery_integrity_required(dep_task)
     if not _increment_integration_required(dep_task, project, dep_status) and not requires_source_delivery_integrity:
         return []
-    strategy = factory_contracts.repository_strategy_from_project(project)
     repo_raw = str(strategy.get("primary_repo_path") or project.get("repo_path") or "").strip()
     if not repo_raw:
         return ["repo_path_missing"]
     repo_path = Path(repo_raw).expanduser()
     if not repo_path.exists():
         return ["repo_path_missing"]
-    branch = str(dep_task.get("branch") or "").strip()
-    worktree_raw = str(dep_task.get("worktree_path") or "").strip()
-    base_branch = str(strategy.get("base_branch") or project.get("base_branch") or "main").strip() or "main"
-    if not branch or not worktree_raw or branch in {base_branch, f"origin/{base_branch}"}:
+    if not branch or not worktree_raw:
         return ["unverified_branch_metadata"]
-    branch_blocker = _factory_branch_ref_blocker(branch)
-    if branch_blocker:
-        return [branch_blocker]
     worktree_path = Path(worktree_raw).expanduser()
     if not worktree_path.exists():
         return ["worktree_path_missing"]
@@ -2949,7 +2974,7 @@ def _dependency_increment_blockers(dep_task: dict[str, Any], project: dict[str, 
         fetch_branch = _run_git(repo_path, ["fetch", "origin", f"{branch}:refs/remotes/origin/{branch}"], timeout=120)
         if fetch_branch.returncode != 0:
             return ["unverified_branch_metadata"]
-        source_ref, branch_commit = _resolve_git_ref(repo_path, branch)
+        source_ref, branch_commit = _resolve_git_ref(repo_path, branch, base_branch=base_branch)
         base_ref = f"origin/{base_branch}"
         base_commit = _git_stdout(repo_path, ["rev-parse", "--verify", f"{base_ref}^{{commit}}"], timeout=30)
     except Exception:

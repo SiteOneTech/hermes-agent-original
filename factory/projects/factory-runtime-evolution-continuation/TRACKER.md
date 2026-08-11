@@ -9,7 +9,7 @@
 | Source of truth | Agent Core Postgres `zeus_agent.factory` |
 | Repo artifacts | `factory/projects/factory-runtime-evolution-continuation/` |
 | Repo | `SiteOneTech/hermes-agent-original` (zeus_only) |
-| Current state | `active` — FRE-010 planning-review passed (solution-architect, 2026-08-10, planning gate 690); FRE-024 security gates 726/729/732/734 failed during independent review; latest rework hardens source-delivery PR metadata parsing so downstream dispatch fails closed on non-boolean merged flags and missing PR head/base/clean evidence, with refreshed implementation gate 735 passed after push and independent security review still pending. |
+| Current state | `active` — FRE-010 planning-review passed (solution-architect, 2026-08-10, planning gate 690); FRE-024 security gates 726/729/732/734 failed during independent review; latest rework hardens branch metadata integrity so downstream dispatch and increment integration reject base-branch aliases and git pseudorefs before any fetch/resolve/integration git operation; refreshed implementation evidence is ready for independent security review. |
 | Anomalies at start | `missing_project_artifact_dir`, `missing_required_docs` (resolved by this increment's dir + committed docs) |
 
 ## 1. Task tracker (mirrors Factory DB)
@@ -81,6 +81,12 @@
    - GREEN commands: same focused command → 4 passed; `scripts/run_tests.sh tests/hermes_cli/test_factory_increment_integration.py -v --tb=short` → 40 passed; `scripts/run_tests.sh tests/hermes_cli/test_factory*.py --tb=short` → 154 passed; `.venv/bin/ruff check hermes_cli/factory_pg.py hermes_cli/factory_contracts.py tests/hermes_cli/test_factory_increment_integration.py && git diff --check` → all checks passed.
    - Runtime contract tightened: replacement/source-delivery PR evidence now normalizes boolean-like fields fail-closed, requires exact PR head commit, requires PR base branch to match the Factory base branch, and requires explicit clean/mergeable evidence before downstream dispatch.
    - Factory gate evidence: implementation gate `735` recorded as `passed` after commit `e008ff45f` was pushed; independent security review remains required.
+10. FRE-024 fifth security rework evidence (2026-08-11T01:43:30Z, same branch):
+   - Rework target from independent review: reject base aliases and pseudorefs (`main`, `origin/main`, `refs/heads/main`, `refs/remotes/origin/main`, `HEAD`, `FETCH_HEAD`, `ORIG_HEAD`, `MERGE_HEAD`, `origin/HEAD`) before dispatch dependency fetch/resolve and before `_integrate_increment_to_base` git operations.
+   - Claude Code engine invocation: `claude-anthropic-code -p ... --allowedTools 'Read' --max-turns 4 --output-format json` reached `error_max_turns`; resumed session `2b06ebcd-ea02-48a7-9467-5b8f3b546b09` with no tools and received focused findings for `_factory_branch_ref_blocker`, `_increment_integration_required`, `_integrate_increment_to_base`, `_dependency_increment_blockers`, and `_resolve_git_ref`.
+   - RED command: `scripts/run_tests.sh tests/hermes_cli/test_factory_increment_integration.py -k 'base_alias_and_pseudoref or option_like_branch' -v --tb=short` → 26 failed, 5 passed, 41 deselected. Failures reproduced `refs/heads/main`, `refs/remotes/origin/main`, `HEAD`, `FETCH_HEAD`, `ORIG_HEAD`, `MERGE_HEAD`, and `origin/HEAD` reaching dependency/integration logic or making `_increment_integration_required()` true.
+   - GREEN commands: same focused command → 31 passed; `scripts/run_tests.sh tests/hermes_cli/test_factory_increment_integration.py -v --tb=short` → 72 passed; `scripts/run_tests.sh tests/hermes_cli/test_factory*.py --tb=short` → 186 passed; `.venv/bin/ruff check hermes_cli/factory_pg.py hermes_cli/factory_contracts.py tests/hermes_cli/test_factory_increment_integration.py` → all checks passed; `git diff --check` → exit 0.
+   - Runtime contract tightened: branch metadata guard now normalizes `refs/heads/*` and `refs/remotes/*`, rejects base-branch aliases plus git pseudorefs in the same guard used by dispatch dependency checks and increment integration, and `_resolve_git_ref()` has defense-in-depth against resolving unsafe metadata.
 
 ## 3. Gate log
 
@@ -89,7 +95,7 @@
 | G0 Repository Strategy | passed | DB `project_created` event 172950 (repo_scope zeus_only, base main, per_deliverable worktrees) |
 | G1 Documentary Readiness | passed | 14 docs exist/indexed/committed/validated:true/reviewed:true after solution-architect review; planning gate 690=passed |
 | Review (FRE-010) | passed | solution-architect review, 2026-08-10, planning gate 690 |
-| Implementation (FRE-024) | rework implemented after fourth security review | Factory gate 725 originally passed; security gates 726/729/732/734 failed; TDD RED/GREEN rework evidence listed in evidence log items 6–9; refreshed implementation gate 735 passed after commit/push; independent security review still required before delivery/merge |
+| Implementation (FRE-024) | rework implemented after latest security review | Factory gate 725 originally passed; security gates 726/729/732/734 failed; TDD RED/GREEN rework evidence listed in evidence log items 6–10; refreshed implementation evidence is ready for gate recording and independent security review before delivery/merge |
 | Delivery | not applicable yet | no product-runtime code in G1 |
 
 ## 4. Risk register
