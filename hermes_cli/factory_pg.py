@@ -2881,8 +2881,14 @@ def _source_delivery_contract_blockers(
             if not (pr.get("url") or pr.get("html_url") or pr.get("number")):
                 blockers.append("pr_missing")
             state = str(pr.get("state") or pr.get("status") or "").strip().lower()
-            merged = _source_delivery_pr_flag(pr.get("merged")) is True or state in {"merged", "closed_merged", "accepted"}
-            if not merged:
+            merged_states = {"merged", "closed_merged", "accepted"}
+            merged_flag = _source_delivery_pr_flag(pr.get("merged")) if "merged" in pr else None
+            if merged_flag is False:
+                if state in merged_states:
+                    blockers.append("pr_contradictory")
+                else:
+                    blockers.append(f"pr_{state or 'unmerged'}")
+            elif not (merged_flag is True or state in merged_states):
                 blockers.append(f"pr_{state or 'unmerged'}")
             clean_flags = [
                 _source_delivery_pr_flag(
