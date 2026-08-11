@@ -320,7 +320,7 @@ async def test_missing_or_invalid_secondary_mode_falls_back_to_gateway_default(
     assert runner._busy_text_mode == "queue"
 
 
-def test_profile_route_and_nonmultiplexed_resolution_preserve_boundaries():
+def test_profile_route_and_nonmultiplexed_resolution_preserve_boundaries(monkeypatch):
     runner = _runner(default_mode="interrupt")
     runner._snapshot_profile_busy_modes(
         "research",
@@ -334,6 +334,13 @@ def test_profile_route_and_nonmultiplexed_resolution_preserve_boundaries():
             chat_id="chat-1",
         )
     ]
+    monkeypatch.setattr(
+        "hermes_cli.profiles.profiles_to_serve",
+        lambda multiplex, profile_allowlist=None: [
+            ("default", object()),
+            ("research", object()),
+        ],
+    )
     source = _event(profile=None).source
 
     assert runner._effective_busy_input_mode(source) == "steer"
