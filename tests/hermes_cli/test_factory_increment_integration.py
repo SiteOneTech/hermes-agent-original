@@ -860,6 +860,110 @@ def test_next_runnable_task_blocks_wrong_head_replacement_pr(fake_sql, tmp_path)
     assert "pr_head_mismatch" in joined
 
 
+def test_next_runnable_task_blocks_string_false_merged_replacement_pr(fake_sql, tmp_path):
+    project, replacement, feature_commit = _make_source_delivery_repo(tmp_path, merged_to_base=True)
+    metadata = _source_delivery_metadata(feature_commit, pr_state="open")
+    metadata["source_delivery"]["pr"]["merged"] = "false"
+    replacement["metadata"] = metadata
+    dep = {
+        "project_id": "demo",
+        "task_id": "task-old",
+        "status": "superseded",
+        "metadata": {"replacement_task_id": "task-replacement"},
+    }
+    candidate = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "task-downstream",
+        "status": "todo",
+        "dependencies": ["task-old"],
+    }
+    fake_sql.rows_results = [[dep, replacement, candidate], [candidate]]
+    fake_sql.one_results = [project]
+
+    assert factory_pg._next_runnable_task("demo") is None
+    joined = "\n".join(fake_sql.statements)
+    assert "pr_open" in joined
+
+
+def test_next_runnable_task_blocks_replacement_pr_without_head_commit(fake_sql, tmp_path):
+    project, replacement, feature_commit = _make_source_delivery_repo(tmp_path, merged_to_base=True)
+    metadata = _source_delivery_metadata(feature_commit)
+    metadata["source_delivery"]["pr"].pop("head_commit")
+    replacement["metadata"] = metadata
+    dep = {
+        "project_id": "demo",
+        "task_id": "task-old",
+        "status": "superseded",
+        "metadata": {"replacement_task_id": "task-replacement"},
+    }
+    candidate = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "task-downstream",
+        "status": "todo",
+        "dependencies": ["task-old"],
+    }
+    fake_sql.rows_results = [[dep, replacement, candidate], [candidate]]
+    fake_sql.one_results = [project]
+
+    assert factory_pg._next_runnable_task("demo") is None
+    joined = "\n".join(fake_sql.statements)
+    assert "pr_head_missing" in joined
+
+
+def test_next_runnable_task_blocks_replacement_pr_without_base_branch(fake_sql, tmp_path):
+    project, replacement, feature_commit = _make_source_delivery_repo(tmp_path, merged_to_base=True)
+    metadata = _source_delivery_metadata(feature_commit)
+    metadata["source_delivery"]["pr"].pop("base_branch")
+    replacement["metadata"] = metadata
+    dep = {
+        "project_id": "demo",
+        "task_id": "task-old",
+        "status": "superseded",
+        "metadata": {"replacement_task_id": "task-replacement"},
+    }
+    candidate = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "task-downstream",
+        "status": "todo",
+        "dependencies": ["task-old"],
+    }
+    fake_sql.rows_results = [[dep, replacement, candidate], [candidate]]
+    fake_sql.one_results = [project]
+
+    assert factory_pg._next_runnable_task("demo") is None
+    joined = "\n".join(fake_sql.statements)
+    assert "pr_base_missing" in joined
+
+
+def test_next_runnable_task_blocks_replacement_pr_without_clean_evidence(fake_sql, tmp_path):
+    project, replacement, feature_commit = _make_source_delivery_repo(tmp_path, merged_to_base=True)
+    metadata = _source_delivery_metadata(feature_commit)
+    metadata["source_delivery"]["pr"].pop("mergeable_state")
+    replacement["metadata"] = metadata
+    dep = {
+        "project_id": "demo",
+        "task_id": "task-old",
+        "status": "superseded",
+        "metadata": {"replacement_task_id": "task-replacement"},
+    }
+    candidate = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "task-downstream",
+        "status": "todo",
+        "dependencies": ["task-old"],
+    }
+    fake_sql.rows_results = [[dep, replacement, candidate], [candidate]]
+    fake_sql.one_results = [project]
+
+    assert factory_pg._next_runnable_task("demo") is None
+    joined = "\n".join(fake_sql.statements)
+    assert "pr_clean_missing" in joined
+
+
 def test_next_runnable_task_blocks_missing_replacement_pr(fake_sql, tmp_path):
     project, replacement, feature_commit = _make_source_delivery_repo(tmp_path, merged_to_base=True)
     metadata = _source_delivery_metadata(feature_commit)

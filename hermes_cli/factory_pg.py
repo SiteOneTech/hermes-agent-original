@@ -2802,6 +2802,26 @@ def _source_delivery_status_accepted(value: Any) -> bool:
     return False
 
 
+def _source_delivery_pr_flag(value: Any, *, accepted_extra: set[str] | None = None, rejected_extra: set[str] | None = None) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        if value == 1:
+            return True
+        if value == 0:
+            return False
+        return None
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if not normalized:
+            return None
+        if normalized in _SOURCE_DELIVERY_REJECTED_VALUES or normalized in (rejected_extra or set()):
+            return False
+        if normalized in _SOURCE_DELIVERY_ACCEPTED_VALUES or normalized in (accepted_extra or set()):
+            return True
+    return None
+
+
 def _source_delivery_outcome_accepted(container: dict[str, Any], keys: tuple[str, ...]) -> bool:
     outcomes = [
         _source_delivery_status_accepted(container.get(key))
@@ -2861,17 +2881,31 @@ def _source_delivery_contract_blockers(
             if not (pr.get("url") or pr.get("html_url") or pr.get("number")):
                 blockers.append("pr_missing")
             state = str(pr.get("state") or pr.get("status") or "").strip().lower()
-            merged = bool(pr.get("merged")) or state in {"merged", "closed_merged", "accepted"}
+            merged = _source_delivery_pr_flag(pr.get("merged")) is True or state in {"merged", "closed_merged", "accepted"}
             if not merged:
                 blockers.append(f"pr_{state or 'unmerged'}")
-            mergeable_state = str(pr.get("mergeable_state") or pr.get("clean") or pr.get("merge_status") or "").strip().lower()
-            if mergeable_state in {"dirty", "blocked", "conflicting", "conflicts", "unknown"} or pr.get("clean") is False or pr.get("mergeable") is False:
+            clean_flags = [
+                _source_delivery_pr_flag(
+                    pr[key],
+                    accepted_extra={"clean", "mergeable"},
+                    rejected_extra={"conflicting", "conflicts", "unknown"},
+                )
+                for key in ("mergeable_state", "clean", "merge_status", "mergeable")
+                if key in pr
+            ]
+            if any(flag is False for flag in clean_flags):
                 blockers.append("pr_dirty")
+            elif not any(flag is True for flag in clean_flags):
+                blockers.append("pr_clean_missing")
             pr_head = _commit_value(pr, "head_commit", "head_sha", "head_ref_oid", "commit_sha")
-            if pr_head and branch_commit and pr_head != branch_commit:
+            if not pr_head:
+                blockers.append("pr_head_missing")
+            elif branch_commit and pr_head != branch_commit:
                 blockers.append("pr_head_mismatch")
             pr_base = str(pr.get("base_branch") or pr.get("base_ref") or pr.get("base") or "").strip()
-            if pr_base and pr_base != base_branch:
+            if not pr_base:
+                blockers.append("pr_base_missing")
+            elif pr_base != base_branch:
                 blockers.append("pr_base_mismatch")
     return blockers
 
