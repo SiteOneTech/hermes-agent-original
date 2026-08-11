@@ -441,6 +441,30 @@ _BASE_ALIAS_OR_PSEUDO_REFS = (
     "refs/remotes/origin/HEAD",
 )
 
+_UNSAFE_BASE_BRANCHES = (
+    "",
+    "--upload-pack=touch /tmp/factory-pwned",
+    "HEAD",
+    "FETCH_HEAD",
+    "ORIG_HEAD",
+    "MERGE_HEAD",
+    "origin/HEAD",
+    "refs/remotes/origin/HEAD",
+    "main..evil",
+    "bad branch",
+)
+
+
+def _project_with_base_branch(project: dict, base_branch: str) -> dict:
+    project = dict(project)
+    metadata = dict(project.get("metadata") or {})
+    strategy = dict(metadata.get("repo_strategy") or {})
+    project["base_branch"] = base_branch
+    strategy["base_branch"] = base_branch
+    metadata["repo_strategy"] = strategy
+    project["metadata"] = metadata
+    return project
+
 
 def test_next_runnable_task_blocks_cancelled_dependency_without_replacement(fake_sql):
     dep = {"project_id": "demo", "task_id": "task-old", "status": "cancelled", "metadata": {}}
@@ -1089,6 +1113,47 @@ def test_dependency_increment_blockers_rejects_option_like_branch_before_fetch(f
     assert not any("--upload-pack" in " ".join(args) for args in calls)
 
 
+@pytest.mark.parametrize("base_branch", _UNSAFE_BASE_BRANCHES)
+def test_dependency_increment_blockers_rejects_unsafe_base_branch_before_fetch(fake_sql, monkeypatch, tmp_path, base_branch):
+    repo = tmp_path / "repo"
+    worktree = tmp_path / "worktree"
+    repo.mkdir()
+    worktree.mkdir()
+    task = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "task-replacement",
+        "status": "done",
+        "branch": "factory/demo/task-replacement",
+        "worktree_path": str(worktree),
+        "metadata": _source_delivery_metadata("abc123"),
+    }
+    project = _project_with_base_branch(
+        {
+            "project_id": "demo",
+            "repo_path": str(repo),
+            "metadata": {"repo_strategy": {"primary_repo_path": str(repo), "base_branch": "main"}},
+        },
+        base_branch,
+    )
+    calls: list[list[str]] = []
+
+    def record_git(_repo_path, args, *, timeout=120):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(factory_pg, "_run_git", record_git)
+
+    assert factory_pg._dependency_increment_blockers(task, project) == ["unverified_base_branch_metadata"]
+    assert calls == []
+
+
+def test_dependency_increment_blockers_accepts_main_base_branch(fake_sql, tmp_path):
+    project, replacement, _feature_commit = _make_source_delivery_repo(tmp_path, merged_to_base=True)
+
+    assert factory_pg._dependency_increment_blockers(replacement, project) == []
+
+
 @pytest.mark.parametrize("branch", _BASE_ALIAS_OR_PSEUDO_REFS)
 def test_dependency_increment_blockers_rejects_base_alias_and_pseudoref_before_fetch(fake_sql, monkeypatch, tmp_path, branch):
     repo = tmp_path / "repo"
@@ -1140,6 +1205,64 @@ def test_increment_integration_required_rejects_base_alias_and_pseudoref(branch)
     }
 
     assert factory_pg._increment_integration_required(task, project, "done") is False
+
+
+@pytest.mark.parametrize("base_branch", _UNSAFE_BASE_BRANCHES)
+def test_increment_integration_required_rejects_unsafe_base_branch(base_branch):
+    task = {
+        "project_id": "demo",
+        "task_id": "task-1",
+        "status": "review_ready",
+        "branch": "factory/demo/task-1",
+        "worktree_path": "/tmp/factory-worktree",
+        "metadata": {},
+    }
+    project = _project_with_base_branch(
+        {
+            "project_id": "demo",
+            "repo_path": "/tmp/factory-repo",
+            "metadata": {"repo_strategy": {"primary_repo_path": "/tmp/factory-repo", "base_branch": "main"}},
+        },
+        base_branch,
+    )
+
+    assert factory_pg._increment_integration_required(task, project, "done") is False
+
+
+@pytest.mark.parametrize("base_branch", _UNSAFE_BASE_BRANCHES)
+def test_integrate_increment_to_base_rejects_unsafe_base_branch_before_git(fake_sql, monkeypatch, tmp_path, base_branch):
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    task = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "task-1",
+        "status": "review_ready",
+        "branch": "factory/demo/task-1",
+        "worktree_path": str(worktree),
+        "metadata": {},
+    }
+    project = _project_with_base_branch(
+        {
+            "project_id": "demo",
+            "repo_path": str(tmp_path / "repo"),
+            "metadata": {"repo_strategy": {"primary_repo_path": str(tmp_path / "repo"), "base_branch": "main"}},
+        },
+        base_branch,
+    )
+    fake_sql.one_results = [task]
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    calls: list[list[str]] = []
+
+    def record_git(_repo_path, args, *, timeout=120):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(factory_pg, "_run_git", record_git)
+
+    with pytest.raises(factory_pg.IncrementIntegrationError, match="unverified base branch metadata"):
+        factory_pg._integrate_increment_to_base("task-1", actor="qa", final_status="done")
+    assert calls == []
 
 
 @pytest.mark.parametrize("branch", _BASE_ALIAS_OR_PSEUDO_REFS)

@@ -2144,7 +2144,9 @@ def _increment_integration_required(task: dict[str, Any], project: dict[str, Any
     if not branch or not worktree_path:
         return False
     strategy = factory_contracts.repository_strategy_from_project(project)
-    base_branch = str(strategy.get("base_branch") or project.get("base_branch") or "main").strip() or "main"
+    base_branch, base_branch_blocker = _verified_factory_base_branch(project, strategy)
+    if base_branch_blocker:
+        return False
     return _factory_branch_ref_blocker(branch, base_branch=base_branch) is None
 
 
@@ -2230,7 +2232,9 @@ def _integrate_increment_to_base(task_id: str, *, actor: str = "factory-orchestr
     if not project:
         raise IncrementIntegrationError(f"Factory project not found for task: {task_id}")
     strategy = factory_contracts.repository_strategy_from_project(project)
-    base_branch = str(strategy.get("base_branch") or project.get("base_branch") or "main").strip() or "main"
+    base_branch, base_branch_blocker = _verified_factory_base_branch(project, strategy)
+    if base_branch_blocker:
+        raise IncrementIntegrationError("unverified base branch metadata")
     branch_blocker = _factory_branch_ref_blocker(branch, base_branch=base_branch)
     if branch_blocker:
         raise IncrementIntegrationError("unverified branch metadata")
@@ -2784,12 +2788,12 @@ def _canonical_factory_base_branch(base_branch: str | None) -> str:
     return normalized
 
 
-def _factory_branch_ref_blocker(branch: str, *, base_branch: str | None = None) -> str | None:
-    value = str(branch or "").strip()
+def _factory_ref_syntax_blocker(ref: str) -> bool:
+    value = str(ref or "").strip()
     if not value:
-        return "unverified_branch_metadata"
+        return True
     ref_parts = value.split("/")
-    if (
+    return bool(
         value.startswith("-")
         or value.startswith("/")
         or value.endswith("/")
@@ -2800,7 +2804,52 @@ def _factory_branch_ref_blocker(branch: str, *, base_branch: str | None = None) 
         or "//" in value
         or _UNSAFE_FACTORY_REF_CHARS.search(value)
         or any(part in {"", ".", ".."} or part.startswith(".") for part in ref_parts)
-    ):
+    )
+
+
+def _factory_base_branch_blocker(base_branch: str | None) -> str | None:
+    value = str(base_branch or "").strip()
+    if _factory_ref_syntax_blocker(value):
+        return "unverified_base_branch_metadata"
+    canonical = _canonical_factory_base_branch(value)
+    if _factory_ref_syntax_blocker(canonical):
+        return "unverified_base_branch_metadata"
+    if canonical in _FACTORY_PSEUDO_REFS or canonical.endswith("/HEAD"):
+        return "unverified_base_branch_metadata"
+    return None
+
+
+def _project_base_branch_value(project: dict[str, Any], strategy: dict[str, Any] | None = None) -> Any:
+    metadata = _metadata(project)
+    repo_strategy_value = metadata.get("repo_strategy")
+    repo_strategy = repo_strategy_value if isinstance(repo_strategy_value, dict) else {}
+    candidates: list[Any] = []
+    if isinstance(project, dict) and "base_branch" in project:
+        candidates.append(project.get("base_branch"))
+    if "base_branch" in repo_strategy:
+        candidates.append(repo_strategy.get("base_branch"))
+    if "base_branch" in metadata:
+        candidates.append(metadata.get("base_branch"))
+    for candidate in candidates:
+        if str(candidate or "").strip():
+            return candidate
+    if candidates:
+        return candidates[0]
+    strategy = strategy if isinstance(strategy, dict) else {}
+    return strategy.get("base_branch") or "main"
+
+
+def _verified_factory_base_branch(project: dict[str, Any], strategy: dict[str, Any] | None = None) -> tuple[str, str | None]:
+    value = _project_base_branch_value(project, strategy)
+    blocker = _factory_base_branch_blocker(value)
+    if blocker:
+        return "", blocker
+    return _canonical_factory_base_branch(value), None
+
+
+def _factory_branch_ref_blocker(branch: str, *, base_branch: str | None = None) -> str | None:
+    value = str(branch or "").strip()
+    if _factory_ref_syntax_blocker(value):
         return "unverified_branch_metadata"
     normalized = _normalize_factory_ref_alias(value)
     if normalized in _FACTORY_PSEUDO_REFS or normalized.endswith("/HEAD"):
@@ -2935,7 +2984,7 @@ def _source_delivery_contract_blockers(
             pr_base = str(pr.get("base_branch") or pr.get("base_ref") or pr.get("base") or "").strip()
             if not pr_base:
                 blockers.append("pr_base_missing")
-            elif pr_base != base_branch:
+            elif _factory_base_branch_blocker(pr_base) or _canonical_factory_base_branch(pr_base) != base_branch:
                 blockers.append("pr_base_mismatch")
     return blockers
 
@@ -2947,7 +2996,9 @@ def _dependency_increment_blockers(dep_task: dict[str, Any], project: dict[str, 
     strategy = factory_contracts.repository_strategy_from_project(project)
     branch = str(dep_task.get("branch") or "").strip()
     worktree_raw = str(dep_task.get("worktree_path") or "").strip()
-    base_branch = str(strategy.get("base_branch") or project.get("base_branch") or "main").strip() or "main"
+    base_branch, base_branch_blocker = _verified_factory_base_branch(project, strategy)
+    if base_branch_blocker:
+        return [base_branch_blocker]
     if branch:
         branch_blocker = _factory_branch_ref_blocker(branch, base_branch=base_branch)
         if branch_blocker:
