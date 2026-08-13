@@ -614,8 +614,15 @@ def _route_repairable_alerts(alerts: list[dict[str, Any]], payload: dict[str, An
             human_alerts.append(alert)
             continue
         grouped.setdefault(_supervisor_group_key([alert]), []).append(alert)
-    for group_id, group_alerts in grouped.items():
-        _launch_reasoning_supervisor(group_id, group_alerts, payload, state)
+    # Deterministic repair is owned by the lease-backed orchestrator tick. The
+    # watchdog is observational, but repairable incidents must remain visible:
+    # a wedged/offline tick is itself an operator-visible Factory failure.
+    for group_alerts in grouped.values():
+        for alert in group_alerts:
+            observable = dict(alert)
+            observable["supervisor_action"] = "lease_owner_tick_required"
+            observable["mutating_worker_spawned"] = False
+            human_alerts.append(observable)
     return human_alerts
 
 
@@ -627,9 +634,9 @@ def main() -> None:
     tick_state = _read_json(_home() / "factory" / "watchdog_state.json")
     claimed_null_rounds = int(tick_state.get("claimed_null_rounds") or 0)
     db = factory_backend.get_backend()
-    payload = db.status()
-    classified = factory_pg.classify_factory_blockers(payload)
-    factory_pg.record_factory_blocker_actions(classified, payload=payload)
+    # The watchdog is observational: only the global lease-owning orchestrator
+    # tick may write Factory state or launch workers. This prevents a second
+    # reasoning supervisor from racing claims/holds/successor activation.
     payload = db.status()
     alerts = factory_pg.factory_watchdog_alerts(payload, blocked_minutes=threshold, claimed_null_rounds=claimed_null_rounds)
     progress_state_path = _progress_state_path()

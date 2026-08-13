@@ -37,13 +37,14 @@ def main() -> None:
         db = factory_backend.get_backend()
         payload = db.status()
         classified = factory_pg.classify_factory_blockers(payload)
-        action_result = factory_pg.record_factory_blocker_actions(classified, payload=payload)
-        # Refresh after actions/questions so alert logic sees any question rows just created.
-        payload_after = db.status()
-        alerts = factory_pg.factory_watchdog_alerts(payload_after)
+        # The lease-owning orchestrator tick is the sole writer.  This cron
+        # remains a deterministic observer so it cannot create questions or
+        # repair state concurrently with a claim/successor transition.
+        action_result = {"mode": "observational", "questions_created": 0}
+        alerts = factory_pg.factory_watchdog_alerts(payload)
         report = {
             "job": "factory_blocker_detector",
-            "db_backend": payload_after.get("db_backend"),
+            "db_backend": payload.get("db_backend"),
             "timestamp": _now(),
             "summary": {
                 "classified": len(classified),

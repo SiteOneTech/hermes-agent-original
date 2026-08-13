@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Document status | validated:true (implementation-planner, 2026-08-10); reviewed:true (solution-architect, 2026-08-10, planning gate 690) |
+| Document status | baseline reviewed:true (solution-architect, 2026-08-10, planning gate 690); FRE-025 amendment validated:true (implementation owner, 2026-08-12), reviewed:pending |
 
 ## 1. Escalation allowlist (only genuine Jean conditions)
 
@@ -36,6 +36,14 @@ failures, resolved-gate mentions, missing-doc/artifact reconciliation findings
   without runnable work, delivery_hold/blocked without runnable work.
 - No `required_docs_waived` / `notion_waived` / equivalent suppressors without Jean's
   explicit authorization for that exact project.
+- Manual pause: explicit nonblank human/operator actor, reason, and origin are required;
+  reserved Factory system actors fail closed and cannot create user-decision authority.
+- Technical/dependency hold: stays supervisable, clears manual-pause markers, and must
+  never transition `manual_attention` to a weaker state.
+- Source delivery: positive terminal source-bearing increments remain blocked from
+  completed reconciliation, delivery readiness, and queued-successor auto-resume until
+  verified in the declared origin base. Only an explicit Jean-authorized waiver for
+  the task may bypass this gate.
 
 ## 3. Runtime/DB security requirements (downstream increments)
 
@@ -60,6 +68,7 @@ failures, resolved-gate mentions, missing-doc/artifact reconciliation findings
 | FRE-014 | Reopen preflight cannot be bypassed; lineage metadata immutable-by-convention; approval path for cancelled/superseded. security-reviewer + solution-architect. |
 | FRE-015 | Independent security review of the whole increment set with real evidence. |
 | FRE-017 | Cron resume order + evidence; no credential changes; no prod deploy. devops-release. |
+| FRE-025 | Manual authority/provenance fail closed; technical hold preserves supervision and `manual_attention`; source integration or explicit Jean waiver required. Independent security/quality review REQUIRED. |
 
 ## 5. Delivery boundary
 
@@ -67,3 +76,8 @@ failures, resolved-gate mentions, missing-doc/artifact reconciliation findings
   production change. Sandbox (`kidu.app` / `/srv/factory/projects/<project>`) applies
   only if a future scope adds a dashboard/UI surface, and production stays HOLD until
   Jean's explicit decision.
+
+FRE-025 does not authorize live data migration, PR operations, deployment, or external
+service use. Legacy system-attributed user pauses must be reviewed individually and
+migrated only through the canonical technical-hold command described in
+`RETROSPECTIVE_FRE_025.md`.

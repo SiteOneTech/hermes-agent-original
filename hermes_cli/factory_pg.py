@@ -229,6 +229,19 @@ RECONCILIATION_TASK_SPECS: dict[str, dict[str, Any]] = {
             "Project is not marked completed from prose alone.",
         ],
     },
+    "source_increment_not_integrated": {
+        "title": "R6 — Reconciliation: integrate terminal source increment into origin base",
+        "phase": "delivery",
+        "owner": "devops-release",
+        "reviewer": "quality-reviewer",
+        "engine": "zeus",
+        "priority": 65,
+        "acceptance": [
+            "Every positive terminal source-bearing increment is verified as contained in origin/<base_branch>.",
+            "Integration evidence names the immutable branch commit and resulting origin base commit.",
+            "A bypass is accepted only when Jean explicitly authorized the exact task waiver with a reason.",
+        ],
+    },
 }
 TERMINAL_TASK_STATUSES = factory_contracts.TERMINAL_TASK_STATUSES
 POSITIVE_TERMINAL_TASK_STATUSES = {
@@ -257,6 +270,29 @@ MANUAL_TAKEOVER_DEFAULT_TTL_MINUTES = 180
 MANUAL_TAKEOVER_MAX_TTL_MINUTES = 24 * 60
 BLOCKED_ALERT_DEFAULT_MINUTES = 60
 CLAIMED_NULL_ALERT_ROUNDS = 3
+RESERVED_FACTORY_SYSTEM_ACTORS = {
+    *(agent_id.lower() for agent_id, *_rest in FACTORY_AGENTS),
+    "zeus",
+    "factory-supervisor",
+    "factory-force-tick",
+    "factory-cron",
+    "factory-watchdog",
+    "factory-reviewer-dispatch",
+    "factory-status-sync",
+    "factory-blocker-detector",
+}
+
+
+def _is_reserved_factory_system_actor(actor: str) -> bool:
+    """Reject Factory profiles and the whole internal ``factory-*`` namespace.
+
+    Manual pause is an operator decision. A fixed denylist alone is unsafe because
+    schedulers gain new names over time, so every Factory-prefixed identity and
+    every registered Factory agent profile is internal by definition.
+    """
+
+    normalized = slugify(str(actor or ""))
+    return normalized.startswith("factory-") or normalized in RESERVED_FACTORY_SYSTEM_ACTORS
 _BLOCKER_TECHNICAL_KEYWORDS = (
     "error", "exception", "traceback", "crash", "timeout", "fail", "failed", "failing", "import error",
     "syntax error", "typeerror", "attributeerror", "test failed", "pytest", "bug", "regression", "rework",
@@ -411,10 +447,415 @@ def ensure_runtime_schema() -> None:
     global _SCHEMA_READY
     if _SCHEMA_READY:
         return
-    ddl = Path(__file__).resolve().parents[1] / "db" / "modules" / "factory" / "000003_orchestration_runtime.sql"
+    ddl_root = Path(__file__).resolve().parents[1] / "db" / "modules" / "factory"
+    # This legacy guard only repairs the pre-existing orchestration runtime
+    # schema. New schema changes are versioned migrations and must be applied
+    # by scripts/agent_core_db.py before their corresponding runtime deploy.
+    ddl = ddl_root / "000003_orchestration_runtime.sql"
     if ddl.exists():
         sql.psql(ddl.read_text(encoding="utf-8"), user=_admin_user())
     _SCHEMA_READY = True
+
+
+GLOBAL_CONTROL_PLANE_LEASE_KEY = "factory-control-plane"
+GLOBAL_CONTROL_PLANE_LEASE_TTL_SECONDS = 120
+_SUCCESSION_PENDING_STATUSES = {"declared", "eligible", "dispatching"}
+
+
+def acquire_global_control_plane_lease(
+    holder: str,
+    *,
+    ttl_seconds: int = GLOBAL_CONTROL_PLANE_LEASE_TTL_SECONDS,
+) -> dict[str, Any]:
+    """Atomically acquire the one lease allowed to mutate Factory progression.
+
+    The control plane has several scheduled observers, but only the orchestrator
+    tick may reconcile, change succession state, claim, or spawn work.  A single
+    row with an expiry makes that rule process-safe without relying on host-local
+    PID files, and an expired tick cannot strand the Factory forever.
+    """
+
+    ensure_runtime_schema()
+    holder_value = str(holder or "").strip()
+    if not holder_value:
+        raise ValueError("global control-plane lease holder is required")
+    ttl = max(15, min(int(ttl_seconds or GLOBAL_CONTROL_PLANE_LEASE_TTL_SECONDS), 900))
+    row = sql.statement_one(
+        f"""
+        INSERT INTO factory.runtime_leases(lease_key, holder, acquired_at, expires_at, metadata)
+        VALUES (
+          {_q(GLOBAL_CONTROL_PLANE_LEASE_KEY)}, {_q(holder_value)}, now(),
+          now() + make_interval(secs => {ttl}),
+          {_j({'kind': 'global_factory_control_plane', 'holder': holder_value, 'ttl_seconds': ttl})}
+        )
+        ON CONFLICT (lease_key) DO UPDATE
+        SET holder=EXCLUDED.holder,
+            acquired_at=now(),
+            expires_at=EXCLUDED.expires_at,
+            metadata=EXCLUDED.metadata
+        WHERE factory.runtime_leases.expires_at <= now()
+        RETURNING lease_key, holder, acquired_at, expires_at, metadata;
+        """,
+        user=_user(),
+    )
+    lease = _normalize(row) if row else None
+    return {
+        "acquired": bool(lease),
+        "lease_key": GLOBAL_CONTROL_PLANE_LEASE_KEY,
+        "holder": holder_value if lease else None,
+        "lease": lease,
+    }
+
+
+def release_global_control_plane_lease(holder: str) -> None:
+    """Release only the caller's own global lease; never delete another tick."""
+
+    holder_value = str(holder or "").strip()
+    if not holder_value:
+        return
+    sql.psql(
+        f"DELETE FROM factory.runtime_leases WHERE lease_key={_q(GLOBAL_CONTROL_PLANE_LEASE_KEY)} AND holder={_q(holder_value)};",
+        user=_user(),
+    )
+
+
+def _explicit_jean_successor_authorization(authorization: Any) -> bool:
+    """Validate the small, auditable authority schema for automatic succession."""
+
+    if not isinstance(authorization, dict):
+        return False
+    authorizer = str(authorization.get("authorized_by") or "").strip().lower()
+    reason = str(authorization.get("reason") or "").strip()
+    return (
+        authorizer in {"jean", "jean garcía", "jean garcia"}
+        and bool(reason)
+        and authorization.get("allow_auto_resume") is True
+    )
+
+
+def declare_project_succession(
+    predecessor_project_id: str,
+    successor_project_id: str,
+    *,
+    authorization: dict[str, Any],
+    declared_by: str,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Persist an explicit Jean-authorized predecessor → successor contract."""
+
+    ensure_runtime_schema()
+    predecessor = str(predecessor_project_id or "").strip()
+    successor = str(successor_project_id or "").strip()
+    actor = str(declared_by or "").strip()
+    if not predecessor or not successor or predecessor == successor:
+        raise ValueError("distinct predecessor_project_id and successor_project_id are required")
+    if not _explicit_jean_successor_authorization(authorization):
+        raise ValueError("successor activation requires explicit Jean authorization, reason, and allow_auto_resume=true")
+    if str(actor).lower() not in {"jean", "jean garcía", "jean garcia"}:
+        raise ValueError("only Jean may declare an automatic project succession")
+    if not _project(predecessor) or not _project(successor):
+        raise ValueError("predecessor and successor Factory projects must exist")
+    row = sql.statement_one(
+        f"""
+        INSERT INTO factory.project_successions(
+          predecessor_project_id, successor_project_id, status, authorization_metadata,
+          declared_by, metadata, last_blockers
+        )
+        VALUES (
+          {_q(predecessor)}, {_q(successor)}, 'declared', {_j(authorization)},
+          {_q(actor)}, {_j(metadata or {})}, '[]'::jsonb
+        )
+        ON CONFLICT (successor_project_id) DO UPDATE
+        SET predecessor_project_id=EXCLUDED.predecessor_project_id,
+            status=CASE WHEN factory.project_successions.status='activated' THEN 'activated' ELSE 'declared' END,
+            authorization_metadata=EXCLUDED.authorization_metadata,
+            declared_by=EXCLUDED.declared_by,
+            declared_at=now(),
+            metadata=factory.project_successions.metadata || EXCLUDED.metadata,
+            last_blockers='[]'::jsonb,
+            last_evaluated_at=now()
+        RETURNING *;
+        """,
+        user=_user(),
+    )
+    result = _normalize(row) if row else {}
+    sql.psql(
+        f"""
+        INSERT INTO factory.events(project_id, actor, event_type, message, metadata)
+        VALUES ({_q(successor)}, {_q(actor)}, 'project_succession_declared',
+                {_q(f'Explicit successor relationship declared from {predecessor} to {successor}')},
+                {_j({'predecessor_project_id': predecessor, 'authorization': authorization})});
+        """,
+        user=_user(),
+    )
+    return result
+
+
+def _successor_activation_blockers(
+    succession: dict[str, Any],
+    predecessor: dict[str, Any],
+    successor: dict[str, Any],
+    *,
+    predecessor_tasks: list[dict[str, Any]],
+    successor_tasks: list[dict[str, Any]],
+    pending_human_questions: list[dict[str, Any]],
+    active_autonomous_project_ids: list[str],
+) -> list[str]:
+    """Return deterministic reasons an authorized successor is not eligible."""
+
+    blockers: list[str] = []
+    authorization = succession.get("authorization_metadata")
+    if not _explicit_jean_successor_authorization(authorization):
+        blockers.append("succession_missing_explicit_jean_authorization")
+    if str(predecessor.get("status") or "").lower() not in {"completed", "accepted"}:
+        blockers.append("predecessor_not_completed")
+    elif _source_increment_integration_blockers(predecessor, predecessor_tasks):
+        blockers.append("predecessor_source_delivery_unverified")
+
+    successor_metadata = _metadata(successor)
+    successor_status = str(successor.get("status") or "").lower()
+    if successor_status == MANUAL_ATTENTION_STATUS or successor_metadata.get("manual_attention_required"):
+        blockers.append("successor_manual_attention_required")
+    if successor_metadata.get("technical_hold"):
+        blockers.append("successor_technical_hold_unresolved")
+    if successor_metadata.get("manual_pause"):
+        pause_at = _parse_datetime(successor_metadata.get("manual_pause_recorded_at"))
+        declared_at = _parse_datetime(succession.get("declared_at"))
+        # A succession declaration may deliberately supersede a *prior* pause,
+        # but it can never overrule a later explicit human decision. Missing
+        # timestamps fail closed because chronology is then not auditable.
+        if pause_at is None or declared_at is None or pause_at >= declared_at:
+            blockers.append("successor_manual_pause_after_succession_declaration")
+        elif not _explicit_jean_successor_authorization(authorization):
+            blockers.append("successor_manual_pause_requires_explicit_successor_authorization")
+    if pending_human_questions:
+        blockers.append("successor_pending_human_question")
+    for active_project_id in sorted({str(item) for item in active_autonomous_project_ids if str(item)}):
+        if active_project_id not in {str(predecessor.get("project_id") or ""), str(successor.get("project_id") or "")}:
+            blockers.append(f"single_active_slot_occupied:{active_project_id}")
+    if not any(str(task.get("status") or "") in {"todo", "ready", "rework", "review_ready"} for task in successor_tasks):
+        blockers.append("successor_has_no_runnable_or_reviewable_work")
+    return blockers
+
+
+def evaluate_project_successions() -> list[dict[str, Any]]:
+    """Re-evaluate declared successions without activating or claiming work."""
+
+    ensure_runtime_schema()
+    relations = _normalize_rows(sql.rows(
+        "SELECT * FROM factory.project_successions WHERE status IN ('declared','eligible') ORDER BY declared_at, succession_id",
+        user=_user(),
+    ))
+    results: list[dict[str, Any]] = []
+    for relation in relations:
+        predecessor_id = str(relation.get("predecessor_project_id") or "")
+        successor_id = str(relation.get("successor_project_id") or "")
+        predecessor = _project(predecessor_id)
+        successor = _project(successor_id)
+        if not predecessor or not successor:
+            blockers = ["predecessor_or_successor_missing"]
+        else:
+            questions = _normalize_rows(sql.rows(
+                f"SELECT question_id FROM factory.human_questions WHERE project_id={_q(successor_id)} AND status IN ('pending','open')",
+                user=_user(),
+            ))
+            active_rows = _normalize_rows(sql.rows(
+                "SELECT project_id FROM factory.projects WHERE autonomous_enabled IS TRUE AND status IN ('active','planned','intake','blocked')",
+                user=_user(),
+            ))
+            blockers = _successor_activation_blockers(
+                relation,
+                predecessor,
+                successor,
+                predecessor_tasks=_tasks(predecessor_id),
+                successor_tasks=_tasks(successor_id),
+                pending_human_questions=questions,
+                active_autonomous_project_ids=[str(row.get("project_id") or "") for row in active_rows],
+            )
+        next_status = "eligible" if not blockers else "declared"
+        sql.psql(
+            f"""
+            UPDATE factory.project_successions
+            SET status={_q(next_status)},
+                eligible_at=CASE WHEN {bool(not blockers)} THEN COALESCE(eligible_at, now()) ELSE NULL END,
+                last_evaluated_at=now(),
+                last_blockers={_j(blockers)}
+            WHERE succession_id={int(relation['succession_id'])};
+            """,
+            user=_user(),
+        )
+        results.append({
+            "succession_id": relation.get("succession_id"),
+            "predecessor_project_id": predecessor_id,
+            "successor_project_id": successor_id,
+            "status": next_status,
+            "blockers": blockers,
+        })
+    return results
+
+
+def prepare_successor_dispatch(succession_id: int) -> dict[str, Any]:
+    """Move one eligible successor into dispatching without declaring activation."""
+
+    ensure_runtime_schema()
+    relation = sql.one(
+        f"SELECT * FROM factory.project_successions WHERE succession_id={int(succession_id)} AND status='eligible'",
+        user=_user(),
+    )
+    if not relation:
+        return {"prepared": False, "reason": "succession_not_eligible"}
+    succession = _normalize(relation)
+    successor_id = str(succession["successor_project_id"])
+    predecessor_id = str(succession["predecessor_project_id"])
+    predecessor = _project(predecessor_id)
+    successor = _project(successor_id)
+    if not predecessor or not successor:
+        return {"prepared": False, "reason": "predecessor_or_successor_missing"}
+    questions = _normalize_rows(sql.rows(
+        f"SELECT question_id FROM factory.human_questions WHERE project_id={_q(successor_id)} AND status IN ('pending','open')",
+        user=_user(),
+    ))
+    active_rows = _normalize_rows(sql.rows(
+        "SELECT project_id FROM factory.projects WHERE autonomous_enabled IS TRUE AND status IN ('active','planned','intake','blocked')",
+        user=_user(),
+    ))
+    blockers = _successor_activation_blockers(
+        succession,
+        predecessor,
+        successor,
+        predecessor_tasks=_tasks(predecessor_id),
+        successor_tasks=_tasks(successor_id),
+        pending_human_questions=questions,
+        active_autonomous_project_ids=[str(row.get("project_id") or "") for row in active_rows],
+    )
+    if blockers:
+        sql.psql(
+            f"UPDATE factory.project_successions SET status='declared', last_blockers={_j(blockers)}, last_evaluated_at=now() WHERE succession_id={int(succession_id)};",
+            user=_user(),
+        )
+        return {"prepared": False, "reason": "successor_activation_blocked", "blockers": blockers}
+    dispatch_metadata = {
+        "successor_activation_dispatching": True,
+        "successor_activation_succession_id": int(succession_id),
+        "successor_activation_predecessor": predecessor_id,
+    }
+    sql.psql(
+        f"""
+        UPDATE factory.project_successions
+        SET status='dispatching', dispatch_started_at=now(), last_evaluated_at=now(), last_blockers='[]'::jsonb
+        WHERE succession_id={int(succession_id)} AND status='eligible';
+        UPDATE factory.projects
+        SET status='active', autonomous_enabled=true, paused_at=NULL,
+            metadata=metadata || {_j(dispatch_metadata)}, updated_at=now()
+        WHERE project_id={_q(successor_id)};
+        UPDATE factory.lanes SET status='active', updated_at=now()
+        WHERE project_id={_q(successor_id)} AND status IN ('paused','planned','intake');
+        INSERT INTO factory.events(project_id, actor, event_type, message, metadata)
+        VALUES ({_q(successor_id)}, 'factory-orchestrator-tick', 'project_successor_dispatching',
+                {_q(f'Authorized successor dispatching after predecessor {predecessor_id}')},
+                {_j({'succession_id': int(succession_id), 'predecessor_project_id': predecessor_id})});
+        """,
+        user=_user(),
+    )
+    return {"prepared": True, "succession_id": int(succession_id), "successor_project_id": successor_id}
+
+
+def mark_successor_activated(succession_id: int, run_id: str) -> None:
+    """Atomically activate only when no later human pause supersedes the handoff."""
+
+    activation = {
+        "succession_id": int(succession_id),
+        "run_id": str(run_id),
+        "activated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
+    row = sql.statement_one(
+        f"""
+        WITH activated AS (
+          UPDATE factory.project_successions s
+          SET status='activated', activated_at=now(), activated_run_id={_q(run_id)},
+              last_evaluated_at=now(), last_blockers='[]'::jsonb
+          FROM factory.projects p
+          WHERE s.succession_id={int(succession_id)}
+            AND s.status='dispatching'
+            AND p.project_id=s.successor_project_id
+            -- A later (or unverifiable) human pause wins over the declaration.
+            AND NOT (
+              p.metadata ? 'manual_pause'
+              AND (
+                NULLIF(p.metadata->>'manual_pause_recorded_at', '') IS NULL
+                OR (NULLIF(p.metadata->>'manual_pause_recorded_at', ''))::timestamptz >= s.declared_at
+              )
+            )
+          RETURNING s.successor_project_id
+        ), updated_project AS (
+          UPDATE factory.projects p
+          SET metadata=(p.metadata || {_j({'last_successor_activation': activation})})
+                - 'manual_pause' - 'pause_kind' - 'pause_reason' - 'paused_by'
+                - 'pause_origin' - 'pause_authority' - 'manual_pause_recorded_at'
+                - 'successor_activation_dispatching' - 'successor_activation_succession_id'
+                - 'successor_activation_predecessor',
+              updated_at=now()
+          FROM activated a
+          WHERE p.project_id=a.successor_project_id
+          RETURNING p.project_id
+        ), recorded AS (
+          INSERT INTO factory.events(project_id, actor, event_type, message, metadata)
+          SELECT project_id, 'factory-orchestrator-tick', 'project_successor_activated',
+                 'Successor activation completed after task claim and worker spawn', {_j(activation)}
+          FROM updated_project
+          RETURNING project_id
+        )
+        SELECT project_id FROM recorded;
+        """,
+        user=_user(),
+    )
+    if not row:
+        raise ValueError("successor activation rejected: dispatch is stale or a later human pause exists")
+
+
+def rollback_successor_dispatch(succession_id: int, run_id: str, *, error: str) -> None:
+    """Rollback a pre-spawn successor claim; preserve auditable eligibility."""
+
+    message = str(error or "worker_spawn_failed")[:2000]
+    sql.psql(
+        f"""
+        WITH run_row AS (
+          SELECT task_id, project_id FROM factory.task_runs WHERE run_id={_q(run_id)}
+        ), reset_task AS (
+          UPDATE factory.tasks t
+          SET status='todo', claimed_by=NULL, claimed_at=NULL, lease_until=NULL, updated_at=now(),
+              metadata=metadata || {_j({'successor_dispatch_rollback': True, 'rollback_reason': message})}
+          FROM run_row r
+          WHERE t.task_id=r.task_id AND t.status IN ('claimed','review_running')
+        ), cancel_run AS (
+          UPDATE factory.task_runs
+          SET status='cancelled', finished_at=now(), heartbeat_at=now(),
+              output_summary={_q('Successor dispatch rolled back before worker registration: ' + message)}
+          WHERE run_id={_q(run_id)} AND status IN ('queued','running')
+        ), pause_successor AS (
+          UPDATE factory.projects p
+          SET status='paused', autonomous_enabled=false, paused_at=now(),
+              metadata=(p.metadata || {_j({'successor_activation_retry_pending': True, 'successor_activation_last_error': message})})
+                - 'successor_activation_dispatching' - 'successor_activation_succession_id'
+                - 'successor_activation_predecessor',
+              updated_at=now()
+          FROM run_row r
+          WHERE p.project_id=r.project_id
+          RETURNING p.project_id
+        ), reset_succession AS (
+          UPDATE factory.project_successions
+          SET status='eligible', dispatch_started_at=NULL, last_evaluated_at=now(),
+              last_blockers={_j(['worker_spawn_failed'])}
+          WHERE succession_id={int(succession_id)} AND status='dispatching'
+        )
+        INSERT INTO factory.events(project_id, actor, event_type, message, metadata)
+        SELECT project_id, 'factory-orchestrator-tick', 'project_successor_dispatch_rolled_back',
+               {_q('Successor dispatch rolled back before worker registration')},
+               {_j({'succession_id': int(succession_id), 'run_id': run_id, 'error': message})}
+        FROM run_row;
+        """,
+        user=_user(),
+    )
 
 
 def seed_agents() -> None:
@@ -1543,6 +1984,113 @@ def _notion_projection_issue(metadata: dict[str, Any]) -> str | None:
     return None
 
 
+def _canonical_base_branch(project: dict[str, Any]) -> str:
+    strategy = _repository_strategy(project)
+    value = str(strategy.get("base_branch") or project.get("base_branch") or "main").strip() or "main"
+    for prefix in ("refs/remotes/origin/", "refs/heads/", "origin/"):
+        if value.startswith(prefix):
+            return value.removeprefix(prefix)
+    return value
+
+
+def _source_increment_is_contained_in_origin(
+    task: dict[str, Any],
+    project: dict[str, Any],
+    *,
+    branch: str,
+    base_branch: str,
+) -> bool:
+    """Verify the recorded source commit is an ancestor of the current origin base.
+
+    Factory metadata is an audit trail, not authority to claim delivery. The
+    metadata must identify the branch and immutable source/base commits, while
+    Git verifies that exact source SHA against a freshly fetched ``origin`` base.
+    This survives normal branch cleanup after a merge without accepting a stale
+    or forged ``integrated`` field while its source PR remains open.
+    """
+
+    metadata = _metadata(task)
+    recorded_branch = str(metadata.get("increment_branch") or "").strip()
+    recorded_base = _canonical_base_branch({"base_branch": metadata.get("increment_base_branch"), "metadata": {}})
+    source_commit = str(metadata.get("increment_branch_commit") or "").strip()
+    recorded_base_commit = str(metadata.get("increment_base_commit_after") or "").strip()
+    if (
+        metadata.get("increment_integration_status") != "integrated"
+        or recorded_branch != branch
+        or recorded_base != base_branch
+        or not source_commit
+        or not recorded_base_commit
+    ):
+        return False
+    strategy = _repository_strategy(project)
+    repo_raw = str(strategy.get("primary_repo_path") or project.get("repo_path") or "").strip()
+    if not repo_raw:
+        return False
+    repo_path = Path(repo_raw).expanduser()
+    if not repo_path.exists():
+        return False
+    try:
+        fetch_base = _run_git(repo_path, ["fetch", "origin", base_branch], timeout=120)
+        if fetch_base.returncode != 0:
+            return False
+        base_ref = f"origin/{base_branch}"
+        source_result = _run_git(repo_path, ["rev-parse", "--verify", f"{source_commit}^{{commit}}"], timeout=30)
+        base_result = _run_git(repo_path, ["rev-parse", "--verify", f"{base_ref}^{{commit}}"], timeout=30)
+        if source_result.returncode != 0 or base_result.returncode != 0:
+            return False
+        ancestor = _run_git(repo_path, ["merge-base", "--is-ancestor", source_result.stdout.strip(), base_ref], timeout=30)
+        return ancestor.returncode == 0
+    except Exception:
+        return False
+
+
+def _source_increment_integration_blockers(
+    project: dict[str, Any],
+    tasks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return positive terminal source increments lacking verified base integration."""
+
+    base_branch = _canonical_base_branch(project)
+    blockers: list[dict[str, Any]] = []
+    for task in tasks:
+        status_value = str(task.get("status") or "").lower()
+        if status_value not in POSITIVE_TERMINAL_TASK_STATUSES:
+            continue
+        if _is_reconciliation_task(task) or _is_runtime_bootstrap_repair_task(task) or _task_integration_waived(task):
+            continue
+        branch = str(task.get("branch") or "").strip()
+        if not branch or branch in {base_branch, f"origin/{base_branch}", f"refs/heads/{base_branch}", f"refs/remotes/origin/{base_branch}"}:
+            continue
+        if _source_increment_is_contained_in_origin(task, project, branch=branch, base_branch=base_branch):
+            continue
+        blockers.append({
+            "task_id": str(task.get("task_id") or ""),
+            "branch": branch,
+            "base_branch": base_branch,
+            "required_base_ref": f"origin/{base_branch}",
+            "reason": "branch_not_verified_in_origin_base",
+        })
+    return blockers
+
+
+def _source_increment_reconciliation_finding(
+    project: dict[str, Any],
+    tasks: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    blockers = _source_increment_integration_blockers(project, tasks)
+    if not blockers:
+        return None
+    return {
+        "code": "source_increment_not_integrated",
+        "message": "Positive terminal source-bearing increments are not verified in the origin base branch",
+        "metadata": {
+            "task_ids": [item["task_id"] for item in blockers],
+            "base_branch": _canonical_base_branch(project),
+            "blockers": blockers,
+        },
+    }
+
+
 def reconciliation_findings(project: dict[str, Any], tasks: list[dict[str, Any]], pending_gates: list[dict[str, Any]], gates: Optional[list[dict[str, Any]]] = None) -> list[dict[str, Any]]:
     """Return deterministic project-completeness anomalies for Factory reconciliation.
 
@@ -1555,14 +2103,17 @@ def reconciliation_findings(project: dict[str, Any], tasks: list[dict[str, Any]]
     """
 
     metadata = _metadata(project)
+    source_integration_finding = _source_increment_reconciliation_finding(project, tasks)
     if (
         str(project.get("status") or "") in {"completed", "accepted"}
         and not metadata.get("force_reconcile_completed")
         and not _has_unauthorized_completion_waivers(metadata)
     ):
-        return []
+        return [source_integration_finding] if source_integration_finding else []
 
     findings: list[dict[str, Any]] = []
+    if source_integration_finding:
+        findings.append(source_integration_finding)
 
     def add(code: str, message: str, **metadata: Any) -> None:
         if code not in RECONCILIATION_TASK_SPECS:
@@ -1828,6 +2379,11 @@ def critical_readiness_findings(project_id: str, *, gate_evidence: Optional[dict
 
     if gate_evidence is not None:
         findings.extend(_validation_task_readiness_findings(project_id))
+        source_blockers = _source_increment_integration_blockers(project, _tasks(project_id))
+        findings.extend(
+            f"positive terminal source task {item['task_id']} branch {item['branch']} is not verified in {item['required_base_ref']}"
+            for item in source_blockers
+        )
         findings.extend(_delivery_evidence_findings(project, gate_evidence))
     return findings
 
@@ -2582,8 +3138,17 @@ def _project_reconcile_forces_autonomy_off(old_status: str | None, new_status: s
     return _project_status_forces_autonomy_off(old_status) or _project_status_forces_autonomy_off(new_status)
 
 
-def _should_auto_resume_after_reconcile(old_status: str | None, new_status: str | None) -> bool:
-    return str(new_status or "").lower() == "completed" and str(old_status or "").lower() != "completed"
+def _should_auto_resume_after_reconcile(
+    old_status: str | None,
+    new_status: str | None,
+    *,
+    completion_blockers: Optional[list[str]] = None,
+) -> bool:
+    return (
+        not completion_blockers
+        and str(new_status or "").lower() == "completed"
+        and str(old_status or "").lower() != "completed"
+    )
 
 
 def _has_runnable_autonomous_work(tasks: list[dict[str, Any]]) -> bool:
@@ -2653,43 +3218,12 @@ def _dependency_increment_integrated(dep_task: dict[str, Any], project: dict[str
     dep_status = str(dep_task.get("status") or "")
     if not _increment_integration_required(dep_task, project, dep_status):
         return True
-    metadata = _metadata(dep_task)
-    if metadata.get("increment_integration_status") == "integrated":
-        return True
-    strategy = factory_contracts.repository_strategy_from_project(project)
-    repo_raw = str(strategy.get("primary_repo_path") or project.get("repo_path") or "").strip()
-    if not repo_raw:
-        return False
-    repo_path = Path(repo_raw).expanduser()
-    if not repo_path.exists():
-        return False
-    branch = str(dep_task.get("branch") or "").strip()
-    base_branch = str(strategy.get("base_branch") or project.get("base_branch") or "main").strip() or "main"
-    try:
-        _run_git(repo_path, ["fetch", "origin", base_branch], timeout=120)
-        source_ref, branch_commit = _resolve_git_ref(repo_path, branch)
-        base_ref = f"origin/{base_branch}"
-        base_commit = _git_stdout(repo_path, ["rev-parse", "--verify", f"{base_ref}^{{commit}}"], timeout=30)
-        ancestor = _run_git(repo_path, ["merge-base", "--is-ancestor", branch_commit, base_ref], timeout=30)
-    except Exception:
-        return False
-    if ancestor.returncode != 0:
-        return False
-    evidence = _increment_integration_metadata(
-        status="integrated",
-        task=dep_task,
-        project=project,
-        branch=branch,
-        source_ref=source_ref,
-        branch_commit=branch_commit,
-        base_branch=base_branch,
-        base_commit_before=base_commit,
-        base_commit_after=base_commit,
-        method="legacy_ancestor_detected_dispatch_guard",
-        actor="factory-dispatcher",
+    return _source_increment_is_contained_in_origin(
+        dep_task,
+        project,
+        branch=str(dep_task.get("branch") or "").strip(),
+        base_branch=_canonical_base_branch(project),
     )
-    _record_increment_integration_result(dep_task, project, evidence, actor="factory-dispatcher")
-    return True
 
 
 def _candidate_dependencies_integrated(project_id: str, candidate: dict[str, Any], tasks: list[dict[str, Any]], project: dict[str, Any]) -> bool:
@@ -2878,7 +3412,10 @@ def reconcile_project(project_id: str) -> dict[str, Any]:
         """,
         user=_user(),
     )
-    auto_resumed = _auto_resume_next_guard_queued_project(project_id) if _should_auto_resume_after_reconcile(str(project.get("status") or ""), new_status) else None
+    # Completion never resumes an arbitrary queued project. Automatic handoff is
+    # permitted only through a declared project_successions record, evaluated by
+    # the lease-owning global orchestrator tick.
+    auto_resumed = None
     return {
         "project_id": project_id,
         "status": new_status,
@@ -3027,33 +3564,142 @@ def resume_project(project_id: str) -> dict[str, Any]:
     return result
 
 
-def pause_project(project_id: str, *, reason: str = "user_paused") -> dict[str, Any]:
+def pause_project(
+    project_id: str,
+    *,
+    reason: str,
+    actor: str,
+    origin: str,
+) -> dict[str, Any]:
+    pid = str(project_id or "").strip()
+    reason_text = str(reason or "").strip()
+    actor_name = str(actor or "").strip()
+    origin_text = str(origin or "").strip()
+    if not pid:
+        raise ValueError("project_id is required")
+    if not reason_text:
+        raise ValueError("manual pause reason is required")
+    if not actor_name:
+        raise ValueError("manual pause actor is required")
+    if _is_reserved_factory_system_actor(actor_name):
+        raise ValueError(f"manual pause actor must be a human/operator authority, not reserved system actor {actor_name}")
+    if not origin_text:
+        raise ValueError("manual pause origin is required")
     ensure_runtime_schema()
     pause_metadata = {
         "autonomous_enabled": False,
         "manual_pause": True,
         "pause_kind": "user_decision",
-        "pause_reason": reason,
-        "paused_by": "factory-orchestrator",
+        "pause_reason": reason_text,
+        "paused_by": actor_name,
+        "pause_origin": origin_text,
+        "pause_authority": "explicit_human_operator",
+        "manual_pause_recorded_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "reactivation_policy": "resolve_state_preflight_before_dispatch",
     }
     sql.psql(
         f"""
         UPDATE factory.projects
         SET status='paused', autonomous_enabled=false, paused_at=now(),
-            metadata = (metadata || {_j(pause_metadata)})
+            metadata = ((metadata || {_j(pause_metadata)})
                 - 'paused_by_single_active_guard'
                 - 'single_active_guard_queue'
-                - 'single_active_guard_paused_for',
+                - 'single_active_guard_paused_for'
+                - 'technical_hold'
+                - 'technical_hold_kind'
+                - 'technical_hold_reason'
+                - 'technical_hold_by'
+                - 'technical_hold_at'),
             updated_at=now()
-        WHERE project_id={_q(project_id)};
-        UPDATE factory.lanes SET status='paused', updated_at=now() WHERE project_id={_q(project_id)} AND status='active';
+        WHERE project_id={_q(pid)};
+        UPDATE factory.lanes SET status='paused', updated_at=now() WHERE project_id={_q(pid)} AND status='active';
         INSERT INTO factory.events(project_id, actor, event_type, message, metadata)
-        VALUES ({_q(project_id)}, 'factory-orchestrator', 'autonomous_pause', 'Autonomous Factory execution paused by user/operator decision', {_j(pause_metadata)});
+        VALUES ({_q(pid)}, {_q(actor_name)}, 'manual_pause_recorded', 'Autonomous Factory execution paused by explicit human/operator authority', {_j(pause_metadata)});
         """,
         user=_user(),
     )
-    return {"project_id": project_id, "status": "paused", "pause_kind": "user_decision", "pause_reason": reason}
+    return {
+        "project_id": pid,
+        "status": "paused",
+        "pause_kind": "user_decision",
+        "pause_reason": reason_text,
+        "paused_by": actor_name,
+        "pause_origin": origin_text,
+    }
+
+
+def technical_hold_project(
+    project_id: str,
+    *,
+    reason: str,
+    actor: str,
+    hold_kind: str = "technical",
+) -> dict[str, Any]:
+    """Record a supervisable technical/dependency hold without disabling autonomy."""
+
+    pid = str(project_id or "").strip()
+    reason_text = str(reason or "").strip()
+    actor_name = str(actor or "").strip()
+    kind = str(hold_kind or "").strip().lower().replace("-", "_")
+    if not pid:
+        raise ValueError("project_id is required")
+    if not reason_text:
+        raise ValueError("technical hold reason is required")
+    if not actor_name:
+        raise ValueError("technical hold actor is required")
+    if kind not in {"technical", "dependency"}:
+        raise ValueError("technical hold kind must be technical or dependency")
+    ensure_runtime_schema()
+    project = _project(pid)
+    if not project:
+        raise ValueError(f"Factory project not found: {pid}")
+    project_metadata = _metadata(project)
+    if str(project.get("status") or "").lower() == MANUAL_ATTENTION_STATUS or project_metadata.get("manual_attention_required"):
+        raise ValueError("technical hold cannot downgrade manual_attention")
+    hold_metadata = {
+        "autonomous_enabled": True,
+        "technical_hold": True,
+        "technical_hold_kind": kind,
+        "technical_hold_reason": reason_text,
+        "technical_hold_by": actor_name,
+        "technical_hold_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "reactivation_policy": "autonomous_supervisor_repairs_or_requeues",
+    }
+    sql.psql(
+        f"""
+        UPDATE factory.projects
+        SET status='blocked', autonomous_enabled=true, paused_at=NULL,
+            metadata = (metadata
+                - 'manual_pause'
+                - 'pause_kind'
+                - 'pause_reason'
+                - 'paused_by'
+                - 'pause_origin'
+                - 'pause_authority'
+                - 'manual_pause_recorded_at'
+                - 'paused_by_single_active_guard'
+                - 'single_active_guard_queue'
+                - 'single_active_guard_paused_for') || {_j(hold_metadata)},
+            updated_at=now()
+        WHERE project_id={_q(pid)}
+          AND status<>'manual_attention'
+          AND COALESCE((metadata->>'manual_attention_required')::boolean, false) IS NOT TRUE;
+        UPDATE factory.lanes
+        SET status='blocked', updated_at=now()
+        WHERE project_id={_q(pid)} AND status IN ('active','planned','intake','paused','delivery_hold');
+        INSERT INTO factory.events(project_id, actor, event_type, message, metadata)
+        VALUES ({_q(pid)}, {_q(actor_name)}, 'technical_dependency_hold', 'Factory project placed in supervisable technical/dependency hold', {_j(hold_metadata)});
+        """,
+        user=_user(),
+    )
+    return {
+        "project_id": pid,
+        "status": "blocked",
+        "autonomous_enabled": True,
+        "hold_kind": kind,
+        "hold_reason": reason_text,
+        "held_by": actor_name,
+    }
 
 
 def _task_blocker_text(task: dict[str, Any]) -> str:
@@ -4056,17 +4702,21 @@ def _dispatch_docs_first_waived(metadata: dict[str, Any]) -> bool:
 
 
 def _is_runtime_bootstrap_repair_task(task: dict[str, Any]) -> bool:
+    """Accept only an explicit Jean-authorized bootstrap integration waiver."""
+
     metadata = _metadata(task)
-    if metadata.get("control_plane_bootstrap") or metadata.get("runtime_bootstrap_repair"):
-        return True
-    text = "\n".join(str(task.get(key) or "") for key in ("task_id", "title", "description", "phase")).lower()
-    return (
-        "control-plane" in text
-        or "control plane" in text
-        or "docs/notion" in text
-        or "notion control" in text
-        or "link-notion" in text
-    )
+    enabled = metadata.get("control_plane_bootstrap") is True or metadata.get("runtime_bootstrap_repair") is True
+    authorizer = str(
+        metadata.get("runtime_bootstrap_repair_authorized_by")
+        or metadata.get("control_plane_bootstrap_authorized_by")
+        or ""
+    ).strip().lower()
+    reason = str(
+        metadata.get("runtime_bootstrap_repair_authorization_reason")
+        or metadata.get("control_plane_bootstrap_authorization_reason")
+        or ""
+    ).strip()
+    return enabled and authorizer in {"jean", "jean garcía", "jean garcia"} and bool(reason)
 
 
 def _is_implementation_dispatch_task(task: dict[str, Any]) -> bool:
@@ -4756,37 +5406,133 @@ def resolve_project_state(project_id: str) -> dict[str, Any]:
     }
 
 
-def force_tick(project_id: Optional[str] = None) -> dict[str, Any]:
+def force_tick(
+    project_id: Optional[str] = None,
+    *,
+    holder: str = "factory-force-tick",
+    lease_ttl_seconds: int = GLOBAL_CONTROL_PLANE_LEASE_TTL_SECONDS,
+    retain_lease: bool = False,
+) -> dict[str, Any]:
+    """Run the only mutating Factory control-plane pass under one global lease."""
+
     ensure_runtime_schema()
-    monitor = monitor_runs()
-    if project_id:
-        unblock_targets = [project_id]
-    else:
-        unblock_targets = [
-            row["project_id"]
+    lease = acquire_global_control_plane_lease(holder, ttl_seconds=lease_ttl_seconds)
+    if not lease.get("acquired"):
+        return {
+            "skipped": True,
+            "reason": "global_control_plane_lease_held",
+            "lease": lease,
+            "monitor": {},
+            "unblocked": [],
+            "reconciled": [],
+            "successions": [],
+            "prepared_successor": None,
+            "claimed": None,
+        }
+    completed = False
+    try:
+        monitor = monitor_runs()
+        repairs = []
+        repair_targets = [project_id] if project_id else [
+            str(row["project_id"])
             for row in sql.rows(
-                "SELECT project_id FROM factory.projects WHERE status='blocked' OR autonomous_enabled IS TRUE ORDER BY updated_at",
+                "SELECT project_id FROM factory.projects WHERE autonomous_enabled IS TRUE OR status IN ('blocked','delivery_hold') ORDER BY updated_at",
                 user=_user(),
             )
         ]
-    unblocked = []
-    for target in unblock_targets:
-        result = clear_resolved_blockers(target)
-        if result.get("reopened"):
-            unblocked.append({"project_id": target, "reopened": result.get("reopened")})
-    if project_id:
-        reconciled = [reconcile_project(project_id)]
-    else:
-        reconciled = [reconcile_project(row["project_id"]) for row in sql.rows("SELECT project_id FROM factory.projects ORDER BY updated_at", user=_user())]
-    claimed = claim_next_review(project_id, worker="factory-force-tick")
-    if not claimed:
-        # Documentation/reconciliation repair has priority over product rework
-        # when docs-first gates are red. Otherwise a failed QA/rework loop can
-        # keep executing against invalid methodology context.
-        claimed = claim_next_task(project_id, worker="factory-force-tick")
-    if not claimed:
-        claimed = claim_next_rework(project_id, worker="factory-force-tick")
-    return {"monitor": monitor, "unblocked": unblocked, "reconciled": reconciled, "claimed": claimed}
+        for target in repair_targets:
+            repair = supervisor_health_check(target, repair=True)
+            if repair.get("violations") or repair.get("repairs"):
+                repairs.append(repair)
+        if project_id:
+            unblock_targets = [project_id]
+        else:
+            unblock_targets = [
+                row["project_id"]
+                for row in sql.rows(
+                    "SELECT project_id FROM factory.projects WHERE status='blocked' OR autonomous_enabled IS TRUE ORDER BY updated_at",
+                    user=_user(),
+                )
+            ]
+        unblocked = []
+        for target in unblock_targets:
+            result = clear_resolved_blockers(target)
+            if result.get("reopened"):
+                unblocked.append({"project_id": target, "reopened": result.get("reopened")})
+        if project_id:
+            reconciled = [reconcile_project(project_id)]
+        else:
+            reconciled = [reconcile_project(row["project_id"]) for row in sql.rows("SELECT project_id FROM factory.projects ORDER BY updated_at", user=_user())]
+
+        payload_after_reconcile = status(project_id)
+        classified_blockers = classify_factory_blockers(payload_after_reconcile, project_id=project_id)
+        blocker_actions = record_factory_blocker_actions(
+            classified_blockers,
+            payload=payload_after_reconcile,
+            create_questions=True,
+        )
+        successions = evaluate_project_successions() if not project_id else []
+        prepared_successor = None
+        dispatch_project_id = project_id
+        if not project_id:
+            eligible = next((item for item in successions if item.get("status") == "eligible"), None)
+            if eligible:
+                prepared_successor = prepare_successor_dispatch(int(eligible["succession_id"]))
+                if prepared_successor.get("prepared"):
+                    dispatch_project_id = str(prepared_successor["successor_project_id"])
+
+        claimed = claim_next_review(dispatch_project_id, worker="factory-force-tick")
+        if not claimed:
+            # Documentation/reconciliation repair has priority over product rework
+            # when docs-first gates are red. Otherwise a failed QA/rework loop can
+            # keep executing against invalid methodology context.
+            claimed = claim_next_task(dispatch_project_id, worker="factory-force-tick")
+        if not claimed:
+            claimed = claim_next_rework(dispatch_project_id, worker="factory-force-tick")
+        if prepared_successor and prepared_successor.get("prepared") and not claimed:
+            # No claim means no activation. Return successor to eligible and remove
+            # its transient dispatch state instead of reporting a false handoff.
+            successor_id = str(prepared_successor["successor_project_id"])
+            succession_id = int(prepared_successor["succession_id"])
+            sql.psql(
+                f"""
+                UPDATE factory.project_successions
+                SET status='eligible', dispatch_started_at=NULL, last_evaluated_at=now(),
+                    last_blockers={_j(['successor_no_claimable_work_after_prepare'])}
+                WHERE succession_id={succession_id} AND status='dispatching';
+                UPDATE factory.projects
+                SET status='paused', autonomous_enabled=false, paused_at=now(),
+                    metadata=(metadata || {_j({'successor_activation_retry_pending': True})})
+                      - 'successor_activation_dispatching' - 'successor_activation_succession_id'
+                      - 'successor_activation_predecessor',
+                    updated_at=now()
+                WHERE project_id={_q(successor_id)};
+                """,
+                user=_user(),
+            )
+            prepared_successor["prepared"] = False
+            prepared_successor["reason"] = "successor_no_claimable_work_after_prepare"
+        completed = True
+        return {
+            "skipped": False,
+            "lease": lease,
+            "monitor": monitor,
+            "repairs": repairs,
+            "unblocked": unblocked,
+            "reconciled": reconciled,
+            "classified_blockers": classified_blockers,
+            "blocker_actions": blocker_actions,
+            "successions": successions,
+            "prepared_successor": prepared_successor,
+            "claimed": claimed,
+        }
+    finally:
+        # The orchestrator retains a successful tick lease through worker
+        # registration/activation, but an exception before a result exists must
+        # always release it here; otherwise a transient DB failure stalls the
+        # Factory until TTL expiry.
+        if not retain_lease or not completed:
+            release_global_control_plane_lease(holder)
 
 
 def normalize_project_action(action: str) -> str:
@@ -4804,12 +5550,22 @@ def normalize_project_action(action: str) -> str:
         "unblock": "resolve-state",
         "resume": "resume",
         "pause": "pause",
+        "technical-hold": "technical-hold",
+        "dependency-hold": "technical-hold",
         "tick": "tick",
     }
     return aliases.get(normalized, normalized)
 
 
-def control_action(project_id: str, action: str) -> dict[str, Any]:
+def control_action(
+    project_id: str,
+    action: str,
+    *,
+    reason: str | None = None,
+    actor: str | None = None,
+    origin: str | None = None,
+    hold_kind: str | None = None,
+) -> dict[str, Any]:
     canonical_action = normalize_project_action(action)
     if canonical_action == "resume":
         preflight = resolve_project_state(project_id)
@@ -4828,7 +5584,17 @@ def control_action(project_id: str, action: str) -> dict[str, Any]:
         supervisor = supervisor_health_check(project_id, repair=True)
         return {"action": "resume", **resumed, "resume_blocked": False, "dispatch_allowed": True, "preflight": preflight, "supervisor": supervisor}
     if canonical_action == "pause":
-        return {"action": "pause", **pause_project(project_id)}
+        return {"action": "pause", **pause_project(project_id, reason=reason or "", actor=actor or "", origin=origin or "")}
+    if canonical_action == "technical-hold":
+        return {
+            "action": "technical-hold",
+            **technical_hold_project(
+                project_id,
+                reason=reason or "",
+                actor=actor or "",
+                hold_kind=hold_kind or "technical",
+            ),
+        }
     if canonical_action == "resolve-state":
         return resolve_project_state(project_id)
     if canonical_action == "tick":

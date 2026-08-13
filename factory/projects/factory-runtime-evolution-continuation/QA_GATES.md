@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Document status | validated:true (implementation-planner, 2026-08-10); reviewed:true (solution-architect, 2026-08-10, planning gate 690) |
+| Document status | baseline reviewed:true (solution-architect, 2026-08-10, planning gate 690); FRE-025 amendment validated:true (implementation owner, 2026-08-12), reviewed:pending |
 
 ## 1. General QA principles (repo canon)
 
@@ -41,6 +41,9 @@ Scope: documentation-only; no runtime code. QA gate = documentary verification:
 | FRE-014 | `scripts/run_tests.sh tests/hermes_cli/test_factory_project_reopen.py` + CLI smoke `hermes factory project reopen --help` | green; CLI registered |
 | FRE-015 | `scripts/run_tests.sh tests/hermes_cli/test_factory*.py` (full factory set) | all green or documented pre-existing failures |
 | FRE-017 | cron smoke per script + `hermes cronjob list` | exit 0; no unexpected alerts; evidence file |
+| FRE-025 RED/GREEN | exact behavior-test node selection via the explicitly required venv Python | meaningful RED, then identical selection GREEN |
+| FRE-025 focused | `HERMES_PYTHON=/home/jean/Projects/hermes-agent-original/venv/bin/python scripts/run_tests.sh tests/hermes_cli/test_factory_successor_control.py tests/hermes_cli/test_factory_orchestrator_tick.py tests/hermes_cli/test_factory_control_plane_refactor.py tests/hermes_cli/test_factory_increment_integration.py tests/hermes_cli/test_factory_cron_control_plane.py tests/factory/test_factory_watchdog_alerts.py` | all pass |
+| FRE-025 hygiene | `git diff --check` | no output; exit 0 |
 
 ## 4. Evidence capture rules
 
@@ -57,3 +60,20 @@ Scope: documentation-only; no runtime code. QA gate = documentary verification:
   compliance review of diffs; both are independent of the increment owner.
 - A QA gate that cannot be satisfied blocks merge (fail-closed), with a concrete rework
   list.
+
+## 6. FRE-025 behavioral acceptance
+
+- Manual pause rejects missing/blank reason, actor, or origin and all reserved Factory
+  system actors, while persisting explicit human/operator authority and audited origin.
+- Technical/dependency hold remains supervisable, clears manual-pause markers, emits a
+  distinct event, and refuses to downgrade `manual_attention`.
+- Bootstrap repair is recognized only from explicit structured metadata; title and
+  description prose cannot exempt source integration.
+- An unintegrated positive terminal source-bearing task creates a reconciliation and
+  delivery blocker and prevents queued-successor auto-resume.
+- Strong integration evidence, an explicit Jean-authorized waiver, and legitimate
+  non-source documentation/reconciliation tasks remain accepted.
+- Successor activation is explicit and lease-owned: queue position or project prose cannot
+  activate a successor, and watchdog observations cannot spawn a competing mutator.
+- Tests assert public behavior and state/event contracts; no source-text snapshots are
+  used.

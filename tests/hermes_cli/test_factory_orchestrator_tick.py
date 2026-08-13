@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
 
+from hermes_cli import factory
 def _load_orchestrator_module():
     repo_root = Path(__file__).resolve().parents[2]
     script = repo_root / "scripts" / "factory" / "factory_orchestrator_tick.py"
@@ -13,6 +16,51 @@ def _load_orchestrator_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+
+def test_factory_cli_requires_explicit_jean_successor_authorization(monkeypatch, capsys):
+    captured: dict[str, object] = {}
+
+    class FakeBackend:
+        def declare_project_succession(self, predecessor, successor, **kwargs):
+            captured["predecessor"] = predecessor
+            captured["successor"] = successor
+            captured.update(kwargs)
+            return {"succession_id": 42, "predecessor_project_id": predecessor, "successor_project_id": successor}
+
+    monkeypatch.setattr(factory, "_backend", lambda _args: FakeBackend())
+    args = argparse.Namespace(
+        project_id="factory-runtime",
+        successor_project_id="alpha",
+        actor="Jean",
+        reason="Factory green permits research-only Alpha under a single worker",
+        allow_auto_resume=True,
+        json=True,
+    )
+
+    assert factory.cmd_project_declare_successor(args) == 0
+    assert captured["predecessor"] == "factory-runtime"
+    assert captured["successor"] == "alpha"
+    assert captured["declared_by"] == "Jean"
+    assert captured["authorization"] == {
+        "authorized_by": "Jean",
+        "reason": "Factory green permits research-only Alpha under a single worker",
+        "allow_auto_resume": True,
+    }
+    assert '"succession_id": 42' in capsys.readouterr().out
+
+
+def test_factory_cli_successor_parser_requires_explicit_flag():
+    parser = argparse.ArgumentParser()
+    subs = parser.add_subparsers(dest="root")
+    factory.add_parser(subs)
+
+    parsed = parser.parse_args([
+        "factory", "project", "declare-successor", "factory-runtime", "alpha",
+        "--actor", "Jean", "--reason", "Factory green",
+    ])
+    assert parsed.allow_auto_resume is False
 
 
 def test_spawn_worker_uses_current_python_module_not_path_hermes(monkeypatch, tmp_path):
@@ -89,6 +137,41 @@ def test_spawn_worker_uses_current_python_module_not_path_hermes(monkeypatch, tm
     assert result["pid"] == 12345
     assert captured["mark_run_spawned"]["process_id"] == 12345
     assert captured["metadata"]["worker_cwd"] == str(tmp_path)
+
+
+
+def test_spawn_worker_terminates_new_process_when_run_registration_fails(monkeypatch, tmp_path):
+    module = _load_orchestrator_module()
+    monkeypatch.setattr(module, "_home", lambda: tmp_path)
+    monkeypatch.setattr(module, "_prepare_worktree", lambda *_args: {"ready": True, "cwd": str(tmp_path), "reason": "test"})
+
+    class FakePopen:
+        pid = 54321
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def wait(self, *, timeout):
+            return 0
+
+    terminated: list[int] = []
+    monkeypatch.setattr(module.subprocess, "Popen", FakePopen)
+    monkeypatch.setattr(module.os, "killpg", lambda pid, _signal: terminated.append(pid))
+
+    class FailingDB:
+        def mark_run_spawned(self, *_args, **_kwargs):
+            raise RuntimeError("Agent Core write failed")
+
+        def update_run_metadata(self, *_args, **_kwargs):
+            raise AssertionError("must not write metadata after failed run registration")
+
+    payload = {"projects": [{"project_id": "demo", "repo_path": str(tmp_path), "metadata": {}}], "tasks": [], "gates": []}
+    claim = {"run_id": "run-failing", "worker_profile": "implementation-planner", "task": {"project_id": "demo", "task_id": "t1", "title": "test", "phase": "implementation", "branch": "factory/demo/t1", "worktree_path": str(tmp_path)}}
+
+    with pytest.raises(RuntimeError, match="Agent Core write failed"):
+        module._spawn_worker(FailingDB(), payload, claim)
+
+    assert terminated == [54321]
 
 
 def test_prepare_worktree_starts_new_increment_from_origin_base(monkeypatch, tmp_path):

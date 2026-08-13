@@ -660,10 +660,23 @@ def test_dispatch_preflight_exempts_reconciliation_tasks():
     assert factory_pg._dispatch_preflight_blockers(task, docs_ready=False, notion_ready=False) == []
 
 
-def test_dispatch_preflight_exempts_control_plane_bootstrap_repair():
-    task = {"task_id": "inc-0001-control-plane", "phase": "implementation", "status": "todo",
-            "metadata": {"control_plane_bootstrap": True}}
-    assert factory_pg._dispatch_preflight_blockers(task, docs_ready=False, notion_ready=False) == []
+def test_dispatch_preflight_exempts_only_jean_authorized_control_plane_bootstrap_repair():
+    unapproved = {
+        "task_id": "inc-0001-control-plane",
+        "phase": "implementation",
+        "status": "todo",
+        "metadata": {"control_plane_bootstrap": True},
+    }
+    authorized = {
+        **unapproved,
+        "metadata": {
+            "control_plane_bootstrap": True,
+            "control_plane_bootstrap_authorized_by": "Jean García",
+            "control_plane_bootstrap_authorization_reason": "Canonical control-plane recovery",
+        },
+    }
+    assert factory_pg._dispatch_preflight_blockers(unapproved, docs_ready=False, notion_ready=False) == ["missing_or_unindexed_docs"]
+    assert factory_pg._dispatch_preflight_blockers(authorized, docs_ready=False, notion_ready=False) == []
 
 
 def test_dispatch_preflight_respects_explicit_jean_waiver():
@@ -942,6 +955,177 @@ def test_auto_resume_only_fires_on_new_completion_transition():
     assert factory_pg._should_auto_resume_after_reconcile("blocked", "completed") is True
     assert factory_pg._should_auto_resume_after_reconcile("completed", "completed") is False
     assert factory_pg._should_auto_resume_after_reconcile("paused", "active") is False
+
+
+@pytest.mark.parametrize(
+    ("reason", "actor", "origin"),
+    [
+        ("", "jean", "operator-cli"),
+        ("review requested", "", "operator-cli"),
+        ("review requested", "jean", ""),
+        ("review requested", "factory-orchestrator", "operator-cli"),
+        ("review requested", "factory-reconciler", "operator-cli"),
+        ("review requested", "factory-monitor", "operator-cli"),
+        ("review requested", "factory-dispatcher", "operator-cli"),
+        ("review requested", "factory-supervisor", "operator-cli"),
+        ("review requested", "factory-force-tick", "operator-cli"),
+        ("review requested", "factory-cron", "operator-cli"),
+        ("review requested", "factory-watchdog", "operator-cli"),
+        ("review requested", "codex-builder", "operator-cli"),
+        ("review requested", "zeus", "operator-cli"),
+    ],
+)
+def test_manual_pause_rejects_blank_provenance_and_system_actors(reason, actor, origin):
+    with pytest.raises(ValueError):
+        factory_pg.pause_project("demo", reason=reason, actor=actor, origin=origin)
+
+
+def test_manual_pause_persists_explicit_human_authority_and_origin(fake_sql):
+    result = factory_pg.pause_project(
+        "demo",
+        reason="Jean requested an independent source review",
+        actor="jean",
+        origin="hermes factory project pause",
+    )
+
+    assert result["paused_by"] == "jean"
+    assert result["pause_origin"] == "hermes factory project pause"
+    joined = "\n".join(fake_sql.statements)
+    assert "'manual_pause_recorded'" in joined
+    assert "'autonomous_pause'" not in joined
+    assert '"pause_authority": "explicit_human_operator"' in joined
+    assert '"pause_origin": "hermes factory project pause"' in joined
+    assert '"paused_by": "jean"' in joined
+
+
+def test_cli_manual_pause_requires_and_forwards_explicit_fields(monkeypatch):
+    parser = argparse.ArgumentParser()
+    factory.add_parser(parser.add_subparsers(dest="command"))
+    argv = [
+        "factory",
+        "project",
+        "pause",
+        "demo",
+        "--reason",
+        "independent review requested",
+        "--actor",
+        "jean",
+        "--origin",
+        "operator terminal",
+    ]
+    args = parser.parse_args(argv)
+    calls = []
+
+    class FakeBackend:
+        @staticmethod
+        def control_action(project_id, action, **kwargs):
+            calls.append((project_id, action, kwargs))
+            return {"action": action, "project_id": project_id, "status": "paused"}
+
+    monkeypatch.setattr("hermes_cli.factory_backend.get_backend", lambda: FakeBackend)
+    assert args.func(args) == 0
+    assert calls == [(
+        "demo",
+        "pause",
+        {
+            "reason": "independent review requested",
+            "actor": "jean",
+            "origin": "operator terminal",
+        },
+    )]
+
+    for flag in ("--reason", "--actor", "--origin"):
+        missing = list(argv)
+        flag_index = missing.index(flag)
+        del missing[flag_index : flag_index + 2]
+        with pytest.raises(SystemExit):
+            parser.parse_args(missing)
+
+
+def test_technical_dependency_hold_is_supervisable_and_clears_manual_pause(fake_sql, monkeypatch):
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: {
+        "project_id": project_id,
+        "status": "paused",
+        "metadata": {
+            "manual_pause": True,
+            "pause_kind": "user_decision",
+            "pause_reason": "misattributed internal hold",
+            "paused_by": "factory-orchestrator",
+            "pause_origin": "legacy control action",
+        },
+    })
+
+    result = factory_pg.technical_hold_project(
+        "demo",
+        reason="waiting for dependency branch integration",
+        actor="factory-orchestrator",
+        hold_kind="dependency",
+    )
+
+    assert result["status"] == "blocked"
+    assert result["autonomous_enabled"] is True
+    assert result["hold_kind"] == "dependency"
+    joined = "\n".join(fake_sql.statements)
+    assert "status='blocked'" in joined
+    assert "autonomous_enabled=true" in joined
+    assert "paused_at=NULL" in joined
+    assert "'technical_dependency_hold'" in joined
+    for marker in ("manual_pause", "pause_kind", "pause_reason", "paused_by", "pause_origin"):
+        assert f"- '{marker}'" in joined
+
+
+def test_technical_dependency_hold_refuses_to_downgrade_manual_attention(fake_sql, monkeypatch):
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: {
+        "project_id": project_id,
+        "status": "manual_attention",
+        "metadata": {"manual_attention_required": True},
+    })
+
+    with pytest.raises(ValueError, match="manual_attention"):
+        factory_pg.technical_hold_project(
+            "demo",
+            reason="dependency unavailable",
+            actor="factory-orchestrator",
+            hold_kind="dependency",
+        )
+
+    assert not fake_sql.statements
+
+
+def test_cli_technical_hold_routes_distinct_operation(monkeypatch):
+    parser = argparse.ArgumentParser()
+    factory.add_parser(parser.add_subparsers(dest="command"))
+    args = parser.parse_args([
+        "factory",
+        "project",
+        "technical-hold",
+        "demo",
+        "--reason",
+        "dependency branch is not integrated",
+        "--actor",
+        "factory-orchestrator",
+        "--hold-kind",
+        "dependency",
+    ])
+    calls = []
+
+    class FakeBackend:
+        @staticmethod
+        def control_action(project_id, action, **kwargs):
+            calls.append((project_id, action, kwargs))
+            return {"action": action, "project_id": project_id, "status": "blocked"}
+
+    monkeypatch.setattr("hermes_cli.factory_backend.get_backend", lambda: FakeBackend)
+    assert args.func(args) == 0
+    assert calls == [(
+        "demo",
+        "technical-hold",
+        {
+            "reason": "dependency branch is not integrated",
+            "actor": "factory-orchestrator",
+            "hold_kind": "dependency",
+        },
+    )]
 
 
 def test_reconcile_preserves_manual_attention_and_forces_autonomy_off(monkeypatch):
