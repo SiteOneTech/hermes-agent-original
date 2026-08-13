@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
+import time
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -289,6 +291,31 @@ def _prepare_worktree(payload: dict[str, Any], claim: dict[str, Any]) -> dict[st
     return {"ready": True, "reason": "worktree_created", "repo_path": str(repo_path), "branch": branch, "base_ref": base_ref, "worktree_path": str(worktree_path), "cwd": str(worktree_path)}
 
 
+def _terminate_unregistered_worker(proc: subprocess.Popen[Any]) -> None:
+    """Terminate and reap the worker's dedicated process group on registration failure."""
+
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    try:
+        proc.wait(timeout=5)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        # A process group that survives SIGKILL is a kernel-level anomaly; the
+        # Factory run was never registered and the caller will rollback state.
+        # Do not signal an arbitrary parent process as a fallback.
+        return
+
+
 def _spawn_worker(db: Any, payload: dict[str, Any], claim: dict[str, Any]) -> dict[str, Any]:
     run_id = claim["run_id"]
     worker = str(claim.get("worker_profile") or "factory-orchestrator")
@@ -328,8 +355,12 @@ def _spawn_worker(db: Any, payload: dict[str, Any], claim: dict[str, Any]) -> di
         start_new_session=True,
         close_fds=True,
     )
-    db.mark_run_spawned(run_id, process_id=proc.pid, log_path=str(log_path), prompt_path=str(prompt_path))
-    db.update_run_metadata(run_id, {"exit_path": str(exit_path), "spawned_by": "factory_orchestrator_tick", "worktree_preparation": worktree_state, "worker_cwd": cwd_path})
+    try:
+        db.mark_run_spawned(run_id, process_id=proc.pid, log_path=str(log_path), prompt_path=str(prompt_path))
+        db.update_run_metadata(run_id, {"exit_path": str(exit_path), "spawned_by": "factory_orchestrator_tick", "worktree_preparation": worktree_state, "worker_cwd": cwd_path})
+    except Exception:
+        _terminate_unregistered_worker(proc)
+        raise
     return {"run_id": run_id, "worker_profile": worker, "pid": proc.pid, "log_path": str(log_path), "prompt_path": str(prompt_path), "worktree_preparation": worktree_state, "worker_cwd": cwd_path}
 
 
@@ -340,29 +371,45 @@ def main() -> None:
         db = factory_backend.get_backend()
         project_id = os.environ.get("FACTORY_TICK_PROJECT_ID") or None
         supervisor = []
-        if hasattr(db, "supervisor_health_check"):
+        if hasattr(db, "supervisor_health_check") and not project_id:
+            # The global lease-owning pass below is the sole mutator.  This
+            # pre-pass is observational only; repair=True would race the tick.
             before = db.status(project_id)
-            if project_id:
-                supervisor_targets = [project_id]
-            else:
-                supervisor_targets = [
-                    str(project.get("project_id"))
-                    for project in before.get("projects", [])
-                    if project.get("autonomous_enabled") or str(project.get("status") or "") in {"blocked", "delivery_hold"}
-                ]
+            supervisor_targets = [
+                str(project.get("project_id"))
+                for project in before.get("projects", [])
+                if project.get("autonomous_enabled") or str(project.get("status") or "") in {"blocked", "delivery_hold"}
+            ]
             for target in supervisor_targets:
-                result = db.supervisor_health_check(target, repair=True)
-                if result.get("violations") or result.get("repairs"):
+                result = db.supervisor_health_check(target, repair=False)
+                if result.get("violations"):
                     supervisor.append(result)
-        tick = db.force_tick(project_id)
+        holder = f"factory-orchestrator-tick:{os.getpid()}"
+        tick = db.force_tick(project_id, holder=holder, retain_lease=True)
         spawned = None
-        if tick.get("claimed"):
-            # Build the worker prompt from post-claim state.  Using the pre-tick
-            # snapshot makes task lists and gate state stale (e.g. F3 still
-            # shown as running while F4 has just been claimed), which confuses
-            # autonomous workers and reviewers.
-            prompt_payload = db.status(project_id)
-            spawned = _spawn_worker(db, prompt_payload, tick["claimed"])
+        successor_activation = None
+        try:
+            if not tick.get("skipped") and tick.get("claimed"):
+                # Build the worker prompt from post-claim state.  Using the pre-tick
+                # snapshot makes task lists and gate state stale (e.g. F3 still
+                # shown as running while F4 has just been claimed), which confuses
+                # autonomous workers and reviewers.
+                prompt_payload = db.status(project_id)
+                try:
+                    spawned = _spawn_worker(db, prompt_payload, tick["claimed"])
+                    prepared = tick.get("prepared_successor") if isinstance(tick.get("prepared_successor"), dict) else None
+                    if prepared and prepared.get("prepared") and hasattr(db, "mark_successor_activated"):
+                        db.mark_successor_activated(int(prepared["succession_id"]), str(tick["claimed"]["run_id"]))
+                        successor_activation = {"status": "activated", "succession_id": prepared["succession_id"], "run_id": tick["claimed"]["run_id"]}
+                except Exception as exc:
+                    prepared = tick.get("prepared_successor") if isinstance(tick.get("prepared_successor"), dict) else None
+                    if prepared and prepared.get("prepared") and hasattr(db, "rollback_successor_dispatch"):
+                        db.rollback_successor_dispatch(int(prepared["succession_id"]), str(tick["claimed"]["run_id"]), error=str(exc))
+                        successor_activation = {"status": "rolled_back", "succession_id": prepared["succession_id"], "error": str(exc)}
+                    raise
+        finally:
+            if not tick.get("skipped") and hasattr(db, "release_global_control_plane_lease"):
+                db.release_global_control_plane_lease(holder)
         after = db.status()
         state = _read_watchdog_state()
         claimed_null_suspicious = (not tick.get("claimed")) and factory_pg._claimed_null_alert_expected(after, project_id=project_id)
@@ -381,7 +428,8 @@ def main() -> None:
             "reconciled": tick.get("reconciled"),
             "claimed": tick.get("claimed"),
             "spawned_worker": spawned,
-            "claimed_null_rounds": claimed_null_rounds,
+            "successor_activation": successor_activation,
+            "control_plane_skipped": bool(tick.get("skipped")),
             "alerts": alerts,
             "counts": {
                 "projects": len(after.get("projects", [])),

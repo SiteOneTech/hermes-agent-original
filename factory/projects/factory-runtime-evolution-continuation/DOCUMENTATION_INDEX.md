@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Document status | validated:true (implementation-planner, 2026-08-10); reviewed:true (solution-architect, 2026-08-10, planning gate 690) |
+| Document status | baseline reviewed:true (solution-architect, 2026-08-10, planning gate 690); FRE-025 amendment validated:true (implementation owner, 2026-08-12), reviewed:pending |
 
 ## 1. Required G1 documents (canonical control pack)
 
@@ -33,6 +33,7 @@
 | `DELIVERY_REPORT.md` | FRE-016 |
 | `CHANGELOG.md` / `CHANGE_RECORDS.md` | per merged increment (FRE-016) |
 | `RETROSPECTIVE.md` | end of sprint / project closure |
+| `RETROSPECTIVE_FRE_025.md` | FRE-025 incident, controls, migration procedure, test evidence, and remaining delivery limitation |
 | `NOTION_UPDATE.md` | human PM projection, if/when required |
 
 ## 3. Source-of-truth hierarchy
@@ -66,3 +67,11 @@ task acceptance criteria. `reviewed:true` means the independent `solution-archit
 review passed on 2026-08-10 via Factory planning gate 690. This document-only
 reconciliation replaces the stale negative/pending review markers so the G1 preflight
 reflects the already-recorded planning-review gate instead of re-blocking FRE-010.
+
+## 6. FRE-025 amendment status
+
+FRE-025 updates `TASK_GRAPH.md`, `TRACKER.md`, `QA_GATES.md`, and
+`SECURITY_GATES.md`, and adds `RETROSPECTIVE_FRE_025.md`. The implementation owner has
+validated this amendment against the behavior tests listed in the retrospective.
+Independent review and verified source integration remain pending; the historical G1
+planning-review result does not satisfy those FRE-025 gates.

@@ -345,8 +345,194 @@ def test_claim_next_task_keeps_priority_order_when_docs_ready(fake_sql, monkeypa
     assert result["task"]["task_id"] == "demo-impl"
 
 
+def _source_task(*, metadata=None, phase="implementation"):
+    return {
+        "project_id": "demo",
+        "task_id": "task-source",
+        "title": "Control-plane source increment",
+        "description": "Implement control plane source changes",
+        "phase": phase,
+        "status": "done",
+        "branch": "factory/demo/task-source",
+        "worktree_path": "/tmp/factory-demo-task-source",
+        "metadata": metadata or {},
+    }
+
+
+def _source_project(*, status="completed"):
+    return {
+        "project_id": "demo",
+        "status": status,
+        "repo_path": "/tmp/factory-demo-repo",
+        "base_branch": "main",
+        "metadata": {
+            "repo_strategy": {
+                "primary_repo_path": "/tmp/factory-demo-repo",
+                "base_branch": "main",
+            }
+        },
+    }
+
+
+def test_runtime_bootstrap_repair_exemption_requires_structured_jean_authorization():
+    text_only = _source_task()
+    unapproved = _source_task(metadata={"runtime_bootstrap_repair": True})
+    authorized = _source_task(metadata={
+        "runtime_bootstrap_repair": True,
+        "runtime_bootstrap_repair_authorized_by": "Jean García",
+        "runtime_bootstrap_repair_authorization_reason": "Canonical Factory control-plane recovery",
+    })
+
+    assert factory_pg._is_runtime_bootstrap_repair_task(text_only) is False
+    assert factory_pg._is_runtime_bootstrap_repair_task(unapproved) is False
+    assert factory_pg._is_runtime_bootstrap_repair_task(authorized) is True
+    assert factory_pg._increment_integration_required(text_only, _source_project(status="active"), "done") is True
+    assert factory_pg._increment_integration_required(unapproved, _source_project(status="active"), "done") is True
+    assert factory_pg._increment_integration_required(authorized, _source_project(status="active"), "done") is False
+
+
+def test_reconciliation_finds_completed_source_increment_without_verified_base_integration():
+    findings = factory_pg.reconciliation_findings(
+        _source_project(),
+        tasks=[_source_task(metadata={"increment_integration_status": "integrated"})],
+        pending_gates=[],
+        gates=[],
+    )
+
+    finding = next(item for item in findings if item["code"] == "source_increment_not_integrated")
+    assert finding["metadata"]["task_ids"] == ["task-source"]
+    assert finding["metadata"]["base_branch"] == "main"
+
+
+def test_delivery_readiness_blocks_unintegrated_positive_terminal_source_task(monkeypatch):
+    project = _source_project(status="active")
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: [_source_task()])
+    monkeypatch.setattr(factory_pg, "_delivery_evidence_findings", lambda project_arg, evidence: [])
+
+    findings = factory_pg.critical_readiness_findings("demo", gate_evidence={"tests": "passed"})
+
+    assert any("task-source" in finding and "origin/main" in finding for finding in findings)
+
+
+def test_reconciliation_rejects_metadata_claimed_integration_when_git_containment_fails(monkeypatch):
+    claimed_integrated = _source_task(metadata={
+        "increment_integration_status": "integrated",
+        "increment_branch": "factory/demo/task-source",
+        "increment_branch_commit": "abc123",
+        "increment_base_branch": "main",
+        "increment_base_commit_after": "def456",
+    })
+    monkeypatch.setattr(factory_pg, "_source_increment_is_contained_in_origin", lambda *args, **kwargs: False)
+
+    findings = factory_pg.reconciliation_findings(
+        _source_project(),
+        tasks=[claimed_integrated],
+        pending_gates=[],
+        gates=[],
+    )
+
+    assert any(item["code"] == "source_increment_not_integrated" for item in findings)
+
+
+def test_reconciliation_accepts_verified_git_containment_or_jean_waiver(monkeypatch):
+    integrated = _source_task(metadata={
+        "increment_integration_status": "integrated",
+        "increment_branch": "factory/demo/task-source",
+        "increment_branch_commit": "abc123",
+        "increment_base_branch": "main",
+        "increment_base_commit_after": "def456",
+    })
+    waived = _source_task(metadata={
+        "increment_integration_waived": True,
+        "increment_integration_waived_authorized_by": "Jean García",
+        "increment_integration_waived_reason": "PR-first independent review remains open",
+    })
+    monkeypatch.setattr(factory_pg, "_source_increment_is_contained_in_origin", lambda *args, **kwargs: True)
+
+    for task in (integrated, waived):
+        findings = factory_pg.reconciliation_findings(
+            _source_project(),
+            tasks=[task],
+            pending_gates=[],
+            gates=[],
+        )
+        assert not any(item["code"] == "source_increment_not_integrated" for item in findings)
+
+
+def test_reconciliation_keeps_legitimate_non_source_and_reconciliation_tasks_working():
+    docs_task = _source_task(phase="documentation")
+    docs_task["branch"] = "main"
+    reconciliation_task = _source_task(metadata={
+        "factory_reconciliation_task": True,
+        "reconciliation_anomaly": "missing_required_docs",
+    })
+
+    findings = factory_pg.reconciliation_findings(
+        _source_project(),
+        tasks=[docs_task, reconciliation_task],
+        pending_gates=[],
+        gates=[],
+    )
+
+    assert not any(item["code"] == "source_increment_not_integrated" for item in findings)
+
+
+def test_source_integration_blocker_prevents_completion_auto_resume():
+    assert factory_pg._should_auto_resume_after_reconcile(
+        "active",
+        "completed",
+        completion_blockers=["source_increment_not_integrated"],
+    ) is False
+
+
 def _git(path, *args):
     return subprocess.run(["git", "-C", str(path), *args], text=True, capture_output=True, check=True)
+
+
+def test_source_integration_requires_current_origin_base_ancestry(tmp_path):
+    origin = tmp_path / "origin.git"
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "--bare", str(origin)], text=True, capture_output=True, check=True)
+    subprocess.run(["git", "clone", str(origin), str(repo)], text=True, capture_output=True, check=True)
+    _git(repo, "config", "user.email", "factory@example.test")
+    _git(repo, "config", "user.name", "Factory Test")
+    (repo / "README.md").write_text("base\n", encoding="utf-8")
+    _git(repo, "add", "README.md")
+    _git(repo, "commit", "-m", "base")
+    _git(repo, "branch", "-M", "main")
+    _git(repo, "push", "origin", "main")
+    _git(repo, "checkout", "-b", "factory/demo/task-source")
+    (repo / "feature.txt").write_text("feature\n", encoding="utf-8")
+    _git(repo, "add", "feature.txt")
+    _git(repo, "commit", "-m", "feature")
+    source_commit = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _git(repo, "push", "origin", "factory/demo/task-source")
+
+    task = _source_task(metadata={
+        "increment_integration_status": "integrated",
+        "increment_branch": "factory/demo/task-source",
+        "increment_branch_commit": source_commit,
+        "increment_base_branch": "main",
+        "increment_base_commit_after": _git(repo, "rev-parse", "main").stdout.strip(),
+    })
+    project = _source_project()
+    project["repo_path"] = str(repo)
+    project["metadata"]["repo_strategy"]["primary_repo_path"] = str(repo)
+
+    assert factory_pg._source_increment_is_contained_in_origin(
+        task, project, branch=task["branch"], base_branch="main"
+    ) is False
+
+    _git(repo, "checkout", "main")
+    _git(repo, "merge", "--no-ff", "factory/demo/task-source", "-m", "merge feature")
+    _git(repo, "push", "origin", "main")
+    _git(repo, "branch", "-D", "factory/demo/task-source")
+    _git(repo, "push", "origin", "--delete", "factory/demo/task-source")
+
+    assert factory_pg._source_increment_is_contained_in_origin(
+        task, project, branch=task["branch"], base_branch="main"
+    ) is True
 
 
 def test_integrate_increment_to_base_rejects_dirty_worktree_before_gate(fake_sql, monkeypatch, tmp_path):

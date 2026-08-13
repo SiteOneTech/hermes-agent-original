@@ -373,7 +373,7 @@ def test_factory_watchdog_progress_stall_alerts_are_deterministic(monkeypatch):
     assert alerts[0]["progress_snapshot"]["task_counts"] == {"running": 1}
 
 
-def test_factory_watchdog_launches_reasoning_supervisor_instead_of_notifying(monkeypatch, tmp_path):
+def test_factory_watchdog_is_observational_and_never_spawns_second_supervisor(monkeypatch, tmp_path):
     watchdog = _load_script("factory_watchdog_alerts")
     launched = []
 
@@ -403,13 +403,12 @@ def test_factory_watchdog_launches_reasoning_supervisor_instead_of_notifying(mon
 
     human_alerts = watchdog._route_repairable_alerts([alert], payload, state)
 
-    assert human_alerts == []
-    assert len(launched) == 1
-    entry = state["supervisor_runs"]["demo"]
-    assert entry["status"] == "running"
-    prompt = Path(entry["prompt_path"]).read_text(encoding="utf-8")
-    assert "SUPERVISOR_STATUS: NEEDS_HUMAN" in prompt
-    assert "Jean NO quiere recibir alertas repetidas" in prompt
+    assert launched == []
+    assert state.get("supervisor_runs") == {}
+    assert len(human_alerts) == 1
+    assert human_alerts[0]["alert_type"] == "factory_progress_stalled"
+    assert human_alerts[0]["supervisor_action"] == "lease_owner_tick_required"
+    assert human_alerts[0]["mutating_worker_spawned"] is False
 
 
 def test_factory_watchdog_notifies_only_when_supervisor_needs_human(monkeypatch, tmp_path):

@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Document status | validated:true (implementation-planner, 2026-08-10); reviewed:true (solution-architect, 2026-08-10, planning gate 690) |
+| Document status | baseline reviewed:true (solution-architect, 2026-08-10, planning gate 690); FRE-025 amendment validated:true (implementation owner, 2026-08-12), reviewed:pending |
 | Rule | Every increment = own branch/worktree (`factory/factory-runtime-evolution-continuation/<inc-key>`), TDD RED→GREEN, reviewer gate, PR-first merge to `main` after gates. |
 
 ## 0. Dependency graph
@@ -18,6 +18,9 @@ FRE-012 ──┴──> FRE-013 (watchdog/cron integration)
 FRE-011+FRE-012+FRE-013+FRE-014 ──> FRE-015 (independent QA/security review)
 FRE-015 ──> FRE-016 (PR-first delivery / merge to main)
 FRE-013 + FRE-015 ──> FRE-017 (global cron verification)
+
+FRE-025 (pause provenance + source-delivery guard) ──> independent review
+FRE-025 independent review ──> verified source integration into origin/main
 ```
 
 ## 1. Task inventory
@@ -34,6 +37,7 @@ FRE-013 + FRE-015 ──> FRE-017 (global cron verification)
 | FRE-015 | Independent QA/security review of FRE-011…FRE-014 | review | quality-reviewer + security-reviewer | factory-orchestrator | FRE-011..014 | (review lane) |
 | FRE-016 | PR-first delivery: merge approved increments to main | delivery | devops-release + factory-orchestrator | factory-orchestrator | FRE-015 | — |
 | FRE-017 | Global cron verification (incremental resume + smoke) | verification | devops-release | factory-orchestrator | FRE-013, FRE-015 | `factory/factory-runtime-evolution-continuation/inc-017-global-cron-verification` |
+| FRE-025 | Pause provenance, technical holds, and source-delivery guard | implementation | implementation owner | independent reviewer | verified incident | `factory/factory-runtime-evolution-continuation/inc-025-pause-provenance-source-delivery` |
 
 ## 2. Per-increment acceptance (TDD anchors)
 
@@ -99,6 +103,19 @@ FRE-013 + FRE-015 ──> FRE-017 (global cron verification)
 - DoD: verification evidence committed under project artifacts (e.g.
   `CRON_VERIFICATION.md` lifecycle doc); devops-release + orchestrator gates.
 
+### FRE-025 — Pause provenance and source delivery
+
+- RED: behavior tests reject blank/reserved manual-pause authority, require CLI
+  provenance, distinguish technical holds, narrow bootstrap repair to structured
+  metadata, and block unintegrated terminal source increments from reconciliation,
+  delivery, and successor auto-resume.
+- GREEN: explicit audited manual pause; supervisable technical/dependency hold that
+  cannot weaken `manual_attention`; structured exemption; shared integration guard
+  with explicit Jean-authorized waiver support; explicit successor contract evaluated
+  only by the global lease-owning tick.
+- DoD: exact focused suite and `git diff --check` pass; retrospective committed;
+  independent review and verified integration into `origin/main` remain required.
+
 ## 3. Mapping to acceptance criteria (FRE-010)
 
 | Acceptance criterion | Evidence |
@@ -115,3 +132,8 @@ FRE-011, FRE-012, FRE-014 are independent after FRE-010 and touch disjoint files
 `factory_contracts.py` + question creation; FRE-014: reopen + CLI + intake) — claimable
 in parallel without file conflicts. FRE-013 waits for FRE-011/012 (supervisor output
 contract). FRE-017 waits for FRE-013 + FRE-015.
+
+FRE-025 is isolated from the earlier implementation graph. Its local implementation
+and tests may complete in this branch, but source integration is sequential: an
+independent reviewer must approve the exact diff before the branch is verified in the
+declared origin base. No queued successor may bypass that order.

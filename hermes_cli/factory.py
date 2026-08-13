@@ -221,6 +221,26 @@ def cmd_project_release_takeover(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_project_declare_successor(args: argparse.Namespace) -> int:
+    backend = _backend(args)
+    authorization = {
+        "authorized_by": args.actor,
+        "reason": args.reason,
+        "allow_auto_resume": bool(args.allow_auto_resume),
+    }
+    result = backend.declare_project_succession(
+        args.project_id,
+        args.successor_project_id,
+        authorization=authorization,
+        declared_by=args.actor,
+        metadata={"declared_via": "hermes factory project declare-successor"},
+    )
+    if args.json:
+        return _print_json(result)
+    print(f"✓ Project succession declared: {args.project_id} -> {args.successor_project_id}")
+    return 0
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     payload = _status_payload(args)
     if args.json:
@@ -263,6 +283,7 @@ def cmd_project_action(args: argparse.Namespace) -> int:
     action_map = {
         "resume": "resume",
         "pause": "pause",
+        "technical-hold": "technical-hold",
         "tick": "tick",
         "resolve-state": "resolve-state",
         "resolve": "resolve-state",
@@ -278,6 +299,22 @@ def cmd_project_action(args: argparse.Namespace) -> int:
         else:
             tick = _run_orchestrator_script(args.project_id)
             result = {**resumed, "tick": tick, "claimed": tick.get("claimed")}
+    elif args.factory_project_command == "pause":
+        result = backend.control_action(
+            args.project_id,
+            "pause",
+            reason=args.reason,
+            actor=args.actor,
+            origin=args.origin,
+        )
+    elif args.factory_project_command == "technical-hold":
+        result = backend.control_action(
+            args.project_id,
+            "technical-hold",
+            reason=args.reason,
+            actor=args.actor,
+            hold_kind=args.hold_kind,
+        )
     else:
         result = backend.control_action(args.project_id, action_map[args.factory_project_command])
     if args.json:
@@ -314,7 +351,9 @@ def factory_command(args: argparse.Namespace) -> int:
             return cmd_project_takeover(args)
         if sub == "release-takeover":
             return cmd_project_release_takeover(args)
-        if sub in {"resume", "pause", "tick", "resolve-state", "resolve", "reconcile", "unblock"}:
+        if sub == "declare-successor":
+            return cmd_project_declare_successor(args)
+        if sub in {"resume", "pause", "technical-hold", "tick", "resolve-state", "resolve", "reconcile", "unblock"}:
             return cmd_project_action(args)
     if command == "lane" and getattr(args, "factory_lane_command", None) == "create":
         return cmd_lane_create(args)
@@ -408,9 +447,36 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
     project_release_takeover.add_argument("--json", action="store_true")
     project_release_takeover.set_defaults(func=factory_command)
 
+    project_declare_successor = project_sub.add_parser(
+        "declare-successor",
+        help="Persist Jean-authorized predecessor→successor activation; the global tick evaluates and dispatches it",
+    )
+    project_declare_successor.add_argument("project_id", help="Completed/integrated predecessor project id")
+    project_declare_successor.add_argument("successor_project_id", help="Paused successor project id")
+    project_declare_successor.add_argument("--actor", required=True, help="Jean authority recorded in immutable succession metadata")
+    project_declare_successor.add_argument("--reason", required=True, help="Why this successor may resume autonomously")
+    project_declare_successor.add_argument("--allow-auto-resume", action="store_true", help="Explicitly authorize this one automatic successor activation")
+    project_declare_successor.add_argument("--json", action="store_true")
+    project_declare_successor.set_defaults(func=factory_command)
+
+    project_pause = project_sub.add_parser("pause", help="Pause autonomy by explicit human/operator authority with audited provenance")
+    project_pause.add_argument("project_id")
+    project_pause.add_argument("--reason", required=True, help="Explicit human/operator reason for the manual pause")
+    project_pause.add_argument("--actor", required=True, help="Human/operator identity; Factory system actors are rejected")
+    project_pause.add_argument("--origin", required=True, help="Auditable request origin, such as the operator terminal or reviewed ticket")
+    project_pause.add_argument("--json", action="store_true")
+    project_pause.set_defaults(func=factory_command)
+
+    project_technical_hold = project_sub.add_parser("technical-hold", help="Record a supervisable technical/dependency hold without disabling autonomy")
+    project_technical_hold.add_argument("project_id")
+    project_technical_hold.add_argument("--reason", required=True, help="Concrete technical/dependency condition")
+    project_technical_hold.add_argument("--actor", required=True, help="Actor recording the technical/dependency hold")
+    project_technical_hold.add_argument("--hold-kind", required=True, choices=["technical", "dependency"])
+    project_technical_hold.add_argument("--json", action="store_true")
+    project_technical_hold.set_defaults(func=factory_command)
+
     for action, help_text in {
         "resume": "Run resolve-state preflight, then enable autonomous incremental execution when dispatchable",
-        "pause": "Pause autonomous execution for a project by user/operator decision",
         "tick": "Force one deterministic orchestrator/dispatcher tick",
         "resolve-state": "Canonical resolve action: reconcile, repair resolved blockers, and classify holds/questions",
         "resolve": "Legacy alias for resolve-state",
