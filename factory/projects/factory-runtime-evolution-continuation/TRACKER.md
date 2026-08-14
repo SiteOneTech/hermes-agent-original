@@ -9,7 +9,7 @@
 | Source of truth | Agent Core Postgres `zeus_agent.factory` |
 | Repo artifacts | `factory/projects/factory-runtime-evolution-continuation/` |
 | Repo | `SiteOneTech/hermes-agent-original` (zeus_only) |
-| Current state | `active` — FRE-010 planning-review passed; FRE-025 implementation is locally validated, with independent review and source integration pending. |
+| Current state | `active` — FRE-010 planning-review passed; FRE-025 implementation locally validated with independent review/source integration pending; FRE-027 owner implementation validated locally. |
 | Anomalies at start | `missing_project_artifact_dir`, `missing_required_docs` (resolved by this increment's dir + committed docs) |
 
 ## 1. Task tracker (mirrors Factory DB)
@@ -27,6 +27,7 @@
 | FRE-016 PR-first delivery | planned (TASK_GRAPH) | devops-release + factory-orchestrator | factory-orchestrator | CHANGE_RECORDS.md, DELIVERY_REPORT.md |
 | FRE-017 Global cron verification | planned (TASK_GRAPH) | devops-release | factory-orchestrator | cron smoke evidence |
 | FRE-025 Pause provenance, technical holds, and source-delivery guard | implemented; owner verification in progress | implementation owner | independent reviewer | behavior RED/GREEN + exact focused suite + `RETROSPECTIVE_FRE_025.md` |
+| FRE-027 Enforce Factory migration readiness before orchestration | implemented; owner verification complete | claude-builder | qa/security/quality gates as assigned | migration-readiness RED/GREEN + focused Factory suite + `IMPLEMENTATION_REPORT_FRE_027.md` |
 
 ## 2. Evidence log (real, 2026-08-10)
 
@@ -56,6 +57,13 @@
    `18 passed in 0.78s`. Final owner verification (2026-08-13T08:28:52Z):
    focused `scripts/run_tests.sh` suite `161 passed, 0 failed`; `git diff --check`
    exit 0. Details are recorded in `RETROSPECTIVE_FRE_025.md`.
+6. FRE-027 migration-readiness evidence (2026-08-14): RED reproduced opaque
+   missing-000004 behavior (`psql` exit status 3), missing orchestrator preflight
+   (`DID NOT RAISE SystemExit`), and missing module-scoped migration CLI
+   (`--module` unrecognized / no `verify_module`). GREEN: focused Factory suite
+   `9 files, 173 tests passed, 0 failed`; `test_agent_core_roles.py` `3 passed`;
+   `py_compile` and `git diff --check` exit 0. Details are recorded in
+   `IMPLEMENTATION_REPORT_FRE_027.md`.
 
 ## 3. Gate log
 
@@ -68,6 +76,7 @@
 | FRE-025 owner QA | passed | focused suite `161 passed, 0 failed`; `git diff --check` exit 0; exact commands in `RETROSPECTIVE_FRE_025.md` |
 | FRE-025 independent review | pending | must review the exact committed diff |
 | FRE-025 source integration | pending | branch must be verified integrated into declared `origin/main`; existing open PRs remain independently gated |
+| FRE-027 owner QA | passed | RED/GREEN captured; focused Factory suite `173 passed, 0 failed`; `test_agent_core_roles.py` `3 passed`; syntax/help/diff checks green |
 
 ## 4. Risk register
 
@@ -80,3 +89,4 @@
 | System actor mislabels a technical block as a human pause | Manual pause requires explicit nonblank authority and origin and rejects reserved actors; canonical technical hold remains supervisable |
 | Terminal source increment reconciles before integration | Reconciliation and delivery share a branch-integration guard; successor auto-resume consumes the blocker; only explicit Jean authorization waives it |
 | Existing misleading system-attributed user pauses persist | Migrate individually through canonical `technical-hold` after verification; never bulk-edit DB and never downgrade `manual_attention` |
+| Factory runtime starts against a DB missing migration `000004` | `ensure_runtime_schema()` now fails closed with a migration-readiness diagnostic before lease/claim/spawn; recovery path is `scripts/agent_core_db.py migrate --module factory` + `verify --module factory` |

@@ -437,24 +437,126 @@ def available() -> bool:
         return False
 
 
-def ensure_runtime_schema() -> None:
-    """Ensure orchestration runtime tables/columns exist.
+REQUIRED_FACTORY_MIGRATION_VERSION = "000004"
+FACTORY_MIGRATE_COMMAND = "python scripts/agent_core_db.py migrate --module factory"
+FACTORY_VERIFY_COMMAND = "python scripts/agent_core_db.py verify --module factory"
+_FACTORY_MIGRATION_READINESS_KEYS = (
+    "migration_000004_applied",
+    "runtime_leases_exists",
+    "project_successions_exists",
+    "runtime_leases_write_ok",
+    "project_successions_write_ok",
+    "project_successions_sequence_ok",
+)
 
-    Migrations normally create these objects. This guard keeps the autonomous
-    cron path safe after deploy/restart when a runtime DB is slightly behind.
+
+class FactoryMigrationReadinessError(RuntimeError):
+    """Raised when the Factory DB is not ready for runtime orchestration."""
+
+    def __init__(self, message: str, diagnostic: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.diagnostic = diagnostic
+
+
+def _exception_text(exc: Exception) -> str:
+    pieces = [str(exc)]
+    for attr in ("stderr", "stdout"):
+        value = getattr(exc, attr, None)
+        if value:
+            pieces.append(str(value).strip())
+    return "\n".join(piece for piece in pieces if piece)
+
+
+def factory_migration_readiness() -> dict[str, Any]:
+    """Return a read-only readiness diagnostic for required Factory migrations."""
+
+    version = REQUIRED_FACTORY_MIGRATION_VERSION
+    runtime_user = _user()
+    query = f"""
+        SELECT
+          EXISTS (
+            SELECT 1 FROM agent_core.schema_migrations
+            WHERE module='factory' AND version={_q(version)}
+          ) AS migration_{version}_applied,
+          to_regclass('factory.runtime_leases') IS NOT NULL AS runtime_leases_exists,
+          to_regclass('factory.project_successions') IS NOT NULL AS project_successions_exists,
+          CASE WHEN to_regclass('factory.runtime_leases') IS NULL THEN FALSE ELSE
+            has_table_privilege(current_user, 'factory.runtime_leases', 'SELECT')
+            AND has_table_privilege(current_user, 'factory.runtime_leases', 'INSERT')
+            AND has_table_privilege(current_user, 'factory.runtime_leases', 'UPDATE')
+          END AS runtime_leases_write_ok,
+          CASE WHEN to_regclass('factory.project_successions') IS NULL THEN FALSE ELSE
+            has_table_privilege(current_user, 'factory.project_successions', 'SELECT')
+            AND has_table_privilege(current_user, 'factory.project_successions', 'INSERT')
+            AND has_table_privilege(current_user, 'factory.project_successions', 'UPDATE')
+          END AS project_successions_write_ok,
+          CASE WHEN to_regclass('factory.project_successions_succession_id_seq') IS NULL THEN FALSE ELSE
+            has_sequence_privilege(current_user, 'factory.project_successions_succession_id_seq', 'USAGE')
+            AND has_sequence_privilege(current_user, 'factory.project_successions_succession_id_seq', 'SELECT')
+          END AS project_successions_sequence_ok
+    """
+    diagnostic: dict[str, Any] = {
+        "ready": False,
+        "module": "factory",
+        "required_migrations": [version],
+        "required_tables": ["factory.runtime_leases", "factory.project_successions"],
+        "required_runtime_role": runtime_user,
+        "apply_command": FACTORY_MIGRATE_COMMAND,
+        "verify_command": FACTORY_VERIFY_COMMAND,
+    }
+    try:
+        rows = sql.rows(query, user=runtime_user)
+    except Exception as exc:
+        diagnostic.update({"readiness_query_error": _exception_text(exc), "missing_migrations": [version]})
+        return diagnostic
+
+    checks = dict(rows[0]) if rows else {}
+    failed = [key for key in _FACTORY_MIGRATION_READINESS_KEYS if not checks.get(key)]
+    missing_tables = []
+    if not checks.get("runtime_leases_exists"):
+        missing_tables.append("factory.runtime_leases")
+    if not checks.get("project_successions_exists"):
+        missing_tables.append("factory.project_successions")
+    missing_privileges = [
+        key for key in ("runtime_leases_write_ok", "project_successions_write_ok", "project_successions_sequence_ok")
+        if not checks.get(key)
+    ]
+    diagnostic.update(
+        {
+            "ready": not failed,
+            "checks": checks,
+            "failed_checks": failed,
+            "missing_migrations": [] if checks.get(f"migration_{version}_applied") else [version],
+            "missing_tables": missing_tables,
+            "missing_privileges": missing_privileges,
+        }
+    )
+    return diagnostic
+
+
+def ensure_runtime_schema() -> None:
+    """Fail closed unless required Factory migrations are applied and usable.
+
+    Runtime code must not apply DDL fallbacks. The canonical recovery path is
+    module-scoped migration + verification through scripts/agent_core_db.py.
     """
 
     global _SCHEMA_READY
     if _SCHEMA_READY:
         return
-    ddl_root = Path(__file__).resolve().parents[1] / "db" / "modules" / "factory"
-    # This legacy guard only repairs the pre-existing orchestration runtime
-    # schema. New schema changes are versioned migrations and must be applied
-    # by scripts/agent_core_db.py before their corresponding runtime deploy.
-    ddl = ddl_root / "000003_orchestration_runtime.sql"
-    if ddl.exists():
-        sql.psql(ddl.read_text(encoding="utf-8"), user=_admin_user())
-    _SCHEMA_READY = True
+    diagnostic = factory_migration_readiness()
+    if diagnostic.get("ready"):
+        _SCHEMA_READY = True
+        return
+    failed = diagnostic.get("failed_checks") or ["readiness_query_error"]
+    raise FactoryMigrationReadinessError(
+        "Factory migration readiness failed: required Factory migration "
+        f"{REQUIRED_FACTORY_MIGRATION_VERSION}_successor_control is not verified "
+        f"(failed checks: {', '.join(str(item) for item in failed)}). "
+        f"Run `{FACTORY_MIGRATE_COMMAND}` and confirm with `{FACTORY_VERIFY_COMMAND}` "
+        "before the Factory control plane can lease, claim, or spawn work.",
+        diagnostic,
+    )
 
 
 GLOBAL_CONTROL_PLANE_LEASE_KEY = "factory-control-plane"

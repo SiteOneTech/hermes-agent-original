@@ -1,7 +1,10 @@
 """Regression tests for FRE-025 successor activation and global control lease."""
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from scripts import agent_core_db
 from hermes_cli import factory_pg
@@ -42,6 +45,75 @@ def test_successor_control_migration_is_discovered_as_a_new_factory_version():
     assert "000004" in versions
     assert agent_core_db.MODULES["factory"]["migrations"] == ROOT / "db/modules/factory"
     assert agent_core_db.migration_version(ROOT / "db/modules/factory/000004_successor_control.sql") == "000004"
+
+
+def test_force_tick_fails_closed_when_factory_successor_control_migration_is_missing(monkeypatch):
+    calls: list[tuple[str, str, str | None]] = []
+
+    class FakeSql:
+        @staticmethod
+        def rows(query, **kwargs):
+            calls.append(("rows", query, kwargs.get("user")))
+            assert kwargs.get("user") == "factory_runtime"
+            assert "agent_core.schema_migrations" in query
+            assert "000004" in query
+            assert "factory.runtime_leases" in query
+            assert "factory.project_successions" in query
+            return [
+                {
+                    "migration_000004_applied": False,
+                    "runtime_leases_exists": False,
+                    "project_successions_exists": False,
+                    "runtime_leases_write_ok": False,
+                    "project_successions_write_ok": False,
+                    "project_successions_sequence_ok": False,
+                }
+            ]
+
+        @staticmethod
+        def statement_one(query, **kwargs):
+            calls.append(("statement_one", query, kwargs.get("user")))
+            raise subprocess.CalledProcessError(
+                3,
+                ["psql"],
+                stderr='ERROR: relation "factory.runtime_leases" does not exist',
+            )
+
+        @staticmethod
+        def psql(query, **kwargs):
+            calls.append(("psql", query, kwargs.get("user")))
+            return subprocess.CompletedProcess(["psql"], 0, stdout="", stderr="")
+
+        @staticmethod
+        def runtime_env():
+            return {"FACTORY_DB_RUNTIME_USER": "factory_runtime"}
+
+        @staticmethod
+        def quote_literal(value):
+            return "'" + str(value).replace("'", "''") + "'"
+
+        @staticmethod
+        def quote_jsonb(_value):
+            return "'{}'::jsonb"
+
+    def fail_if_reached(*_args, **_kwargs):
+        raise AssertionError("claim/spawn path must not run when Factory 000004 is missing")
+
+    monkeypatch.setattr(factory_pg, "sql", FakeSql)
+    monkeypatch.setattr(factory_pg, "_SCHEMA_READY", False)
+    monkeypatch.setattr(factory_pg, "monitor_runs", fail_if_reached)
+    monkeypatch.setattr(factory_pg, "claim_next_review", fail_if_reached)
+    monkeypatch.setattr(factory_pg, "claim_next_task", fail_if_reached)
+    monkeypatch.setattr(factory_pg, "claim_next_rework", fail_if_reached)
+
+    with pytest.raises(RuntimeError) as exc:
+        factory_pg.force_tick(holder="tick-missing-000004")
+
+    message = str(exc.value)
+    assert "Factory migration readiness failed" in message
+    assert "000004" in message
+    assert "scripts/agent_core_db.py migrate --module factory" in message
+    assert [call[0] for call in calls] == ["rows"]
 
 
 def test_declared_successor_persists_authorization_metadata_contract(monkeypatch):

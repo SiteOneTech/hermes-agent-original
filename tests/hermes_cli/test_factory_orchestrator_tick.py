@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -61,6 +62,59 @@ def test_factory_cli_successor_parser_requires_explicit_flag():
         "--actor", "Jean", "--reason", "Factory green",
     ])
     assert parsed.allow_auto_resume is False
+
+
+def test_orchestrator_tick_reports_migration_readiness_before_claim_or_spawn(monkeypatch, capsys):
+    module = _load_orchestrator_module()
+    calls: list[str] = []
+
+    class MissingFactoryMigration(RuntimeError):
+        diagnostic = {
+            "ready": False,
+            "module": "factory",
+            "missing_migrations": ["000004"],
+            "apply_command": "python scripts/agent_core_db.py migrate --module factory",
+            "verify_command": "python scripts/agent_core_db.py verify --module factory",
+        }
+
+    class FakeDB:
+        def ensure_runtime_schema(self):
+            calls.append("ensure_runtime_schema")
+            raise MissingFactoryMigration(
+                "Factory migration readiness failed: run python scripts/agent_core_db.py migrate --module factory"
+            )
+
+        def status(self, *_args, **_kwargs):
+            calls.append("status")
+            return {
+                "db_backend": "agent_core_postgres",
+                "projects": [],
+                "tasks": [],
+                "lanes": [],
+                "gates": [],
+                "events": [],
+                "artifacts": [],
+                "task_runs": [],
+                "human_questions": [],
+                "agents": [],
+            }
+
+        def force_tick(self, *_args, **_kwargs):
+            calls.append("force_tick")
+            return {"skipped": True, "claimed": None, "monitor": {}, "unblocked": [], "reconciled": []}
+
+    monkeypatch.setattr("hermes_cli.factory_backend.get_backend", lambda: FakeDB())
+    monkeypatch.setattr(module, "_spawn_worker", lambda *_args, **_kwargs: calls.append("spawn_worker"))
+
+    with pytest.raises(SystemExit) as exc:
+        module.main()
+
+    assert exc.value.code == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["error_type"] == "factory_migration_readiness_failed"
+    assert payload["migration_readiness"]["missing_migrations"] == ["000004"]
+    assert "migrate --module factory" in payload["error"]
+    assert calls == ["ensure_runtime_schema"]
 
 
 def test_spawn_worker_uses_current_python_module_not_path_hermes(monkeypatch, tmp_path):

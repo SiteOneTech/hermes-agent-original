@@ -34,6 +34,7 @@
 | `CHANGELOG.md` / `CHANGE_RECORDS.md` | per merged increment (FRE-016) |
 | `RETROSPECTIVE.md` | end of sprint / project closure |
 | `RETROSPECTIVE_FRE_025.md` | FRE-025 incident, controls, migration procedure, test evidence, and remaining delivery limitation |
+| `IMPLEMENTATION_REPORT_FRE_027.md` | FRE-027 migration-readiness preflight, module-scoped migration path, TDD evidence, and live-DB boundary |
 | `NOTION_UPDATE.md` | human PM projection, if/when required |
 
 ## 3. Source-of-truth hierarchy

@@ -69,6 +69,7 @@ failures, resolved-gate mentions, missing-doc/artifact reconciliation findings
 | FRE-015 | Independent security review of the whole increment set with real evidence. |
 | FRE-017 | Cron resume order + evidence; no credential changes; no prod deploy. devops-release. |
 | FRE-025 | Manual authority/provenance fail closed; technical hold preserves supervision and `manual_attention`; source integration or explicit Jean waiver required. Independent security/quality review REQUIRED. |
+| FRE-027 | Migration readiness fails closed before Factory lease/claim/spawn; runtime code performs no DDL fallback; recovery uses canonical module-scoped migration/verification; `factory_runtime` privileges are explicitly verified. Independent review REQUIRED. |
 
 ## 5. Delivery boundary
 

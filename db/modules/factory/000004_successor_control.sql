@@ -35,3 +35,20 @@ CREATE TABLE IF NOT EXISTS factory.project_successions (
 );
 CREATE INDEX IF NOT EXISTS idx_factory_project_successions_predecessor_status
   ON factory.project_successions(predecessor_project_id, status, declared_at);
+
+-- Runtime grants are repeated here deliberately. Earlier deployed databases may
+-- have recorded a 000003 Factory migration before the runtime-grants file was
+-- present, so 000004 must make the new successor-control tables usable by the
+-- least-privilege Factory runtime role without relying on a runtime DDL fallback.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'factory_runtime') THEN
+    GRANT SELECT, INSERT, UPDATE ON factory.runtime_leases TO factory_runtime;
+    GRANT SELECT, INSERT, UPDATE ON factory.project_successions TO factory_runtime;
+    GRANT USAGE, SELECT ON SEQUENCE factory.project_successions_succession_id_seq TO factory_runtime;
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'agent_runtime') THEN
+    GRANT SELECT ON factory.runtime_leases TO agent_runtime;
+    GRANT SELECT ON factory.project_successions TO agent_runtime;
+  END IF;
+END $$;

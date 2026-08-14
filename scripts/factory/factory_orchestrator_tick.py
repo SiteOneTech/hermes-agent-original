@@ -369,6 +369,21 @@ def main() -> None:
         from hermes_cli import factory_backend, factory_pg
 
         db = factory_backend.get_backend()
+        if hasattr(db, "ensure_runtime_schema"):
+            try:
+                db.ensure_runtime_schema()
+            except Exception as exc:
+                diagnostic = getattr(exc, "diagnostic", None)
+                if not isinstance(diagnostic, dict):
+                    raise
+                print(json.dumps({
+                    "job": "factory_orchestrator_tick",
+                    "error_type": "factory_migration_readiness_failed",
+                    "error": str(exc),
+                    "migration_readiness": diagnostic,
+                    "timestamp": _now(),
+                }, ensure_ascii=False, indent=2))
+                sys.exit(1)
         project_id = os.environ.get("FACTORY_TICK_PROJECT_ID") or None
         supervisor = []
         if hasattr(db, "supervisor_health_check") and not project_id:
