@@ -44,6 +44,9 @@ Scope: documentation-only; no runtime code. QA gate = documentary verification:
 | FRE-025 RED/GREEN | exact behavior-test node selection via the explicitly required venv Python | meaningful RED, then identical selection GREEN |
 | FRE-025 focused | `HERMES_PYTHON=/home/jean/Projects/hermes-agent-original/venv/bin/python scripts/run_tests.sh tests/hermes_cli/test_factory_successor_control.py tests/hermes_cli/test_factory_orchestrator_tick.py tests/hermes_cli/test_factory_control_plane_refactor.py tests/hermes_cli/test_factory_increment_integration.py tests/hermes_cli/test_factory_cron_control_plane.py tests/factory/test_factory_watchdog_alerts.py` | all pass |
 | FRE-025 hygiene | `git diff --check` | no output; exit 0 |
+| FRE-027 RED/GREEN | missing-000004 readiness, orchestrator preflight, and module-scoped migration CLI selections via `scripts/run_tests.sh` | meaningful RED, then focused GREEN |
+| FRE-027 focused | `HERMES_PYTHON=/home/jean/Projects/hermes-agent-original/venv/bin/python scripts/run_tests.sh tests/hermes_cli/test_factory_successor_control.py tests/hermes_cli/test_factory_orchestrator_tick.py tests/hermes_cli/test_factory_control_plane_refactor.py tests/hermes_cli/test_factory_increment_integration.py tests/hermes_cli/test_factory_cron_control_plane.py tests/factory/test_factory_watchdog_alerts.py tests/scripts/test_agent_core_db_migrations.py tests/hermes_cli/test_agent_core_sql.py tests/hermes_cli/test_factory.py` | all pass |
+| FRE-027 scripts/roles | `scripts/run_tests.sh tests/scripts/test_agent_core_roles.py`; `python3 -m py_compile ...`; `git diff --check`; `agent_core_db.py migrate/verify --help` | pass; module-scoped migration path advertised |
 
 ## 4. Evidence capture rules
 

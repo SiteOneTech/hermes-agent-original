@@ -67,6 +67,18 @@ MODULES = {
     },
 }
 
+DEFAULT_MIGRATION_MODULE_ORDER = [
+    "agent_core",
+    "factory",
+    "agent_management",
+    "calendar",
+    "crm",
+    "sales_operator",
+    "fitness",
+    "signature",
+]
+FACTORY_SUCCESSOR_CONTROL_VERSION = "000004"
+
 
 def load_env_file(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
@@ -173,6 +185,93 @@ ON CONFLICT (module, version) DO UPDATE SET checksum = EXCLUDED.checksum;
     psql(env, database, sql)
 
 
+def _module_database(env: dict[str, str], module: str) -> str:
+    spec = MODULES[module]
+    return env[spec["database_env"]]
+
+
+def _selected_modules(requested: list[str] | None) -> list[str]:
+    if not requested:
+        return list(DEFAULT_MIGRATION_MODULE_ORDER)
+    modules: list[str] = []
+    for module in requested:
+        if module not in modules:
+            modules.append(module)
+    return modules
+
+
+def _parse_verification_rows(stdout: str) -> dict[str, str]:
+    checks: dict[str, str] = {}
+    for line in stdout.splitlines():
+        if not line.strip():
+            continue
+        name, sep, status = line.partition("|")
+        checks[name.strip()] = status.strip() if sep else "missing_status"
+    return checks
+
+
+def verify_factory_module(env: dict[str, str]) -> dict[str, object]:
+    """Verify Factory successor-control migration and runtime-role privileges."""
+
+    database = _module_database(env, "factory")
+    runtime_role = env.get("FACTORY_DB_RUNTIME_USER", "factory_runtime")
+    version = FACTORY_SUCCESSOR_CONTROL_VERSION
+    sql = f"""
+SELECT 'factory:{version}', CASE WHEN EXISTS (
+  SELECT 1 FROM agent_core.schema_migrations
+  WHERE module = 'factory' AND version = {quote_literal(version)}
+) THEN 'ok' ELSE 'missing' END
+UNION ALL
+SELECT 'factory.runtime_leases', CASE WHEN to_regclass('factory.runtime_leases') IS NOT NULL THEN 'ok' ELSE 'missing' END
+UNION ALL
+SELECT 'factory.project_successions', CASE WHEN to_regclass('factory.project_successions') IS NOT NULL THEN 'ok' ELSE 'missing' END
+UNION ALL
+SELECT 'factory.runtime_leases:{runtime_role}:write', CASE WHEN to_regclass('factory.runtime_leases') IS NOT NULL
+  AND has_table_privilege({quote_literal(runtime_role)}, 'factory.runtime_leases', 'SELECT')
+  AND has_table_privilege({quote_literal(runtime_role)}, 'factory.runtime_leases', 'INSERT')
+  AND has_table_privilege({quote_literal(runtime_role)}, 'factory.runtime_leases', 'UPDATE')
+  THEN 'ok' ELSE 'missing' END
+UNION ALL
+SELECT 'factory.project_successions:{runtime_role}:write', CASE WHEN to_regclass('factory.project_successions') IS NOT NULL
+  AND has_table_privilege({quote_literal(runtime_role)}, 'factory.project_successions', 'SELECT')
+  AND has_table_privilege({quote_literal(runtime_role)}, 'factory.project_successions', 'INSERT')
+  AND has_table_privilege({quote_literal(runtime_role)}, 'factory.project_successions', 'UPDATE')
+  THEN 'ok' ELSE 'missing' END
+UNION ALL
+SELECT 'factory.project_successions_succession_id_seq:{runtime_role}', CASE WHEN to_regclass('factory.project_successions_succession_id_seq') IS NOT NULL
+  AND has_sequence_privilege({quote_literal(runtime_role)}, 'factory.project_successions_succession_id_seq', 'USAGE')
+  AND has_sequence_privilege({quote_literal(runtime_role)}, 'factory.project_successions_succession_id_seq', 'SELECT')
+  THEN 'ok' ELSE 'missing' END;
+"""
+    proc = psql(env, database, sql)
+    checks = _parse_verification_rows(proc.stdout)
+    failed = [name for name, status in checks.items() if status != "ok"]
+    result: dict[str, object] = {
+        "module": "factory",
+        "database": database,
+        "required_version": version,
+        "runtime_role": runtime_role,
+        "ready": not failed,
+        "checks": checks,
+        "failed_checks": failed,
+    }
+    if failed:
+        raise SystemExit(
+            "Factory migration verification failed for successor-control readiness: "
+            f"{', '.join(failed)}. Run `python scripts/agent_core_db.py migrate --module factory`, "
+            "ensure runtime roles with `python scripts/agent_core_roles.py`, then confirm with "
+            "`python scripts/agent_core_db.py verify --module factory`."
+        )
+    print(f"factory:{version} readiness verified for runtime role {runtime_role}")
+    return result
+
+
+def verify_module(env: dict[str, str], module: str) -> dict[str, object]:
+    if module == "factory":
+        return verify_factory_module(env)
+    return {"module": module, "ready": True, "checks": {}}
+
+
 def migration_version(path: Path) -> str:
     return path.name.split("_", 1)[0]
 
@@ -230,7 +329,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Manage Agent Core PostgreSQL runtime")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("up", help="Start Agent Core PostgreSQL")
-    sub.add_parser("migrate", help="Apply core module migrations")
+    migrate = sub.add_parser("migrate", help="Apply core module migrations")
+    migrate.add_argument("--module", choices=sorted(MODULES), action="append", help="Apply only this module's migrations; repeat for multiple modules")
+    migrate.add_argument("--no-verify", action="store_true", help="Skip post-migration module readiness verification")
+    verify = sub.add_parser("verify", help="Verify module migration readiness without applying DDL")
+    verify.add_argument("--module", choices=sorted(MODULES), action="append", help="Verify only this module; repeat for multiple modules")
     sub.add_parser("status", help="Show DB status and applied migrations")
     ext = sub.add_parser("apply-external", help="Apply external SQL directory into a module database")
     ext.add_argument("--module", required=True)
@@ -249,14 +352,16 @@ def main() -> None:
         print(f"Agent Core DB ready: {env['AGENT_DB_NAME']} + {env['AGENT_CALENDAR_DB_NAME']} + crm:{env.get('AGENT_CRM_DB_NAME', env['AGENT_DB_NAME'])} + fitness:{env.get('AGENT_FITNESS_DB_NAME', env['AGENT_DB_NAME'])} + signature:{env.get('AGENT_SIGNATURE_DB_NAME', env['AGENT_DB_NAME'])} + agent_management:{env.get('AGENT_AGENT_MANAGEMENT_DB_NAME', env['AGENT_DB_NAME'])}")
     elif args.command == "migrate":
         compose(env, ["up", "-d"])
-        ensure_database(env, env["AGENT_DB_NAME"])
-        ensure_database(env, env["AGENT_CALENDAR_DB_NAME"])
-        ensure_database(env, env.get("AGENT_CRM_DB_NAME", env["AGENT_DB_NAME"]))
-        ensure_database(env, env.get("AGENT_FITNESS_DB_NAME", env["AGENT_DB_NAME"]))
-        ensure_database(env, env.get("AGENT_SIGNATURE_DB_NAME", env["AGENT_DB_NAME"]))
-        ensure_database(env, env.get("AGENT_AGENT_MANAGEMENT_DB_NAME", env["AGENT_DB_NAME"]))
-        for module in ["agent_core", "factory", "agent_management", "calendar", "crm", "sales_operator", "fitness", "signature"]:
+        modules = _selected_modules(args.module)
+        for database in sorted({_module_database(env, module) for module in modules}):
+            ensure_database(env, database)
+        for module in modules:
             apply_module(env, module)
+            if not args.no_verify:
+                verify_module(env, module)
+    elif args.command == "verify":
+        for module in _selected_modules(args.module):
+            verify_module(env, module)
     elif args.command == "status":
         status(env)
     elif args.command == "apply-external":
