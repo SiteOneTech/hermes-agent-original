@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -205,6 +207,88 @@ def test_spawn_worker_terminates_new_process_when_run_registration_fails(monkeyp
         module._spawn_worker(FailingDB(), payload, claim)
 
     assert terminated == [54321]
+
+
+def test_spawn_worker_fails_closed_when_worktree_preparation_is_unavailable(monkeypatch, tmp_path):
+    module = _load_orchestrator_module()
+
+    monkeypatch.setattr(module, "_home", lambda: tmp_path)
+    preparation = {
+        "ready": False,
+        "reason": "missing_repo_branch_or_worktree",
+        "cwd": str(tmp_path / "live-checkout-must-not-run-worker"),
+    }
+    monkeypatch.setattr(module, "_prepare_worktree", lambda _payload, _claim: preparation)
+
+    class NoPopen:
+        def __init__(self, *_args, **_kwargs):
+            raise AssertionError("worker must not launch without an isolated worktree")
+
+    monkeypatch.setattr(module.subprocess, "Popen", NoPopen)
+    captured: dict[str, Any] = {}
+
+    class FakeDB:
+        def mark_run_finished(self, run_id, *, exit_code, output_summary):
+            captured["finished"] = {
+                "run_id": run_id,
+                "exit_code": exit_code,
+                "output_summary": output_summary,
+            }
+
+        def update_run_metadata(self, run_id, metadata):
+            captured["metadata"] = {"run_id": run_id, **metadata}
+
+    payload = {
+        "projects": [{"project_id": "demo-project", "repo_path": str(tmp_path)}],
+        "tasks": [],
+        "gates": [],
+    }
+    claim = {
+        "run_id": "run-no-worktree",
+        "worker_profile": "factory-reporter",
+        "task": {
+            "project_id": "demo-project",
+            "task_id": "reconcile-docs",
+            "title": "Reconcile docs",
+            "phase": "documentation",
+            "engine": "zeus",
+            "status": "claimed",
+            "branch": None,
+            "worktree_path": None,
+            "acceptance_criteria": [],
+            "dependencies": [],
+        },
+    }
+
+    result = module._spawn_worker(FakeDB(), payload, claim)
+
+    assert result["spawned"] is False
+    assert result["worktree_preparation"] == preparation
+    assert "missing_repo_branch_or_worktree" in result["reason"]
+    assert captured["finished"]["run_id"] == "run-no-worktree"
+    assert captured["finished"]["exit_code"] == 1
+    assert "worktree preflight failed" in captured["finished"]["output_summary"]
+    assert captured["metadata"]["worktree_preparation"] == preparation
+    assert captured["metadata"]["dispatch_refused_reason"] == "missing_repo_branch_or_worktree"
+    assert captured["metadata"]["dispatch_refused"] is True
+    assert captured["metadata"]["technical_block"] is True
+    assert captured["metadata"]["technical_block_reason"] == "worktree_preflight_unavailable"
+    assert captured["metadata"]["worker_cwd"] is None
+
+    summary = captured["finished"]["output_summary"]
+    assert summary.splitlines()[0] == "STATE: BLOCKED"
+    assert "Technical block: worktree preflight failed" in summary
+    assert "No worker was launched and no fallback cwd was used." in summary
+    assert "worktree_preflight_evidence" in summary
+    assert '"ready": false' in summary
+
+    preflight_path = Path(captured["metadata"]["worktree_preflight_path"])
+    assert preflight_path.is_file()
+    preflight_evidence = json.loads(preflight_path.read_text(encoding="utf-8"))
+    assert preflight_evidence["ready"] is False
+    assert preflight_evidence["reason"] == "missing_repo_branch_or_worktree"
+    assert preflight_evidence["worktree_preparation"] == preparation
+    assert Path(captured["metadata"]["exit_path"]).read_text(encoding="utf-8") == "1"
 
 
 def test_prepare_worktree_starts_new_increment_from_origin_base(monkeypatch, tmp_path):
