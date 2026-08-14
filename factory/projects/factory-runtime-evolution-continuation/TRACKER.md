@@ -29,6 +29,7 @@
 | FRE-020 Technical rework escalation and canonical continuation recovery | implemented (local branch; not pushed/closed) | claude-builder | quality-reviewer + solution-architect | TDD RED commit `4e2d163ac`; GREEN focused Factory tests 134/134; code/docs committed on assigned branch |
 | FRE-021 Review outcome semantic integrity and failed-review recovery | implemented (local branch; not pushed/closed) | claude-builder | quality-reviewer | TDD RED observed before production change; GREEN targeted 2/2 and focused Factory tests 136/136; code/docs committed on assigned branch |
 | FRE-022 Strict canonical semantic marker lexical contract | implemented (local branch; not pushed/closed) | claude-builder | security-reviewer | TDD RED observed before production change; GREEN targeted 17/17, preservation 2/2, and focused Factory tests 153/153; code/docs committed on assigned branch |
+| FRE-023 Reviewed G1 candidate visibility and fail-closed preflight | claimed/in implementation | claude-builder | security-reviewer + quality-reviewer | TDD coverage in `tests/hermes_cli/test_factory_control_plane_refactor.py`; resolver in `hermes_cli/factory_pg.py` |
 | FRE-025 Pause provenance, technical holds, and source-delivery guard | implemented; owner verification in progress | implementation owner | independent reviewer | behavior RED/GREEN + exact focused suite + `RETROSPECTIVE_FRE_025.md` |
 | FRE-027 Enforce Factory migration readiness before orchestration | implemented; owner verification complete | claude-builder | qa/security/quality gates as assigned | migration-readiness RED/GREEN + focused Factory suite + `IMPLEMENTATION_REPORT_FRE_027.md` |
 
@@ -97,6 +98,27 @@
 15. FRE-022 implemented controls:
     - `hermes_cli/factory_pg.py`: `_semantic_state_from_line()` now uses an exact canonical marker map after ANSI/leading-decoration cleanup; removed case-insensitive/flexible-whitespace regex matching and legacy no-space `STATE:DONE` marker acceptance.
     - `tests/hermes_cli/test_factory_control_plane_refactor.py`: lexical contract tests assert six exact canonical forms accepted and listed noncanonical variants/suffixed prose rejected.
+
+5. FRE-023 TDD evidence (2026-08-10): RED
+   `scripts/run_tests.sh tests/hermes_cli/test_factory_control_plane_refactor.py -k 'reviewed_g1_candidate or unverified_g1_worktree'`
+   failed before implementation with `KeyError: 'readiness_source'` and the exact
+   candidate readiness assertion still blocking. GREEN after the resolver:
+   the same command passed `11 tests passed, 0 failed`; the full focused file
+   passed `101 tests passed, 0 failed`; sibling checks
+   `scripts/run_tests.sh tests/hermes_cli/test_factory_increment_integration.py tests/hermes_cli/test_factory.py tests/hermes_cli/test_factory_orchestrator_tick.py`
+   passed `20 tests passed, 0 failed`; the full factory set
+   `scripts/run_tests.sh tests/hermes_cli/test_factory*.py` passed
+   `138 tests passed, 0 failed`.
+6. FRE-023 implementation contract: primary checkout remains the default
+   document source; `reviewed_g1_candidate` metadata is accepted only when path,
+   branch, SHA, clean git readback, open PR head evidence, independent review
+   evidence, and committed positive G1 markers all match. Invalid metadata,
+   dirty artifacts, wrong SHA/branch, closed/stale/wrong-head PR evidence, and
+   negative document markers fall back to primary blockers.
+7. FRE-023 independent security review evidence (Claude Code Haiku review session
+   `2b4e6ba7-f234-4a4c-a6e4-8df87e798a50`): PASS. Reviewer found no bypass for
+   path/branch/SHA readback, clean checkout, open PR head, independent review,
+   primary-default behavior, unverified-worktree bypass, or external side effects.
 
 ## 3. Gate log
 

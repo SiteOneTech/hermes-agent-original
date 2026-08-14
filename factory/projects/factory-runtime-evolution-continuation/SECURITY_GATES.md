@@ -68,6 +68,7 @@ failures, resolved-gate mentions, missing-doc/artifact reconciliation findings
 | FRE-014 | Reopen preflight cannot be bypassed; lineage metadata immutable-by-convention; approval path for cancelled/superseded. security-reviewer + solution-architect. |
 | FRE-015 | Independent security review of the whole increment set with real evidence. |
 | FRE-017 | Cron resume order + evidence; no credential changes; no prod deploy. devops-release. |
+| FRE-023 | Reviewed G1 candidate resolver must fail closed unless metadata path/branch/SHA readback, clean committed checkout, open PR head evidence, and independent review evidence all match; no runtime, Gateway, deploy, credential, or external-write behavior changes. security-reviewer review REQUIRED. |
 | FRE-025 | Manual authority/provenance fail closed; technical hold preserves supervision and `manual_attention`; source integration or explicit Jean waiver required. Independent security/quality review REQUIRED. |
 | FRE-027 | Migration readiness fails closed before Factory lease/claim/spawn; runtime code performs no DDL fallback; recovery uses canonical module-scoped migration/verification; `factory_runtime` privileges are explicitly verified. Independent review REQUIRED. |
 
