@@ -324,7 +324,55 @@ def _spawn_worker(db: Any, payload: dict[str, Any], claim: dict[str, Any]) -> di
     prompt_path = base / "prompt.md"
     log_path = base / "worker.log"
     exit_path = base / "exit_code.txt"
+    preflight_path = base / "worktree_preflight.json"
     worktree_state = _prepare_worktree(payload, claim)
+    if not worktree_state.get("ready"):
+        reason = str(worktree_state.get("reason") or "worktree_preparation_failed")
+        preflight_evidence = {
+            "run_id": run_id,
+            "worker_profile": worker,
+            "ready": False,
+            "reason": reason,
+            "worktree_preparation": worktree_state,
+        }
+        preflight_path.write_text(json.dumps(preflight_evidence, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+        exit_path.write_text("1", encoding="utf-8")
+        summary = "\n".join(
+            [
+                "STATE: BLOCKED",
+                f"Technical block: worktree preflight failed; worker launch refused: {reason}",
+                "No worker was launched and no fallback cwd was used.",
+                f"worktree_preflight_path: {preflight_path}",
+                "worktree_preflight_evidence:",
+                json.dumps(preflight_evidence, ensure_ascii=False, indent=2, sort_keys=True),
+            ]
+        )
+        db.update_run_metadata(
+            run_id,
+            {
+                "exit_path": str(exit_path),
+                "spawned_by": "factory_orchestrator_tick",
+                "worktree_preparation": worktree_state,
+                "worktree_preflight_path": str(preflight_path),
+                "worker_cwd": None,
+                "dispatch_refused": True,
+                "dispatch_refused_reason": reason,
+                "technical_block": True,
+                "technical_block_reason": "worktree_preflight_unavailable",
+            },
+        )
+        db.mark_run_finished(run_id, exit_code=1, output_summary=summary)
+        return {
+            "run_id": run_id,
+            "worker_profile": worker,
+            "spawned": False,
+            "reason": reason,
+            "log_path": str(log_path),
+            "prompt_path": str(prompt_path),
+            "worktree_preparation": worktree_state,
+            "worktree_preflight_path": str(preflight_path),
+            "worker_cwd": None,
+        }
     prompt = _task_prompt(payload, claim) + "\n\nPreparación runtime de worktree:\n" + json.dumps(worktree_state, ensure_ascii=False, indent=2)
     prompt_path.write_text(prompt, encoding="utf-8")
 
