@@ -15,6 +15,44 @@ import pytest
 # Helpers
 # ---------------------------------------------------------------------------
 
+@pytest.fixture(autouse=True)
+def _no_real_gateway_service(monkeypatch):
+    """run_import() auto-installs the gateway service post-restore; tests must
+    never touch the host's systemd/launchd. Individual tests re-patch these to
+    assert the wiring."""
+    import hermes_cli.gateway as gateway_mod
+
+    monkeypatch.setattr(gateway_mod, "ensure_gateway_service", lambda **kw: False)
+    monkeypatch.setattr(gateway_mod, "_is_service_running", lambda: False)
+
+
+def _advance_backup_clock(seconds: float = 1.1) -> None:
+    """Skew hermes_cli.backup's datetime forward instead of sleeping.
+
+    Snapshot ids have 1-second resolution; tests that need two distinct
+    timestamps previously slept >1s. This installs (once) a datetime shim in
+    the backup module whose now() adds a cumulative offset, then bumps it.
+    """
+    import datetime as _dt
+
+    import hermes_cli.backup as _backup
+
+    shim = getattr(_backup.datetime, "_hermes_test_shim", None)
+    if shim is None:
+        class _ShimDatetime(_dt.datetime):
+            _hermes_test_shim = True
+            _offset = _dt.timedelta(0)
+
+            @classmethod
+            def now(cls, tz=None):  # noqa: D102
+                return _dt.datetime.now(tz) + cls._offset
+
+        _backup.datetime = _ShimDatetime
+        shim = _ShimDatetime
+    else:
+        shim = _backup.datetime
+    shim._offset += _dt.timedelta(seconds=seconds)
+
 def _make_hermes_tree(root: Path) -> None:
     """Create a realistic ~/.hermes directory structure for testing."""
     (root / "config.yaml").write_text("model:\n  provider: openrouter\n")
@@ -561,6 +599,81 @@ class TestImport:
                     zf.writestr(name, content)
                 else:
                     zf.writestr(name, content)
+
+    def test_import_auto_installs_gateway_service(self, tmp_path, monkeypatch):
+        """After a restore, run_import brings the gateway service up without
+        prompting — restored cron jobs and bot tokens must not sit dormant
+        (the install-then-import dead-gateway bug)."""
+        import hermes_cli.gateway as gateway_mod
+
+        hermes_home = tmp_path / ".hermes"
+        hermes_home.mkdir()
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        calls = []
+        monkeypatch.setattr(
+            gateway_mod, "ensure_gateway_service",
+            lambda **kw: calls.append(kw) or True,
+        )
+        monkeypatch.setattr(gateway_mod, "_is_service_running", lambda: False)
+
+        zip_path = tmp_path / "backup.zip"
+        self._make_backup_zip(zip_path, {"config.yaml": "model: test\n"})
+
+        from hermes_cli.backup import run_import
+        run_import(Namespace(zipfile=str(zip_path), force=True))
+
+        assert calls and calls[0].get("context") == "import"
+
+    def test_import_skips_service_when_already_running(self, tmp_path, monkeypatch):
+        """A live gateway is left alone — no reinstall churn during import."""
+        import hermes_cli.gateway as gateway_mod
+
+        hermes_home = tmp_path / ".hermes"
+        hermes_home.mkdir()
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        calls = []
+        monkeypatch.setattr(
+            gateway_mod, "ensure_gateway_service",
+            lambda **kw: calls.append(kw) or True,
+        )
+        monkeypatch.setattr(gateway_mod, "_is_service_running", lambda: True)
+
+        zip_path = tmp_path / "backup.zip"
+        self._make_backup_zip(zip_path, {"config.yaml": "model: test\n"})
+
+        from hermes_cli.backup import run_import
+        run_import(Namespace(zipfile=str(zip_path), force=True))
+
+        assert not calls
+
+    def test_import_survives_service_layer_import_failure(self, tmp_path, monkeypatch, capsys):
+        """If the service helpers can't even be reached, import still completes
+        and prints the manual fallback."""
+        hermes_home = tmp_path / ".hermes"
+        hermes_home.mkdir()
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        import hermes_cli.gateway as gateway_mod
+
+        def boom():
+            raise RuntimeError("service layer unavailable")
+
+        monkeypatch.setattr(gateway_mod, "_is_service_running", boom)
+
+        zip_path = tmp_path / "backup.zip"
+        self._make_backup_zip(zip_path, {"config.yaml": "model: test\n"})
+
+        from hermes_cli.backup import run_import
+        run_import(Namespace(zipfile=str(zip_path), force=True))
+
+        out = capsys.readouterr().out
+        assert "Done. Your Hermes configuration has been restored." in out
+        assert "hermes gateway install" in out
 
     def test_restores_files(self, tmp_path, monkeypatch):
         """Import extracts files into hermes home."""
@@ -2840,30 +2953,3 @@ class TestMemoryProviderExternalPaths:
 
         paths = HindsightMemoryProvider().backup_paths()
         assert str(tmp_path / ".hindsight") in paths
-
-def _advance_backup_clock(seconds: float = 1.1) -> None:
-    """Skew hermes_cli.backup's datetime forward instead of sleeping.
-
-    Snapshot ids have 1-second resolution; tests that need two distinct
-    timestamps previously slept >1s. This installs (once) a datetime shim in
-    the backup module whose now() adds a cumulative offset, then bumps it.
-    """
-    import datetime as _dt
-
-    import hermes_cli.backup as _backup
-
-    shim = getattr(_backup.datetime, "_hermes_test_shim", None)
-    if shim is None:
-        class _ShimDatetime(_dt.datetime):
-            _hermes_test_shim = True
-            _offset = _dt.timedelta(0)
-
-            @classmethod
-            def now(cls, tz=None):  # noqa: D102
-                return _dt.datetime.now(tz) + cls._offset
-
-        _backup.datetime = _ShimDatetime
-        shim = _ShimDatetime
-    else:
-        shim = _backup.datetime
-    shim._offset += _dt.timedelta(seconds=seconds)

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import os
-import signal
 import subprocess
 import time
 import sys
@@ -292,27 +291,48 @@ def _prepare_worktree(payload: dict[str, Any], claim: dict[str, Any]) -> dict[st
 
 
 def _terminate_unregistered_worker(proc: subprocess.Popen[Any]) -> None:
-    """Terminate and reap the worker's dedicated process group on registration failure."""
+    """Terminate an unregistered worker tree on every supported host OS.
+
+    The worker is spawned in a new session, but ``os.killpg`` is POSIX-only.
+    Use the core ``psutil`` dependency to snapshot the worker and its children,
+    terminate them gracefully, then escalate surviving members. This keeps the
+    registration-failure rollback from leaving a worker running on Windows.
+    """
+    import psutil
 
     try:
-        os.killpg(proc.pid, signal.SIGTERM)
-    except ProcessLookupError:
+        root = psutil.Process(proc.pid)
+    except psutil.NoSuchProcess:
         return
+
+    try:
+        targets = root.children(recursive=True)
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        targets = []
+    targets.append(root)
+
+    for target in targets:
+        try:
+            target.terminate()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
+    try:
+        _gone, alive = psutil.wait_procs(targets, timeout=5)
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        alive = []
+
+    for target in alive:
+        try:
+            target.kill()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
     try:
         proc.wait(timeout=5)
-        return
     except subprocess.TimeoutExpired:
-        pass
-    try:
-        os.killpg(proc.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        return
-    try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        # A process group that survives SIGKILL is a kernel-level anomaly; the
-        # Factory run was never registered and the caller will rollback state.
-        # Do not signal an arbitrary parent process as a fallback.
+        # A survivor after escalation is a kernel-level anomaly; the Factory
+        # run was never registered and the caller rolls back its DB state.
         return
 
 

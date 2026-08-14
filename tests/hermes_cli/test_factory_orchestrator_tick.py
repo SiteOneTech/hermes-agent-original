@@ -156,7 +156,40 @@ def test_spawn_worker_terminates_new_process_when_run_registration_fails(monkeyp
 
     terminated: list[int] = []
     monkeypatch.setattr(module.subprocess, "Popen", FakePopen)
-    monkeypatch.setattr(module.os, "killpg", lambda pid, _signal: terminated.append(pid))
+
+    class FakeProcess:
+        pid = 54321
+
+        def children(self, *, recursive: bool):
+            assert recursive is True
+            return []
+
+        def terminate(self):
+            terminated.append(self.pid)
+
+        def kill(self):
+            raise AssertionError("worker should exit during the graceful wait")
+
+    class FakePsutil:
+        class NoSuchProcess(Exception):
+            pass
+
+        @staticmethod
+        def Process(pid):
+            assert pid == 54321
+            return FakeProcess()
+
+        @staticmethod
+        def wait_procs(processes, *, timeout):
+            assert timeout == 5
+            return processes, []
+
+    monkeypatch.setitem(sys.modules, "psutil", FakePsutil)
+    monkeypatch.setattr(
+        module.os,
+        "killpg",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("POSIX killpg must not be used")),
+    )
 
     class FailingDB:
         def mark_run_spawned(self, *_args, **_kwargs):
