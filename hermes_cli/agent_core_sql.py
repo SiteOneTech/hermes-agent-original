@@ -171,8 +171,9 @@ def statement_one(statement_sql: str, *, database: str | None = None, user: str 
     PostgreSQL does not allow ``INSERT ... RETURNING`` directly inside a FROM
     subquery, so DML statements are wrapped as a writable CTE.
     """
+    statement = statement_sql.strip().rstrip(";").rstrip()
     data = json_query(
-        f"WITH q AS ({statement_sql}) SELECT to_jsonb(q)::text FROM q LIMIT 1;",
+        f"WITH q AS ({statement}) SELECT to_jsonb(q)::text FROM q LIMIT 1;",
         database=database,
         user=user,
     )
