@@ -514,7 +514,7 @@ def release_global_control_plane_lease(holder: str) -> None:
     if not holder_value:
         return
     sql.psql(
-        f"DELETE FROM factory.runtime_leases WHERE lease_key={_q(GLOBAL_CONTROL_PLANE_LEASE_KEY)} AND holder={_q(holder_value)};",
+        f"UPDATE factory.runtime_leases SET expires_at=now() WHERE lease_key={_q(GLOBAL_CONTROL_PLANE_LEASE_KEY)} AND holder={_q(holder_value)};",
         user=_user(),
     )
 

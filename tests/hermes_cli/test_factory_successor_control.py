@@ -231,3 +231,29 @@ def test_force_tick_skips_when_global_control_lease_is_held(monkeypatch):
 
     assert result["skipped"] is True
     assert result["reason"] == "global_control_plane_lease_held"
+
+
+def test_global_lease_release_expires_the_callers_lease_without_delete_permission(monkeypatch):
+    statements: list[str] = []
+
+    class FakeSql:
+        @staticmethod
+        def psql(query, **_kwargs):
+            statements.append(query)
+
+        @staticmethod
+        def quote_literal(value):
+            return "'" + str(value).replace("'", "''") + "'"
+
+        @staticmethod
+        def runtime_env():
+            return {}
+
+    monkeypatch.setattr(factory_pg, "sql", FakeSql)
+
+    factory_pg.release_global_control_plane_lease("tick-a")
+
+    query = "\n".join(statements)
+    assert "UPDATE factory.runtime_leases" in query
+    assert "expires_at=now()" in query
+    assert "DELETE FROM factory.runtime_leases" not in query
