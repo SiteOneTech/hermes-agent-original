@@ -32,7 +32,11 @@ DEFAULTS = {
     "FITNESS_DB_RUNTIME_USER": "fitness_runtime",
     "SIGNATURE_DB_RUNTIME_USER": "signature_runtime",
     "AGENT_MANAGEMENT_DB_RUNTIME_USER": "agent_management_runtime",
+    "ALPHA_RESEARCH_DB_RUNTIME_USER": "alpha_research_runtime",
+    "ALPHA_RESEARCH_DB_REVIEWER_USER": "alpha_research_reviewer",
 }
+# Alpha Research roles intentionally have no shared-password fallback: the
+# research ledger only opens with its own dedicated Infisical secrets.
 SHARED_RUNTIME_PASSWORD_FALLBACKS = {
     "AGENT_MANAGEMENT_DB_RUNTIME_PASSWORD": "AGENT_DB_RUNTIME_PASSWORD",
 }
@@ -66,6 +70,8 @@ def _fill_passwords_from_urls(env: dict[str, str]) -> None:
         "FITNESS_DB_RUNTIME_PASSWORD": "FITNESS_DATABASE_URL",
         "SIGNATURE_DB_RUNTIME_PASSWORD": "SIGNATURE_DATABASE_URL",
         "AGENT_MANAGEMENT_DB_RUNTIME_PASSWORD": "AGENT_MANAGEMENT_DATABASE_URL",
+        "ALPHA_RESEARCH_DB_RUNTIME_PASSWORD": "ALPHA_RESEARCH_DATABASE_URL",
+        "ALPHA_RESEARCH_DB_REVIEWER_PASSWORD": "ALPHA_RESEARCH_REVIEWER_DATABASE_URL",
     }
     for password_key, url_key in pairs.items():
         if env.get(password_key):
