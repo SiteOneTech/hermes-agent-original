@@ -141,6 +141,35 @@ def test_mark_run_finished_review_success_reworks_when_merge_fails(fake_sql, mon
     assert "Increment integration failed before terminal close" in joined
 
 
+def test_mark_run_finished_failed_review_with_wrapped_instruction_remains_rework(fake_sql, monkeypatch):
+    calls: list[str] = []
+
+    def integrate(task_id: str, *, actor: str, final_status: str):
+        calls.append(task_id)
+        return {"increment_integration_required": True, "increment_integration_status": "integrated"}
+
+    monkeypatch.setattr(factory_pg, "_integrate_increment_to_base", integrate)
+    fake_sql.one_results = [
+        {"task_id": "task-1", "metadata": {"run_type": "review"}},
+        {"project_id": "demo"},
+    ]
+    output = (
+        "STATE: DONE; si falla, termina con STATE: BLOCKED y razones/rework.\n"
+        "RateLimitError [HTTP 429]: Token Plan usage limit reached.\n"
+        "API call failed after 3 retries."
+    )
+
+    factory_pg.mark_run_finished("run-1", exit_code=1, output_summary=output)
+
+    assert calls == []
+    joined = "\n".join(fake_sql.statements)
+    assert "SET status='failed'" in joined
+    assert "SET status='rework'" in joined
+    assert "SET status='done'" not in joined
+    assert "review_run_failed" in joined
+    assert "HTTP 429" in joined
+
+
 def test_passed_task_gate_requires_increment_integration(fake_sql, monkeypatch):
     calls: list[str] = []
 

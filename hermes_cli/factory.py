@@ -169,6 +169,23 @@ def cmd_project_close(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_project_reopen(args: argparse.Namespace) -> int:
+    backend = _backend(args)
+    result = backend.reopen_project(
+        args.project_id,
+        reason=args.reason,
+        actor=args.actor,
+        continuation_of=getattr(args, "continuation_of", None),
+    )
+    if args.json:
+        return _print_json(result)
+    if result.get("reopen_blocked"):
+        print(f"✗ Project {args.project_id}: reopen blocked ({result.get('reason')})")
+        return 1
+    print(f"✓ Project {args.project_id}: reopened canonically ({result.get('status')})")
+    return 0
+
+
 def cmd_project_link_notion(args: argparse.Namespace) -> int:
     backend = _backend(args)
     result = backend.link_notion_tracker(
@@ -345,6 +362,8 @@ def factory_command(args: argparse.Namespace) -> int:
             return cmd_project_create(args)
         if sub == "close":
             return cmd_project_close(args)
+        if sub in {"reopen", "continue"}:
+            return cmd_project_reopen(args)
         if sub == "link-notion":
             return cmd_project_link_notion(args)
         if sub == "takeover":
@@ -420,6 +439,14 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
     project_close.add_argument("--actor", default="factory-orchestrator")
     project_close.add_argument("--json", action="store_true")
     project_close.set_defaults(func=factory_command)
+
+    project_reopen = project_sub.add_parser("reopen", aliases=["continue"], help="Canonically reopen/continue a terminal project without creating a detached successor")
+    project_reopen.add_argument("project_id")
+    project_reopen.add_argument("--reason", required=True, help="Evidence-backed continuation reason recorded in Factory DB")
+    project_reopen.add_argument("--actor", default="factory-orchestrator")
+    project_reopen.add_argument("--continuation-of", help="Optional lineage/predecessor project id")
+    project_reopen.add_argument("--json", action="store_true")
+    project_reopen.set_defaults(func=factory_command)
 
     project_link_notion = project_sub.add_parser("link-notion", help="Write/readback canonical project-specific Notion PM tracker metadata")
     project_link_notion.add_argument("project_id")

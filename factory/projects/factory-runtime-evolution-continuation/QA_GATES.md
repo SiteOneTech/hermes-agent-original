@@ -41,6 +41,9 @@ Scope: documentation-only; no runtime code. QA gate = documentary verification:
 | FRE-014 | `scripts/run_tests.sh tests/hermes_cli/test_factory_project_reopen.py` + CLI smoke `hermes factory project reopen --help` | green; CLI registered |
 | FRE-015 | `scripts/run_tests.sh tests/hermes_cli/test_factory*.py` (full factory set) | all green or documented pre-existing failures |
 | FRE-017 | cron smoke per script + `hermes cronjob list` | exit 0; no unexpected alerts; evidence file |
+| FRE-020 | TDD RED command in TRACKER §2.5; GREEN focused command and full Factory set in TRACKER §2.6 | RED observed before production change; GREEN 9/9 and 134/134 after change |
+| FRE-021 | TDD RED command in TRACKER §2.8; GREEN targeted command and full focused Factory set in TRACKER §2.9 | RED observed before production change; GREEN 2/2 targeted and 136/136 focused Factory tests |
+| FRE-022 | TDD RED/GREEN commands in TRACKER §2; focused preservation checks and Factory regression set | RED observed before production change; GREEN 17/17 lexical targeted, 2/2 preservation targeted, and 153/153 focused Factory tests |
 | FRE-025 RED/GREEN | exact behavior-test node selection via the explicitly required venv Python | meaningful RED, then identical selection GREEN |
 | FRE-025 focused | `HERMES_PYTHON=/home/jean/Projects/hermes-agent-original/venv/bin/python scripts/run_tests.sh tests/hermes_cli/test_factory_successor_control.py tests/hermes_cli/test_factory_orchestrator_tick.py tests/hermes_cli/test_factory_control_plane_refactor.py tests/hermes_cli/test_factory_increment_integration.py tests/hermes_cli/test_factory_cron_control_plane.py tests/factory/test_factory_watchdog_alerts.py` | all pass |
 | FRE-025 hygiene | `git diff --check` | no output; exit 0 |
@@ -57,7 +60,41 @@ Scope: documentation-only; no runtime code. QA gate = documentary verification:
 - FLAKY results (`⚠ FLAKY` from the runner) are a bug to fix, not evidence to accept.
 - Never fabricate output; if a check cannot run (missing dependency/env), report BLOCKER.
 
-## 5. QA ownership
+## 5. FRE-020 QA evidence (2026-08-10)
+
+- Environment note: the assigned worktree has no local `.venv`; `scripts/run_tests.sh` was executed with `HERMES_PYTHON=/home/jean/Projects/hermes-agent-original/venv/bin/python`, which the runner accepted as the Nix/dev venv with pytest.
+- RED: test-only commit `4e2d163ac`; targeted behavioral tests failed 9/9 before production changes.
+- GREEN: targeted FRE-020 tests passed 9/9; focused Factory regression set passed 134/134.
+- No source-reading tests were added; assertions exercise runtime functions/CLI parser behavior and emitted SQL/event effects via the existing FakeSql test harness.
+
+## 6. FRE-021 QA evidence (2026-08-10)
+
+- Environment note: the assigned worktree has no local `.venv`; `scripts/run_tests.sh`
+  was executed with `HERMES_PYTHON=/home/jean/Projects/hermes-agent-original/venv/bin/python`.
+- RED: the new semantic/review tests failed before production changes because
+  `_semantic_state_from_line("STATE: DONE; si falla...")` returned `done`, and the failed
+  review path invoked increment integration from a wrapped instruction.
+- GREEN: the same targeted tests passed 2/2 after the production change; the focused
+  Factory regression set passed 136/136.
+- No source-reading tests were added; assertions exercise runtime parser functions and
+  review-run SQL/audit behavior through the existing FakeSql harness.
+
+## 7. FRE-022 QA evidence (2026-08-10)
+
+- Environment note: the assigned worktree has no local `.venv`; `scripts/run_tests.sh`
+  was executed with `HERMES_PYTHON=/home/jean/Projects/hermes-agent-original/venv/bin/python`.
+- RED: lexical-contract tests failed before production change with 8 rejected-variant rows
+  failing (`STATE:DONE`, `STATE : DONE`, `state: done`, `FINAL:STATE: DONE`, extra
+  internal whitespace, and case variants); six exact canonical marker rows remained green,
+  proving the test scope was the noncanonical acceptance gap.
+- GREEN: the same targeted lexical command passed 17/17 after production change.
+- Preservation checks passed 2/2 for stale-worker canonical `STATE: DONE` recovery and
+  the real wrapped 429 failed-review path (`review_run_failed`, no integration/done).
+- Focused Factory regression set passed 153/153. No source-reading tests were added;
+  assertions exercise runtime parser functions and SQL/audit behavior through the existing
+  FakeSql harness.
+
+## 8. QA ownership
 
 - qa-verifier owns live smoke/E2E evidence (FRE-015/017); quality-reviewer owns spec
   compliance review of diffs; both are independent of the increment owner.

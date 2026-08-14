@@ -835,7 +835,7 @@ def test_supervisor_requeues_technical_blocker_before_manual_attention(fake_sql,
     assert "manual_attention" not in joined
 
 
-def test_supervisor_moves_exhausted_blocker_to_manual_attention(fake_sql, monkeypatch):
+def test_supervisor_exhausted_technical_rework_creates_autonomous_recovery_without_manual_attention(fake_sql, monkeypatch):
     monkeypatch.setattr(factory_pg, "_project", lambda project_id: {
         "project_id": project_id,
         "status": "blocked",
@@ -859,10 +859,16 @@ def test_supervisor_moves_exhausted_blocker_to_manual_attention(fake_sql, monkey
     result = factory_pg.supervisor_health_check("demo", repair=True)
 
     assert result["health"] == "yellow"
-    assert any(repair["operation"] == "mark_project_manual_attention" for repair in result["repairs"])
+    assert any(repair["operation"] == "ensure_autonomous_technical_recovery" for repair in result["repairs"])
+    assert not any(repair["operation"] == "mark_project_manual_attention" for repair in result["repairs"])
     joined = "\n".join(fake_sql.statements)
-    assert "status='manual_attention'" in joined
-    assert "autonomous_enabled=false" in joined
+    assert "technical_rework_escalated_autonomously" in joined
+    assert "technical_recovery_of_task_id" in joined
+    assert "INSERT INTO factory.tasks" in joined
+    assert "autonomous_enabled=true" in joined
+    assert "status='manual_attention'" not in joined
+    assert "autonomous_enabled=false" not in joined
+    assert "INSERT INTO factory.human_questions" not in joined
 
 
 def test_supervisor_honors_task_specific_higher_rework_retry_ceiling(fake_sql, monkeypatch):
@@ -897,7 +903,7 @@ def test_supervisor_honors_task_specific_higher_rework_retry_ceiling(fake_sql, m
     assert "supervisor_rework_max_retries" in joined
 
 
-def test_supervisor_moves_existing_human_question_to_manual_attention(fake_sql, monkeypatch):
+def test_invalid_existing_human_question_is_retired_and_requeued_without_manual_attention(fake_sql, monkeypatch):
     monkeypatch.setattr(factory_pg, "_project", lambda project_id: {
         "project_id": project_id,
         "status": "blocked",
@@ -916,17 +922,104 @@ def test_supervisor_moves_existing_human_question_to_manual_attention(fake_sql, 
             "metadata": {},
         }
     ])
-    fake_sql.rows_results = [[], [{"question_id": "hq-demo", "task_id": "demo-blocked-human", "status": "pending"}], []]
+    fake_sql.rows_results = [
+        [],
+        [
+            {
+                "question_id": "hq-demo",
+                "task_id": "demo-blocked-human",
+                "status": "pending",
+                "question": "Factory project demo requires a human decision.",
+                "options": [],
+                "metadata": {"human_question_source": "classifier_fallback"},
+            }
+        ],
+        [],
+    ]
 
     result = factory_pg.supervisor_health_check("demo", repair=True)
 
     assert result["health"] == "yellow"
-    assert any(repair["operation"] == "mark_project_manual_attention" for repair in result["repairs"])
+    assert any(repair["operation"] == "retire_invalid_human_questions" for repair in result["repairs"])
+    assert any(repair["operation"] == "supervisor_requeue_technical_blockers" for repair in result["repairs"])
+    assert not any(repair["operation"] == "mark_project_manual_attention" for repair in result["repairs"])
     joined = "\n".join(fake_sql.statements)
-    assert "status='manual_attention'" in joined
-    assert "autonomous_enabled=false" in joined
-    assert "pending_human_question" in joined
-    assert "SET status='rework'" not in joined
+    assert "human_question_retired" in joined
+    assert "invalid_autonomous_repair" in joined
+    assert "SET status='rework'" in joined
+    assert "status='manual_attention'" not in joined
+    assert "autonomous_enabled=false" not in joined
+    assert "pending_human_question" not in joined
+
+
+def test_manual_attention_refuses_invalid_generic_question_without_category_options_evidence(fake_sql):
+    result = factory_pg.mark_project_manual_attention(
+        "demo",
+        reason="pending_human_question",
+        blockers=[
+            {
+                "task_id": "demo-blocked-human",
+                "action_category": "human_question_required",
+                "requires_human": True,
+                "question": "Factory project demo requires a human decision.",
+                "options": [],
+            }
+        ],
+    )
+
+    assert result["status"] == "rejected"
+    assert result["rejected"] is True
+    joined = "\n".join(fake_sql.statements)
+    assert "manual_attention_rejected_invalid_human_question" in joined
+    assert "status='manual_attention'" not in joined
+    assert "autonomous_enabled=false" not in joined
+
+
+def test_stranded_technical_manual_attention_restores_existing_recovery_task(fake_sql, monkeypatch):
+    monkeypatch.setattr(factory_pg, "_autonomous_recovery_preflight_findings", lambda project: [], raising=False)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: {
+        "project_id": project_id,
+        "status": "manual_attention",
+        "autonomous_enabled": False,
+        "metadata": {
+            "autonomous_enabled": False,
+            "manual_attention_required": True,
+            "manual_attention_reason": "technical_rework_retries_exhausted",
+        },
+    })
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: [
+        {
+            "project_id": project_id,
+            "lane_id": "demo-lane",
+            "task_id": "demo-blocked-tech",
+            "title": "Fix failing UI QA",
+            "status": "blocked",
+            "retry_count": factory_pg.SUPERVISOR_TECHNICAL_REWORK_MAX_RETRIES,
+            "result_summary": "STATE: BLOCKED — repeated regression after rework",
+            "metadata": {},
+        },
+        {
+            "project_id": project_id,
+            "lane_id": "demo-lane",
+            "task_id": "demo-blocked-tech-technical-recovery",
+            "title": "R1 — Technical recovery for failing UI QA",
+            "status": "todo",
+            "dependencies": [],
+            "metadata": {"technical_recovery": True, "technical_recovery_of_task_id": "demo-blocked-tech"},
+        },
+    ])
+    fake_sql.rows_results = [[], []]
+
+    result = factory_pg.supervisor_health_check("demo", repair=True)
+
+    assert result["health"] == "yellow"
+    assert any(repair["operation"] == "restore_autonomous_technical_recovery" for repair in result["repairs"])
+    assert not any(repair["operation"] == "mark_project_manual_attention" for repair in result["repairs"])
+    joined = "\n".join(fake_sql.statements)
+    assert "autonomous_recovery_restored" in joined
+    assert "demo-blocked-tech-technical-recovery" in joined
+    assert "status='active'" in joined
+    assert "autonomous_enabled=true" in joined
 
 
 def test_terminal_and_manual_attention_statuses_disable_autonomy():
@@ -1321,6 +1414,56 @@ def test_final_semantic_state_ignores_instructional_mid_sentence_marker_without_
     )
     assert factory_pg._final_semantic_state(text) is None
     assert factory_pg._effective_exit_code(0, text) == 0
+
+
+def test_final_semantic_state_rejects_wrapped_instructional_done_marker_without_final_verdict():
+    text = (
+        "STATE: DONE; si falla, termina con STATE: BLOCKED y razones/rework.\n"
+        "Initializing agent...\n"
+        "RateLimitError [HTTP 429]: Token Plan usage limit reached.\n"
+        "API call failed after 3 retries."
+    )
+
+    assert factory_pg._semantic_state_from_line("STATE: DONE") == "done"
+    assert factory_pg._semantic_state_from_line("FINAL: STATE: BLOCKED") == "blocked"
+    assert factory_pg._semantic_state_from_line("STATE: DONE; si falla, termina con STATE: BLOCKED") is None
+    assert factory_pg._final_semantic_state(text) is None
+    assert factory_pg._effective_exit_code(1, text) != 0
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        ("STATE: DONE", "done"),
+        ("STATE: BLOCKED", "blocked"),
+        ("STATE: IN_PROGRESS", "in_progress"),
+        ("FINAL: STATE: DONE", "done"),
+        ("FINAL: STATE: BLOCKED", "blocked"),
+        ("FINAL: STATE: IN_PROGRESS", "in_progress"),
+    ],
+)
+def test_semantic_state_accepts_only_exact_canonical_marker_lines(line, expected):
+    assert factory_pg._semantic_state_from_line(line) == expected
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "STATE:DONE",
+        "STATE : DONE",
+        "state: done",
+        "FINAL:STATE: DONE",
+        "STATE:  DONE",
+        "FINAL: STATE:  BLOCKED",
+        "Final: STATE: DONE",
+        "STATE: done",
+        "STATE: DONE; si falla, termina con STATE: BLOCKED",
+        "STATE: BLOCKED — tests failed",
+        "FINAL: STATE: IN_PROGRESS until checks finish",
+    ],
+)
+def test_semantic_state_rejects_noncanonical_lexical_variants(line):
+    assert factory_pg._semantic_state_from_line(line) is None
 
 
 def test_worker_output_summary_does_not_promote_prompt_instruction_marker(tmp_path):
