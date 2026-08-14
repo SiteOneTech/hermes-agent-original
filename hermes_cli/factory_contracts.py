@@ -108,13 +108,18 @@ class WorkIntent(_StrEnum):
     DOCS_RESEARCH = "docs_research"
 
 
-TERMINAL_TASK_STATUSES = {
+POSITIVE_TERMINAL_TASK_STATUSES = {
     TaskStatus.DONE.value,
     TaskStatus.VERIFIED.value,
     TaskStatus.ACCEPTED.value,
+}
+
+NEGATIVE_TERMINAL_TASK_STATUSES = {
     TaskStatus.CANCELLED.value,
     TaskStatus.SUPERSEDED.value,
 }
+
+TERMINAL_TASK_STATUSES = POSITIVE_TERMINAL_TASK_STATUSES | NEGATIVE_TERMINAL_TASK_STATUSES
 
 IN_FLIGHT_TASK_STATUSES = {
     TaskStatus.CLAIMED.value,
