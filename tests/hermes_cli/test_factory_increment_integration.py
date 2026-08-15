@@ -276,6 +276,49 @@ def test_claim_next_task_claims_docs_repair_before_preflight_denied_product(fake
     assert "dispatch_preflight_denied" not in joined
 
 
+
+def test_claim_next_task_allows_docs_recovery_while_rework_waits(fake_sql, monkeypatch):
+    rework = {
+        "project_id": "demo",
+        "task_id": "docs-rework",
+        "status": "rework",
+        "phase": "documentation",
+        "priority": 36,
+    }
+    recovery = {
+        "project_id": "demo",
+        "task_id": "canonical-source-visibility-recovery",
+        "status": "todo",
+        "phase": "documentation",
+        "priority": 35,
+        "dependencies": [],
+        "owner_profile": "factory-reporter",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "zeus",
+        "lane_id": "demo-zeus",
+    }
+    selected: list[str] = []
+    monkeypatch.setattr(factory_pg, "cleanup_stale_manual_takeover_leases", lambda _project_id: None)
+    monkeypatch.setattr(factory_pg, "_tasks", lambda _project_id: [rework, recovery])
+    monkeypatch.setattr(factory_pg, "_project", lambda _project_id: {"project_id": "demo", "metadata": {}})
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda _project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda _project_id: [])
+    monkeypatch.setattr(factory_pg, "_project_docs_notion_preflight", lambda *_args: (False, True, False, False))
+    monkeypatch.setattr(
+        factory_pg,
+        "_next_runnable_task",
+        lambda _project_id, **_kwargs: selected.append(recovery["task_id"]) or recovery,
+    )
+    monkeypatch.setattr(factory_pg, "_candidate_dependencies_integrated", lambda *_args: True)
+    fake_sql.rows_results = [[{"project_id": "demo"}]]
+    fake_sql.statement_one_results = [recovery]
+
+    claimed = factory_pg.claim_next_task("demo", worker="test-dispatcher")
+
+    assert selected == ["canonical-source-visibility-recovery"]
+    assert claimed and claimed["task"]["task_id"] == recovery["task_id"]
+
+
 def test_reconciler_requeues_technical_docs_repair_blocked_without_human_decision(fake_sql):
     project = {
         "project_id": "demo",

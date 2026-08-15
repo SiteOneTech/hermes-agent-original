@@ -6397,7 +6397,7 @@ def claim_next_task(project_id: Optional[str] = None, *, worker: str = "factory-
     for project in projects:
         pid = project["project_id"]
         tasks = _tasks(pid)
-        if _has_active_increment(tasks):
+        if _has_in_flight_increment(tasks):
             continue
         full_project = _project(pid) or {"project_id": pid, "metadata": {}}
         pending_gates = _active_pending_gates(pid)
