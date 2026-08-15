@@ -34,19 +34,21 @@ Canonical G1 pack for the **private Zeus-side implementation** succeeding `zeus-
 - `REQUIREMENTS_TRACEABILITY.md` maps requirements to tasks/tests/reviews.
 - `DATABASE_AND_RUNTIME_CONTRACT.md` is binding for exact DB, runtime, no-egress and scheduler implementation behavior.
 - `G1_REVIEW.md` records independent review findings/remediation.
-- `R2J_CANONICAL_STATE_REPAIR.md` records the PR #29 canonical-state provenance repair: exact PR head `f61a7275048e2135b2b2729a1b9cdf8713c58866`, canonical `main` `5e1e4622e93d8d2fabdfe0f2176889a29afa7f7c`, current Factory `document_status` blockers, and why R2i's `already_ancestor` attachment is review-worktree evidence rather than source-candidate merge evidence.
+- `R2J_CANONICAL_STATE_REPAIR.md` records the historical PR #29 canonical-state provenance repair: exact PR #29 head `f61a7275048e2135b2b2729a1b9cdf8713c58866`, R2i review-worktree `already_ancestor` mismatch and the intended PR-first handoff that later became PR #30.
+- `R2K_STALE_CANONICAL_G1_PROVENANCE_REPAIR.md` supersedes the stale active provenance path for renewed review dispatch. It records that Agent Core project metadata still points to obsolete PR #20 / `dad375f27568c38be771fc597b579d087f034e1d`, PR #30 carried R2j commit `c1943efb2b97b54b42bc5eabe858340d8c391116` into remote `origin/main` as `83d5ee06ba25859f047469baed223fe88e9467e3`, local primary `main` remains at `4eb87e4cd48105af05fe974cf1d493f0e1b57ae1`, and canonical G1 `document_status` remains non-dispatchable because required docs read back as `reviewed=false` from the primary source.
 
 ## Status semantics
 - `validated: yes` means the implementation-planner/local worker confirmed the file exists, is tracked, is indexed where required, and is internally consistent with this G1 contract.
 - `reviewed: pending` is an explicit reviewed-status value, not a missing field. It may become `reviewed: yes` only after independent reviewers record PASS evidence against the exact committed SHA.
 - A branch-local reviewed status or the observed ALR-010-R1 base-branch merge never authorizes normal implementation by itself; exact-SHA independent reviews and reconciled delivery evidence remain required.
-- Review-task integration metadata must not be used as PR visibility evidence unless its branch commit equals the candidate PR head; for R2i, the `already_ancestor` attachment names review branch commit `5e1e4622e93d8d2fabdfe0f2176889a29afa7f7c`, while the actual open PR #29 candidate remains `f61a7275048e2135b2b2729a1b9cdf8713c58866`.
+- Review-task integration metadata must not be used as PR visibility evidence unless its branch commit equals the candidate PR head; for R2i, the `already_ancestor` attachment names review branch commit `5e1e4622e93d8d2fabdfe0f2176889a29afa7f7c`, while the actual PR #29 candidate remains `f61a7275048e2135b2b2729a1b9cdf8713c58866` and the later R2j repair is PR #30 head `c1943efb2b97b54b42bc5eabe858340d8c391116`.
+- Stale Factory project metadata that points to PR #20 / `dad375f27568c38be771fc597b579d087f034e1d` is not current review provenance and must not be used to dispatch ALR-020.
 
 ## Required reading order
 1. `DOCUMENTATION_INDEX.md`, `FACTORY_INTAKE.md`, `G0_REPOSITORY_STRATEGY.md`
 2. `REQUIREMENTS_ANALYSIS.md`, `REQUIREMENTS_TRACEABILITY.md`, `PRD.md`, `ADRS.md`
 3. `DATABASE_AND_RUNTIME_CONTRACT.md`, `TECHNICAL_BLUEPRINT.md`, `TASK_GRAPH.md`, `SPRINT_PLAN.md`
-4. `QA_GATES.md`, `SECURITY_GATES.md`, `G1_REVIEW.md`
+4. `QA_GATES.md`, `SECURITY_GATES.md`, `G1_REVIEW.md`, `R2K_STALE_CANONICAL_G1_PROVENANCE_REPAIR.md`
 
 ## G1 rule
-No normal implementation starts until every required G1 document is `reviewed: yes`; the three supplemental controlling artifacts must be committed and PASS-reviewed against the exact revised SHA too. Base exposure alone is not sufficient: the observed ALR-010-R1 merge is non-approval evidence until gate-695 reconciliation is independently accepted, and a branch-only pack is likewise never sufficient.
+No normal implementation starts until every required G1 document is `reviewed: yes`; the supplemental controlling artifacts, including R2k, must be committed and PASS-reviewed against the exact revised SHA too. Base exposure alone is not sufficient: the observed ALR-010-R1 merge and the later R2j/PR #30 merge are non-dispatch evidence until canonical Factory metadata and `document_status` are reconciled, and a branch-only or stale-PR pack is likewise never sufficient.
