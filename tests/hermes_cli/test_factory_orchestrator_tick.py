@@ -390,6 +390,10 @@ def test_prepare_existing_worktree_rejects_branch_mismatch(monkeypatch, tmp_path
             return module.subprocess.CompletedProcess(argv, 0, stdout="true\n", stderr="")
         if "--git-common-dir" in argv:
             return module.subprocess.CompletedProcess(argv, 0, stdout=str(repo / ".git") + "\n", stderr="")
+        if "--show-toplevel" in argv:
+            return module.subprocess.CompletedProcess(argv, 0, stdout=str(worktree) + "\n", stderr="")
+        if "--git-dir" in argv:
+            return module.subprocess.CompletedProcess(argv, 0, stdout=str(repo / ".git" / "worktrees" / "inc-001") + "\n", stderr="")
         if "branch" in argv and "--show-current" in argv:
             return module.subprocess.CompletedProcess(argv, 0, stdout="factory/demo/other\n", stderr="")
         return module.subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
@@ -408,6 +412,74 @@ def test_prepare_existing_worktree_rejects_branch_mismatch(monkeypatch, tmp_path
 
     assert result["ready"] is False
     assert result["reason"] == "worktree_branch_mismatch"
+
+
+def test_prepare_existing_worktree_rejects_subdirectory_not_worktree_root(monkeypatch, tmp_path):
+    module = _load_orchestrator_module()
+    repo = tmp_path / "repo"
+    assigned_subdirectory = repo / "subdirectory-not-a-worktree"
+    repo.mkdir()
+    assigned_subdirectory.mkdir()
+
+    def fake_run(argv, **_kwargs):
+        if "--is-inside-work-tree" in argv:
+            return module.subprocess.CompletedProcess(argv, 0, stdout="true\n", stderr="")
+        if "--git-common-dir" in argv:
+            return module.subprocess.CompletedProcess(argv, 0, stdout=str(repo / ".git") + "\n", stderr="")
+        if "--show-toplevel" in argv:
+            return module.subprocess.CompletedProcess(argv, 0, stdout=str(repo) + "\n", stderr="")
+        if "branch" in argv and "--show-current" in argv:
+            return module.subprocess.CompletedProcess(argv, 0, stdout="factory/demo/inc-001\n", stderr="")
+        return module.subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    payload = {
+        "projects": [{
+            "project_id": "demo",
+            "repo_path": str(repo),
+            "metadata": {"repo_strategy": {"primary_repo_path": str(repo), "base_branch": "main"}},
+        }],
+    }
+    claim = {"task": {"project_id": "demo", "branch": "factory/demo/inc-001", "worktree_path": str(assigned_subdirectory)}}
+
+    result = module._prepare_worktree(payload, claim)
+
+    assert result["ready"] is False
+    assert result["reason"] == "worktree_path_not_repository_root"
+
+
+def test_prepare_existing_worktree_rejects_primary_checkout(monkeypatch, tmp_path):
+    module = _load_orchestrator_module()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def fake_run(argv, **_kwargs):
+        if "--is-inside-work-tree" in argv:
+            return module.subprocess.CompletedProcess(argv, 0, stdout="true\n", stderr="")
+        if "--git-common-dir" in argv:
+            return module.subprocess.CompletedProcess(argv, 0, stdout=str(repo / ".git") + "\n", stderr="")
+        if "--show-toplevel" in argv:
+            return module.subprocess.CompletedProcess(argv, 0, stdout=str(repo) + "\n", stderr="")
+        if "--git-dir" in argv:
+            return module.subprocess.CompletedProcess(argv, 0, stdout=str(repo / ".git") + "\n", stderr="")
+        if "branch" in argv and "--show-current" in argv:
+            return module.subprocess.CompletedProcess(argv, 0, stdout="factory/demo/inc-001\n", stderr="")
+        return module.subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    payload = {
+        "projects": [{
+            "project_id": "demo",
+            "repo_path": str(repo),
+            "metadata": {"repo_strategy": {"primary_repo_path": str(repo), "base_branch": "main"}},
+        }],
+    }
+    claim = {"task": {"project_id": "demo", "branch": "factory/demo/inc-001", "worktree_path": str(repo)}}
+
+    result = module._prepare_worktree(payload, claim)
+
+    assert result["ready"] is False
+    assert result["reason"] == "worktree_path_not_isolated"
 
 
 def test_prepare_worktree_starts_new_increment_from_origin_base(monkeypatch, tmp_path):

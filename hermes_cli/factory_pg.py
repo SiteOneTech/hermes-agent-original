@@ -6196,12 +6196,12 @@ def claim_next_review(project_id: Optional[str] = None, *, worker: str = "factor
 
 
 def claim_next_rework(project_id: Optional[str] = None, *, worker: str = "factory-dispatcher") -> dict[str, Any] | None:
-    """Claim the oldest rework task for its original owner.
+    """Claim an eligible rework task without bypassing docs-first dispatch gates.
 
-    Review failure should not be terminal and should not require Jean/Zeus to
-    manually flip the row back to ``todo``. ``rework`` blocks later increments,
-    but it is itself runnable by the owner with the reviewer findings carried in
-    ``result_summary``.
+    A rework is not automatically safe merely because it already started once:
+    product implementation, QA, security, deploy, and delivery rework must still
+    wait for G1/documentation readiness. Documentation and reconciliation rework
+    remain eligible so that the blocked gate can be repaired.
     """
 
     ensure_runtime_schema()
@@ -6209,56 +6209,116 @@ def claim_next_rework(project_id: Optional[str] = None, *, worker: str = "factor
     project_filter = f"AND p.project_id={_q(project_id)}" if project_id else ""
     manual_takeover_filter = _manual_takeover_dispatch_filter("p")
     in_flight = ",".join(_q(status) for status in IN_FLIGHT_TASK_STATUSES)
-    row = sql.statement_one(
+    projects = sql.rows(
         f"""
-        UPDATE factory.tasks t
-        SET status='claimed',
-            claimed_by={_q(worker)},
-            claimed_at=now(),
-            lease_until=now() + interval '30 minutes',
-            retry_count=COALESCE(retry_count, 0) + 1,
-            updated_at=now()
+        SELECT p.project_id
         FROM factory.projects p
-        WHERE t.project_id=p.project_id
-          AND p.autonomous_enabled IS TRUE
+        WHERE p.autonomous_enabled IS TRUE
           AND p.status IN ('active','planned','intake','blocked')
           AND {manual_takeover_filter}
-          AND t.status='rework'
           {project_filter}
-          AND NOT EXISTS (
-            SELECT 1 FROM factory.task_runs r
-            WHERE r.project_id=t.project_id AND r.status IN ('queued','running')
-          )
-          AND NOT EXISTS (
-            SELECT 1 FROM factory.tasks t_busy
-            WHERE t_busy.project_id=t.project_id AND t_busy.status IN ({in_flight})
-          )
-          AND t.task_id = (
-            SELECT t2.task_id
-            FROM factory.tasks t2
-            WHERE t2.project_id=t.project_id AND t2.status='rework'
-            ORDER BY t2.priority, t2.updated_at, t2.created_at
-            LIMIT 1
-          )
-        RETURNING t.*
+        ORDER BY p.updated_at, p.started_at
         """,
         user=_user(),
     )
-    if not row:
-        return None
-    normalized = _normalize(row)
-    run_id = f"run-{int(time.time())}-{uuid.uuid4().hex[:8]}"
-    worker_profile = normalized.get("owner_profile") or normalized.get("owner_agent_id") or "factory-orchestrator"
-    sql.psql(
-        f"""
-        INSERT INTO factory.task_runs(run_id, task_id, project_id, lane_id, worker_profile, reviewer_profile, engine, status, started_at, heartbeat_at, metadata)
-        VALUES ({_q(run_id)}, {_q(normalized['task_id'])}, {_q(normalized['project_id'])}, {_q(normalized.get('lane_id'))}, {_q(worker_profile)}, {_q(normalized.get('reviewer_profile'))}, {_q(normalized.get('engine'))}, 'queued', now(), now(), {_j({'claimed_by': worker, 'run_type': 'rework', 'previous_status': 'rework'})});
-        INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
-        VALUES ({_q(normalized['project_id'])}, {_q(normalized.get('lane_id'))}, {_q(normalized['task_id'])}, {_q(worker)}, 'rework_claimed', {_q(f"Task {normalized['task_id']} claimed for rework by {worker_profile}")}, {_j({'run_id': run_id, 'worker_profile': worker_profile, 'run_type': 'rework'})});
-        """,
-        user=_user(),
-    )
-    return {"run_id": run_id, "task": normalized, "worker_profile": worker_profile, "run_type": "rework"}
+    for project_row in projects:
+        pid = str(project_row["project_id"])
+        tasks = _tasks(pid)
+        if _has_in_flight_increment(tasks):
+            continue
+        full_project = _project(pid) or {"project_id": pid, "metadata": {}}
+        pending_gates = _active_pending_gates(pid)
+        latest_gates = _latest_gate_rows(pid)
+        docs_ready, notion_ready, notion_required, docs_first_waived = _project_docs_notion_preflight(
+            full_project,
+            tasks,
+            pending_gates,
+            latest_gates,
+        )
+        eligible_task_ids: list[str] = []
+        denied_product_rework = False
+        for task in sorted(
+            (item for item in tasks if str(item.get("status") or "") == "rework"),
+            key=lambda item: (int(item.get("priority") or 100), str(item.get("updated_at") or ""), str(item.get("created_at") or "")),
+        ):
+            preflight_blockers = _dispatch_preflight_blockers(
+                task,
+                docs_ready=docs_ready,
+                notion_ready=notion_ready,
+                notion_required=notion_required,
+                docs_first_waived=docs_first_waived,
+            )
+            if preflight_blockers:
+                denied_product_rework = True
+                _record_dispatch_preflight_denied(pid, task, preflight_blockers, worker=worker)
+                continue
+            task_id = str(task.get("task_id") or "")
+            if task_id:
+                eligible_task_ids.append(task_id)
+        if denied_product_rework:
+            ensure_reconciliation_tasks(
+                full_project,
+                reconciliation_findings(full_project, tasks, pending_gates, latest_gates),
+                tasks,
+            )
+            reconcile_project(pid)
+        if not eligible_task_ids:
+            continue
+        eligible_ids = ",".join(_q(task_id) for task_id in eligible_task_ids)
+        row = sql.statement_one(
+            f"""
+            UPDATE factory.tasks t
+            SET status='claimed',
+                claimed_by={_q(worker)},
+                claimed_at=now(),
+                lease_until=now() + interval '30 minutes',
+                retry_count=COALESCE(retry_count, 0) + 1,
+                updated_at=now()
+            FROM factory.projects p
+            WHERE t.project_id=p.project_id
+              AND p.project_id={_q(pid)}
+              AND p.autonomous_enabled IS TRUE
+              AND p.status IN ('active','planned','intake','blocked')
+              AND {manual_takeover_filter}
+              AND t.status='rework'
+              AND t.task_id IN ({eligible_ids})
+              AND NOT EXISTS (
+                SELECT 1 FROM factory.task_runs r
+                WHERE r.project_id=t.project_id AND r.status IN ('queued','running')
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM factory.tasks t_busy
+                WHERE t_busy.project_id=t.project_id AND t_busy.status IN ({in_flight})
+              )
+              AND t.task_id = (
+                SELECT t2.task_id
+                FROM factory.tasks t2
+                WHERE t2.project_id=t.project_id
+                  AND t2.status='rework'
+                  AND t2.task_id IN ({eligible_ids})
+                ORDER BY t2.priority, t2.updated_at, t2.created_at
+                LIMIT 1
+              )
+            RETURNING t.*
+            """,
+            user=_user(),
+        )
+        if not row:
+            continue
+        normalized = _normalize(row)
+        run_id = f"run-{int(time.time())}-{uuid.uuid4().hex[:8]}"
+        worker_profile = normalized.get("owner_profile") or normalized.get("owner_agent_id") or "factory-orchestrator"
+        sql.psql(
+            f"""
+            INSERT INTO factory.task_runs(run_id, task_id, project_id, lane_id, worker_profile, reviewer_profile, engine, status, started_at, heartbeat_at, metadata)
+            VALUES ({_q(run_id)}, {_q(normalized['task_id'])}, {_q(normalized['project_id'])}, {_q(normalized.get('lane_id'))}, {_q(worker_profile)}, {_q(normalized.get('reviewer_profile'))}, {_q(normalized.get('engine'))}, 'queued', now(), now(), {_j({'claimed_by': worker, 'run_type': 'rework', 'previous_status': 'rework'})});
+            INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
+            VALUES ({_q(normalized['project_id'])}, {_q(normalized.get('lane_id'))}, {_q(normalized['task_id'])}, {_q(worker)}, 'rework_claimed', {_q(f"Task {normalized['task_id']} claimed for rework by {worker_profile}")}, {_j({'run_id': run_id, 'worker_profile': worker_profile, 'run_type': 'rework'})});
+            """,
+            user=_user(),
+        )
+        return {"run_id": run_id, "task": normalized, "worker_profile": worker_profile, "run_type": "rework"}
+    return None
 
 
 def _dispatch_docs_first_waived(metadata: dict[str, Any]) -> bool:

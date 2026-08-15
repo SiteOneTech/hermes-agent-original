@@ -288,6 +288,46 @@ def _prepare_worktree(payload: dict[str, Any], claim: dict[str, Any]) -> dict[st
                     "worktree_path": str(worktree_path),
                     "cwd": str(repo_path),
                 }
+            worktree_root = subprocess.run(
+                ["git", "-C", str(worktree_path), "rev-parse", "--path-format=absolute", "--show-toplevel"],
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+            resolved_worktree_path = worktree_path.resolve()
+            resolved_worktree_root = Path(worktree_root.stdout.strip()).resolve() if worktree_root.returncode == 0 and worktree_root.stdout.strip() else None
+            if resolved_worktree_root != resolved_worktree_path:
+                return {
+                    "ready": False,
+                    "reason": "worktree_path_not_repository_root",
+                    "repo_path": str(repo_path),
+                    "worktree_path": str(worktree_path),
+                    "worktree_root": str(resolved_worktree_root) if resolved_worktree_root else None,
+                    "cwd": str(repo_path),
+                }
+            worktree_git_dir = subprocess.run(
+                ["git", "-C", str(worktree_path), "rev-parse", "--path-format=absolute", "--git-dir"],
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+            resolved_repo_common = Path(repo_common.stdout.strip()).resolve()
+            resolved_worktree_git_dir = Path(worktree_git_dir.stdout.strip()).resolve() if worktree_git_dir.returncode == 0 and worktree_git_dir.stdout.strip() else None
+            if not resolved_worktree_git_dir or resolved_worktree_git_dir == resolved_repo_common:
+                return {
+                    "ready": False,
+                    "reason": "worktree_path_not_isolated",
+                    "repo_path": str(repo_path),
+                    "worktree_path": str(worktree_path),
+                    "worktree_git_dir": str(resolved_worktree_git_dir) if resolved_worktree_git_dir else None,
+                    "cwd": str(repo_path),
+                }
             branch_probe = subprocess.run(
                 ["git", "-C", str(worktree_path), "branch", "--show-current"],
                 text=True,

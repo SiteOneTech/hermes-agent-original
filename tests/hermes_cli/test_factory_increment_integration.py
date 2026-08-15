@@ -319,6 +319,70 @@ def test_claim_next_task_allows_docs_recovery_while_rework_waits(fake_sql, monke
     assert claimed and claimed["task"]["task_id"] == recovery["task_id"]
 
 
+def test_claim_next_rework_refuses_product_work_while_g1_is_red(fake_sql, monkeypatch):
+    product_rework = {
+        "project_id": "demo",
+        "lane_id": "demo-zeus",
+        "task_id": "demo-implementation-rework",
+        "status": "rework",
+        "phase": "implementation",
+        "priority": 20,
+        "owner_profile": "claude-builder",
+        "metadata": {},
+    }
+    project = {"project_id": "demo", "status": "active", "autonomous_enabled": True, "metadata": {}}
+    reconciliation_calls: list[str] = []
+    monkeypatch.setattr(factory_pg, "cleanup_stale_manual_takeover_leases", lambda _project_id: None)
+    monkeypatch.setattr(factory_pg, "_tasks", lambda _project_id: [product_rework])
+    monkeypatch.setattr(factory_pg, "_project", lambda _project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda _project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda _project_id: [])
+    monkeypatch.setattr(factory_pg, "_project_docs_notion_preflight", lambda *_args: (False, True, False, False))
+    monkeypatch.setattr(factory_pg, "ensure_reconciliation_tasks", lambda *_args: reconciliation_calls.append("ensured"))
+    monkeypatch.setattr(factory_pg, "reconciliation_findings", lambda *_args: [])
+    monkeypatch.setattr(factory_pg, "reconcile_project", lambda _project_id: reconciliation_calls.append("reconciled"))
+    fake_sql.rows_results = [[{"project_id": "demo"}]]
+    fake_sql.statement_one_results = [{**product_rework, "status": "claimed"}]
+
+    claimed = factory_pg.claim_next_rework("demo", worker="factory-force-tick")
+
+    assert claimed is None
+    assert reconciliation_calls == ["ensured", "reconciled"]
+    joined = "\n".join(fake_sql.statements)
+    assert "dispatch_preflight_denied" in joined
+    assert "rework_claimed" not in joined
+
+
+def test_claim_next_rework_allows_documentation_recovery_while_g1_is_red(fake_sql, monkeypatch):
+    docs_rework = {
+        "project_id": "demo",
+        "lane_id": "demo-zeus",
+        "task_id": "demo-reconcile-docs",
+        "status": "rework",
+        "phase": "documentation",
+        "priority": 20,
+        "owner_profile": "factory-reporter",
+        "metadata": {"factory_reconciliation_task": True},
+    }
+    project = {"project_id": "demo", "status": "active", "autonomous_enabled": True, "metadata": {}}
+    monkeypatch.setattr(factory_pg, "cleanup_stale_manual_takeover_leases", lambda _project_id: None)
+    monkeypatch.setattr(factory_pg, "_tasks", lambda _project_id: [docs_rework])
+    monkeypatch.setattr(factory_pg, "_project", lambda _project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda _project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda _project_id: [])
+    monkeypatch.setattr(factory_pg, "_project_docs_notion_preflight", lambda *_args: (False, True, False, False))
+    fake_sql.rows_results = [[{"project_id": "demo"}]]
+    fake_sql.statement_one_results = [{**docs_rework, "status": "claimed"}]
+
+    claimed = factory_pg.claim_next_rework("demo", worker="factory-force-tick")
+
+    assert claimed and claimed["task"]["task_id"] == "demo-reconcile-docs"
+    assert claimed["run_type"] == "rework"
+    joined = "\n".join(fake_sql.statements)
+    assert "t.task_id IN ('demo-reconcile-docs')" in joined
+    assert "rework_claimed" in joined
+
+
 def test_reconciler_requeues_technical_docs_repair_blocked_without_human_decision(fake_sql):
     project = {
         "project_id": "demo",
