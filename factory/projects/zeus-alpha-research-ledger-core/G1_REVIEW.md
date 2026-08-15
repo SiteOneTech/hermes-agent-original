@@ -3,7 +3,7 @@ project_id: zeus-alpha-research-ledger-core
 phase: local_advisory_ledger_v1
 status: g1_rebaseline
 validated: yes
-reviewed: pending
+reviewed: yes
 ---
 
 # G1 REVIEW RECORD
@@ -42,13 +42,76 @@ Read-back source: `hermes factory status zeus-alpha-research-ledger-core --json`
 
 - Gate **695**, `gate_type=spec`, `status=failed`, reviewer `solution-architect`, timestamp `2026-08-10T09:31:33.359633+00:00`: “Review of SHA b9396bcd7: documentary content resolves the bounded Gate 686/687 specification/security findings, but task cannot close because live Factory/Git evidence contradicts the no-merge/PR-first contract. Agent Core Postgres status recorded event 173433 increment_integrated with method merge_no_ff_push_origin for this task, and git shows origin/main at e3d04ff94 is a merge commit with parent b9396bcd7. Rework: reconcile/revert/record authorized handling of the unexpected base-branch merge and update G1_REVIEW/TRACKER/TASK_GRAPH with actual merge evidence before closure; no downstream implementation dispatch until independent reviews inspect exact corrected SHA.”
 
-This R2 correction records the merge fact instead of preserving stale branch-only/no-merge statements: Factory event `173433` integrated branch commit `b9396bcd7d14ee6f212bd0fd0609e468cecf567f` into base `main` using `merge_no_ff_push_origin`, producing `e3d04ff94b67e6e21be1d5515bdb71400fbedf0a`. Git confirms `e3d04ff94` has parents `00e7bb4ab` and `b9396bcd7`, and `b9396bcd7` is an ancestor of `origin/main`.
+The R1 correction recorded the first merge fact instead of preserving stale branch-only/no-merge statements: Factory event `173433` integrated branch commit `b9396bcd7d14ee6f212bd0fd0609e468cecf567f` into base `main` using `merge_no_ff_push_origin`, producing `e3d04ff94b67e6e21be1d5515bdb71400fbedf0a`. Git confirms `e3d04ff94` has parents `00e7bb4ab0fcd9013ffa924ce6c5a8ae2c2ae2fc` and `b9396bcd7d14ee6f212bd0fd0609e468cecf567f`, and `b9396bcd7d14ee6f212bd0fd0609e468cecf567f` is an ancestor of `origin/main`.
 
-The correction does **not** claim that the merge was authorized, does not revert it, does not open a PR, does not perform a new merge/deploy, and does not convert any R1/G1 review to PASS. It only reconciles documentation with the Agent Core/Git source of truth so independent reviewers can inspect the exact corrected SHA.
+## Review round 5 — PR-first/direct-integration REQUEST_CHANGES (Gate 697)
+
+**Candidate reviewed:** committed SHA `6ee8b4fdb886d0834bfbc62c7e152ee35d505e66` (`docs(factory): reconcile ALR direct merge evidence`).
+
+Read-back source: `hermes factory status zeus-alpha-research-ledger-core --json` from Agent Core Postgres (`db_backend=agent_core_postgres`, `database=zeus_agent`) plus local Git inspection. The real failed gate note was:
+
+- Gate **697**, `gate_type=spec`, `status=failed`, reviewer `solution-architect`, timestamp `2026-08-10T09:53:47.41439+00:00`: “Review of SHA 6ee8b4fdb886d0834bfbc62c7e152ee35d505e66: bounded Gate 686/687 contract content is materially present, and tracked docs/diff checks pass, but task cannot close because the R2 correction was again integrated directly into origin/main. Agent Core Postgres event 173494 records merge_no_ff_push_origin of 6ee8b4fdb to base 9f975acb; local git shows origin/main=9f975acb with parents e3d04ff94 and 6ee8b4fdb, ancestor check exit 0. Current docs only record prior event 173433/b9396/e3d04 and still state this task performs no new merge/no new merge-deploy, so G1_REVIEW/G0/TASK_GRAPH/TRACKER/METHODOLOGY are stale against source of truth. Rework: record event 173494/9f975 evidence, remove false no-new-merge statements or explain authorized handling, keep reviewed=pending/no downstream ALR-020 authority, then obtain independent exact-SHA spec/security reviews.”
+
+This R2 correction records both merge facts instead of preserving stale branch-only/no-new-merge statements: Factory event `173433` integrated branch commit `b9396bcd7d14ee6f212bd0fd0609e468cecf567f` into base `main`, producing `e3d04ff94b67e6e21be1d5515bdb71400fbedf0a`; Factory event `173494` integrated branch commit `6ee8b4fdb886d0834bfbc62c7e152ee35d505e66` into base `main`, producing `9f975acb0625750b8d46648766d1395c89392dca`. Git confirms `9f975acb` has parents `e3d04ff94b67e6e21be1d5515bdb71400fbedf0a` and `6ee8b4fdb886d0834bfbc62c7e152ee35d505e66`; both `b9396bcd7d14ee6f212bd0fd0609e468cecf567f` and `6ee8b4fdb886d0834bfbc62c7e152ee35d505e66` are ancestors of `origin/main`.
+
+The correction does **not** claim that either direct merge was authorized, does not revert history, does not perform another base merge/deploy, and does not convert any R1/G1 review to PASS. This R2 task must create a fresh branch-only candidate commit and make it visible through a Zeus-signed GitHub PR labeled `agent:zeus`; independent specification and security reviewers must inspect that exact revised SHA before any `reviewed: yes`, QA Guardian handoff, or ALR-020 dispatch authority exists.
 
 ## Local documentary verification — non-approval
 
-At `2026-08-10T04:50:09-04:00`, the implementation-planner worker verified the project-local pack from the assigned worktree only. `git ls-files --error-unmatch` confirmed the 14 required G1 documents plus `G0_REPOSITORY_STRATEGY.md`, `REQUIREMENTS_TRACEABILITY.md`, `DATABASE_AND_RUNTIME_CONTRACT.md`, and `G1_REVIEW.md` are tracked. `DOCUMENTATION_INDEX.md` indexes required documents and records explicit validated/reviewed status. `G0_REPOSITORY_STRATEGY.md` records the Zeus-only source repo, `origin/main` reference, assigned branch/worktree policy, PR-first delivery, and predecessor linkage. This is implementation evidence, not an independent specification/security PASS.
+At `2026-08-10T04:50:09-04:00`, the implementation-planner worker verified the project-local pack from the assigned worktree only. `git ls-files --error-unmatch` confirmed the 14 required G1 documents plus `G0_REPOSITORY_STRATEGY.md`, `REQUIREMENTS_TRACEABILITY.md`, `DATABASE_AND_RUNTIME_CONTRACT.md`, and `G1_REVIEW.md` are tracked. R2 must rerun tracked-document verification, `git diff --check`, and stale-claim scans after this edit and before the fresh candidate commit. This is implementation evidence, not an independent specification/security PASS.
+
+## Review round 6 — exact-SHA independent PASS evidence
+
+**Substantive candidate reviewed:** committed SHA `dad375f27568c38be771fc597b579d087f034e1d` (`docs(factory): reconcile ALR PR-first merge evidence`), visible on open, non-draft GitHub PR [#20](https://github.com/SiteOneTech/hermes-agent-original/pull/20) from `factory/zeus-alpha-research-ledger-core/inc-011-alr-010-r2-pr-first-g1-reconciliation` to `main`, labeled `agent:zeus` with the recorded Zeus sign-off.
+
+- Factory gate **699**, `gate_type=spec`, `status=passed`, reviewer `solution-architect`, independently reviewed this exact SHA and its Gate-695/Gate-697 reconciliation.
+- Factory gates **706** and **707**, `gate_type=security`, `status=passed`, independently reviewed this exact SHA, its project-local diff, no-egress/no-authority boundaries, and the fact that the prior direct integrations are audit evidence only.
+
+The frontmatter/index marker transition in this commit is a deterministic record of those completed gates, not a self-review and not a claim that the post-review metadata-only commit was itself independently reviewed. It does not grant QA Guardian approval, merge/deploy authority, external-runtime authority, or any exception to downstream per-increment TDD, independent review and PR-first requirements.
+
+## Review round 7 — independent quality REQUEST_CHANGES (Gate 708)
+
+**Candidate reviewed:** committed SHA `0d57631de23f84db3135764bea538fa349dc7462` (`docs(factory): record ALR G1 review readiness`). The independent read-only documentation review inspected this exact SHA, confirmed its diff is restricted to 18 project-local Factory documents and that `git diff --check` is clean, but returned `REQUEST_CHANGES` at Factory quality gate **708**.
+
+The concrete findings were that `TRACKER.md` still stated that exact-SHA reviews and PR work were pending while the markers had been changed to `reviewed: yes`, and that `TASK_GRAPH.md` retained an unresolved ALR-020 bounded-local-sessions acceptance conflict without Factory DB read-back evidence. This is not QA Guardian approval, merge/deploy authority, or ALR-020 authority.
+
+The bounded same-project repair is Factory event **174440** at `2026-08-10T16:32:37.76002+00:00`: it changed the ALR-020 acceptance criterion from the old `bounded local sessions` literal to the exact session/message-excluded, scheduler-readiness and non-session local-intake statement, and the Agent Core read-back proved the old literal absent and the new literal present. That event is project-local task metadata only; it changes no source/runtime file and does not itself satisfy the required independent review of the next documentation SHA.
+
+## Review round 8 — corrected exact-SHA independent PASS evidence
+
+**Corrected substantive candidate reviewed:** committed SHA `3e6c14f8aa368ec6e3623d16640bf4b558ce0c7a` (`docs(factory): reconcile ALR G1 review rework`), visible on open, non-draft GitHub PR #20 from the existing Zeus-signed, `agent:zeus` branch to `main`.
+
+- Factory gate **709**, `gate_type=spec`, `status=passed`, independently reviewed the corrected tracker/task graph/index/G1 evidence.
+- Factory gate **710**, `gate_type=security`, `status=passed`, independently reviewed the no-egress/no-authority boundary and the fact that event 174440 is task metadata only.
+- Factory gate **711**, `gate_type=quality`, `status=passed`, independently verified the concrete gate-708 rework, exact ALR-020 read-back, clean Markdown-only diff, and the pre-marker candidate's deliberately pending reviewed state.
+
+The frontmatter/index marker transition in this commit records those completed gates. It is not a self-review and does not claim QA Guardian approval, merge/deploy authority, external-runtime authority, or any exception to downstream per-increment TDD, independent review and PR-first requirements.
 
 ## Status
-This is still a remediation record, not approval. After this revision is committed, obtain new independent specification and security reviews against that exact committed SHA, including the gate-695 merge reconciliation. Only then may their independent PASS results support changing required G1 frontmatter/index to `reviewed: yes` and unblocking downstream implementation according to the reconciled delivery policy. Until then, `reviewed: pending` remains binding.
+The G1 pack is validated and reviewed on corrected substantive candidate `3e6c14f8aa368ec6e3623d16640bf4b558ce0c7a`, with PR #20 visibility and Factory gates 709/710/711. This resolves only the documentation-readiness condition. It does not close the project or waive source TDD, independent review, QA Guardian, local smoke, no-egress, PR or delivery requirements for ALR-020 through ALR-080.
+
+## R2c required-document marker reconciliation
+
+This pass re-read the required G1 documents and supplemental controlling artifacts from the assigned isolated worktree, checked that each required G1 file carries `validated: yes` and `reviewed: yes` frontmatter, and changed `DOCUMENTATION_INDEX.md` from human shorthand (`yes`) to exact machine-readable per-file table markers (`validated: yes` / `reviewed: yes`). The review evidence remains the independent PASS set for corrected candidate `3e6c14f8aa368ec6e3623d16640bf4b558ce0c7a` (Factory gates 709, 710 and 711); this R2c reconciliation does not create a QA Guardian approval, merge/deploy authorization, source/runtime authority or downstream implementation authority.
+
+Product execution, QA, sandbox and delivery tasks remain blocked until canonical Factory resolve-state reads a document-status snapshot with zero G1 blockers from the committed source of truth.
+
+## R2c live verification — canonical blocker remains
+
+At the current R2c read-back, `factory-reporter` re-read `DOCUMENTATION_INDEX.md`, all required G1 documents, and the supplemental controlling artifacts from the assigned isolated worktree. Branch-local evidence is internally consistent: every tracked project-local Markdown artifact has `validated: yes` and `reviewed: yes` frontmatter, and `DOCUMENTATION_INDEX.md` lists every required G1 row with exact `validated: yes` / `reviewed: yes` table markers.
+
+Remote visibility is also current: GitHub PR #20 is open, non-draft, labeled `agent:zeus`, and its head branch points at the reviewed marker branch. A direct push to the assigned branch returned `Everything up-to-date`, and `git ls-remote origin refs/heads/factory/zeus-alpha-research-ledger-core/inc-011-alr-010-r2-pr-first-g1-reconciliation` matched the local worktree head observed before this evidence note.
+
+However, the canonical Agent Core Factory status command still computes `document_status` from project `repo_path=/home/jean/Projects/hermes-agent-original`, not from the assigned G1 worktree. That primary checkout still reads `reviewed=false` blockers for `FACTORY_INTAKE.md`, `REQUIREMENTS_ANALYSIS.md`, `PATTERN_ANALYSIS.md`, `ASSUMPTIONS_AND_OPEN_QUESTIONS.md`, `PRD.md`, `ADRS.md`, `METHODOLOGY_PLAN.md`, `TECHNICAL_BLUEPRINT.md`, `SPRINT_PLAN.md`, `TASK_GRAPH.md`, and `SECURITY_GATES.md`.
+
+Decision for this increment: record the branch-local validation/review evidence, but do not mark product execution, QA, sandbox, delivery, main-branch merge, deploy, or downstream ALR-020+ dispatch as unblocked. The remaining recovery is an authorized canonical-source update through the PR/QA Guardian path or an explicit Factory metadata correction by the owner/orchestrator; this worker did not perform a direct base-branch merge.
+
+## R2c recurrence verification — run-1786817032-466b8839
+
+This follow-up R2c pass revalidated the same required-doc anomaly after Factory reopened `zeus-alpha-research-ledger-core-reconcile-unvalidated-required-docs` for `unvalidated_required_docs` at Agent Core events 187851/187853. I independently re-read the required G1 pack and supplemental controlling artifacts from the assigned worktree, including `DOCUMENTATION_INDEX.md`, `FACTORY_INTAKE.md`, `REQUIREMENTS_ANALYSIS.md`, `PATTERN_ANALYSIS.md`, `ASSUMPTIONS_AND_OPEN_QUESTIONS.md`, `PRD.md`, `ADRS.md`, `METHODOLOGY_PLAN.md`, `TECHNICAL_BLUEPRINT.md`, `SPRINT_PLAN.md`, `TASK_GRAPH.md`, `TRACKER.md`, `QA_GATES.md`, `SECURITY_GATES.md`, `G0_REPOSITORY_STRATEGY.md`, `REQUIREMENTS_TRACEABILITY.md`, `DATABASE_AND_RUNTIME_CONTRACT.md`, and `G1_REVIEW.md`.
+
+Independent review finding: the branch-local document pack is coherent and reviewed for G1 documentary readiness only. The docs consistently preserve the Zeus-only/local Agent Core boundary, no Vonash/runtime/trading authority, dedicated role/no-egress contract, source-provider exclusion, PR-first/QA Guardian path, and the requirement that ALR-020+ execution remain held until the canonical document-status blocker is zero. `DOCUMENTATION_INDEX.md` uses the required machine-readable `validated: yes` / `reviewed: yes` markers.
+
+Canonical blocker finding: `/home/jean/Projects/hermes-agent-original/venv/bin/python -m hermes_cli.main factory status zeus-alpha-research-ledger-core --json` still reports Agent Core Postgres (`db_backend=agent_core_postgres`, `database=zeus_agent`) and a current project `document_status` with `docs_ready=false`, `blocking_count=11`, and the same reviewed=false G1 blockers listed above. Read-only inspection of `/home/jean/Projects/hermes-agent-original/factory/projects/zeus-alpha-research-ledger-core/` confirms the primary checkout still has `reviewed: pending` markers in those canonical project files, while the assigned branch/worktree has `reviewed: yes`.
+
+Decision remains BLOCKED at the source-of-truth layer: record a failed critical-readiness evidence gate and keep product execution, QA, sandbox, delivery, direct base merge/deploy, and downstream ALR-020+ dispatch blocked until the authorized canonical source path makes Agent Core `document_status` read zero G1 blockers.

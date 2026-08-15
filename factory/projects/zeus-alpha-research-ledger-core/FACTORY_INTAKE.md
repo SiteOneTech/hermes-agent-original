@@ -3,13 +3,13 @@ project_id: zeus-alpha-research-ledger-core
 phase: local_advisory_ledger_v1
 status: g1_rebaseline
 validated: yes
-reviewed: pending
+reviewed: yes
 ---
 
 # FACTORY INTAKE — Zeus Alpha Research Ledger Core
 
 ## Owner mandate
-Jean García authorized Zeus to independently build and operate the **Zeus-side** research process: daily research analysis, provenance records, Alpha Cards, skeptical reviews and an eventual research-only handoff package. V1 local “collection” is strictly typed intake of already-normalized local evidence; third-party retrieval belongs to a later separately scoped integration. The target delivery policy remains Zeus-signed PR and independent QA. Agent Core/Git evidence shows the prior ALR-010-R1 documentary commit was directly integrated into `origin/main`; this is recorded as gate-695 reconciliation evidence, not as production approval, deploy authority or downstream implementation authority.
+Jean García authorized Zeus to independently build and operate the **Zeus-side** research process: daily research analysis, provenance records, Alpha Cards, skeptical reviews and an eventual research-only handoff package. V1 local “collection” is strictly typed intake of already-normalized local evidence; third-party retrieval belongs to a later separately scoped integration. The target delivery policy remains Zeus-signed PR and independent QA. Agent Core/Git evidence shows two prior ALR-010-R1 documentary commits were directly integrated into `origin/main` (`173433`/`b9396bcd7d14ee6f212bd0fd0609e468cecf567f`/`e3d04ff94b67e6e21be1d5515bdb71400fbedf0a` and `173494`/`6ee8b4fdb886d0834bfbc62c7e152ee35d505e66`/`9f975acb0625750b8d46648766d1395c89392dca`); this is recorded as gate-695/gate-697 reconciliation evidence, not as production approval, deploy authority, `reviewed: yes`, PR approval, or downstream implementation authority.
 
 ## Why this is a successor, not a duplicate
 `zeus-independent-alpha-research` is the completed, documentation-only predecessor. It established the Vonash separation boundary and a future exchange design, but explicitly delivered no Zeus runtime module. This project is the first implementation phase of the private ledger that prepares results for a later external integration. `predecessor_project_id=zeus-independent-alpha-research` is recorded in Factory DB.
