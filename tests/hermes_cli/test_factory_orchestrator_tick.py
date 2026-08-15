@@ -195,6 +195,40 @@ def test_spawn_worker_uses_current_python_module_not_path_hermes(monkeypatch, tm
 
 
 
+def test_task_prompt_uses_current_python_for_factory_cli():
+    module = _load_orchestrator_module()
+    payload = {
+        "projects": [{
+            "project_id": "demo-project",
+            "name": "Demo Project",
+            "repo_path": "/repo",
+            "metadata": {"repo_strategy": {"primary_repo_path": "/repo", "base_branch": "main"}},
+            "document_status": [],
+        }],
+        "tasks": [],
+        "gates": [],
+    }
+    claim = {
+        "run_id": "run-test",
+        "task": {
+            "project_id": "demo-project",
+            "task_id": "task-test",
+            "title": "Documentation reconciliation",
+            "phase": "documentation",
+            "engine": "zeus",
+            "status": "claimed",
+            "acceptance_criteria": [],
+            "dependencies": [],
+        },
+    }
+
+    prompt = module._task_prompt(payload, claim)
+
+    assert f"`{sys.executable} -m hermes_cli.main factory status`" in prompt
+    assert f"`{sys.executable} -m hermes_cli.main factory gate record`" in prompt
+    assert "`hermes factory" not in prompt
+
+
 def test_spawn_worker_terminates_new_process_when_run_registration_fails(monkeypatch, tmp_path):
     module = _load_orchestrator_module()
     monkeypatch.setattr(module, "_home", lambda: tmp_path)

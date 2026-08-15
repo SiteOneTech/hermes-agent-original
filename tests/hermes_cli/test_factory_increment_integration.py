@@ -275,6 +275,144 @@ def test_claim_next_task_claims_docs_repair_before_preflight_denied_product(fake
     assert "dispatch_preflight_denied" not in joined
 
 
+def test_reconciler_requeues_technical_docs_repair_blocked_without_human_decision(fake_sql):
+    project = {
+        "project_id": "demo",
+        "repo_path": "/repo",
+        "risk_level": "medium",
+        "metadata": {
+            "repo_strategy": {
+                "primary_repo_path": "/repo",
+                "branch_prefix": "factory/demo/",
+                "worktree_root": "/worktrees",
+            },
+            "g1_documentation_checkout": {
+                "branch": "factory/demo/inc-010-g1-review",
+                "path": "/worktrees/demo/inc-010-g1-review",
+            },
+        },
+    }
+    finding = {
+        "code": "unvalidated_required_docs",
+        "message": "Required Factory methodology documents are present but not fully validated/reviewed",
+        "metadata": {"blocking_documents": ["PRD.md"]},
+    }
+    repair = {
+        "project_id": "demo",
+        "task_id": "demo-reconcile-unvalidated-required-docs",
+        "status": "blocked",
+        "retry_count": 0,
+        "max_retries": 2,
+        "metadata": {
+            "factory_reconciliation_task": True,
+            "reconciliation_anomaly": "unvalidated_required_docs",
+            "last_blocker_classification": {
+                "action_category": "technical_rework",
+                "requires_human": False,
+            },
+        },
+    }
+
+    changes = factory_pg.ensure_reconciliation_tasks(project, [finding], [repair])
+
+    assert changes == [{
+        "task_id": "demo-reconcile-unvalidated-required-docs",
+        "code": "unvalidated_required_docs",
+        "action": "requeued",
+    }]
+    joined = "\n".join(fake_sql.statements)
+    assert "status='rework'" in joined
+    assert "reconciliation_task_requeued" in joined
+    assert "claimed_by=NULL" in joined
+    assert "branch='factory/demo/inc-010-g1-review'" in joined
+    assert "worktree_path='/worktrees/demo/inc-010-g1-review'" in joined
+
+
+def test_reconciler_does_not_requeue_without_complete_g0_assignment(fake_sql):
+    project = {
+        "project_id": "demo",
+        "risk_level": "medium",
+        "metadata": {
+            "repo_strategy": {
+                "status": "missing",
+                "branch_prefix": "factory/demo/",
+                "worktree_root": "/worktrees",
+            },
+        },
+    }
+    finding = {
+        "code": "unvalidated_required_docs",
+        "message": "Required Factory methodology documents are present but not fully validated/reviewed",
+        "metadata": {"blocking_documents": ["PRD.md"]},
+    }
+    repair = {
+        "project_id": "demo",
+        "task_id": "demo-reconcile-unvalidated-required-docs",
+        "status": "blocked",
+        "retry_count": 0,
+        "max_retries": 2,
+        "metadata": {
+            "factory_reconciliation_task": True,
+            "reconciliation_anomaly": "unvalidated_required_docs",
+            "last_blocker_classification": {
+                "action_category": "technical_rework",
+                "requires_human": False,
+            },
+        },
+    }
+
+    changes = factory_pg.ensure_reconciliation_tasks(project, [finding], [repair])
+
+    assert changes == []
+    assert "status='rework'" not in "\n".join(fake_sql.statements)
+
+
+def test_reconciler_does_not_mix_conflicting_partial_assignments(fake_sql):
+    project = {
+        "project_id": "demo",
+        "repo_path": "/repo",
+        "risk_level": "medium",
+        "metadata": {
+            "repo_strategy": {
+                "primary_repo_path": "/repo",
+                "branch_prefix": "factory/demo/",
+                "worktree_root": "/worktrees",
+            },
+            "g1_documentation_checkout": {
+                "branch": "factory/demo/inc-010-g1-review",
+                "path": "/worktrees/demo/inc-010-g1-review",
+            },
+        },
+    }
+    finding = {
+        "code": "unvalidated_required_docs",
+        "message": "Required Factory methodology documents are present but not fully validated/reviewed",
+        "metadata": {"blocking_documents": ["PRD.md"]},
+    }
+    repair = {
+        "project_id": "demo",
+        "task_id": "demo-reconcile-unvalidated-required-docs",
+        "status": "blocked",
+        "branch": "factory/demo/inc-099-unrelated",
+        "worktree_path": "",
+        "retry_count": 0,
+        "max_retries": 2,
+        "metadata": {
+            "factory_reconciliation_task": True,
+            "reconciliation_anomaly": "unvalidated_required_docs",
+            "last_blocker_classification": {
+                "action_category": "technical_rework",
+                "requires_human": False,
+            },
+        },
+    }
+
+    changes = factory_pg.ensure_reconciliation_tasks(project, [finding], [repair])
+
+    assert changes == []
+    assert "status='rework'" not in "\n".join(fake_sql.statements)
+
+
 def test_claimed_null_predicate_ignores_docs_blocked_product_without_repair():
     payload = {
         "projects": [

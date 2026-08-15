@@ -1872,6 +1872,105 @@ def _task_branch_and_worktree(project: dict[str, Any] | None, increment_key: str
     return branch or None, worktree or None, strategy
 
 
+def _clean_assignment_value(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _is_document_reconciliation_code(code: str) -> bool:
+    spec = RECONCILIATION_TASK_SPECS.get(code) or {}
+    return str(spec.get("phase") or "").strip().lower() in {"documentation", "reporting"}
+
+
+def _reconciliation_increment_key(project_id: str, code: str, task: dict[str, Any] | None = None) -> str:
+    if task:
+        increment_key = _clean_assignment_value(task.get("increment_key"))
+        if increment_key:
+            return increment_key
+    return f"reconcile-{code}" if project_id and code else ""
+
+
+def _g1_documentation_reconciliation_assignment(project: dict[str, Any] | None, code: str) -> dict[str, Any] | None:
+    if not project or not _is_document_reconciliation_code(code):
+        return None
+    checkout = _metadata(project).get("g1_documentation_checkout")
+    if not isinstance(checkout, dict):
+        return None
+    branch = _clean_assignment_value(checkout.get("branch"))
+    worktree_path = _clean_assignment_value(checkout.get("path") or checkout.get("worktree_path"))
+    if not branch or not worktree_path:
+        return None
+    return {
+        "branch": branch,
+        "worktree_path": worktree_path,
+        "source": "metadata.g1_documentation_checkout",
+        "provenance": {
+            "source": "metadata.g1_documentation_checkout",
+            "branch_source": "metadata.g1_documentation_checkout.branch",
+            "worktree_source": "metadata.g1_documentation_checkout.path",
+        },
+    }
+
+
+def _repo_strategy_reconciliation_assignment(project: dict[str, Any] | None, code: str, task: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    if not project:
+        return None
+    project_id = _clean_assignment_value(project.get("project_id"))
+    increment_key = _reconciliation_increment_key(project_id, code, task)
+    if not project_id or not increment_key:
+        return None
+    branch, worktree_path, strategy = _task_branch_and_worktree(project, increment_key)
+    if not branch or not worktree_path:
+        return None
+    return {
+        "branch": branch,
+        "worktree_path": worktree_path,
+        "source": "repo_strategy",
+        "provenance": {
+            "source": "repo_strategy",
+            "branch_source": "repo_strategy.branch_prefix",
+            "worktree_source": "repo_strategy.worktree_root",
+            "increment_key": increment_key,
+            "repo_strategy_status": strategy.get("status"),
+        },
+    }
+
+
+def _reconciliation_task_assignment(project: dict[str, Any] | None, code: str, task: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    existing_branch = _clean_assignment_value(task.get("branch")) if task else ""
+    existing_worktree = _clean_assignment_value(task.get("worktree_path")) if task else ""
+    derived = (
+        _g1_documentation_reconciliation_assignment(project, code)
+        or _repo_strategy_reconciliation_assignment(project, code, task)
+    )
+    if derived:
+        derived_branch = _clean_assignment_value(derived.get("branch"))
+        derived_worktree = _clean_assignment_value(derived.get("worktree_path"))
+        if existing_branch and not existing_worktree and derived_branch and existing_branch != derived_branch:
+            return None
+        if existing_worktree and not existing_branch and derived_worktree and existing_worktree != derived_worktree:
+            return None
+    branch = existing_branch or _clean_assignment_value((derived or {}).get("branch"))
+    worktree_path = existing_worktree or _clean_assignment_value((derived or {}).get("worktree_path"))
+    if not branch or not worktree_path:
+        return None
+    branch_source = "task.branch" if existing_branch else (derived or {}).get("provenance", {}).get("branch_source")
+    worktree_source = "task.worktree_path" if existing_worktree else (derived or {}).get("provenance", {}).get("worktree_source")
+    provenance = {
+        "source": (derived or {}).get("source", "task_existing_assignment"),
+        "branch_source": branch_source,
+        "worktree_source": worktree_source,
+    }
+    if derived:
+        provenance.update(derived.get("provenance") or {})
+        provenance["branch_source"] = branch_source
+        provenance["worktree_source"] = worktree_source
+    return {
+        "branch": branch,
+        "worktree_path": worktree_path,
+        "provenance": provenance,
+    }
+
+
 def _all_open_work_is_reconciliation(tasks: list[dict[str, Any]]) -> bool:
     open_tasks = [task for task in tasks if str(task.get("status") or "") not in TERMINAL_TASK_STATUSES]
     return bool(open_tasks) and all(_is_reconciliation_task(task) for task in open_tasks)
@@ -2356,6 +2455,36 @@ def _task_covers_reconciliation_anomaly(task: dict[str, Any], code: str) -> bool
     return False
 
 
+def _task_reconciliation_max_retries(task: dict[str, Any]) -> int:
+    try:
+        value = int(task.get("max_retries") or 0)
+    except (TypeError, ValueError):
+        value = 0
+    return value if value > 0 else SUPERVISOR_TECHNICAL_REWORK_MAX_RETRIES
+
+
+def _blocked_reconciliation_requeue_context(task: dict[str, Any], code: str) -> dict[str, Any] | None:
+    if str(task.get("status") or "") != "blocked":
+        return None
+    metadata = _metadata(task)
+    if not metadata.get("factory_reconciliation_task"):
+        return None
+    if str(metadata.get("reconciliation_anomaly") or "").strip() != code:
+        return None
+    classification = metadata.get("last_blocker_classification")
+    if not isinstance(classification, dict):
+        return None
+    if classification.get("action_category") != "technical_rework":
+        return None
+    if classification.get("requires_human") is not False:
+        return None
+    retry_count = _task_retry_count(task)
+    max_retries = _task_reconciliation_max_retries(task)
+    if retry_count >= max_retries:
+        return None
+    return {"classification": classification, "retry_count": retry_count, "max_retries": max_retries}
+
+
 def _latest_gate_statuses(gates: list[dict[str, Any]]) -> dict[str, str]:
     statuses: dict[str, str] = {}
     for gate in gates:
@@ -2611,7 +2740,82 @@ def ensure_reconciliation_tasks(project: dict[str, Any], findings: list[dict[str
     terminal = ",".join(_q(status) for status in TERMINAL_TASK_STATUSES)
     for finding in findings:
         code = str(finding.get("code") or "")
-        if not code or any(_task_covers_reconciliation_anomaly(task, code) for task in tasks):
+        if not code:
+            continue
+        matching_tasks = [task for task in tasks if _task_covers_reconciliation_anomaly(task, code)]
+        for task in matching_tasks:
+            requeue_context = _blocked_reconciliation_requeue_context(task, code)
+            if not requeue_context:
+                continue
+            assignment = _reconciliation_task_assignment(project, code, task)
+            if not assignment:
+                continue
+            task_id = str(task.get("task_id") or "")
+            if not task_id:
+                continue
+            retry_count = int(requeue_context["retry_count"])
+            max_retries = int(requeue_context["max_retries"])
+            classification = requeue_context["classification"]
+            assignment_metadata = {
+                "branch": assignment["branch"],
+                "worktree_path": assignment["worktree_path"],
+                "provenance": assignment["provenance"],
+            }
+            requeue_metadata = {
+                "last_reconciliation_requeue": {
+                    "reason": "active_technical_rework_anomaly",
+                    "reconciliation_anomaly": code,
+                    "retry_count": retry_count,
+                    "max_retries": max_retries,
+                    "classification": classification,
+                    "assignment": assignment_metadata,
+                },
+                "reconciliation_assignment": assignment_metadata,
+            }
+            event_metadata = {
+                "task_id": task_id,
+                "reconciliation_anomaly": code,
+                "retry_count": retry_count,
+                "max_retries": max_retries,
+                "classification": classification,
+                "assignment": assignment_metadata,
+            }
+            sql.psql(
+                f"""
+                WITH requeued AS (
+                  UPDATE factory.tasks
+                  SET status='rework',
+                      branch=CASE WHEN COALESCE(branch, '')='' THEN {_q(assignment['branch'])} ELSE branch END,
+                      worktree_path=CASE WHEN COALESCE(worktree_path, '')='' THEN {_q(assignment['worktree_path'])} ELSE worktree_path END,
+                      claimed_by=NULL,
+                      claimed_at=NULL,
+                      lease_until=NULL,
+                      evidence_status='missing',
+                      metadata=metadata || {_j(requeue_metadata)},
+                      updated_at=now()
+                  WHERE project_id={_q(project_id)}
+                    AND task_id={_q(task_id)}
+                    AND status='blocked'
+                    AND (COALESCE(branch, '')='' OR branch={_q(assignment['branch'])})
+                    AND (COALESCE(worktree_path, '')='' OR worktree_path={_q(assignment['worktree_path'])})
+                    AND metadata->>'factory_reconciliation_task'='true'
+                    AND metadata->>'reconciliation_anomaly'={_q(code)}
+                    AND metadata->'last_blocker_classification'->>'action_category'='technical_rework'
+                    AND metadata->'last_blocker_classification'->>'requires_human'='false'
+                    AND COALESCE(retry_count, 0) < {max_retries}
+                  RETURNING project_id, lane_id, task_id
+                )
+                INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
+                SELECT project_id, lane_id, task_id, 'factory-reconciler', 'reconciliation_task_requeued',
+                       {_q('Blocked reconciliation task requeued because the active anomaly is classified as technical rework')},
+                       {_j(event_metadata)}
+                FROM requeued;
+                """,
+                user=_user(),
+            )
+            created.append({"task_id": task_id, "code": code, "action": "requeued"})
+            break
+        if matching_tasks:
             continue
         spec = RECONCILIATION_TASK_SPECS[code]
         task_id = f"{project_id}-reconcile-{code.replace('_', '-')}"
@@ -2621,6 +2825,18 @@ def ensure_reconciliation_tasks(project: dict[str, Any], findings: list[dict[str
             "reconciliation_anomaly": code,
             "finding": finding,
         }
+        assignment = _reconciliation_task_assignment(project, code)
+        assignment_metadata = None
+        if assignment:
+            assignment_metadata = {
+                "branch": assignment["branch"],
+                "worktree_path": assignment["worktree_path"],
+                "provenance": assignment["provenance"],
+            }
+            metadata["reconciliation_assignment"] = assignment_metadata
+        event_metadata = {"task_id": task_id, "reconciliation_anomaly": code}
+        if assignment_metadata:
+            event_metadata["assignment"] = assignment_metadata
         description = (
             f"Deterministic reconciliation task generated because: {finding.get('message')}.\n\n"
             "Do not close the project manually from UI state. Inspect Factory DB, project-local artifacts, gates, and deliverable evidence; then record gates/evidence canonically."
@@ -2631,19 +2847,21 @@ def ensure_reconciliation_tasks(project: dict[str, Any], findings: list[dict[str
             INSERT INTO factory.tasks (
               task_id, project_id, lane_id, title, description, phase, status,
               owner_profile, reviewer_profile, engine, priority, dependencies,
-              acceptance_criteria, evidence_required, evidence_status, risk_level,
+              branch, worktree_path, acceptance_criteria, evidence_required, evidence_status, risk_level,
               metadata, increment_key, increment_order, created_at, updated_at
             )
             VALUES (
               {_q(task_id)}, {_q(project_id)}, (SELECT lane_id FROM factory.lanes WHERE project_id={_q(project_id)} ORDER BY created_at, lane_id LIMIT 1),
               {_q(spec['title'])}, {_q(description)}, {_q(spec['phase'])}, 'todo',
               {_q(spec['owner'])}, {_q(spec['reviewer'])}, {_q(spec['engine'])}, {int(spec['priority'])}, '[]'::jsonb,
-              {_j(spec['acceptance'])}, true, 'missing', {_q(str(project.get('risk_level') or 'medium'))},
+              {_q((assignment or {}).get('branch'))}, {_q((assignment or {}).get('worktree_path'))}, {_j(spec['acceptance'])}, true, 'missing', {_q(str(project.get('risk_level') or 'medium'))},
               {_j(metadata)}, {_q('reconcile-' + code)}, {int(spec['priority'])}, now(), now()
             )
             ON CONFLICT (task_id) DO UPDATE SET
               status=CASE WHEN factory.tasks.status IN ({terminal}) THEN 'todo' ELSE factory.tasks.status END,
               evidence_status=CASE WHEN factory.tasks.status IN ({terminal}) THEN 'missing' ELSE factory.tasks.evidence_status END,
+              branch=CASE WHEN COALESCE(factory.tasks.branch, '')='' AND EXCLUDED.branch IS NOT NULL THEN EXCLUDED.branch ELSE factory.tasks.branch END,
+              worktree_path=CASE WHEN COALESCE(factory.tasks.worktree_path, '')='' AND EXCLUDED.worktree_path IS NOT NULL THEN EXCLUDED.worktree_path ELSE factory.tasks.worktree_path END,
               result_summary=CASE
                 WHEN factory.tasks.status IN ({terminal}) THEN COALESCE(factory.tasks.result_summary, '') || {_q(reopen_note)}
                 ELSE factory.tasks.result_summary
@@ -2653,7 +2871,7 @@ def ensure_reconciliation_tasks(project: dict[str, Any], findings: list[dict[str
               metadata=factory.tasks.metadata || EXCLUDED.metadata || {_j({'reopened_by': 'factory_reconciler', 'reopen_reason': 'canonical_anomaly_recurred'})},
               updated_at=now();
             INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
-            VALUES ({_q(project_id)}, (SELECT lane_id FROM factory.lanes WHERE project_id={_q(project_id)} ORDER BY created_at, lane_id LIMIT 1), {_q(task_id)}, 'factory-reconciler', 'reconciliation_task_ensured', {_q(f'Reconciliation task ensured for anomaly {code}')}, {_j({'task_id': task_id, 'reconciliation_anomaly': code})});
+            VALUES ({_q(project_id)}, (SELECT lane_id FROM factory.lanes WHERE project_id={_q(project_id)} ORDER BY created_at, lane_id LIMIT 1), {_q(task_id)}, 'factory-reconciler', 'reconciliation_task_ensured', {_q(f'Reconciliation task ensured for anomaly {code}')}, {_j(event_metadata)});
             """
         )
         created.append({"task_id": task_id, "code": code})
