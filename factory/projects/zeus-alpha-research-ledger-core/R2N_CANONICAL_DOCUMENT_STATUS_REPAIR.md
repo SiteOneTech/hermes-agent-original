@@ -24,14 +24,20 @@ Read-only Git verification from the assigned isolated worktree recorded:
 - Assigned worktree root: `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-034-r2n-repair-g1-canonical-document`.
 - Repository remote: `https://github.com/SiteOneTech/hermes-agent-original.git` (`origin`).
 - Canonical base branch: `origin/main`.
-- Exact branch/base/remote-main SHA before this repair: `df4c77fd1413a65cdb85885a06978ff157c1de4d`.
-- The R2n branch was initially equal to that base before this documentation-only correction.
+- Exact remote-main base at R2n branch creation: `df4c77fd1413a65cdb85885a06978ff157c1de4d`.
+- The R2n branch was initially equal to that base before the first documentation-only correction.
+- Rework input PR #33 head before this repair pass: `5a3873487c8503a675de14a03ae579a7e87279a7` (`docs(factory): repair R2n G1 document handoff`), open against `main` with label `agent:zeus`.
 
 ## Canonical Factory status reproduced
 
-The approved Factory status path is Agent Core Postgres `factory.*` via `/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory status zeus-alpha-research-ledger-core --json`. The reproduced status read-back used backend `agent_core_postgres`, database `zeus_agent`, canonical project `repo_path=/home/jean/Projects/hermes-agent-original`, and project anomaly `metadata.reconciliation_anomalies=["unvalidated_required_docs"]`.
+The approved Factory status path is Agent Core Postgres `factory.*` via `/home/jean/Projects/hermes-agent-original/venv/bin/python -m hermes_cli.main factory status zeus-alpha-research-ledger-core --json`. The reproduced status read-back used backend `agent_core_postgres`, database `zeus_agent`, canonical project `repo_path=/home/jean/Projects/hermes-agent-original`, and project anomaly `metadata.reconciliation_anomalies=["unvalidated_required_docs"]`.
 
-The current project-level `document_status` rows read from the primary source show all 14 required G1 documents as present, indexed, committed and validated, but not reviewed. The prompt snapshot listed a smaller blocker subset; the canonical live read-back below is the binding source for this repair:
+R2n records two observable readings instead of dismissing either one:
+
+1. **Dispatch snapshot / loose projection:** the task prompt listed 10 blocking required docs and 4 READY docs. The READY docs were `SPRINT_PLAN.md`, `TRACKER.md`, `DOCUMENTATION_INDEX.md`, and `QA_GATES.md`. Their frontmatter and index rows still said pending, so the READY state was a heuristic false-positive caused by positive review-marker prose in the first 40 lines.
+2. **Strict primary read-back:** the captured Agent Core status output from primary source shows all 14 required G1 documents present, indexed, committed and validated, but not reviewed. This is the intended fail-closed state until a real independent exact-SHA review exists. The after-correction read-back still has `last_reconciled_at=2026-08-15T22:35:46.427543+00:00`, `repo_path=/home/jean/Projects/hermes-agent-original`, and `metadata.reconciliation_anomalies=["unvalidated_required_docs"]` because Agent Core is reading the primary checkout and stale metadata, not this unreviewed branch candidate.
+
+The strict read-back below is the binding target this repair makes branch-local docs align with:
 
 | Required G1 document | Readiness source | Exists | Indexed | Committed | Validated | Reviewed | Blocking cause |
 |---|---|---:|---:|---:|---:|---:|---|
@@ -56,7 +62,18 @@ The R2m handoff is now stale as the active review target because it names branch
 
 Agent Core project metadata also still carries the older `metadata.g1_documentation_checkout` pointer to PR #20 / `dad375f27568c38be771fc597b579d087f034e1d`, `not_merged=true`, under branch `factory/zeus-alpha-research-ledger-core/inc-011-alr-010-r2-pr-first-g1-reconciliation`. That stale metadata is not a reviewed candidate and must not be used to dispatch ALR-020.
 
-This repair makes R2n the active documentation handoff, preserves R2j/R2k/R2m as historical provenance, and keeps required G1 `reviewed` markers pending because this worker is not the independent reviewer.
+This repair makes R2n the active documentation handoff, preserves R2j/R2k/R2m as historical provenance, documents the 10+4 versus strict-all-14 mismatch, and keeps required G1 review markers pending because this worker is not the independent reviewer.
+
+## False-ready marker neutralization
+
+The four prompt-READY docs already had pending frontmatter/index rows. To make the checker read the intended pending state rather than loose positive prose, R2n removes these branch-local first-40-line false positives:
+
+| File | Neutralized marker class | Intended state |
+|---|---|---|
+| `SPRINT_PLAN.md` | literal positive reviewed marker and `reviewer <word>` prose | pending |
+| `TRACKER.md` | literal positive reviewed marker prose | pending |
+| `DOCUMENTATION_INDEX.md` | `reviewer <word>` prose in controlling-status text | pending |
+| `QA_GATES.md` | `reviewer <word>` prose in task-field description | pending |
 
 ## Exact-SHA review handoff
 
