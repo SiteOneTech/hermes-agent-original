@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -480,6 +481,36 @@ def test_prepare_existing_worktree_rejects_primary_checkout(monkeypatch, tmp_pat
 
     assert result["ready"] is False
     assert result["reason"] == "worktree_path_not_isolated"
+
+
+def test_prepare_existing_real_linked_worktree_is_accepted(tmp_path):
+    module = _load_orchestrator_module()
+    repo = tmp_path / "repo"
+    worktree = tmp_path / "worktrees" / "inc-001"
+    branch = "factory/demo/inc-001"
+    subprocess.run(["git", "init", str(repo)], check=True, capture_output=True, text=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.email", "factory-test@example.invalid"], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "Factory Test"], check=True)
+    (repo / "README.md").write_text("factory test\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "README.md"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-m", "initial"], check=True, capture_output=True, text=True)
+    worktree.parent.mkdir(parents=True)
+    subprocess.run(["git", "-C", str(repo), "worktree", "add", "-b", branch, str(worktree), "HEAD"], check=True, capture_output=True, text=True)
+
+    payload = {
+        "projects": [{
+            "project_id": "demo",
+            "repo_path": str(repo),
+            "metadata": {"repo_strategy": {"primary_repo_path": str(repo), "base_branch": "main"}},
+        }],
+    }
+    claim = {"task": {"project_id": "demo", "branch": branch, "worktree_path": str(worktree)}}
+
+    result = module._prepare_worktree(payload, claim)
+
+    assert result["ready"] is True
+    assert result["reason"] == "worktree_exists"
+    assert result["cwd"] == str(worktree)
 
 
 def test_prepare_worktree_starts_new_increment_from_origin_base(monkeypatch, tmp_path):
