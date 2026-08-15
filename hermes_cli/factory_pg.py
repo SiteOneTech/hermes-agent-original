@@ -4399,6 +4399,7 @@ def reconcile_project(project_id: str) -> dict[str, Any]:
     metadata = _metadata(project)
     pending_gates = _active_pending_gates(project_id)
     latest_gates = _latest_gate_rows(project_id)
+    document_dispatch_readiness = _document_dispatch_readiness(project, tasks, pending_gates, latest_gates)
     findings = reconciliation_findings(project, tasks, pending_gates, latest_gates)
     created_reconciliation_tasks = ensure_reconciliation_tasks(project, findings, tasks) if findings else []
     cancelled_reconciliation_tasks = cancel_resolved_reconciliation_tasks(project, findings, tasks)
@@ -4442,7 +4443,11 @@ def reconcile_project(project_id: str) -> dict[str, Any]:
         new_status = "intake"
     finding_codes = [str(finding.get("code")) for finding in findings]
     force_autonomy_off = _project_reconcile_forces_autonomy_off(str(project.get("status") or ""), new_status)
-    reconcile_metadata = {'reconciliation_required': bool(findings), 'reconciliation_anomalies': finding_codes}
+    reconcile_metadata = {
+        'reconciliation_required': bool(findings),
+        'reconciliation_anomalies': finding_codes,
+        'document_dispatch_readiness': document_dispatch_readiness,
+    }
     if force_autonomy_off:
         reconcile_metadata.update({
             'autonomous_enabled': False,
@@ -6226,16 +6231,30 @@ def claim_next_rework(project_id: Optional[str] = None, *, worker: str = "factor
         tasks = _tasks(pid)
         if _has_in_flight_increment(tasks):
             continue
+        # Reconciliation persists the filesystem-derived G1 state into the
+        # project ledger before a direct caller can claim rework. Canonical G1
+        # writers also reconcile, so a concurrent readiness transition changes
+        # this durable predicate and invalidates an old selection at claim time.
+        reconcile_project(pid)
+        tasks = _tasks(pid)
+        if _has_in_flight_increment(tasks):
+            continue
         full_project = _project(pid) or {"project_id": pid, "metadata": {}}
         pending_gates = _active_pending_gates(pid)
         latest_gates = _latest_gate_rows(pid)
-        docs_ready, notion_ready, notion_required, docs_first_waived = _project_docs_notion_preflight(
+        document_dispatch_readiness = _document_dispatch_readiness(
             full_project,
             tasks,
             pending_gates,
             latest_gates,
         )
+        docs_ready = bool(document_dispatch_readiness["docs_ready"])
+        notion_ready = bool(document_dispatch_readiness["notion_ready"])
+        notion_required = bool(document_dispatch_readiness["notion_required"])
+        docs_first_waived = bool(document_dispatch_readiness["docs_first_waived"])
+        durable_document_dispatch_readiness = _metadata(full_project).get("document_dispatch_readiness")
         eligible_task_ids: list[str] = []
+        product_task_ids: list[str] = []
         denied_product_rework = False
         for task in sorted(
             (item for item in tasks if str(item.get("status") or "") == "rework"),
@@ -6248,6 +6267,8 @@ def claim_next_rework(project_id: Optional[str] = None, *, worker: str = "factor
                 notion_required=notion_required,
                 docs_first_waived=docs_first_waived,
             )
+            if _is_docs_first_gated_dispatch_task(task) and durable_document_dispatch_readiness != document_dispatch_readiness:
+                preflight_blockers.append("stale_document_dispatch_readiness")
             if preflight_blockers:
                 denied_product_rework = True
                 _record_dispatch_preflight_denied(pid, task, preflight_blockers, worker=worker)
@@ -6255,6 +6276,8 @@ def claim_next_rework(project_id: Optional[str] = None, *, worker: str = "factor
             task_id = str(task.get("task_id") or "")
             if task_id:
                 eligible_task_ids.append(task_id)
+                if _is_docs_first_gated_dispatch_task(task):
+                    product_task_ids.append(task_id)
         if denied_product_rework:
             ensure_reconciliation_tasks(
                 full_project,
@@ -6265,6 +6288,22 @@ def claim_next_rework(project_id: Optional[str] = None, *, worker: str = "factor
         if not eligible_task_ids:
             continue
         eligible_ids = ",".join(_q(task_id) for task_id in eligible_task_ids)
+        product_id_set = set(product_task_ids)
+        recovery_task_ids = [task_id for task_id in eligible_task_ids if task_id not in product_id_set]
+        claimable_task_predicates: list[str] = []
+        if recovery_task_ids:
+            claimable_task_predicates.append(
+                "t.task_id IN (" + ",".join(_q(task_id) for task_id in recovery_task_ids) + ")"
+            )
+        if product_task_ids:
+            claimable_task_predicates.append(
+                "(t.task_id IN ("
+                + ",".join(_q(task_id) for task_id in product_task_ids)
+                + ") AND p.metadata->'document_dispatch_readiness' = "
+                + _j(document_dispatch_readiness)
+                + ")"
+            )
+        claimable_task_predicate = " OR ".join(claimable_task_predicates)
         row = sql.statement_one(
             f"""
             UPDATE factory.tasks t
@@ -6281,7 +6320,7 @@ def claim_next_rework(project_id: Optional[str] = None, *, worker: str = "factor
               AND p.status IN ('active','planned','intake','blocked')
               AND {manual_takeover_filter}
               AND t.status='rework'
-              AND t.task_id IN ({eligible_ids})
+              AND ({claimable_task_predicate})
               AND NOT EXISTS (
                 SELECT 1 FROM factory.task_runs r
                 WHERE r.project_id=t.project_id AND r.status IN ('queued','running')
@@ -6423,6 +6462,35 @@ def _project_docs_notion_preflight(project: dict[str, Any], tasks: list[dict[str
     docs_ready = not bool(_g1_document_blockers(project)) and "missing_project_artifact_dir" not in codes
     notion_ready = _notion_projection_issue(metadata) is None
     return docs_ready, notion_ready, _metadata_bool(metadata, "notion_required"), _dispatch_docs_first_waived(metadata)
+
+
+def _document_dispatch_readiness(
+    project: dict[str, Any],
+    tasks: list[dict[str, Any]],
+    pending_gates: list[dict[str, Any]],
+    gates: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Return the durable docs-first state used to authorize product claims.
+
+    `reconcile_project()` persists this compact snapshot on the project. Claim
+    updates compare against the exact JSON value, so another canonical G1/gate
+    reconciliation invalidates an already-selected product rework before it can
+    transition from `rework` to `claimed`.
+    """
+
+    docs_ready, notion_ready, notion_required, docs_first_waived = _project_docs_notion_preflight(
+        project,
+        tasks,
+        pending_gates,
+        gates,
+    )
+    return {
+        "schema_version": 1,
+        "docs_ready": docs_ready,
+        "notion_ready": notion_ready,
+        "notion_required": notion_required,
+        "docs_first_waived": docs_first_waived,
+    }
 
 
 def _record_dispatch_preflight_denied(project_id: str, task: dict[str, Any], blockers: list[str], *, worker: str) -> None:

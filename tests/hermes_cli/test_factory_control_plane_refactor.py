@@ -1420,6 +1420,8 @@ def test_reconcile_preserves_manual_attention_and_forces_autonomy_off(monkeypatc
     assert "status='manual_attention'" in joined
     assert "autonomous_enabled=false" in joined
     assert "project_status_manual_attention" in joined
+    assert '"document_dispatch_readiness"' in joined
+    assert '"schema_version": 1' in joined
 
 
 def test_close_project_cancels_active_runs_and_records_monitor_evidence(fake_sql):
