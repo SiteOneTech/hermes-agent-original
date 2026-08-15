@@ -2802,7 +2802,7 @@ def ensure_reconciliation_tasks(project: dict[str, Any], findings: list[dict[str
                     AND metadata->>'factory_reconciliation_task'='true'
                     AND metadata->>'reconciliation_anomaly'={_q(code)}
                     AND metadata->'last_blocker_classification'->>'action_category'='technical_rework'
-                    AND metadata->'last_blocker_classification'->>'requires_human'='false'
+                    AND metadata->'last_blocker_classification'->'requires_human' = 'false'::jsonb
                     AND COALESCE(retry_count, 0) < {max_retries}
                     AND NOT EXISTS (
                       SELECT 1

@@ -373,6 +373,8 @@ def test_reconciler_requeues_technical_docs_repair_blocked_without_human_decisio
     assert "worktree_path='/worktrees/demo/inc-010-g1-review'" in joined
     assert "NOT EXISTS (" in joined
     assert "FROM factory.task_runs active_run" in joined
+    assert "last_blocker_classification'->'requires_human' = 'false'::jsonb" in joined
+    assert "last_blocker_classification'->>'requires_human'='false'" not in joined
 
 
 def test_reconciler_does_not_report_requeue_when_atomic_update_loses_race(fake_sql):
