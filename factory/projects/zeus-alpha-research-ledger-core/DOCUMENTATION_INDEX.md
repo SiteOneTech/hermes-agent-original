@@ -34,11 +34,13 @@ Canonical G1 pack for the **private Zeus-side implementation** succeeding `zeus-
 - `REQUIREMENTS_TRACEABILITY.md` maps requirements to tasks/tests/reviews.
 - `DATABASE_AND_RUNTIME_CONTRACT.md` is binding for exact DB, runtime, no-egress and scheduler implementation behavior.
 - `G1_REVIEW.md` records independent review findings/remediation.
+- `R2J_CANONICAL_STATE_REPAIR.md` records the PR #29 canonical-state provenance repair: exact PR head `f61a7275048e2135b2b2729a1b9cdf8713c58866`, canonical `main` `5e1e4622e93d8d2fabdfe0f2176889a29afa7f7c`, current Factory `document_status` blockers, and why R2i's `already_ancestor` attachment is review-worktree evidence rather than source-candidate merge evidence.
 
 ## Status semantics
 - `validated: yes` means the implementation-planner/local worker confirmed the file exists, is tracked, is indexed where required, and is internally consistent with this G1 contract.
 - `reviewed: pending` is an explicit reviewed-status value, not a missing field. It may become `reviewed: yes` only after independent reviewers record PASS evidence against the exact committed SHA.
 - A branch-local reviewed status or the observed ALR-010-R1 base-branch merge never authorizes normal implementation by itself; exact-SHA independent reviews and reconciled delivery evidence remain required.
+- Review-task integration metadata must not be used as PR visibility evidence unless its branch commit equals the candidate PR head; for R2i, the `already_ancestor` attachment names review branch commit `5e1e4622e93d8d2fabdfe0f2176889a29afa7f7c`, while the actual open PR #29 candidate remains `f61a7275048e2135b2b2729a1b9cdf8713c58866`.
 
 ## Required reading order
 1. `DOCUMENTATION_INDEX.md`, `FACTORY_INTAKE.md`, `G0_REPOSITORY_STRATEGY.md`
