@@ -312,6 +312,7 @@ def test_reconciler_requeues_technical_docs_repair_blocked_without_human_decisio
             },
         },
     }
+    fake_sql.one_results = [{"task_id": "demo-reconcile-unvalidated-required-docs"}]
 
     changes = factory_pg.ensure_reconciliation_tasks(project, [finding], [repair])
 
@@ -326,6 +327,49 @@ def test_reconciler_requeues_technical_docs_repair_blocked_without_human_decisio
     assert "claimed_by=NULL" in joined
     assert "branch='factory/demo/inc-010-g1-review'" in joined
     assert "worktree_path='/worktrees/demo/inc-010-g1-review'" in joined
+    assert "NOT EXISTS (" in joined
+    assert "FROM factory.task_runs active_run" in joined
+
+
+def test_reconciler_does_not_report_requeue_when_atomic_update_loses_race(fake_sql):
+    project = {
+        "project_id": "demo",
+        "repo_path": "/repo",
+        "risk_level": "medium",
+        "metadata": {
+            "repo_strategy": {
+                "primary_repo_path": "/repo",
+                "branch_prefix": "factory/demo/",
+                "worktree_root": "/worktrees",
+            },
+            "g1_documentation_checkout": {
+                "branch": "factory/demo/inc-010-g1-review",
+                "path": "/worktrees/demo/inc-010-g1-review",
+            },
+        },
+    }
+    finding = {"code": "unvalidated_required_docs", "message": "docs require review", "metadata": {}}
+    repair = {
+        "project_id": "demo",
+        "task_id": "demo-reconcile-unvalidated-required-docs",
+        "status": "blocked",
+        "retry_count": 0,
+        "max_retries": 2,
+        "metadata": {
+            "factory_reconciliation_task": True,
+            "reconciliation_anomaly": "unvalidated_required_docs",
+            "last_blocker_classification": {
+                "action_category": "technical_rework",
+                "requires_human": False,
+            },
+        },
+    }
+    fake_sql.one_results = [None]
+
+    changes = factory_pg.ensure_reconciliation_tasks(project, [finding], [repair])
+
+    assert changes == []
+    assert "recorded_event AS" in "\n".join(fake_sql.statements)
 
 
 def test_reconciler_does_not_requeue_without_complete_g0_assignment(fake_sql):

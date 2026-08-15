@@ -2780,7 +2780,7 @@ def ensure_reconciliation_tasks(project: dict[str, Any], findings: list[dict[str
                 "classification": classification,
                 "assignment": assignment_metadata,
             }
-            sql.psql(
+            requeued = sql.one(
                 f"""
                 WITH requeued AS (
                   UPDATE factory.tasks
@@ -2803,18 +2803,29 @@ def ensure_reconciliation_tasks(project: dict[str, Any], findings: list[dict[str
                     AND metadata->'last_blocker_classification'->>'action_category'='technical_rework'
                     AND metadata->'last_blocker_classification'->>'requires_human'='false'
                     AND COALESCE(retry_count, 0) < {max_retries}
+                    AND NOT EXISTS (
+                      SELECT 1
+                      FROM factory.task_runs active_run
+                      WHERE active_run.project_id=factory.tasks.project_id
+                        AND active_run.task_id=factory.tasks.task_id
+                        AND active_run.status IN ('queued','running')
+                    )
                   RETURNING project_id, lane_id, task_id
+                ), recorded_event AS (
+                  INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
+                  SELECT project_id, lane_id, task_id, 'factory-reconciler', 'reconciliation_task_requeued',
+                         {_q('Blocked reconciliation task requeued because the active anomaly is classified as technical rework')},
+                         {_j(event_metadata)}
+                  FROM requeued
+                  RETURNING task_id
                 )
-                INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
-                SELECT project_id, lane_id, task_id, 'factory-reconciler', 'reconciliation_task_requeued',
-                       {_q('Blocked reconciliation task requeued because the active anomaly is classified as technical rework')},
-                       {_j(event_metadata)}
-                FROM requeued;
+                SELECT task_id FROM recorded_event
                 """,
                 user=_user(),
             )
-            created.append({"task_id": task_id, "code": code, "action": "requeued"})
-            break
+            if requeued:
+                created.append({"task_id": str(requeued.get("task_id") or task_id), "code": code, "action": "requeued"})
+                break
         if matching_tasks:
             continue
         spec = RECONCILIATION_TASK_SPECS[code]
