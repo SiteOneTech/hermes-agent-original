@@ -14,21 +14,21 @@ Canonical G1 pack for the **private Zeus-side implementation** succeeding `zeus-
 
 | File | Purpose | Owner | Validated | Reviewed |
 |---|---|---|---|---|
-| `FACTORY_INTAKE.md` | mandate, boundaries, source of truth | factory-orchestrator | yes | yes |
-| `G0_REPOSITORY_STRATEGY.md` | repo/scope/worktree/PR decision | solution-architect | yes | yes |
-| `REQUIREMENTS_ANALYSIS.md` | R1–R10/no-authority requirements | product-analyst | yes | yes |
-| `PATTERN_ANALYSIS.md` | patterns and rejected shortcuts | product-analyst | yes | yes |
-| `ASSUMPTIONS_AND_OPEN_QUESTIONS.md` | verified inputs/unknowns | solution-architect | yes | yes |
-| `PRD.md` | outcome and release acceptance | product-analyst | yes | yes |
-| `ADRS.md` | architectural decisions | solution-architect | yes | yes |
-| `METHODOLOGY_PLAN.md` | Factory/TDD/review approach | implementation-planner | yes | yes |
-| `TECHNICAL_BLUEPRINT.md` | component placement and architecture | solution-architect | yes | yes |
-| `SPRINT_PLAN.md` | increments | implementation-planner | yes | yes |
-| `TASK_GRAPH.md` | Factory reconciliation/reviews | implementation-planner | yes | yes |
-| `TRACKER.md` | status/risk register | factory-reporter | yes | yes |
-| `QA_GATES.md` | RED/GREEN, smoke and delivery gates | qa-verifier | yes | yes |
-| `SECURITY_GATES.md` | security pass/fail evidence | security-reviewer | yes | yes |
-| `DOCUMENTATION_INDEX.md` | entrypoint/status matrix | factory-orchestrator | yes | yes |
+| `FACTORY_INTAKE.md` | mandate, boundaries, source of truth | factory-orchestrator | validated: yes | reviewed: yes |
+| `G0_REPOSITORY_STRATEGY.md` | repo/scope/worktree/PR decision | solution-architect | validated: yes | reviewed: yes |
+| `REQUIREMENTS_ANALYSIS.md` | R1–R10/no-authority requirements | product-analyst | validated: yes | reviewed: yes |
+| `PATTERN_ANALYSIS.md` | patterns and rejected shortcuts | product-analyst | validated: yes | reviewed: yes |
+| `ASSUMPTIONS_AND_OPEN_QUESTIONS.md` | verified inputs/unknowns | solution-architect | validated: yes | reviewed: yes |
+| `PRD.md` | outcome and release acceptance | product-analyst | validated: yes | reviewed: yes |
+| `ADRS.md` | architectural decisions | solution-architect | validated: yes | reviewed: yes |
+| `METHODOLOGY_PLAN.md` | Factory/TDD/review approach | implementation-planner | validated: yes | reviewed: yes |
+| `TECHNICAL_BLUEPRINT.md` | component placement and architecture | solution-architect | validated: yes | reviewed: yes |
+| `SPRINT_PLAN.md` | increments | implementation-planner | validated: yes | reviewed: yes |
+| `TASK_GRAPH.md` | Factory reconciliation/reviews | implementation-planner | validated: yes | reviewed: yes |
+| `TRACKER.md` | status/risk register | factory-reporter | validated: yes | reviewed: yes |
+| `QA_GATES.md` | RED/GREEN, smoke and delivery gates | qa-verifier | validated: yes | reviewed: yes |
+| `SECURITY_GATES.md` | security pass/fail evidence | security-reviewer | validated: yes | reviewed: yes |
+| `DOCUMENTATION_INDEX.md` | entrypoint/status matrix | factory-orchestrator | validated: yes | reviewed: yes |
 
 ## Supplemental controlling artifacts
 - `REQUIREMENTS_TRACEABILITY.md` maps requirements to tasks/tests/reviews.

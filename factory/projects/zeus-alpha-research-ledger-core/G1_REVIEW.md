@@ -83,9 +83,15 @@ The bounded same-project repair is Factory event **174440** at `2026-08-10T16:32
 
 - Factory gate **709**, `gate_type=spec`, `status=passed`, independently reviewed the corrected tracker/task graph/index/G1 evidence.
 - Factory gate **710**, `gate_type=security`, `status=passed`, independently reviewed the no-egress/no-authority boundary and the fact that event 174440 is task metadata only.
-- Factory gate **711**, `gate_type=quality`, `status=passed`, independently verified the concrete gate-708 rework, exact ALR-020 read-back, clean Markdown-only diff, and retained `reviewed: pending` state of candidate `3e6c14f8aa368ec6e3623d16640bf4b558ce0c7a`.
+- Factory gate **711**, `gate_type=quality`, `status=passed`, independently verified the concrete gate-708 rework, exact ALR-020 read-back, clean Markdown-only diff, and the pre-marker candidate's deliberately pending reviewed state.
 
 The frontmatter/index marker transition in this commit records those completed gates. It is not a self-review and does not claim QA Guardian approval, merge/deploy authority, external-runtime authority, or any exception to downstream per-increment TDD, independent review and PR-first requirements.
 
 ## Status
 The G1 pack is validated and reviewed on corrected substantive candidate `3e6c14f8aa368ec6e3623d16640bf4b558ce0c7a`, with PR #20 visibility and Factory gates 709/710/711. This resolves only the documentation-readiness condition. It does not close the project or waive source TDD, independent review, QA Guardian, local smoke, no-egress, PR or delivery requirements for ALR-020 through ALR-080.
+
+## R2c required-document marker reconciliation
+
+This pass re-read the required G1 documents and supplemental controlling artifacts from the assigned isolated worktree, checked that each required G1 file carries `validated: yes` and `reviewed: yes` frontmatter, and changed `DOCUMENTATION_INDEX.md` from human shorthand (`yes`) to exact machine-readable per-file table markers (`validated: yes` / `reviewed: yes`). The review evidence remains the independent PASS set for corrected candidate `3e6c14f8aa368ec6e3623d16640bf4b558ce0c7a` (Factory gates 709, 710 and 711); this R2c reconciliation does not create a QA Guardian approval, merge/deploy authorization, source/runtime authority or downstream implementation authority.
+
+Product execution, QA, sandbox and delivery tasks remain blocked until canonical Factory resolve-state reads a document-status snapshot with zero G1 blockers from the committed source of truth.
