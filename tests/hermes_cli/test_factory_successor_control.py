@@ -43,11 +43,48 @@ def test_successor_control_migration_is_discovered_as_a_new_factory_version():
     ]
 
     assert "000004" in versions
+    assert "000005" in versions
     assert agent_core_db.MODULES["factory"]["migrations"] == ROOT / "db/modules/factory"
     assert agent_core_db.migration_version(ROOT / "db/modules/factory/000004_successor_control.sql") == "000004"
+    assert agent_core_db.migration_version(ROOT / "db/modules/factory/000005_document_dispatch_readiness_serialization.sql") == "000005"
 
 
-def test_force_tick_fails_closed_when_factory_successor_control_migration_is_missing(monkeypatch):
+def test_factory_runtime_requires_000005_readiness_serialization_migration(monkeypatch):
+    assert factory_pg.REQUIRED_FACTORY_MIGRATION_VERSION == "000005"
+
+    captured: dict[str, str] = {}
+
+    class FakeSql:
+        @staticmethod
+        def rows(query, **_kwargs):
+            captured["query"] = query
+            return [{
+                "migration_000005_applied": True,
+                "runtime_leases_exists": True,
+                "project_successions_exists": True,
+                "readiness_guard_trigger_exists": True,
+                "runtime_leases_write_ok": True,
+                "project_successions_write_ok": True,
+                "project_successions_sequence_ok": True,
+            }]
+
+        @staticmethod
+        def quote_literal(value):
+            return "'" + str(value).replace("'", "''") + "'"
+
+        @staticmethod
+        def runtime_env():
+            return {"FACTORY_DB_RUNTIME_USER": "factory_runtime"}
+
+    monkeypatch.setattr(factory_pg, "sql", FakeSql)
+    monkeypatch.setattr(factory_pg, "_SCHEMA_READY", False)
+
+    assert factory_pg.factory_migration_readiness()["ready"] is True
+    assert "000005" in captured["query"]
+    assert "factory_projects_document_dispatch_readiness_guard" in captured["query"]
+
+
+def test_force_tick_fails_closed_when_factory_readiness_serialization_migration_is_missing(monkeypatch):
     calls: list[tuple[str, str, str | None]] = []
 
     class FakeSql:
@@ -56,14 +93,16 @@ def test_force_tick_fails_closed_when_factory_successor_control_migration_is_mis
             calls.append(("rows", query, kwargs.get("user")))
             assert kwargs.get("user") == "factory_runtime"
             assert "agent_core.schema_migrations" in query
-            assert "000004" in query
+            assert "000005" in query
+            assert "factory_projects_document_dispatch_readiness_guard" in query
             assert "factory.runtime_leases" in query
             assert "factory.project_successions" in query
             return [
                 {
-                    "migration_000004_applied": False,
+                    "migration_000005_applied": False,
                     "runtime_leases_exists": False,
                     "project_successions_exists": False,
+                    "readiness_guard_trigger_exists": False,
                     "runtime_leases_write_ok": False,
                     "project_successions_write_ok": False,
                     "project_successions_sequence_ok": False,
@@ -97,7 +136,7 @@ def test_force_tick_fails_closed_when_factory_successor_control_migration_is_mis
             return "'{}'::jsonb"
 
     def fail_if_reached(*_args, **_kwargs):
-        raise AssertionError("claim/spawn path must not run when Factory 000004 is missing")
+        raise AssertionError("claim/spawn path must not run when Factory 000005 is missing")
 
     monkeypatch.setattr(factory_pg, "sql", FakeSql)
     monkeypatch.setattr(factory_pg, "_SCHEMA_READY", False)
@@ -107,11 +146,11 @@ def test_force_tick_fails_closed_when_factory_successor_control_migration_is_mis
     monkeypatch.setattr(factory_pg, "claim_next_rework", fail_if_reached)
 
     with pytest.raises(RuntimeError) as exc:
-        factory_pg.force_tick(holder="tick-missing-000004")
+        factory_pg.force_tick(holder="tick-missing-000005")
 
     message = str(exc.value)
     assert "Factory migration readiness failed" in message
-    assert "000004" in message
+    assert "000005" in message
     assert "scripts/agent_core_db.py migrate --module factory" in message
     assert [call[0] for call in calls] == ["rows"]
 

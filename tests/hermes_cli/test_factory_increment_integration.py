@@ -171,6 +171,19 @@ def test_mark_run_finished_failed_review_with_wrapped_instruction_remains_rework
     assert "HTTP 429" in joined
 
 
+def test_record_gate_invalidates_readiness_in_same_atomic_statement(fake_sql):
+    fake_sql.json_results = [[{"gate_id": 42, "project_id": "demo", "status": "failed", "timestamp": "now"}]]
+
+    result = factory_pg.record_gate("demo", "review", "failed", reviewer="qa", evidence={})
+
+    assert result["gate_id"] == 42
+    joined = "\n".join(fake_sql.statements)
+    assert "WITH inserted_gate AS" in joined
+    assert "UPDATE factory.projects" in joined
+    assert "document_dispatch_readiness_invalidated_by_gate" in joined
+    assert "FROM inserted_gate" in joined
+
+
 def test_passed_task_gate_requires_increment_integration(fake_sql, monkeypatch):
     calls: list[str] = []
 
@@ -179,7 +192,7 @@ def test_passed_task_gate_requires_increment_integration(fake_sql, monkeypatch):
         return {"increment_integration_required": True, "increment_integration_status": "integrated"}
 
     monkeypatch.setattr(factory_pg, "_integrate_increment_to_base", integrate)
-    fake_sql.statement_one_results = [{"gate_id": 42, "project_id": "demo", "status": "passed", "timestamp": "now"}]
+    fake_sql.json_results = [[{"gate_id": 42, "project_id": "demo", "status": "passed", "timestamp": "now"}]]
 
     result = factory_pg.record_gate("demo", "review", "passed", task_id="task-1", reviewer="qa", evidence={})
 
@@ -245,6 +258,21 @@ def test_docs_gate_does_not_exempt_product_task_with_reconciliation_prose():
     assert factory_pg._dispatch_preflight_blockers(product, docs_ready=False, notion_ready=True) == ["missing_or_unindexed_docs"]
 
 
+@pytest.mark.parametrize("phase", ["documentation", "planning", "g0_repository", "g1_docs"])
+def test_docs_gate_does_not_exempt_product_semantics_mislabeled_as_recovery(phase):
+    product = {
+        "task_id": "demo-mislabeled-product-reconciliation",
+        "phase": phase,
+        "title": "Reconciliation: implement product API",
+        "description": "Implement the production endpoint and deploy it after QA.",
+        "owner_profile": "claude-builder",
+        "metadata": {},
+    }
+
+    assert factory_pg._is_docs_first_gated_dispatch_task(product) is True
+    assert factory_pg._dispatch_preflight_blockers(product, docs_ready=False, notion_ready=False) == ["missing_or_unindexed_docs"]
+
+
 def test_reconciler_never_cancels_claimed_reconciliation_with_queued_run(fake_sql):
     project = {"project_id": "demo", "metadata": {}}
     task = {
@@ -308,7 +336,8 @@ def test_atomic_claim_serializes_project_and_queues_run_in_one_statement(fake_sq
         "engine": "claude-code",
     }
     readiness = {
-        "schema_version": 1,
+        "schema_version": 2,
+            "source_revision": 0,
         "docs_ready": True,
         "notion_ready": True,
         "notion_required": False,
@@ -335,7 +364,8 @@ def test_atomic_claim_serializes_project_and_queues_run_in_one_statement(fake_sq
     statement = fake_sql.statements[0]
     assert "WITH locked_project AS" in statement
     assert "UPDATE factory.projects p" in statement
-    assert "project_dispatch_claim" in statement
+    assert "SET updated_at=now()" in statement
+    assert "project_dispatch_claim" not in statement
     assert "UPDATE factory.tasks t" in statement
     assert "INSERT INTO factory.task_runs" in statement
     assert "INSERT INTO factory.events" in statement
@@ -514,7 +544,8 @@ def test_claim_next_rework_refuses_product_when_durable_docs_snapshot_is_stale(f
         "autonomous_enabled": True,
         "metadata": {
             "document_dispatch_readiness": {
-                "schema_version": 1,
+                "schema_version": 2,
+            "source_revision": 0,
                 "docs_ready": False,
                 "notion_ready": True,
                 "notion_required": False,
@@ -556,7 +587,8 @@ def test_claim_next_rework_atomically_requires_matching_durable_docs_snapshot(fa
         "metadata": {},
     }
     readiness = {
-        "schema_version": 1,
+        "schema_version": 2,
+            "source_revision": 0,
         "docs_ready": True,
         "notion_ready": True,
         "notion_required": False,
@@ -909,7 +941,8 @@ def test_claim_next_task_keeps_priority_order_when_docs_ready(fake_sql, monkeypa
     }
     tasks = [product, doc_repair]
     readiness = {
-        "schema_version": 1,
+        "schema_version": 2,
+            "source_revision": 0,
         "docs_ready": True,
         "notion_ready": True,
         "notion_required": False,

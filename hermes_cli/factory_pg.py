@@ -485,13 +485,14 @@ def available() -> bool:
         return False
 
 
-REQUIRED_FACTORY_MIGRATION_VERSION = "000004"
+REQUIRED_FACTORY_MIGRATION_VERSION = "000005"
 FACTORY_MIGRATE_COMMAND = "python scripts/agent_core_db.py migrate --module factory"
 FACTORY_VERIFY_COMMAND = "python scripts/agent_core_db.py verify --module factory"
 _FACTORY_MIGRATION_READINESS_KEYS = (
-    "migration_000004_applied",
+    "migration_000005_applied",
     "runtime_leases_exists",
     "project_successions_exists",
+    "readiness_guard_trigger_exists",
     "runtime_leases_write_ok",
     "project_successions_write_ok",
     "project_successions_sequence_ok",
@@ -528,6 +529,12 @@ def factory_migration_readiness() -> dict[str, Any]:
           ) AS migration_{version}_applied,
           to_regclass('factory.runtime_leases') IS NOT NULL AS runtime_leases_exists,
           to_regclass('factory.project_successions') IS NOT NULL AS project_successions_exists,
+          EXISTS (
+            SELECT 1 FROM pg_trigger trigger_row
+            WHERE trigger_row.tgrelid='factory.projects'::regclass
+              AND trigger_row.tgname='factory_projects_document_dispatch_readiness_guard'
+              AND NOT trigger_row.tgisinternal
+          ) AS readiness_guard_trigger_exists,
           CASE WHEN to_regclass('factory.runtime_leases') IS NULL THEN FALSE ELSE
             has_table_privilege(current_user, 'factory.runtime_leases', 'SELECT')
             AND has_table_privilege(current_user, 'factory.runtime_leases', 'INSERT')
@@ -599,7 +606,7 @@ def ensure_runtime_schema() -> None:
     failed = diagnostic.get("failed_checks") or ["readiness_query_error"]
     raise FactoryMigrationReadinessError(
         "Factory migration readiness failed: required Factory migration "
-        f"{REQUIRED_FACTORY_MIGRATION_VERSION}_successor_control is not verified "
+        f"{REQUIRED_FACTORY_MIGRATION_VERSION}_document_dispatch_readiness_serialization is not verified "
         f"(failed checks: {', '.join(str(item) for item in failed)}). "
         f"Run `{FACTORY_MIGRATE_COMMAND}` and confirm with `{FACTORY_VERIFY_COMMAND}` "
         "before the Factory control plane can lease, claim, or spawn work.",
@@ -1236,6 +1243,24 @@ def _metadata_bool(metadata: dict[str, Any], key: str) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "y", "required", "mandatory"}
     return bool(value)
+
+
+def _document_dispatch_source_revision(project: dict[str, Any]) -> int:
+    """Return the non-negative source revision enforced by the DB trigger.
+
+    Metadata can originate from older Factory records, so malformed values fail
+    closed to the trigger's default generation rather than being coerced through
+    Python truthiness. The reconciler then records a canonical numeric revision.
+    """
+
+    value = _metadata(project).get("document_dispatch_readiness_source_revision", 0)
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int) and 0 <= value <= 999_999_999_999_999_999:
+        return value
+    if isinstance(value, str) and value.isascii() and value.isdecimal() and len(value) <= 18:
+        return int(value)
+    return 0
 
 
 _UI_DELIVERABLE_TYPES = {
@@ -3181,11 +3206,37 @@ def record_gate(project_id: str, gate_type: str, status: str, *, lane_id: Option
         if integration_evidence.get("increment_integration_required") is not False:
             gate_evidence["increment_integration"] = integration_evidence
 
-    row = sql.statement_one(f"""
-      INSERT INTO factory.gates (project_id, lane_id, task_id, gate_type, status, reviewer, evidence, notes, timestamp)
-      VALUES ({_q(project_id)}, {_q(lane_id)}, {_q(task_id)}, {_q(gate)}, {_q(state)}, {_q(reviewer)}, {_j(gate_evidence)}, {_q(notes)}, now())
-      RETURNING gate_id, project_id, status, timestamp
-    """, user=_user())
+    rows = sql.json_query(
+        f"""
+        WITH inserted_gate AS (
+          INSERT INTO factory.gates (project_id, lane_id, task_id, gate_type, status, reviewer, evidence, notes, timestamp)
+          VALUES ({_q(project_id)}, {_q(lane_id)}, {_q(task_id)}, {_q(gate)}, {_q(state)}, {_q(reviewer)}, {_j(gate_evidence)}, {_q(notes)}, now())
+          RETURNING gate_id, project_id, status, timestamp
+        ), invalidated_project AS (
+          -- Gate status is an authoritative docs/G1 input. Touch metadata in
+          -- this same top-level CTE so the DB readiness trigger invalidates the
+          -- prior snapshot before another transaction can claim product work.
+          UPDATE factory.projects p
+          SET metadata = COALESCE(p.metadata, '{{}}'::jsonb) || jsonb_build_object(
+                'document_dispatch_readiness_invalidated_by_gate',
+                jsonb_build_object(
+                  'gate_type', {_q(gate)},
+                  'gate_status', {_q(state)},
+                  'gate_task_id', {_q(task_id)},
+                  'invalidated_at', now()
+                )
+              ),
+              updated_at=now()
+          FROM inserted_gate g
+          WHERE p.project_id=g.project_id
+          RETURNING p.project_id
+        )
+        SELECT COALESCE(jsonb_agg(to_jsonb(inserted_gate)), '[]'::jsonb)::text
+        FROM inserted_gate
+        """,
+        user=_user(),
+    )
+    row = rows[0] if isinstance(rows, list) and rows and isinstance(rows[0], dict) else None
     gate_id = row["gate_id"] if row else None
     if gate_id and state in TERMINAL_GATE_STATUSES:
         sql.psql(
@@ -4571,6 +4622,13 @@ def reconcile_project(project_id: str) -> dict[str, Any]:
         'reconciliation_required': bool(findings),
         'reconciliation_anomalies': finding_codes,
         'document_dispatch_readiness': document_dispatch_readiness,
+        # The DB trigger accepts a snapshot only if its source revision matches
+        # the locked row and this nonce changed. It rejects a Python reconcile
+        # that read inputs before a concurrent canonical source writer.
+        'document_dispatch_readiness_reconciled_at': (
+            datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            + ":" + uuid.uuid4().hex
+        ),
     }
     if force_autonomy_off:
         reconcile_metadata.update({
@@ -6322,11 +6380,7 @@ def _claim_task_with_project_lease(
         f"""
         WITH locked_project AS (
           UPDATE factory.projects p
-          SET metadata = COALESCE(p.metadata, '{{}}'::jsonb) || jsonb_build_object(
-                'project_dispatch_claim',
-                jsonb_build_object('run_id', {_q(run_id)}, 'run_type', {_q(run_type)}, 'claimed_at', now())
-              ),
-              updated_at=now()
+          SET updated_at=now()
           WHERE p.project_id={_q(project_id)}
             AND p.autonomous_enabled IS TRUE
             AND p.status IN ('active','planned','intake','blocked')
@@ -6634,9 +6688,15 @@ def _is_docs_first_gated_dispatch_task(task: dict[str, Any]) -> bool:
     if _is_structured_reconciliation_task(task) or _is_runtime_bootstrap_repair_task(task):
         return False
     phase = str(task.get("phase") or "").strip().lower()
-    if phase.startswith(("g0", "g1")) or phase in {"documentation", "planning"}:
-        return False
-    text = "\n".join(str(task.get(key) or "") for key in ("task_id", "title", "description", "engine", "owner_profile")).lower()
+    # Phase is a worker routing hint, not a security authority. A product task
+    # must not obtain a docs/G1 exemption by self-labeling as planning or
+    # documentation. Examine product semantics before accepting the recovery
+    # phase exemption; structured Factory reconciliation remains the sole typed
+    # recovery authority above.
+    text = "\n".join(
+        str(task.get(key) or "")
+        for key in ("task_id", "title", "description", "engine")
+    ).lower()
     gated_phase = phase.startswith(("implementation", "qa", "security", "delivery", "deploy", "release"))
     gated_text = any(
         term in text
@@ -6657,7 +6717,9 @@ def _is_docs_first_gated_dispatch_task(task: dict[str, Any]) -> bool:
             "release",
         )
     )
-    return gated_phase or gated_text
+    if gated_phase or gated_text:
+        return True
+    return not (phase.startswith(("g0", "g1")) or phase in {"documentation", "planning"})
 
 
 def _dispatch_preflight_blockers(
@@ -6712,7 +6774,8 @@ def _document_dispatch_readiness(
         gates,
     )
     return {
-        "schema_version": 1,
+        "schema_version": 2,
+        "source_revision": _document_dispatch_source_revision(project),
         "docs_ready": docs_ready,
         "notion_ready": notion_ready,
         "notion_required": notion_required,

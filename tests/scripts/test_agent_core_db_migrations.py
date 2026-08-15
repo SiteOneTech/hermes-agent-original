@@ -36,9 +36,9 @@ def test_agent_core_db_migrate_can_target_factory_module_and_verify(monkeypatch)
     assert ("apply_module", "agent_core") not in calls
 
 
-def test_factory_module_apply_applies_000004_once_and_then_skips_idempotently(monkeypatch):
+def test_factory_module_apply_applies_000005_readiness_serialization_once_and_then_skips_idempotently(monkeypatch):
     env = {"AGENT_DB_NAME": "zeus_agent"}
-    applied_versions = {"000001", "000002", "000003"}
+    applied_versions = {"000001", "000002", "000003", "000004"}
     applied_files: list[str] = []
 
     monkeypatch.setattr(agent_core_db, "ensure_database", lambda *_args, **_kwargs: None)
@@ -62,7 +62,7 @@ def test_factory_module_apply_applies_000004_once_and_then_skips_idempotently(mo
     agent_core_db.apply_module(env, "factory")
     agent_core_db.apply_module(env, "factory")
 
-    assert applied_files == ["000004_successor_control.sql"]
+    assert applied_files == ["000005_document_dispatch_readiness_serialization.sql"]
 
 
 def test_verify_factory_module_checks_successor_control_privileges(monkeypatch):
@@ -77,9 +77,10 @@ def test_verify_factory_module_checks_successor_control_privileges(monkeypatch):
             0,
             stdout="\n".join(
                 [
-                    "factory:000004|ok",
+                    "factory:000005|ok",
                     "factory.runtime_leases|ok",
                     "factory.project_successions|ok",
+                    "factory.projects:document_dispatch_readiness_guard|ok",
                     "factory.runtime_leases:factory_runtime:write|ok",
                     "factory.project_successions:factory_runtime:write|ok",
                     "factory.project_successions_succession_id_seq:factory_runtime|ok",
@@ -96,7 +97,8 @@ def test_verify_factory_module_checks_successor_control_privileges(monkeypatch):
     assert result["ready"] is True
     assert captured["database"] == "zeus_agent"
     assert "agent_core.schema_migrations" in captured["sql"]
-    assert "000004" in captured["sql"]
+    assert "000005" in captured["sql"]
+    assert "factory_projects_document_dispatch_readiness_guard" in captured["sql"]
     assert "factory.runtime_leases" in captured["sql"]
     assert "factory.project_successions" in captured["sql"]
     assert "has_table_privilege" in captured["sql"]

@@ -11,6 +11,7 @@ import subprocess
 import threading
 import time
 import uuid
+from pathlib import Path
 
 import pytest
 
@@ -60,6 +61,9 @@ class _EphemeralPostgresSql:
 
     def execute(self, statement: str, *, application_name: str = "factory-test") -> str:
         return self._psql(statement, application_name=application_name)
+
+    def psql(self, statement: str, *, user=None):
+        self._psql(statement, application_name="factory-claim-test")
 
     def json_query(self, statement: str, *, user=None):
         raw = self._psql(statement, application_name="factory-claim-test")
@@ -137,6 +141,18 @@ def ephemeral_factory_postgres(monkeypatch):
                 reviewer_profile text,
                 engine text
             );
+            CREATE TABLE factory.gates(
+                gate_id bigserial PRIMARY KEY,
+                project_id text NOT NULL,
+                lane_id text,
+                task_id text,
+                gate_type text NOT NULL,
+                status text NOT NULL,
+                reviewer text,
+                evidence jsonb NOT NULL DEFAULT '{}'::jsonb,
+                notes text,
+                timestamp timestamptz NOT NULL DEFAULT now()
+            );
             CREATE TABLE factory.task_runs(
                 run_id text PRIMARY KEY,
                 task_id text,
@@ -173,6 +189,11 @@ def ephemeral_factory_postgres(monkeypatch):
                 FOR EACH ROW EXECUTE FUNCTION factory.pause_writer();
             """
         )
+        migration = (
+            Path(__file__).resolve().parents[2]
+            / "db/modules/factory/000005_document_dispatch_readiness_serialization.sql"
+        )
+        database.execute(migration.read_text(encoding="utf-8"))
         monkeypatch.setattr(factory_pg, "sql", database)
         monkeypatch.setattr(factory_pg, "ensure_runtime_schema", lambda: None)
         yield database
@@ -180,14 +201,104 @@ def ephemeral_factory_postgres(monkeypatch):
         subprocess.run(["docker", "rm", "-f", container_name], capture_output=True, text=True, check=False)
 
 
-def _readiness(*, docs_ready: bool) -> dict[str, object]:
+def _readiness(*, docs_ready: bool, source_revision: int = 0) -> dict[str, object]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
+        "source_revision": source_revision,
         "docs_ready": docs_ready,
         "notion_ready": True,
         "notion_required": False,
         "docs_first_waived": False,
     }
+
+
+def test_readiness_source_update_invalidates_snapshot_before_product_claim(ephemeral_factory_postgres):
+    """A canonical source mutation must invalidate a previously green snapshot.
+
+    This models close_task's project Notion projection update occurring after a
+    direct claimer performed its green preflight but before the claimer acquires
+    its project lease. The database invariant—not a later Python reconcile—must
+    make the stale product claim fail closed.
+    """
+    database = ephemeral_factory_postgres
+    green = _readiness(docs_ready=True)
+    database.execute(
+        """
+        INSERT INTO factory.projects(project_id, autonomous_enabled, status, metadata)
+        VALUES ('source-gap', true, 'active', jsonb_build_object('document_dispatch_readiness', $json$%s$json$::jsonb));
+        INSERT INTO factory.tasks(task_id, project_id, lane_id, status, owner_profile)
+        VALUES ('source-gap-implementation', 'source-gap', 'lane', 'todo', 'builder');
+        """ % json.dumps(green)
+    )
+
+    # This is the authoritative project metadata transition committed by a
+    # canonical readiness writer before it can subsequently reconcile.
+    database.execute(
+        """
+        UPDATE factory.projects
+        SET metadata=metadata || '{"notion_projection_stale": true, "notion_sync_required": true}'::jsonb
+        WHERE project_id='source-gap';
+        """
+    )
+
+    snapshot_exists = database.execute(
+        "SELECT metadata ? 'document_dispatch_readiness' FROM factory.projects WHERE project_id='source-gap';"
+    )
+    assert snapshot_exists == "f"
+
+    claimed = factory_pg._claim_task_with_project_lease(
+        project_id="source-gap",
+        task_id="source-gap-implementation",
+        expected_statuses=("todo",),
+        claimed_status="claimed",
+        worker="test-worker",
+        worker_profile="builder",
+        run_id="source-gap-run",
+        run_type="normal",
+        event_type="task_claimed",
+        event_message="must be denied after source invalidation",
+        document_dispatch_readiness=green,
+    )
+
+    assert claimed is None
+    assert database.execute("SELECT status FROM factory.tasks WHERE task_id='source-gap-implementation';") == "todo"
+    assert database.execute("SELECT count(*) FROM factory.task_runs WHERE project_id='source-gap';") == "0"
+    assert database.execute("SELECT count(*) FROM factory.events WHERE project_id='source-gap';") == "0"
+
+
+def test_record_gate_invalidates_snapshot_before_a_product_claim(ephemeral_factory_postgres, monkeypatch):
+    database = ephemeral_factory_postgres
+    green = _readiness(docs_ready=True)
+    database.execute(
+        """
+        INSERT INTO factory.projects(project_id, autonomous_enabled, status, metadata)
+        VALUES ('gate-gap', true, 'active', jsonb_build_object('document_dispatch_readiness', $json$%s$json$::jsonb));
+        INSERT INTO factory.tasks(task_id, project_id, lane_id, status, owner_profile)
+        VALUES ('gate-gap-implementation', 'gate-gap', 'lane', 'todo', 'builder');
+        """ % json.dumps(green)
+    )
+    monkeypatch.setattr(factory_pg, "reconcile_project", lambda project_id: {"project_id": project_id})
+
+    gate = factory_pg.record_gate("gate-gap", "review", "failed", reviewer="qa", evidence={"reason": "red"})
+
+    assert gate["gate_id"]
+    assert database.execute(
+        "SELECT metadata ? 'document_dispatch_readiness' FROM factory.projects WHERE project_id='gate-gap';"
+    ) == "f"
+    assert factory_pg._claim_task_with_project_lease(
+        project_id="gate-gap",
+        task_id="gate-gap-implementation",
+        expected_statuses=("todo",),
+        claimed_status="claimed",
+        worker="test-worker",
+        worker_profile="builder",
+        run_id="gate-gap-run",
+        run_type="normal",
+        event_type="task_claimed",
+        event_message="must be denied after gate source mutation",
+        document_dispatch_readiness=green,
+    ) is None
+    assert database.execute("SELECT count(*) FROM factory.task_runs WHERE project_id='gate-gap';") == "0"
 
 
 def test_factory_claim_serializes_durable_readiness_and_queues_run_atomically(ephemeral_factory_postgres):
@@ -254,12 +365,16 @@ def test_factory_claim_serializes_durable_readiness_and_queues_run_atomically(ep
     assert database.execute("SELECT status FROM factory.tasks WHERE task_id='demo-implementation';") == "todo"
     assert database.execute("SELECT count(*) FROM factory.task_runs;") == "0"
 
+    green_after_writer = _readiness(docs_ready=True, source_revision=1)
     database.execute(
         """
         UPDATE factory.projects
-        SET metadata=jsonb_set(metadata, '{document_dispatch_readiness}', $json$%s$json$::jsonb)
+        SET metadata=metadata || jsonb_build_object(
+              'document_dispatch_readiness', $json$%s$json$::jsonb,
+              'document_dispatch_readiness_reconciled_at', 'test-reconcile-after-writer'
+            )
         WHERE project_id='demo';
-        """ % json.dumps(green)
+        """ % json.dumps(green_after_writer)
     )
     claimed = factory_pg._claim_task_with_project_lease(
         project_id="demo",
@@ -272,7 +387,7 @@ def test_factory_claim_serializes_durable_readiness_and_queues_run_atomically(ep
         run_type="implementation",
         event_type="task_claimed",
         event_message="claim succeeds atomically",
-        document_dispatch_readiness=green,
+        document_dispatch_readiness=green_after_writer,
     )
 
     assert claimed and claimed["task_id"] == "demo-implementation"

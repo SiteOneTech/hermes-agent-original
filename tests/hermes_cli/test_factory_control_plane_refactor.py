@@ -750,7 +750,7 @@ def test_record_delivery_gate_persists_document_status_snapshot(fake_sql, monkey
         {"file_name": "PRD.md", "category": "g1_required", "blocking": False},
         {"file_name": "QA_REPORT.md", "category": "lifecycle", "blocking": False},
     ])
-    fake_sql.statement_one_results = [{"gate_id": 42, "project_id": "demo", "status": "passed", "timestamp": "now"}]
+    fake_sql.json_results = [[{"gate_id": 42, "project_id": "demo", "status": "passed", "timestamp": "now"}]]
 
     result = factory_pg.record_gate("demo", "delivery", "passed", reviewer="qa", evidence={"tests": "passed"})
 
@@ -1424,7 +1424,8 @@ def test_reconcile_preserves_manual_attention_and_forces_autonomy_off(monkeypatc
     assert "autonomous_enabled=false" in joined
     assert "project_status_manual_attention" in joined
     assert '"document_dispatch_readiness"' in joined
-    assert '"schema_version": 1' in joined
+    assert '"schema_version": 2' in joined
+    assert '"source_revision": 0' in joined
 
 
 def test_close_project_cancels_active_runs_and_records_monitor_evidence(fake_sql):
@@ -1808,7 +1809,7 @@ def test_ui_delivery_gate_rejects_non_authorized_sandbox_url(fake_sql, monkeypat
 def test_ui_delivery_gate_passes_with_complete_authorized_sandbox_playwright_evidence(fake_sql, monkeypatch):
     monkeypatch.setattr(factory_pg, "_project", lambda project_id: _ui_project())
     fake_sql.rows_results = [[]]
-    fake_sql.statement_one_results = [{"gate_id": 44, "project_id": "demo", "status": "passed", "timestamp": "now"}]
+    fake_sql.json_results = [[{"gate_id": 44, "project_id": "demo", "status": "passed", "timestamp": "now"}]]
 
     result = factory_pg.record_gate("demo", "delivery", "passed", reviewer="qa", evidence=_complete_ui_delivery_evidence())
 
