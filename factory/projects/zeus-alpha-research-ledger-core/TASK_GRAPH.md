@@ -21,6 +21,13 @@ The Factory DB currently records this ALR-020 acceptance literal: `Schema covers
 - Git evidence: `git show --no-patch --pretty=fuller e3d04ff94b67e6e21be1d5515bdb71400fbedf0a` identifies a merge commit with parents `00e7bb4ab` and `b9396bcd7`; `git merge-base --is-ancestor b9396bcd7d14ee6f212bd0fd0609e468cecf567f origin/main` returns `0`.
 - Interpretation: the docs must not claim ALR-010-R1 is branch-only or unmerged. The merge remains non-approval evidence because gate 695 failed and no independent PASS/PR/QA Guardian evidence exists for the corrected candidate.
 
+### R2j PR #29 canonical-state repair
+
+- Actual delivery candidate: SiteOneTech PR #29, still open at head `f61a7275048e2135b2b2729a1b9cdf8713c58866`, base branch `main`, base commit `5e1e4622e93d8d2fabdfe0f2176889a29afa7f7c`.
+- Current canonical blocker: Agent Core Factory status still reports reconciliation anomaly `unvalidated_required_docs`; the live `document_status` read-back has G1 documents committed/indexed/validated but blocking because `reviewed=false` in the canonical source.
+- Provenance correction: R2i gates are valid independent exact-SHA review evidence for PR #29, but their `already_ancestor` increment-integration metadata names the review-only R2i branch commit `5e1e4622e93d8d2fabdfe0f2176889a29afa7f7c`, not the PR #29 candidate `f61a7275048e2135b2b2729a1b9cdf8713c58866`. Do not treat that review-worktree attachment as a source merge.
+- Handoff: QA Guardian / delivery evidence must bind PR #29 and `qa_guardian_evidence.candidate_commit` to `f61a7275048e2135b2b2729a1b9cdf8713c58866` before any terminal source-delivery conclusion. See `R2J_CANONICAL_STATE_REPAIR.md`.
+
 | Task ID | Phase / status | Owner → reviewer | Depends on | Branch | Worktree |
 |---|---|---|---|---|---|
 | `zeus-alpha-research-ledger-core-alr-010-g1-rebaseline-and-local-ledger-c` | planning / done | implementation-planner → solution-architect | — | `factory/zeus-alpha-research-ledger-core/inc-010-alr-010-g1-rebaseline-and-local` | `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-010-alr-010-g1-rebaseline-and-local` |
@@ -36,6 +43,7 @@ The Factory DB currently records this ALR-020 acceptance literal: `Schema covers
 | `zeus-alpha-research-ledger-core-alr-070-live-local-db-and-tool-smoke-wit` | qa / todo | qa-verifier → quality-reviewer | ALR-061, ALR-062, ALR-063 | `factory/zeus-alpha-research-ledger-core/inc-070-alr-070-live-local-db-and-tool-s` | `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-070-alr-070-live-local-db-and-tool-s` |
 | `zeus-alpha-research-ledger-core-alr-080-zeus-signed-pr-and-qa-guardian-h` | delivery / todo | factory-reporter → qa-verifier | ALR-070 | `factory/zeus-alpha-research-ledger-core/inc-080-alr-080-zeus-signed-pr-and-qa-gu` | `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-080-alr-080-zeus-signed-pr-and-qa-gu` |
 | `zeus-alpha-research-ledger-core-reconcile-missing-required-docs` | documentation / todo | factory-reporter → factory-orchestrator | — | unassigned | unassigned |
+| `zeus-alpha-research-ledger-core-r2j-repair-pr-29-g1-canonical-state-evid` | g1_review / claimed | codex-builder → qa-verifier | R2i exact-SHA review evidence mismatch | `factory/zeus-alpha-research-ledger-core/inc-001-r2j-repair-pr-29-g1-canonical-st` | `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-001-r2j-repair-pr-29-g1-canonical-st` |
 
 The last row is Factory-generated reconciliation for document-readiness drift. It cannot close an implementation gate by itself; ALR-010-R1 still requires exact-SHA independent review evidence and explicit handling of the observed integration anomaly before downstream implementation starts.
 
@@ -45,6 +53,7 @@ The last row is Factory-generated reconciliation for document-readiness drift. I
 - ALR-063 produces distinct security/least-privilege/no-egress evidence.
 - ALR-070 may start only when all three exact review reports cite the candidate SHA and are accepted.
 - Future source increments must produce a Zeus-signed `agent:zeus` PR and QA Guardian merge evidence before terminal closure. The observed ALR-010-R1 Factory direct integration is recorded above as gate-695 reconciliation evidence, not as a repeatable delivery path or implementation authority.
+- R2j adds an explicit guard for review-only branches: an `already_ancestor` record on a reviewer worktree is never proof that the PR candidate it reviewed is merged; source-delivery evidence must bind to the PR head commit.
 - ALR-010-R1 resolves only the documentation findings from failed gates 686/687 and the merge-evidence documentation finding from gate 695. It does not implement ledger code, alter Factory task metadata, open a PR, perform another merge, deploy or grant downstream implementation authority.
 - ALR-020 additionally may not start until the required bounded-local-sessions metadata reconciliation above is recorded and read back exactly; it does not add a collaboration-session implementation task.
 
