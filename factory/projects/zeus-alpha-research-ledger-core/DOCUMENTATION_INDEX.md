@@ -40,6 +40,11 @@ Canonical G1 pack for the **private Zeus-side implementation** succeeding `zeus-
 - `reviewed: yes` records independent specification/security/quality PASS evidence for corrected substantive candidate `3e6c14f8aa368ec6e3623d16640bf4b558ce0c7a` (Factory gates 709/710/711). It does not represent self-review, QA Guardian approval, or authorization to merge/deploy.
 - Factory event 174440 is an auditable task-metadata correction, not source delivery, QA Guardian approval, or implementation authority. A reviewed marker or the observed ALR-010-R1 base-branch merges never authorize normal implementation by themselves.
 
+## Current R2c canonical read-back
+This branch/worktree remains internally G1-reviewed: every required G1 row above uses exact machine-readable `validated: yes` and `reviewed: yes` markers, and this branch records the latest R2c recurrence evidence. However, the Agent Core Factory status command still computes the project `document_status` from the canonical `repo_path=/home/jean/Projects/hermes-agent-original` checkout, where the required-doc snapshot has `docs_ready=false`, `blocking_count=11`, and these G1 blockers: `FACTORY_INTAKE.md`, `REQUIREMENTS_ANALYSIS.md`, `PATTERN_ANALYSIS.md`, `ASSUMPTIONS_AND_OPEN_QUESTIONS.md`, `PRD.md`, `ADRS.md`, `METHODOLOGY_PLAN.md`, `TECHNICAL_BLUEPRINT.md`, `SPRINT_PLAN.md`, `TASK_GRAPH.md`, and `SECURITY_GATES.md`.
+
+Therefore these branch-local markers are review evidence, not downstream execution authority. Product execution, QA, sandbox, delivery, base-branch merge, deploy and ALR-020+ dispatch remain blocked until an authorized canonical-source update or Factory resolve-state produces a `document_status` snapshot with zero G1 blockers.
+
 ## Required reading order
 1. `DOCUMENTATION_INDEX.md`, `FACTORY_INTAKE.md`, `G0_REPOSITORY_STRATEGY.md`
 2. `REQUIREMENTS_ANALYSIS.md`, `REQUIREMENTS_TRACEABILITY.md`, `PRD.md`, `ADRS.md`
