@@ -1742,15 +1742,16 @@ def _reconciliation_task_assignment(project: dict[str, Any] | None, code: str, t
         _g1_documentation_reconciliation_assignment(project, code)
         or _repo_strategy_reconciliation_assignment(project, code, task)
     )
-    if derived:
-        derived_branch = _clean_assignment_value(derived.get("branch"))
-        derived_worktree = _clean_assignment_value(derived.get("worktree_path"))
-        if existing_branch and not existing_worktree and derived_branch and existing_branch != derived_branch:
-            return None
-        if existing_worktree and not existing_branch and derived_worktree and existing_worktree != derived_worktree:
-            return None
-    branch = existing_branch or _clean_assignment_value((derived or {}).get("branch"))
-    worktree_path = existing_worktree or _clean_assignment_value((derived or {}).get("worktree_path"))
+    if not derived:
+        return None
+    derived_branch = _clean_assignment_value(derived.get("branch"))
+    derived_worktree = _clean_assignment_value(derived.get("worktree_path"))
+    if existing_branch and derived_branch and existing_branch != derived_branch:
+        return None
+    if existing_worktree and derived_worktree and existing_worktree != derived_worktree:
+        return None
+    branch = existing_branch or derived_branch
+    worktree_path = existing_worktree or derived_worktree
     if not branch or not worktree_path:
         return None
     branch_source = "task.branch" if existing_branch else (derived or {}).get("provenance", {}).get("branch_source")

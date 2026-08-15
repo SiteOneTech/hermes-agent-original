@@ -382,7 +382,7 @@ def test_reconciler_does_not_requeue_without_complete_g0_assignment(fake_sql):
     assert "status='rework'" not in "\n".join(fake_sql.statements)
 
 
-def test_reconciler_does_not_mix_conflicting_partial_assignments(fake_sql):
+def test_reconciler_does_not_requeue_conflicting_full_assignment(fake_sql):
     project = {
         "project_id": "demo",
         "repo_path": "/repo",
@@ -409,7 +409,7 @@ def test_reconciler_does_not_mix_conflicting_partial_assignments(fake_sql):
         "task_id": "demo-reconcile-unvalidated-required-docs",
         "status": "blocked",
         "branch": "factory/demo/inc-099-unrelated",
-        "worktree_path": "",
+        "worktree_path": "/worktrees/demo/inc-099-unrelated",
         "retry_count": 0,
         "max_retries": 2,
         "metadata": {
@@ -421,6 +421,7 @@ def test_reconciler_does_not_mix_conflicting_partial_assignments(fake_sql):
             },
         },
     }
+    fake_sql.one_results = [{"task_id": "demo-reconcile-unvalidated-required-docs"}]
 
     changes = factory_pg.ensure_reconciliation_tasks(project, [finding], [repair])
 
