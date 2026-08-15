@@ -205,7 +205,7 @@ def _task_prompt(payload: dict[str, Any], claim: dict[str, Any]) -> str:
             "- Si el repo remoto está aprobado, empuja la rama asignada después de validación local y evidencia. Cuando la política de gate/review del entregable lo permita, mantén la rama base/main al día con merge + push incremental; no acumules todo para el final.",
             "- No hagas deploy ni cambies credenciales salvo que la tarea lo pida explícitamente y el scope/gate lo permita.",
             "- No instales paquetes con pip/uv/apt/npm/pnpm ni modifiques entornos para resolver una tarea documental; si falta una dependencia, reporta BLOCKER.",
-            "- No hagas escrituras directas a factory.* con psql/psycopg2/scripts ad-hoc. Para Factory DB usa solo `hermes factory status` y `hermes factory gate record`.",
+            f"- No hagas escrituras directas a factory.* con psql/psycopg2/scripts ad-hoc. Para Factory DB usa solo `{sys.executable} -m hermes_cli.main factory status` y `{sys.executable} -m hermes_cli.main factory gate record`.",
             "- No escribas scripts temporales dentro del repo/proyecto salvo que sean artifacts requeridos; si creas un helper temporal, bórralo antes de terminar.",
             "",
             "Entrega obligatoria:",
