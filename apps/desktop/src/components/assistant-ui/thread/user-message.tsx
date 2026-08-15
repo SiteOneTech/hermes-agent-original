@@ -87,13 +87,17 @@ const PROCESS_NOTIFICATION_RE = /^\[IMPORTANT: Background process [\s\S]*\]$/
 export const AGENT_MESSAGE_RE =
   /^(?:Message from (?:🤖\s*)?([^:\n(]{1,64}?)(?:\s*\(@([a-z0-9][a-z0-9_-]{0,63})\))?:\s*|\[Message from agent '([^']{1,64})'\]\s*)([\s\S]*)$/u
 
-// sender handle -> avatar data URL (null = known absent). Module-level so a
-// chat full of notices from one bot resolves once. Profiles change rarely;
-// stale entries only persist for the window's lifetime.
-const agentAvatarCache = new Map<string, null | string>()
+// sender handle -> avatar data URL. Module-level so a chat full of notices
+// from one bot resolves once. Hits are cached for the window's lifetime;
+// misses only briefly (30s) — an avatar can appear at any moment (bot just
+// created, art backfill still running), and a permanent negative cache
+// froze the 🤖 glyph until an app restart.
+export const agentAvatarCache = new Map<string, null | string>()
+const agentAvatarMissAt = new Map<string, number>()
+const AVATAR_MISS_TTL_MS = 30_000
 const agentAvatarInflight = new Map<string, Promise<null | string>>()
 
-async function resolveAgentAvatar(handle: string): Promise<null | string> {
+export async function resolveAgentAvatar(handle: string): Promise<null | string> {
   const key = handle.trim().toLowerCase()
 
   if (!key) {
@@ -101,7 +105,18 @@ async function resolveAgentAvatar(handle: string): Promise<null | string> {
   }
 
   if (agentAvatarCache.has(key)) {
-    return agentAvatarCache.get(key) ?? null
+    const hit = agentAvatarCache.get(key) ?? null
+
+    if (hit !== null) {
+      return hit
+    }
+
+    // Negative entry: honor it only within the TTL, then re-probe.
+    if (Date.now() - (agentAvatarMissAt.get(key) ?? 0) < AVATAR_MISS_TTL_MS) {
+      return null
+    }
+
+    agentAvatarCache.delete(key)
   }
 
   const inflight = agentAvatarInflight.get(key)
@@ -118,10 +133,10 @@ async function resolveAgentAvatar(handle: string): Promise<null | string> {
         return null
       }
 
-      const res = await gateway.request<{ profiles?: Array<{ has_avatar?: boolean; name: string }> }>(
-        'profiles.list',
-        { include_sessions: false }
-      )
+      const res = await gateway.request<{ profiles?: Array<{ has_avatar?: boolean; name: string }> }>('profiles.list', {
+        include_sessions: false
+      })
+
       const profiles = res?.profiles ?? []
       let profile = profiles.find(p => p.name.toLowerCase() === key)
 
@@ -152,6 +167,10 @@ async function resolveAgentAvatar(handle: string): Promise<null | string> {
   agentAvatarInflight.set(key, run)
   const out = await run
   agentAvatarCache.set(key, out)
+
+  if (out === null) {
+    agentAvatarMissAt.set(key, Date.now())
+  }
 
   return out
 }

@@ -129,7 +129,7 @@ class TestBrowserScreenshotPathRegex:
 class TestSkillHashSymmetry:
     """#62310 — disk hash and bundle hash must agree on every OS."""
 
-    def _make_skill(self, root: Path):
+    def _make_skill(self, root: Path) -> Path:
         skill = root / "demo-skill"
         (skill / "references" / "methods").mkdir(parents=True)
         (skill / "SKILL.md").write_text("---\nname: demo\n---\nbody\n", encoding="utf-8")
