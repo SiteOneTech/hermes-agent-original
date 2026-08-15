@@ -3,7 +3,7 @@ project_id: zeus-alpha-research-ledger-core
 phase: local_advisory_ledger_v1
 status: g1_rebaseline
 validated: yes
-reviewed: pending
+reviewed: yes
 ---
 
 # TRACKER
@@ -11,11 +11,12 @@ reviewed: pending
 ## Current state
 | Area | State | Evidence / next action |
 |---|---|---|
-| G0 strategy | passed with recorded drift | G0 records Zeus-only repo, remote and worktree policy; it now also records live evidence that ALR-010-R1 commit `b9396bcd7d14ee6f212bd0fd0609e468cecf567f` was merged into `origin/main` as `e3d04ff94b67e6e21be1d5515bdb71400fbedf0a` by Factory event `173433`. That merge is evidence to review, not PASS/PR/QA authority. |
+| G0 strategy | passed with recorded drift | G0 records Zeus-only repo, remote and worktree policy; it now also records live evidence that ALR-010-R1 commits `b9396bcd7d14ee6f212bd0fd0609e468cecf567f` and `6ee8b4fdb886d0834bfbc62c7e152ee35d505e66` were merged into `origin/main` as `e3d04ff94b67e6e21be1d5515bdb71400fbedf0a` and `9f975acb0625750b8d46648766d1395c89392dca` by Factory events `173433` and `173494`. R2e verified current canonical base `5e1e4622e93d8d2fabdfe0f2176889a29afa7f7c`. Those merges are evidence to review, not PASS/PR/QA authority. |
 | Predecessor linkage | passed | `zeus-independent-alpha-research` remains the documentation-only predecessor |
-| ALR-010 G1 | corrected candidate pending exact-SHA review | required docs exist, are indexed/tracked, and carry explicit validated/reviewed status; gates 686/687 were request-changes, gate 695 recorded merge-policy drift, and any PASS on a pre-correction SHA is not reused for this revision |
-| ALR-010-R1 | active bounded rework | resolves only the documented gates 686/687 findings plus gate 695's requirement to record the actual direct-merge evidence; no ledger code, Factory metadata mutation, PR, new merge, deploy, prohibited external-system call, PASS claim or reviewed=yes change |
-| ALR-020..050 | not started | blocked on exact-SHA independent PASS reviews, reconciliation of the observed ALR-010-R1 base-merge evidence, and deterministic Factory metadata correction removing incompatible bounded-local-sessions acceptance |
+| ALR-010 G1 | reviewed documentation readiness marker | corrected substantive SHA `3e6c14f8aa368ec6e3623d16640bf4b558ce0c7a` independently passed Factory gates 709 (spec), 710 (security) and 711 (quality); R2e rebases the marker on current canonical main and still requires renewed exact-SHA independent review before closure |
+| ALR-010-R1 | superseded audit history | R1 remains evidence only after two direct integrations; no ledger code, Factory metadata mutation authority, PR approval, deploy, prohibited external-system call, PASS claim or reviewed=yes change comes from R1 |
+| ALR-010-R2/R2e | current-base reconciliation candidate | PR #20 is open and labeled `agent:zeus` but stale at head `0d5e72e655009de808da50a430db5ecd28da8efe`; R2e uses assigned branch `factory/zeus-alpha-research-ledger-core/inc-001-r2e-rebase-the-g1-documentation` as current-base successor unless PR #20 is later updated by an authorized path |
+| ALR-020..050 | ALR-020 next; later tasks not started | ALR-020 acceptance metadata was corrected/read back in Factory event 174440; release the hold only after canonical G1 status is zero-blocker and exact R2e candidate review is recorded |
 | Source APIs | policy only | v1 supports local normalized evidence batch; no provider driver/credential is enabled in core |
 | Daily scheduler | disabled by design | must wait for recorded ALR-070 local prerequisites |
 | Vonash exchange | intentionally excluded | external platform owns any later secure intake/evaluation work |
@@ -29,10 +30,11 @@ reviewed: pending
 - Toolset isolation/no-egress and disabled-by-default scheduler become automated gates.
 - Exact handler naming is canonicalized on `program_create` and `source_submit`, with synonym/alias rejection.
 - Stale current-base wording is removed; base SHAs are historical evidence and must be revalidated before PR.
-- Gate 695's real finding is now recorded: Factory event `173433` integrated branch commit `b9396bcd7d14ee6f212bd0fd0609e468cecf567f` into `origin/main` as merge commit `e3d04ff94b67e6e21be1d5515bdb71400fbedf0a`; this is non-approval evidence and removes false branch-only/no-merge statements.
+- Gate 695's real finding is recorded: Factory event `173433` integrated branch commit `b9396bcd7d14ee6f212bd0fd0609e468cecf567f` into `origin/main` as merge commit `e3d04ff94b67e6e21be1d5515bdb71400fbedf0a`; this is non-approval evidence.
+- Gate 697's real finding is recorded: Factory event `173494` integrated branch commit `6ee8b4fdb886d0834bfbc62c7e152ee35d505e66` into `origin/main` as merge commit `9f975acb0625750b8d46648766d1395c89392dca`; this removes false branch-only/no-new-merge statements and is likewise non-approval evidence.
 - Collaboration session/message storage was removed from v1.
-- Factory's ALR-020 bounded-local-sessions acceptance clause conflicts with that exclusion; required reconciliation is documented in `TASK_GRAPH.md` and must be completed/read back by the authorized metadata owner before implementation, without expanding v1.
+- Factory event 174440 reconciled ALR-020's bounded-local-sessions acceptance clause: the read-back shows the old literal absent and the exact session/message-excluded, scheduler-readiness and non-session local-intake literal present. This task-metadata repair does not expand v1 or authorize implementation.
 - ALR-060 was superseded by three independent review tasks; ALR-070 depends on all three.
 
 ## Immediate next event
-Commit this bounded correction, record documentary evidence, then obtain new independent specification and security reviews against the exact revised SHA. Implementation remains blocked until `reviewed: yes` is validly supported, gate-695 merge reconciliation is independently accepted, and the ALR-020 metadata reconciliation is recorded/read back exactly.
+Commit this current-base R2e correction, push/open the Zeus-signed successor PR if PR #20 cannot be updated within the assigned branch contract, then obtain renewed independent review against the exact R2e SHA. Implementation remains blocked until canonical document status sees zero G1 blockers and the R2e review/gate evidence is recorded.

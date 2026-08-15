@@ -3,15 +3,15 @@ project_id: zeus-alpha-research-ledger-core
 phase: local_advisory_ledger_v1
 status: g1_rebaseline
 validated: yes
-reviewed: pending
+reviewed: yes
 ---
 
 # QA GATES
 
 ## ALR-010 documentary gate
 - All 14 G1 documents plus G0, `REQUIREMENTS_TRACEABILITY.md`, `DATABASE_AND_RUNTIME_CONTRACT.md` and `G1_REVIEW.md` exist, are indexed, committed and independently PASS-reviewed.
-- `TASK_GRAPH.md` reconciliation matches current Factory task IDs, phases, owner/reviewer profiles, dependencies, branches, worktrees, PR-first metadata and the observed ALR-010-R1 direct integration event; before ALR-020, the incompatible bounded-local-sessions acceptance clause has the exact documented metadata correction/read-back evidence and v1 session/message exclusion remains intact.
-- No document implies direct Vonash/trading authority, provider integration in core, or that the observed ALR-010-R1 direct Factory merge is approval/waiver/repeatable policy.
+- `TASK_GRAPH.md` reconciliation matches current Factory task IDs, phases, owner/reviewer profiles, dependencies, branches, worktrees, PR-first metadata and both observed ALR-010-R1 direct integration events (`173433` and `173494`); Factory event 174440 records the exact ALR-020 acceptance metadata correction/read-back that removes the incompatible bounded-local-sessions clause while preserving v1 session/message exclusion. The event is not implementation or approval authority.
+- No document implies direct Vonash/trading authority, provider integration in core, or that either observed ALR-010-R1 direct Factory merge is approval/waiver/repeatable policy.
 
 ## ALR-020 database/role RED-GREEN gate
 - Start with tests for every contract §1/§2/§3 constraint, trigger, lifecycle edge/changed-column/capability/catalog assertion, grant and named direct-SQL negative; observe RED before migration implementation.
@@ -39,5 +39,5 @@ reviewed: pending
 
 ## Delivery gate
 - Exact branch commit, test commands/results and independent reports are recorded.
-- Actual GitHub PR exists with Zeus signature and `agent:zeus` label.
-- For future source increments, QA Guardian merge evidence is mandatory before terminal closure; per-task waiver metadata remains the expected guard against Factory direct branch-to-base integration. The observed ALR-010-R1 `merge_no_ff_push_origin` event must be treated as reconciled audit evidence, not as delivery approval or deployment authority.
+- Actual GitHub PR exists with Zeus signature and `agent:zeus` label, and its head SHA is the exact SHA inspected by independent reviewers.
+- For this R2e documentation increment and future source increments, QA Guardian/independent review evidence is mandatory before terminal closure; per-task waiver metadata remains the expected guard against Factory direct branch-to-base integration. Observed ALR-010-R1 `merge_no_ff_push_origin` events `173433` and `173494` must be treated as reconciled audit evidence, not as delivery approval or deployment authority.

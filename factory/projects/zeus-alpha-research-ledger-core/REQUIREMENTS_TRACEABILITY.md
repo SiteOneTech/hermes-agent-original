@@ -3,7 +3,7 @@ project_id: zeus-alpha-research-ledger-core
 phase: local_advisory_ledger_v1
 status: g1_rebaseline
 validated: yes
-reviewed: pending
+reviewed: yes
 ---
 
 # REQUIREMENTS TRACEABILITY
@@ -21,6 +21,6 @@ reviewed: pending
 | R9 source policy | ALR-020/040 | DB §2 | enum/terms/freshness negatives | ALR-061/063 | ALR-070 |
 | R10 secret/role/scheduler | ALR-020/030/050 | DB §1/§3/§4/§5 | role/DSN/readiness plus synthetic-secret redaction negatives | ALR-063 | ALR-070 |
 | no egress/platform writes | ALR-030/050 | DB §4 | all-ALR-modified-diff-line static scan + every-handler/scheduler interception harness | ALR-063 | ALR-070 |
-| PR-first/QA Guardian + merge reconciliation | ALR-010..080 | G0/TASK_GRAPH/QA gates/G1_REVIEW | Factory DB event/gate evidence, Git ancestry proof, PR/QA evidence where required | ALR-061/062 | ALR-080 |
+| PR-first/QA Guardian + merge reconciliation | ALR-010-R2/R2e, ALR-020..080 | G0/TASK_GRAPH/QA gates/G1_REVIEW | Factory DB event/gate evidence for `173433`/`173494`, event 174440 ALR-020 metadata read-back, Git ancestry proof, Zeus-signed `agent:zeus` PR, and PR/QA evidence where required | ALR-061/062 plus R2e exact-SHA independent review | ALR-080 |
 
 No task may mark a requirement satisfied with prose: test/review evidence cites the exact candidate SHA and the listed contract section.
