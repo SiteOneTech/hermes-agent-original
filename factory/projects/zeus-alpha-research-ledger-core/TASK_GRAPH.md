@@ -38,9 +38,17 @@ The Factory DB currently records this ALR-020 acceptance literal: `Schema covers
 ### R2m current-base G1 documentation PR recovery
 
 - Current canonical base: `origin/main` fetched at `ab08b13669903a87b3d60d6c80231d23d6313782`; assigned branch `factory/zeus-alpha-research-ledger-core/inc-001-r2m-current-base-g1-documentatio` was initially equal to that base.
-- Active candidate: the fresh R2m branch/PR head after this documentation-only recovery commit and push. Independent reviewers must bind PASS/REQUEST_CHANGES to that exact candidate SHA.
+- Historical R2m candidate: the fresh R2m branch/PR head after that documentation-only recovery commit and push. R2n now supersedes it as the active review target.
 - Incorporated repairs: `R2J_CANONICAL_STATE_REPAIR.md` and `R2K_STALE_CANONICAL_G1_PROVENANCE_REPAIR.md` remain indexed controlling artifacts, but PR #20/dad375f, PR #29/f61a, R2i `already_ancestor`, PR #30/c1943 and PR #31/73b exposure are historical only and cannot dispatch ALR-020.
 - Boundary: R2m performs no product implementation, merge, deploy, credential change, direct SQL or external-runtime execution; required G1 docs remain `reviewed: pending`.
+
+### R2n canonical-document validation repair
+
+- Current canonical base: `origin/main` fetched at `df4c77fd1413a65cdb85885a06978ff157c1de4d`; assigned branch `factory/zeus-alpha-research-ledger-core/inc-034-r2n-repair-g1-canonical-document` was initially equal to that base.
+- Active candidate: the fresh R2n branch/PR head after this documentation-only correction and push. Independent reviewers must bind PASS/REQUEST_CHANGES to that exact candidate SHA.
+- Canonical Factory status: `agent_core_postgres:zeus_agent.factory` still reports `unvalidated_required_docs`; project `repo_path=/home/jean/Projects/hermes-agent-original` reads all 14 required G1 documents as `exists=true`, `indexed=true`, `committed=true`, `validated=true`, `reviewed=false`, `readiness_source=primary`.
+- Concrete remaining technical cause: a docs-only branch cannot clear live `document_status` until a PR-first/QA Guardian or authorized metadata reconciliation path points Factory at the independently reviewed R2n exact head. Existing `metadata.g1_documentation_checkout` still names obsolete PR #20 / `dad375f27568c38be771fc597b579d087f034e1d` and is not accepted reviewed-candidate metadata.
+- Boundary: R2n performs no product implementation, merge, deploy, credential change, direct SQL or external-runtime execution; required G1 docs remain `reviewed: pending`.
 
 | Task ID | Phase / status | Owner → reviewer | Depends on | Branch | Worktree |
 |---|---|---|---|---|---|
@@ -59,7 +67,8 @@ The Factory DB currently records this ALR-020 acceptance literal: `Schema covers
 | `zeus-alpha-research-ledger-core-reconcile-missing-required-docs` | documentation / todo | factory-reporter → factory-orchestrator | — | unassigned | unassigned |
 | `zeus-alpha-research-ledger-core-r2j-repair-pr-29-g1-canonical-state-evid` | g1_review / done, historical evidence only | codex-builder → qa-verifier | R2i exact-SHA review evidence mismatch | `factory/zeus-alpha-research-ledger-core/inc-001-r2j-repair-pr-29-g1-canonical-st` | `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-001-r2j-repair-pr-29-g1-canonical-st` |
 | `zeus-alpha-research-ledger-core-r2k-repair-stale-canonical-g1-review-pro` | documentation / done, historical evidence only | codex-builder → independent reviewer required | stale metadata PR #20/dad375f and non-dispatchable canonical G1 status | `factory/zeus-alpha-research-ledger-core/inc-001-r2k-repair-stale-canonical-g1-re` | `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-001-r2k-repair-stale-canonical-g1-re` |
-| `zeus-alpha-research-ledger-core-r2m-current-base-g1-documentation-pr-rec` | documentation / claimed | codex-builder → independent exact-SHA reviewer required | current-base recovery after R2j/R2k provenance repairs | `factory/zeus-alpha-research-ledger-core/inc-001-r2m-current-base-g1-documentatio` | `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-001-r2m-current-base-g1-documentatio` |
+| `zeus-alpha-research-ledger-core-r2m-current-base-g1-documentation-pr-rec` | documentation / blocked, historical handoff only | codex-builder → independent exact-SHA reviewer required | current-base recovery after R2j/R2k provenance repairs | `factory/zeus-alpha-research-ledger-core/inc-001-r2m-current-base-g1-documentatio` | `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-001-r2m-current-base-g1-documentatio` |
+| `zeus-alpha-research-ledger-core-r2n-repair-g1-canonical-document-validat` | documentation / claimed | codex-builder → quality-reviewer | active canonical-document status repair and exact-SHA handoff | `factory/zeus-alpha-research-ledger-core/inc-034-r2n-repair-g1-canonical-document` | `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-034-r2n-repair-g1-canonical-document` |
 
 The reconciliation/documentation rows are audit and handoff rows for document-readiness drift. They cannot close an implementation gate by themselves; ALR-010-R1 still requires exact-SHA independent review evidence and explicit handling of the observed integration anomaly before downstream implementation starts.
 
@@ -71,7 +80,7 @@ The reconciliation/documentation rows are audit and handoff rows for document-re
 - Future source increments must produce a Zeus-signed `agent:zeus` PR and QA Guardian merge evidence before terminal closure. The observed ALR-010-R1 Factory direct integration is recorded above as gate-695 reconciliation evidence, not as a repeatable delivery path or implementation authority.
 - R2j adds an explicit guard for review-only branches: an `already_ancestor` record on a reviewer worktree is never proof that the PR candidate it reviewed is merged; source-delivery evidence must bind to the PR head commit.
 - R2k adds an explicit guard for stale active metadata: `metadata.g1_documentation_checkout` naming PR #20 / `dad375f27568c38be771fc597b579d087f034e1d` is obsolete and cannot be used to dispatch ALR-020. After PR #31/R2k reached `origin/main`, R2k is historical repair evidence rather than the active review target.
-- R2m supersedes the active review target after current-base recovery: the next valid review target is the exact SHA on the R2m Zeus-signed `agent:zeus` PR based on `origin/main` `ab08b13669903a87b3d60d6c80231d23d6313782`; R2k/PR #31 is historical evidence only.
+- R2m superseded R2k after current-base recovery, but R2n now supersedes R2m as the active review target: the next valid review target is the exact SHA on the R2n Zeus-signed `agent:zeus` PR based on `origin/main` `df4c77fd1413a65cdb85885a06978ff157c1de4d`; R2k/PR #31 and R2m are historical evidence only.
 - ALR-010-R1 resolves only the documentation findings from failed gates 686/687 and the merge-evidence documentation finding from gate 695. It does not implement ledger code, alter Factory task metadata, open a PR, perform another merge, deploy or grant downstream implementation authority.
 - ALR-020 additionally may not start until the required bounded-local-sessions metadata reconciliation above is recorded and read back exactly; it does not add a collaboration-session implementation task.
 

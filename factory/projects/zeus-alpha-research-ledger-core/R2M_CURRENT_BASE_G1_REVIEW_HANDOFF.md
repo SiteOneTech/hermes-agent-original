@@ -10,6 +10,10 @@ owner: codex-builder
 
 # R2m current-base G1 documentation PR recovery and exact-SHA review handoff
 
+## Supersession note
+
+R2m is retained as historical current-base handoff evidence. R2n supersedes it as the active review target on current `origin/main` `df4c77fd1413a65cdb85885a06978ff157c1de4d`; see `R2N_CANONICAL_DOCUMENT_STATUS_REPAIR.md`. Do not use the R2m branch, R2m base, or any R2m PR exposure as current G1 approval or ALR-020 dispatch evidence.
+
 ## Scope
 
 This is a bounded project-local documentation recovery on the task-assigned isolated worktree. It recreates the G1 documentation candidate on the current canonical `origin/main`, preserves the canonical R2j/R2k provenance repairs, and prepares a fresh Zeus-signed `agent:zeus` PR for independent exact-SHA review.
@@ -35,7 +39,7 @@ Read-only Git verification from `/home/jean/Projects/.worktrees/zeus-alpha-resea
 
 ## Stale provenance explicitly rejected
 
-The active R2m review target is the fresh PR head produced from this branch after validation and push. Reviewers must not use any of the following as active approval or dispatch evidence:
+At the time of R2m, the review target was the fresh PR head produced from that branch after validation and push. R2n has since superseded it, so reviewers must not use any of the following as current approval or dispatch evidence:
 
 - stale project metadata that names PR #20 / `dad375f27568c38be771fc597b579d087f034e1d`;
 - historical PR #29 head `f61a7275048e2135b2b2729a1b9cdf8713c58866` or its prior PASS reviews;
@@ -51,6 +55,6 @@ Therefore the candidate intentionally keeps required G1 frontmatter and the inde
 
 ## Independent exact-SHA handoff
 
-After local validation and push, the PR body and Factory evidence record must bind review to the exact R2m candidate SHA, base SHA `ab08b13669903a87b3d60d6c80231d23d6313782`, branch, worktree, documentation-only diff, validation commands, and the no-merge/no-deploy/no-external-execution boundaries.
+For historical R2m review, the PR body and Factory evidence record had to bind review to the exact R2m candidate SHA, base SHA `ab08b13669903a87b3d60d6c80231d23d6313782`, branch, worktree, documentation-only diff, validation commands, and the no-merge/no-deploy/no-external-execution boundaries.
 
-The next valid action is independent PASS/REQUEST_CHANGES review against that exact R2m PR head SHA. This worker records implementation evidence only and leaves the G1 gate `reviewed: pending`.
+The next valid current action is now the R2n exact-SHA review path recorded in `R2N_CANONICAL_DOCUMENT_STATUS_REPAIR.md`. This historical R2m worker recorded implementation evidence only and left the G1 gate `reviewed: pending`.

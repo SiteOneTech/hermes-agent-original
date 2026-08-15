@@ -70,11 +70,21 @@ This is implementation/documentation evidence only. It performs no merge, deploy
 
 **Incorporated repairs:** `R2J_CANONICAL_STATE_REPAIR.md` and `R2K_STALE_CANONICAL_G1_PROVENANCE_REPAIR.md` remain indexed controlling artifacts. PR #20/dad375f, historical PR #29/f61a PASS reviews, R2i review-worktree `already_ancestor` evidence, PR #30/c1943 and PR #31/73b are not active approval or implementation-dispatch evidence.
 
-**Handoff:** the fresh R2m Zeus-signed `agent:zeus` PR is the next review target. Independent reviewers must record PASS/REQUEST_CHANGES against its exact PR head SHA and base `ab08b13669903a87b3d60d6c80231d23d6313782`. This worker leaves `reviewed: pending` intact and performs no merge, deployment, credential change, direct SQL, product implementation or external-runtime operation.
+**Handoff at that time:** the fresh R2m Zeus-signed `agent:zeus` PR was the next review target, with independent review bound to its exact PR head SHA and base `ab08b13669903a87b3d60d6c80231d23d6313782`. R2n now supersedes that target. This worker leaves `reviewed: pending` intact and performs no merge, deployment, credential change, direct SQL, product implementation or external-runtime operation.
+
+## Review round 8 — R2n canonical-document validation repair
+
+**Current-base repair:** R2n fetched canonical `origin/main` and recorded exact base `df4c77fd1413a65cdb85885a06978ff157c1de4d`. The assigned branch/worktree `factory/zeus-alpha-research-ledger-core/inc-034-r2n-repair-g1-canonical-document` was initially equal to that base, then received only project-local documentation updates for canonical-document status repair and exact-SHA handoff.
+
+**Canonical status reproduced:** Agent Core Factory status still reports `unvalidated_required_docs`. The project-level `document_status` read-back from primary `repo_path=/home/jean/Projects/hermes-agent-original` shows all 14 required G1 documents `exists=true`, `indexed=true`, `committed=true`, `validated=true`, `reviewed=false`, `readiness_source=primary`. Therefore the smaller prompt blocker subset is stale relative to the live canonical read-back, and no normal implementation dispatch is authorized.
+
+**Correction:** `R2N_CANONICAL_DOCUMENT_STATUS_REPAIR.md` is now the active handoff artifact. It supersedes R2m as the active review target, preserves R2j/R2k/R2m as historical evidence, records the stale `metadata.g1_documentation_checkout` pointer to PR #20 / `dad375f27568c38be771fc597b579d087f034e1d`, and binds independent review to the exact R2n PR head SHA after push.
+
+This worker leaves `reviewed: pending` intact and performs no merge, deployment, credential change, direct SQL, product implementation or external-runtime operation.
 
 ## Local documentary verification — non-approval
 
 At `2026-08-10T04:50:09-04:00`, the implementation-planner worker verified the project-local pack from the assigned worktree only. `git ls-files --error-unmatch` confirmed the 14 required G1 documents plus `G0_REPOSITORY_STRATEGY.md`, `REQUIREMENTS_TRACEABILITY.md`, `DATABASE_AND_RUNTIME_CONTRACT.md`, and `G1_REVIEW.md` are tracked. `DOCUMENTATION_INDEX.md` indexes required documents and records explicit validated/reviewed status. `G0_REPOSITORY_STRATEGY.md` records the Zeus-only source repo, `origin/main` reference, assigned branch/worktree policy, PR-first delivery, and predecessor linkage. This is implementation evidence, not an independent specification/security PASS.
 
 ## Status
-This is still a remediation record, not approval. After this revision is committed and pushed as the R2m current-base PR, obtain new independent specification and security reviews against that exact PR head SHA, including the gate-695/R2j/R2k provenance reconciliation. Only then may their independent PASS results support changing required G1 frontmatter/index to `reviewed: yes` and unblocking downstream implementation according to the reconciled delivery policy. Until then, `reviewed: pending` remains binding.
+This is still a remediation record, not approval. After this revision is committed and pushed as the R2n canonical-document PR, obtain new independent specification and security reviews against that exact PR head SHA, including the gate-695/R2j/R2k/R2m provenance reconciliation. Only then may their independent PASS results support changing required G1 frontmatter/index to `reviewed: yes` and unblocking downstream implementation according to the reconciled delivery policy. Until then, `reviewed: pending` remains binding.
