@@ -61,7 +61,7 @@ Canonical interpretation after this repair:
 - Canonical base at reproduction: `main` / `origin/main` / remote `refs/heads/main` at `5e1e4622e93d8d2fabdfe0f2176889a29afa7f7c`.
 - PR state at reproduction: `OPEN`, no merge commit. The synthetic GitHub merge ref `408e0a6395c9e14af898af9e618ded7ed9cb440e` is not a source merge to `main`.
 - R2i independent gates remain exact-SHA review evidence for PR #29, but their `increment_integration` attachment is review-worktree evidence only and must not be used as canonical source visibility evidence for PR #29.
-- This R2j repair itself is delivered PR-first as PR #30 (`https://github.com/SiteOneTech/hermes-agent-original/pull/30`), head `15f3e3599f67facfde051f820b06fd83cb5ed353` at initial handoff, base `main` `5e1e4622e93d8d2fabdfe0f2176889a29afa7f7c`, label `agent:zeus`. PR #30 is a documentation/traceability repair only and must not be confused with PR #29's G1 candidate.
+- This R2j repair itself is delivered PR-first as PR #30 (`https://github.com/SiteOneTech/hermes-agent-original/pull/30`), base `main` `5e1e4622e93d8d2fabdfe0f2176889a29afa7f7c`, label `agent:zeus`; reviewers must read the PR #30 head from GitHub at review time. PR #30 is a documentation/traceability repair only and must not be confused with PR #29's G1 candidate.
 - Factory `document_status` remains blocked by `unvalidated_required_docs` until the canonical project source read-back shows the required G1 docs reviewed through the approved PR-first / QA Guardian path or an explicit authorized source correction.
 
 ## QA Guardian review artifact requirement
