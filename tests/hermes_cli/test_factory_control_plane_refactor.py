@@ -18,6 +18,7 @@ class FakeSql:
         self.one_results: list[dict | None] = []
         self.statement_one_results: list[dict | None] = []
         self.rows_results: list[list[dict]] = []
+        self.json_results: list[object] = []
 
     def psql(self, sql, *, user=None, **_):
         self.statements.append(sql)
@@ -37,7 +38,7 @@ class FakeSql:
 
     def json_query(self, sql, *, user=None, **_):
         self.statements.append(sql)
-        return []
+        return self.json_results.pop(0) if self.json_results else []
 
     @staticmethod
     def quote_literal(value):
@@ -182,6 +183,7 @@ def test_notion_projection_warning_task_does_not_cover_required_notion_blocker()
         "description": "Missing or stale Notion PM projection is reported for executive visibility.",
         "phase": "reporting",
         "status": "todo",
+        "metadata": {"factory_reconciliation_task": True, "reconciliation_anomaly": "notion_pm_projection_warning"},
     }
     assert factory_pg._task_covers_reconciliation_anomaly(task, "notion_pm_projection_warning") is True
     assert factory_pg._task_covers_reconciliation_anomaly(task, "missing_notion_project") is False
@@ -685,6 +687,7 @@ def test_reconciler_does_not_cancel_product_validation_task_with_reconciliation_
         },
     ]
 
+    fake_sql.json_results = [[{"task_id": "demo-reconcile-unvalidated-required-docs"}]]
     resolved = factory_pg.cancel_resolved_reconciliation_tasks(project, findings, tasks)
 
     assert resolved == [{"task_id": "demo-reconcile-unvalidated-required-docs", "code": "unvalidated_required_docs", "source": "structured_reconciliation_metadata"}]
@@ -747,7 +750,7 @@ def test_record_delivery_gate_persists_document_status_snapshot(fake_sql, monkey
         {"file_name": "PRD.md", "category": "g1_required", "blocking": False},
         {"file_name": "QA_REPORT.md", "category": "lifecycle", "blocking": False},
     ])
-    fake_sql.statement_one_results = [{"gate_id": 42, "project_id": "demo", "status": "passed", "timestamp": "now"}]
+    fake_sql.json_results = [[{"gate_id": 42, "project_id": "demo", "status": "passed", "timestamp": "now"}]]
 
     result = factory_pg.record_gate("demo", "delivery", "passed", reviewer="qa", evidence={"tests": "passed"})
 
@@ -1420,6 +1423,9 @@ def test_reconcile_preserves_manual_attention_and_forces_autonomy_off(monkeypatc
     assert "status='manual_attention'" in joined
     assert "autonomous_enabled=false" in joined
     assert "project_status_manual_attention" in joined
+    assert '"document_dispatch_readiness"' in joined
+    assert '"schema_version": 2' in joined
+    assert '"source_revision": 0' in joined
 
 
 def test_close_project_cancels_active_runs_and_records_monitor_evidence(fake_sql):
@@ -1803,7 +1809,7 @@ def test_ui_delivery_gate_rejects_non_authorized_sandbox_url(fake_sql, monkeypat
 def test_ui_delivery_gate_passes_with_complete_authorized_sandbox_playwright_evidence(fake_sql, monkeypatch):
     monkeypatch.setattr(factory_pg, "_project", lambda project_id: _ui_project())
     fake_sql.rows_results = [[]]
-    fake_sql.statement_one_results = [{"gate_id": 44, "project_id": "demo", "status": "passed", "timestamp": "now"}]
+    fake_sql.json_results = [[{"gate_id": 44, "project_id": "demo", "status": "passed", "timestamp": "now"}]]
 
     result = factory_pg.record_gate("demo", "delivery", "passed", reviewer="qa", evidence=_complete_ui_delivery_evidence())
 

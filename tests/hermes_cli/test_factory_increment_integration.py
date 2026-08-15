@@ -13,6 +13,7 @@ class FakeSql:
         self.one_results: list[dict | None] = []
         self.statement_one_results: list[dict | None] = []
         self.rows_results: list[list[dict]] = []
+        self.json_results: list[object] = []
 
     def psql(self, sql, *, user=None, **_):
         self.statements.append(sql)
@@ -32,7 +33,7 @@ class FakeSql:
 
     def json_query(self, sql, *, user=None, **_):
         self.statements.append(sql)
-        return []
+        return self.json_results.pop(0) if self.json_results else []
 
     @staticmethod
     def quote_literal(value):
@@ -170,6 +171,19 @@ def test_mark_run_finished_failed_review_with_wrapped_instruction_remains_rework
     assert "HTTP 429" in joined
 
 
+def test_record_gate_invalidates_readiness_in_same_atomic_statement(fake_sql):
+    fake_sql.json_results = [[{"gate_id": 42, "project_id": "demo", "status": "failed", "timestamp": "now"}]]
+
+    result = factory_pg.record_gate("demo", "review", "failed", reviewer="qa", evidence={})
+
+    assert result["gate_id"] == 42
+    joined = "\n".join(fake_sql.statements)
+    assert "WITH inserted_gate AS" in joined
+    assert "UPDATE factory.projects" in joined
+    assert "document_dispatch_readiness_invalidated_by_gate" in joined
+    assert "FROM inserted_gate" in joined
+
+
 def test_passed_task_gate_requires_increment_integration(fake_sql, monkeypatch):
     calls: list[str] = []
 
@@ -178,7 +192,7 @@ def test_passed_task_gate_requires_increment_integration(fake_sql, monkeypatch):
         return {"increment_integration_required": True, "increment_integration_status": "integrated"}
 
     monkeypatch.setattr(factory_pg, "_integrate_increment_to_base", integrate)
-    fake_sql.statement_one_results = [{"gate_id": 42, "project_id": "demo", "status": "passed", "timestamp": "now"}]
+    fake_sql.json_results = [[{"gate_id": 42, "project_id": "demo", "status": "passed", "timestamp": "now"}]]
 
     result = factory_pg.record_gate("demo", "review", "passed", task_id="task-1", reviewer="qa", evidence={})
 
@@ -231,6 +245,133 @@ def test_next_runnable_task_prioritizes_doc_repair_over_product_rework(fake_sql,
     assert result["task_id"] == "demo-reconcile-unvalidated-required-docs"
 
 
+def test_docs_gate_does_not_exempt_product_task_with_reconciliation_prose():
+    product = {
+        "task_id": "demo-implementation-reconciliation",
+        "phase": "implementation",
+        "title": "Implementation reconciliation of the delivery surface",
+        "description": "Reconciliation must repair the product implementation.",
+        "metadata": {},
+    }
+
+    assert factory_pg._is_docs_first_gated_dispatch_task(product) is True
+    assert factory_pg._dispatch_preflight_blockers(product, docs_ready=False, notion_ready=True) == ["missing_or_unindexed_docs"]
+
+
+@pytest.mark.parametrize("phase", ["documentation", "planning", "g0_repository", "g1_docs"])
+def test_docs_gate_does_not_exempt_product_semantics_mislabeled_as_recovery(phase):
+    product = {
+        "task_id": "demo-mislabeled-product-reconciliation",
+        "phase": phase,
+        "title": "Reconciliation: implement product API",
+        "description": "Implement the production endpoint and deploy it after QA.",
+        "owner_profile": "claude-builder",
+        "metadata": {},
+    }
+
+    assert factory_pg._is_docs_first_gated_dispatch_task(product) is True
+    assert factory_pg._dispatch_preflight_blockers(product, docs_ready=False, notion_ready=False) == ["missing_or_unindexed_docs"]
+
+
+def test_reconciler_never_cancels_claimed_reconciliation_with_queued_run(fake_sql):
+    project = {"project_id": "demo", "metadata": {}}
+    task = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "demo-reconcile-docs",
+        "status": "claimed",
+        "phase": "documentation",
+        "metadata": {
+            "factory_reconciliation_task": True,
+            "reconciliation_anomaly": "missing_required_docs",
+        },
+    }
+
+    cancelled = factory_pg.cancel_resolved_reconciliation_tasks(project, [], [task])
+
+    assert cancelled == []
+    assert fake_sql.statements == []
+
+
+def test_claim_next_review_refuses_product_qa_while_g1_is_red(fake_sql, monkeypatch):
+    product_review = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "demo-qa-review",
+        "status": "review_ready",
+        "phase": "qa",
+        "title": "QA review for implementation",
+        "priority": 20,
+        "owner_profile": "claude-builder",
+        "reviewer_profile": "quality-reviewer",
+        "metadata": {},
+    }
+    project = {"project_id": "demo", "status": "active", "autonomous_enabled": True, "metadata": {}}
+    monkeypatch.setattr(factory_pg, "cleanup_stale_manual_takeover_leases", lambda _project_id: None)
+    monkeypatch.setattr(factory_pg, "_tasks", lambda _project_id: [product_review])
+    monkeypatch.setattr(factory_pg, "_project", lambda _project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda _project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda _project_id: [])
+    monkeypatch.setattr(factory_pg, "_project_docs_notion_preflight", lambda *_args: (False, True, False, False))
+    monkeypatch.setattr(factory_pg, "reconcile_project", lambda _project_id: {"project_id": "demo"})
+    fake_sql.rows_results = [[{"project_id": "demo"}]]
+    fake_sql.statement_one_results = [{**product_review, "status": "review_running"}]
+
+    claimed = factory_pg.claim_next_review("demo", worker="factory-force-tick")
+
+    assert claimed is None
+    joined = "\n".join(fake_sql.statements)
+    assert "dispatch_preflight_denied" in joined
+    assert "review_claimed" not in joined
+
+
+def test_atomic_claim_serializes_project_and_queues_run_in_one_statement(fake_sql):
+    task = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "demo-impl",
+        "status": "claimed",
+        "owner_profile": "claude-builder",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "claude-code",
+    }
+    readiness = {
+        "schema_version": 2,
+            "source_revision": 0,
+        "docs_ready": True,
+        "notion_ready": True,
+        "notion_required": False,
+        "docs_first_waived": False,
+    }
+    fake_sql.json_results = [[task]]
+
+    claimed = factory_pg._claim_task_with_project_lease(
+        project_id="demo",
+        task_id="demo-impl",
+        expected_statuses=("todo", "ready"),
+        claimed_status="claimed",
+        worker="factory-force-tick",
+        worker_profile="claude-builder",
+        run_id="run-atomic",
+        run_type="implementation",
+        event_type="task_claimed",
+        event_message="Task demo-impl claimed",
+        document_dispatch_readiness=readiness,
+    )
+
+    assert claimed == task
+    assert len(fake_sql.statements) == 1
+    statement = fake_sql.statements[0]
+    assert "WITH locked_project AS" in statement
+    assert "UPDATE factory.projects p" in statement
+    assert "SET updated_at=now()" in statement
+    assert "project_dispatch_claim" not in statement
+    assert "UPDATE factory.tasks t" in statement
+    assert "INSERT INTO factory.task_runs" in statement
+    assert "INSERT INTO factory.events" in statement
+    assert "p.metadata->'document_dispatch_readiness'" in statement
+
+
 def test_claim_next_task_claims_docs_repair_before_preflight_denied_product(fake_sql, monkeypatch):
     product = {
         "project_id": "demo",
@@ -255,7 +396,9 @@ def test_claim_next_task_claims_docs_repair_before_preflight_denied_product(fake
     tasks = [product, doc_repair]
     project = {"project_id": "demo", "status": "active", "autonomous_enabled": True, "metadata": {}}
     fake_sql.rows_results = [[{"project_id": "demo"}], [product, doc_repair]]
-    fake_sql.statement_one_results = [{**doc_repair, "status": "claimed"}]
+    fake_sql.json_results = [[{**doc_repair, "status": "claimed"}]]
+    monkeypatch.setattr(factory_pg, "cleanup_stale_manual_takeover_leases", lambda _project_id: None)
+    monkeypatch.setattr(factory_pg, "reconcile_project", lambda _project_id: {"project_id": "demo"})
     monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
     monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
     monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
@@ -273,6 +416,448 @@ def test_claim_next_task_claims_docs_repair_before_preflight_denied_product(fake
     joined = "\n".join(fake_sql.statements)
     assert "Task demo-reconcile-unvalidated-required-docs claimed" in joined
     assert "dispatch_preflight_denied" not in joined
+
+
+
+def test_claim_next_task_allows_docs_recovery_while_rework_waits(fake_sql, monkeypatch):
+    rework = {
+        "project_id": "demo",
+        "task_id": "docs-rework",
+        "status": "rework",
+        "phase": "documentation",
+        "priority": 36,
+    }
+    recovery = {
+        "project_id": "demo",
+        "task_id": "canonical-source-visibility-recovery",
+        "status": "todo",
+        "phase": "documentation",
+        "priority": 35,
+        "dependencies": [],
+        "owner_profile": "factory-reporter",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "zeus",
+        "lane_id": "demo-zeus",
+    }
+    selected: list[str] = []
+    monkeypatch.setattr(factory_pg, "cleanup_stale_manual_takeover_leases", lambda _project_id: None)
+    monkeypatch.setattr(factory_pg, "reconcile_project", lambda _project_id: {"project_id": "demo"})
+    monkeypatch.setattr(factory_pg, "_tasks", lambda _project_id: [rework, recovery])
+    monkeypatch.setattr(factory_pg, "_project", lambda _project_id: {"project_id": "demo", "metadata": {}})
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda _project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda _project_id: [])
+    monkeypatch.setattr(factory_pg, "_project_docs_notion_preflight", lambda *_args: (False, True, False, False))
+    monkeypatch.setattr(
+        factory_pg,
+        "_next_runnable_task",
+        lambda _project_id, **_kwargs: selected.append(recovery["task_id"]) or recovery,
+    )
+    monkeypatch.setattr(factory_pg, "_candidate_dependencies_integrated", lambda *_args: True)
+    fake_sql.rows_results = [[{"project_id": "demo"}]]
+    fake_sql.json_results = [[recovery]]
+
+    claimed = factory_pg.claim_next_task("demo", worker="test-dispatcher")
+
+    assert selected == ["canonical-source-visibility-recovery"]
+    assert claimed and claimed["task"]["task_id"] == recovery["task_id"]
+
+
+def test_claim_next_rework_refuses_product_work_while_g1_is_red(fake_sql, monkeypatch):
+    product_rework = {
+        "project_id": "demo",
+        "lane_id": "demo-zeus",
+        "task_id": "demo-implementation-rework",
+        "status": "rework",
+        "phase": "implementation",
+        "priority": 20,
+        "owner_profile": "claude-builder",
+        "metadata": {},
+    }
+    project = {"project_id": "demo", "status": "active", "autonomous_enabled": True, "metadata": {}}
+    reconciliation_calls: list[str] = []
+    monkeypatch.setattr(factory_pg, "cleanup_stale_manual_takeover_leases", lambda _project_id: None)
+    monkeypatch.setattr(factory_pg, "_tasks", lambda _project_id: [product_rework])
+    monkeypatch.setattr(factory_pg, "_project", lambda _project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda _project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda _project_id: [])
+    monkeypatch.setattr(factory_pg, "_project_docs_notion_preflight", lambda *_args: (False, True, False, False))
+    monkeypatch.setattr(factory_pg, "ensure_reconciliation_tasks", lambda *_args: reconciliation_calls.append("ensured"))
+    monkeypatch.setattr(factory_pg, "reconciliation_findings", lambda *_args: [])
+    monkeypatch.setattr(factory_pg, "reconcile_project", lambda _project_id: reconciliation_calls.append("reconciled"))
+    fake_sql.rows_results = [[{"project_id": "demo"}]]
+    fake_sql.statement_one_results = [{**product_rework, "status": "claimed"}]
+
+    claimed = factory_pg.claim_next_rework("demo", worker="factory-force-tick")
+
+    assert claimed is None
+    assert reconciliation_calls == ["reconciled", "ensured", "reconciled"]
+    joined = "\n".join(fake_sql.statements)
+    assert "dispatch_preflight_denied" in joined
+    assert "rework_claimed" not in joined
+
+
+def test_claim_next_rework_allows_documentation_recovery_while_g1_is_red(fake_sql, monkeypatch):
+    docs_rework = {
+        "project_id": "demo",
+        "lane_id": "demo-zeus",
+        "task_id": "demo-reconcile-docs",
+        "status": "rework",
+        "phase": "documentation",
+        "priority": 20,
+        "owner_profile": "factory-reporter",
+        "metadata": {"factory_reconciliation_task": True},
+    }
+    project = {"project_id": "demo", "status": "active", "autonomous_enabled": True, "metadata": {}}
+    monkeypatch.setattr(factory_pg, "cleanup_stale_manual_takeover_leases", lambda _project_id: None)
+    monkeypatch.setattr(factory_pg, "_tasks", lambda _project_id: [docs_rework])
+    monkeypatch.setattr(factory_pg, "_project", lambda _project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda _project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda _project_id: [])
+    monkeypatch.setattr(factory_pg, "_project_docs_notion_preflight", lambda *_args: (False, True, False, False))
+    fake_sql.rows_results = [[{"project_id": "demo"}]]
+    fake_sql.json_results = [[{**docs_rework, "status": "claimed"}]]
+
+    claimed = factory_pg.claim_next_rework("demo", worker="factory-force-tick")
+
+    assert claimed and claimed["task"]["task_id"] == "demo-reconcile-docs"
+    assert claimed["run_type"] == "rework"
+    joined = "\n".join(fake_sql.statements)
+    assert "WITH locked_project AS" in joined
+    assert "INSERT INTO factory.task_runs" in joined
+    assert "rework_claimed" in joined
+
+
+def test_claim_next_rework_refuses_product_when_durable_docs_snapshot_is_stale(fake_sql, monkeypatch):
+    product_rework = {
+        "project_id": "demo",
+        "lane_id": "demo-zeus",
+        "task_id": "demo-implementation-rework",
+        "status": "rework",
+        "phase": "implementation",
+        "priority": 20,
+        "owner_profile": "claude-builder",
+        "metadata": {},
+    }
+    project = {
+        "project_id": "demo",
+        "status": "active",
+        "autonomous_enabled": True,
+        "metadata": {
+            "document_dispatch_readiness": {
+                "schema_version": 2,
+            "source_revision": 0,
+                "docs_ready": False,
+                "notion_ready": True,
+                "notion_required": False,
+                "docs_first_waived": False,
+            },
+        },
+    }
+    reconciled: list[str] = []
+    monkeypatch.setattr(factory_pg, "cleanup_stale_manual_takeover_leases", lambda _project_id: None)
+    monkeypatch.setattr(factory_pg, "_tasks", lambda _project_id: [product_rework])
+    monkeypatch.setattr(factory_pg, "_project", lambda _project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda _project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda _project_id: [])
+    monkeypatch.setattr(factory_pg, "_project_docs_notion_preflight", lambda *_args: (True, True, False, False))
+    monkeypatch.setattr(factory_pg, "reconcile_project", lambda project_id: reconciled.append(project_id) or {"project_id": project_id})
+    monkeypatch.setattr(factory_pg, "ensure_reconciliation_tasks", lambda *_args: None)
+    monkeypatch.setattr(factory_pg, "reconciliation_findings", lambda *_args: [])
+    fake_sql.rows_results = [[{"project_id": "demo"}]]
+    fake_sql.statement_one_results = [{**product_rework, "status": "claimed"}]
+
+    claimed = factory_pg.claim_next_rework("demo", worker="factory-force-tick")
+
+    assert claimed is None
+    assert reconciled == ["demo", "demo"]
+    joined = "\n".join(fake_sql.statements)
+    assert "stale_document_dispatch_readiness" in joined
+    assert "rework_claimed" not in joined
+
+
+def test_claim_next_rework_atomically_requires_matching_durable_docs_snapshot(fake_sql, monkeypatch):
+    product_rework = {
+        "project_id": "demo",
+        "lane_id": "demo-zeus",
+        "task_id": "demo-implementation-rework",
+        "status": "rework",
+        "phase": "implementation",
+        "priority": 20,
+        "owner_profile": "claude-builder",
+        "metadata": {},
+    }
+    readiness = {
+        "schema_version": 2,
+            "source_revision": 0,
+        "docs_ready": True,
+        "notion_ready": True,
+        "notion_required": False,
+        "docs_first_waived": False,
+    }
+    project = {
+        "project_id": "demo",
+        "status": "active",
+        "autonomous_enabled": True,
+        "metadata": {"document_dispatch_readiness": readiness},
+    }
+    monkeypatch.setattr(factory_pg, "cleanup_stale_manual_takeover_leases", lambda _project_id: None)
+    monkeypatch.setattr(factory_pg, "_tasks", lambda _project_id: [product_rework])
+    monkeypatch.setattr(factory_pg, "_project", lambda _project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda _project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda _project_id: [])
+    monkeypatch.setattr(factory_pg, "_project_docs_notion_preflight", lambda *_args: (True, True, False, False))
+    monkeypatch.setattr(factory_pg, "reconcile_project", lambda project_id: {"project_id": project_id})
+    fake_sql.rows_results = [[{"project_id": "demo"}]]
+    fake_sql.json_results = [[{**product_rework, "status": "claimed"}]]
+
+    claimed = factory_pg.claim_next_rework("demo", worker="factory-force-tick")
+
+    assert claimed and claimed["task"]["task_id"] == "demo-implementation-rework"
+    joined = "\n".join(fake_sql.statements)
+    assert "WITH locked_project AS" in joined
+    assert "UPDATE factory.projects p" in joined
+    assert "INSERT INTO factory.task_runs" in joined
+    assert "p.metadata->'document_dispatch_readiness' =" in joined
+    assert '"docs_ready": true' in joined
+
+
+def test_reconciler_requeues_technical_docs_repair_blocked_without_human_decision(fake_sql):
+    project = {
+        "project_id": "demo",
+        "repo_path": "/repo",
+        "risk_level": "medium",
+        "metadata": {
+            "repo_strategy": {
+                "primary_repo_path": "/repo",
+                "branch_prefix": "factory/demo/",
+                "worktree_root": "/worktrees",
+            },
+            "g1_documentation_checkout": {
+                "branch": "factory/demo/inc-010-g1-review",
+                "path": "/worktrees/demo/inc-010-g1-review",
+            },
+        },
+    }
+    finding = {
+        "code": "unvalidated_required_docs",
+        "message": "Required Factory methodology documents are present but not fully validated/reviewed",
+        "metadata": {"blocking_documents": ["PRD.md"]},
+    }
+    repair = {
+        "project_id": "demo",
+        "task_id": "demo-reconcile-unvalidated-required-docs",
+        "status": "blocked",
+        "retry_count": 0,
+        "max_retries": 2,
+        "metadata": {
+            "factory_reconciliation_task": True,
+            "reconciliation_anomaly": "unvalidated_required_docs",
+            "last_blocker_classification": {
+                "action_category": "technical_rework",
+                "requires_human": False,
+            },
+        },
+    }
+    fake_sql.json_results = [[{"task_id": "demo-reconcile-unvalidated-required-docs"}]]
+
+    changes = factory_pg.ensure_reconciliation_tasks(project, [finding], [repair])
+
+    assert changes == [{
+        "task_id": "demo-reconcile-unvalidated-required-docs",
+        "code": "unvalidated_required_docs",
+        "action": "requeued",
+    }]
+    joined = "\n".join(fake_sql.statements)
+    assert "status='rework'" in joined
+    assert "reconciliation_task_requeued" in joined
+    assert "claimed_by=NULL" in joined
+    assert "branch='factory/demo/inc-010-g1-review'" in joined
+    assert "worktree_path='/worktrees/demo/inc-010-g1-review'" in joined
+    assert "NOT EXISTS (" in joined
+    assert "FROM factory.task_runs active_run" in joined
+    assert "last_blocker_classification'->'requires_human' = 'false'::jsonb" in joined
+    assert "last_blocker_classification'->>'requires_human'='false'" not in joined
+
+
+def test_reconciler_does_not_report_requeue_when_atomic_update_loses_race(fake_sql):
+    project = {
+        "project_id": "demo",
+        "repo_path": "/repo",
+        "risk_level": "medium",
+        "metadata": {
+            "repo_strategy": {
+                "primary_repo_path": "/repo",
+                "branch_prefix": "factory/demo/",
+                "worktree_root": "/worktrees",
+            },
+            "g1_documentation_checkout": {
+                "branch": "factory/demo/inc-010-g1-review",
+                "path": "/worktrees/demo/inc-010-g1-review",
+            },
+        },
+    }
+    finding = {"code": "unvalidated_required_docs", "message": "docs require review", "metadata": {}}
+    repair = {
+        "project_id": "demo",
+        "task_id": "demo-reconcile-unvalidated-required-docs",
+        "status": "blocked",
+        "retry_count": 0,
+        "max_retries": 2,
+        "metadata": {
+            "factory_reconciliation_task": True,
+            "reconciliation_anomaly": "unvalidated_required_docs",
+            "last_blocker_classification": {
+                "action_category": "technical_rework",
+                "requires_human": False,
+            },
+        },
+    }
+    fake_sql.json_results = [[]]
+
+    changes = factory_pg.ensure_reconciliation_tasks(project, [finding], [repair])
+
+    assert changes == []
+    assert "recorded_event AS" in "\n".join(fake_sql.statements)
+
+
+def test_reconciler_does_not_requeue_without_complete_g0_assignment(fake_sql):
+    project = {
+        "project_id": "demo",
+        "risk_level": "medium",
+        "metadata": {
+            "repo_strategy": {
+                "status": "missing",
+                "branch_prefix": "factory/demo/",
+                "worktree_root": "/worktrees",
+            },
+        },
+    }
+    finding = {
+        "code": "unvalidated_required_docs",
+        "message": "Required Factory methodology documents are present but not fully validated/reviewed",
+        "metadata": {"blocking_documents": ["PRD.md"]},
+    }
+    repair = {
+        "project_id": "demo",
+        "task_id": "demo-reconcile-unvalidated-required-docs",
+        "status": "blocked",
+        "retry_count": 0,
+        "max_retries": 2,
+        "metadata": {
+            "factory_reconciliation_task": True,
+            "reconciliation_anomaly": "unvalidated_required_docs",
+            "last_blocker_classification": {
+                "action_category": "technical_rework",
+                "requires_human": False,
+            },
+        },
+    }
+
+    changes = factory_pg.ensure_reconciliation_tasks(project, [finding], [repair])
+
+    assert changes == []
+    assert "status='rework'" not in "\n".join(fake_sql.statements)
+
+
+def test_reconciler_does_not_requeue_conflicting_full_assignment(fake_sql):
+    project = {
+        "project_id": "demo",
+        "repo_path": "/repo",
+        "risk_level": "medium",
+        "metadata": {
+            "repo_strategy": {
+                "primary_repo_path": "/repo",
+                "branch_prefix": "factory/demo/",
+                "worktree_root": "/worktrees",
+            },
+            "g1_documentation_checkout": {
+                "branch": "factory/demo/inc-010-g1-review",
+                "path": "/worktrees/demo/inc-010-g1-review",
+            },
+        },
+    }
+    finding = {
+        "code": "unvalidated_required_docs",
+        "message": "Required Factory methodology documents are present but not fully validated/reviewed",
+        "metadata": {"blocking_documents": ["PRD.md"]},
+    }
+    repair = {
+        "project_id": "demo",
+        "task_id": "demo-reconcile-unvalidated-required-docs",
+        "status": "blocked",
+        "branch": "factory/demo/inc-099-unrelated",
+        "worktree_path": "/worktrees/demo/inc-099-unrelated",
+        "retry_count": 0,
+        "max_retries": 2,
+        "metadata": {
+            "factory_reconciliation_task": True,
+            "reconciliation_anomaly": "unvalidated_required_docs",
+            "last_blocker_classification": {
+                "action_category": "technical_rework",
+                "requires_human": False,
+            },
+        },
+    }
+    fake_sql.json_results = [[{"task_id": "demo-reconcile-unvalidated-required-docs"}]]
+
+    changes = factory_pg.ensure_reconciliation_tasks(project, [finding], [repair])
+
+    assert changes == []
+    assert "status='rework'" not in "\n".join(fake_sql.statements)
+
+
+def test_reconciler_records_terminal_assignment_conflict_without_reopening(fake_sql):
+    project = {
+        "project_id": "demo",
+        "repo_path": "/repo",
+        "risk_level": "medium",
+        "metadata": {
+            "repo_strategy": {"primary_repo_path": "/repo", "branch_prefix": "factory/demo/", "worktree_root": "/worktrees"},
+            "g1_documentation_checkout": {"branch": "factory/demo/inc-010-g1-review", "path": "/worktrees/demo/inc-010-g1-review"},
+        },
+    }
+    finding = {"code": "unvalidated_required_docs", "message": "docs require review", "metadata": {}}
+    terminal_repair = {
+        "project_id": "demo",
+        "task_id": "demo-reconcile-unvalidated-required-docs",
+        "status": "done",
+        "branch": "factory/demo/inc-099-stale",
+        "worktree_path": "/worktrees/demo/inc-099-stale",
+        "metadata": {"factory_reconciliation_task": True, "reconciliation_anomaly": "unvalidated_required_docs"},
+    }
+
+    changes = factory_pg.ensure_reconciliation_tasks(project, [finding], [terminal_repair])
+
+    assert changes == []
+    joined = "\n".join(fake_sql.statements)
+    assert "reconciliation_assignment_conflict" in joined
+    assert "status='todo'" not in joined
+
+
+def test_reconciler_reopens_terminal_reconciliation_only_with_matching_assignment(fake_sql):
+    project = {
+        "project_id": "demo",
+        "repo_path": "/repo",
+        "metadata": {
+            "repo_strategy": {"primary_repo_path": "/repo", "branch_prefix": "factory/demo/", "worktree_root": "/worktrees"},
+            "g1_documentation_checkout": {"branch": "factory/demo/inc-010-g1-review", "path": "/worktrees/demo/inc-010-g1-review"},
+        },
+    }
+    finding = {"code": "unvalidated_required_docs", "message": "docs require review", "metadata": {}}
+    terminal_repair = {
+        "project_id": "demo", "task_id": "demo-reconcile-unvalidated-required-docs", "status": "done",
+        "branch": "factory/demo/inc-010-g1-review", "worktree_path": "/worktrees/demo/inc-010-g1-review",
+        "metadata": {"factory_reconciliation_task": True, "reconciliation_anomaly": "unvalidated_required_docs"},
+    }
+    fake_sql.json_results = [[{"task_id": terminal_repair["task_id"]}]]
+
+    changes = factory_pg.ensure_reconciliation_tasks(project, [finding], [terminal_repair])
+
+    assert changes == [{"task_id": terminal_repair["task_id"], "code": "unvalidated_required_docs", "action": "reopened"}]
+    joined = "\n".join(fake_sql.statements)
+    assert "reconciliation_task_reopened" in joined
+    assert "status IN (" in joined
+    assert "metadata->>'factory_reconciliation_task'='true'" in joined
 
 
 def test_claimed_null_predicate_ignores_docs_blocked_product_without_repair():
@@ -355,9 +940,24 @@ def test_claim_next_task_keeps_priority_order_when_docs_ready(fake_sql, monkeypa
         "metadata": {"factory_reconciliation_task": True, "reconciliation_anomaly": "unvalidated_required_docs"},
     }
     tasks = [product, doc_repair]
-    project = {"project_id": "demo", "status": "active", "autonomous_enabled": True, "metadata": {}}
+    readiness = {
+        "schema_version": 2,
+            "source_revision": 0,
+        "docs_ready": True,
+        "notion_ready": True,
+        "notion_required": False,
+        "docs_first_waived": False,
+    }
+    project = {
+        "project_id": "demo",
+        "status": "active",
+        "autonomous_enabled": True,
+        "metadata": {"document_dispatch_readiness": readiness},
+    }
     fake_sql.rows_results = [[{"project_id": "demo"}], [product, doc_repair]]
-    fake_sql.statement_one_results = [{**product, "status": "claimed"}]
+    fake_sql.json_results = [[{**product, "status": "claimed"}]]
+    monkeypatch.setattr(factory_pg, "cleanup_stale_manual_takeover_leases", lambda _project_id: None)
+    monkeypatch.setattr(factory_pg, "reconcile_project", lambda _project_id: {"project_id": "demo"})
     monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
     monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
     monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
@@ -372,6 +972,9 @@ def test_claim_next_task_keeps_priority_order_when_docs_ready(fake_sql, monkeypa
 
     assert result is not None
     assert result["task"]["task_id"] == "demo-impl"
+    joined = "\n".join(fake_sql.statements)
+    assert "WITH locked_project AS" in joined
+    assert "INSERT INTO factory.task_runs" in joined
 
 
 def _source_task(*, metadata=None, phase="implementation"):

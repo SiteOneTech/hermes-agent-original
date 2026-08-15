@@ -204,7 +204,7 @@ def _task_prompt(payload: dict[str, Any], claim: dict[str, Any]) -> str:
             "- Si el repo remoto está aprobado, empuja la rama asignada después de validación local y evidencia. Cuando la política de gate/review del entregable lo permita, mantén la rama base/main al día con merge + push incremental; no acumules todo para el final.",
             "- No hagas deploy ni cambies credenciales salvo que la tarea lo pida explícitamente y el scope/gate lo permita.",
             "- No instales paquetes con pip/uv/apt/npm/pnpm ni modifiques entornos para resolver una tarea documental; si falta una dependencia, reporta BLOCKER.",
-            "- No hagas escrituras directas a factory.* con psql/psycopg2/scripts ad-hoc. Para Factory DB usa solo `hermes factory status` y `hermes factory gate record`.",
+            f"- No hagas escrituras directas a factory.* con psql/psycopg2/scripts ad-hoc. Para Factory DB usa solo `{sys.executable} -m hermes_cli.main factory status` y `{sys.executable} -m hermes_cli.main factory gate record`.",
             "- No escribas scripts temporales dentro del repo/proyecto salvo que sean artifacts requeridos; si creas un helper temporal, bórralo antes de terminar.",
             "",
             "Entrega obligatoria:",
@@ -257,6 +257,97 @@ def _prepare_worktree(payload: dict[str, Any], claim: dict[str, Any]) -> dict[st
             check=False,
         )
         if wt_probe.returncode == 0:
+            repo_common = subprocess.run(
+                ["git", "-C", str(repo_path), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+            worktree_common = subprocess.run(
+                ["git", "-C", str(worktree_path), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+            if (
+                repo_common.returncode != 0
+                or worktree_common.returncode != 0
+                or not repo_common.stdout.strip()
+                or repo_common.stdout.strip() != worktree_common.stdout.strip()
+            ):
+                return {
+                    "ready": False,
+                    "reason": "worktree_repository_mismatch",
+                    "repo_path": str(repo_path),
+                    "worktree_path": str(worktree_path),
+                    "cwd": str(repo_path),
+                }
+            worktree_root = subprocess.run(
+                ["git", "-C", str(worktree_path), "rev-parse", "--path-format=absolute", "--show-toplevel"],
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+            resolved_worktree_path = worktree_path.resolve()
+            resolved_worktree_root = Path(worktree_root.stdout.strip()).resolve() if worktree_root.returncode == 0 and worktree_root.stdout.strip() else None
+            if resolved_worktree_root != resolved_worktree_path:
+                return {
+                    "ready": False,
+                    "reason": "worktree_path_not_repository_root",
+                    "repo_path": str(repo_path),
+                    "worktree_path": str(worktree_path),
+                    "worktree_root": str(resolved_worktree_root) if resolved_worktree_root else None,
+                    "cwd": str(repo_path),
+                }
+            worktree_git_dir = subprocess.run(
+                ["git", "-C", str(worktree_path), "rev-parse", "--path-format=absolute", "--git-dir"],
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+            resolved_repo_common = Path(repo_common.stdout.strip()).resolve()
+            resolved_worktree_git_dir = Path(worktree_git_dir.stdout.strip()).resolve() if worktree_git_dir.returncode == 0 and worktree_git_dir.stdout.strip() else None
+            if not resolved_worktree_git_dir or resolved_worktree_git_dir == resolved_repo_common:
+                return {
+                    "ready": False,
+                    "reason": "worktree_path_not_isolated",
+                    "repo_path": str(repo_path),
+                    "worktree_path": str(worktree_path),
+                    "worktree_git_dir": str(resolved_worktree_git_dir) if resolved_worktree_git_dir else None,
+                    "cwd": str(repo_path),
+                }
+            branch_probe = subprocess.run(
+                ["git", "-C", str(worktree_path), "branch", "--show-current"],
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+            current_branch = branch_probe.stdout.strip() if branch_probe.returncode == 0 else ""
+            if current_branch != branch:
+                return {
+                    "ready": False,
+                    "reason": "worktree_branch_mismatch",
+                    "repo_path": str(repo_path),
+                    "worktree_path": str(worktree_path),
+                    "branch": branch,
+                    "current_branch": current_branch or None,
+                    "cwd": str(repo_path),
+                }
             return {"ready": True, "reason": "worktree_exists", "repo_path": str(repo_path), "branch": branch, "worktree_path": str(worktree_path), "cwd": str(worktree_path)}
         return {"ready": False, "reason": "worktree_path_exists_not_git", "repo_path": str(repo_path), "worktree_path": str(worktree_path), "cwd": str(repo_path)}
     worktree_path.parent.mkdir(parents=True, exist_ok=True)

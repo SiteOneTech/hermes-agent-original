@@ -77,7 +77,7 @@ DEFAULT_MIGRATION_MODULE_ORDER = [
     "fitness",
     "signature",
 ]
-FACTORY_SUCCESSOR_CONTROL_VERSION = "000004"
+FACTORY_SUCCESSOR_CONTROL_VERSION = "000005"
 
 
 def load_env_file(path: Path) -> dict[str, str]:
@@ -225,6 +225,13 @@ UNION ALL
 SELECT 'factory.runtime_leases', CASE WHEN to_regclass('factory.runtime_leases') IS NOT NULL THEN 'ok' ELSE 'missing' END
 UNION ALL
 SELECT 'factory.project_successions', CASE WHEN to_regclass('factory.project_successions') IS NOT NULL THEN 'ok' ELSE 'missing' END
+UNION ALL
+SELECT 'factory.projects:document_dispatch_readiness_guard', CASE WHEN EXISTS (
+  SELECT 1 FROM pg_trigger trigger_row
+  WHERE trigger_row.tgrelid='factory.projects'::regclass
+    AND trigger_row.tgname='factory_projects_document_dispatch_readiness_guard'
+    AND NOT trigger_row.tgisinternal
+) THEN 'ok' ELSE 'missing' END
 UNION ALL
 SELECT 'factory.runtime_leases:{runtime_role}:write', CASE WHEN to_regclass('factory.runtime_leases') IS NOT NULL
   AND has_table_privilege({quote_literal(runtime_role)}, 'factory.runtime_leases', 'SELECT')
