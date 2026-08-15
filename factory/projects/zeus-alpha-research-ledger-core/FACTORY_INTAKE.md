@@ -3,7 +3,11 @@ project_id: zeus-alpha-research-ledger-core
 phase: local_advisory_ledger_v1
 status: g1_rebaseline
 validated: yes
-reviewed: pending
+reviewed: yes
+reviewed_by: quality-reviewer
+review_evidence: factory_gate_789
+reviewed_candidate_sha: 1e82340dddf52071d14c3c7a00b04b3c17ee2821
+reviewed_candidate_pr: https://github.com/SiteOneTech/hermes-agent-original/pull/33
 ---
 
 # FACTORY INTAKE — Zeus Alpha Research Ledger Core

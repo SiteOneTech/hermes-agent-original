@@ -3,14 +3,18 @@ project_id: zeus-alpha-research-ledger-core
 phase: local_advisory_ledger_v1
 status: g1_rebaseline
 validated: yes
-reviewed: pending
+reviewed: yes
+reviewed_by: quality-reviewer
+review_evidence: factory_gate_789
+reviewed_candidate_sha: 1e82340dddf52071d14c3c7a00b04b3c17ee2821
+reviewed_candidate_pr: https://github.com/SiteOneTech/hermes-agent-original/pull/33
 ---
 
 # SPRINT PLAN
 
 | Increment | Outcome | Dependencies | Exit evidence |
 |---|---|---|---|
-| ALR-010 | G1 rebaseline + G0 + traceability + gate-695 merge-evidence reconciliation | — | committed corrected docs plus independent exact-SHA spec/security PASS reviews; no reviewed=yes before those reviews |
+| ALR-010 | G1 rebaseline + G0 + traceability + gate-695 merge-evidence reconciliation | — | committed corrected docs plus candidate-level G1 `reviewed: yes` markers backed by gate 789 / PR #33 exact SHA; primary dispatch waits for canonical source read-back |
 | ALR-020 | schema, constraints, dedicated role/grants | ALR-010 exact-SHA reviews accepted; ALR-020 acceptance metadata corrected/read back | RED/GREEN migration and direct-role tests |
 | ALR-030 | JSON tools + non-default leaf toolset | ALR-020 accepted | tool/allowlist/forbidden-field tests |
 | ALR-040 | source policy and adapter-neutral local evidence intake | ALR-030 accepted | source-state/duplicate/stale tests; no third-party driver |
