@@ -18,6 +18,7 @@ class FakeSql:
         self.one_results: list[dict | None] = []
         self.statement_one_results: list[dict | None] = []
         self.rows_results: list[list[dict]] = []
+        self.json_results: list[object] = []
 
     def psql(self, sql, *, user=None, **_):
         self.statements.append(sql)
@@ -37,7 +38,7 @@ class FakeSql:
 
     def json_query(self, sql, *, user=None, **_):
         self.statements.append(sql)
-        return []
+        return self.json_results.pop(0) if self.json_results else []
 
     @staticmethod
     def quote_literal(value):
@@ -182,6 +183,7 @@ def test_notion_projection_warning_task_does_not_cover_required_notion_blocker()
         "description": "Missing or stale Notion PM projection is reported for executive visibility.",
         "phase": "reporting",
         "status": "todo",
+        "metadata": {"factory_reconciliation_task": True, "reconciliation_anomaly": "notion_pm_projection_warning"},
     }
     assert factory_pg._task_covers_reconciliation_anomaly(task, "notion_pm_projection_warning") is True
     assert factory_pg._task_covers_reconciliation_anomaly(task, "missing_notion_project") is False
@@ -685,6 +687,7 @@ def test_reconciler_does_not_cancel_product_validation_task_with_reconciliation_
         },
     ]
 
+    fake_sql.json_results = [[{"task_id": "demo-reconcile-unvalidated-required-docs"}]]
     resolved = factory_pg.cancel_resolved_reconciliation_tasks(project, findings, tasks)
 
     assert resolved == [{"task_id": "demo-reconcile-unvalidated-required-docs", "code": "unvalidated_required_docs", "source": "structured_reconciliation_metadata"}]

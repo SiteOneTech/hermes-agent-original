@@ -1440,7 +1440,7 @@ def _missing_mandatory_phase_categories(project: dict[str, Any], tasks: list[dic
 
 
 def _is_validation_task(task: dict[str, Any]) -> bool:
-    if _is_reconciliation_task(task) or _is_runtime_bootstrap_repair_task(task):
+    if _is_structured_reconciliation_task(task) or _is_runtime_bootstrap_repair_task(task):
         return False
     phase = str(task.get("phase") or "").lower().replace("-", "_")
     validation_phases = {"qa", "qa_security", "security", "security_review", "quality", "quality_review", "review"}
@@ -1935,13 +1935,36 @@ def _repo_strategy_reconciliation_assignment(project: dict[str, Any] | None, cod
     }
 
 
-def _reconciliation_task_assignment(project: dict[str, Any] | None, code: str, task: dict[str, Any] | None = None) -> dict[str, Any] | None:
-    existing_branch = _clean_assignment_value(task.get("branch")) if task else ""
-    existing_worktree = _clean_assignment_value(task.get("worktree_path")) if task else ""
-    derived = (
+def _derived_reconciliation_assignment(project: dict[str, Any] | None, code: str, task: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    return (
         _g1_documentation_reconciliation_assignment(project, code)
         or _repo_strategy_reconciliation_assignment(project, code, task)
     )
+
+
+def _reconciliation_assignment_conflict(project: dict[str, Any] | None, code: str, task: dict[str, Any]) -> dict[str, Any] | None:
+    """Return assignment evidence when an existing task conflicts with G0/G1."""
+
+    derived = _derived_reconciliation_assignment(project, code, task)
+    if not derived:
+        return None
+    existing_branch = _clean_assignment_value(task.get("branch"))
+    existing_worktree = _clean_assignment_value(task.get("worktree_path"))
+    derived_branch = _clean_assignment_value(derived.get("branch"))
+    derived_worktree = _clean_assignment_value(derived.get("worktree_path"))
+    if (existing_branch and existing_branch != derived_branch) or (existing_worktree and existing_worktree != derived_worktree):
+        return {
+            "existing": {"branch": existing_branch or None, "worktree_path": existing_worktree or None},
+            "expected": {"branch": derived_branch or None, "worktree_path": derived_worktree or None},
+            "provenance": derived.get("provenance") or {},
+        }
+    return None
+
+
+def _reconciliation_task_assignment(project: dict[str, Any] | None, code: str, task: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    existing_branch = _clean_assignment_value(task.get("branch")) if task else ""
+    existing_worktree = _clean_assignment_value(task.get("worktree_path")) if task else ""
+    derived = _derived_reconciliation_assignment(project, code, task)
     if not derived:
         return None
     derived_branch = _clean_assignment_value(derived.get("branch"))
@@ -1974,7 +1997,7 @@ def _reconciliation_task_assignment(project: dict[str, Any] | None, code: str, t
 
 def _all_open_work_is_reconciliation(tasks: list[dict[str, Any]]) -> bool:
     open_tasks = [task for task in tasks if str(task.get("status") or "") not in TERMINAL_TASK_STATUSES]
-    return bool(open_tasks) and all(_is_reconciliation_task(task) for task in open_tasks)
+    return bool(open_tasks) and all(_is_structured_reconciliation_task(task) for task in open_tasks)
 
 
 def _all_blocked_work_is_documentation_hold(tasks: list[dict[str, Any]]) -> bool:
@@ -1985,7 +2008,7 @@ def _all_blocked_work_is_documentation_hold(tasks: list[dict[str, Any]]) -> bool
     documentation_phases = {"documentation", "docs", "pm", "reporting"}
     for task in blocking_tasks:
         phase = str(task.get("phase") or "").lower()
-        if phase not in documentation_phases and not _is_reconciliation_task(task):
+        if phase not in documentation_phases and not _is_structured_reconciliation_task(task):
             return False
     return True
 
@@ -2414,46 +2437,31 @@ def _uncommitted_project_artifacts(repo_path: Path, artifact_dir: str) -> list[s
     return [line for line in status.stdout.splitlines() if line.strip()]
 
 
-def _is_reconciliation_task(task: dict[str, Any]) -> bool:
+def _is_structured_reconciliation_task(task: dict[str, Any]) -> bool:
+    """Return true only for Factory-generated reconciliation recovery work.
+
+    Reconciliation is an authority boundary, not a free-form title convention:
+    only an explicit Factory marker plus a known anomaly type may receive the
+    docs-first exemption.  Legacy prose remains readable for migration/reporting
+    helpers but can never authorize product execution.
+    """
+
     metadata = _metadata(task)
-    if metadata.get("factory_reconciliation_task"):
-        return True
-    text = "\n".join(str(task.get(key) or "") for key in ("task_id", "title", "description", "phase")).lower()
-    return "reconciliation" in text or "reconciliación" in text
+    code = str(metadata.get("reconciliation_anomaly") or "").strip()
+    return metadata.get("factory_reconciliation_task") is True and code in RECONCILIATION_TASK_SPECS
 
 
 def _task_covers_reconciliation_anomaly(task: dict[str, Any], code: str) -> bool:
-    if str(task.get("status") or "") in TERMINAL_TASK_STATUSES:
-        return False
+    """Whether a task is the canonical recovery owner for an anomaly.
+
+    Only Factory-created, typed reconciliation records may suppress creation or
+    reopening of recovery work.  Free-form phase/title matches and untyped
+    metadata can describe a historical condition, but must not seize control of
+    a live Factory anomaly.
+    """
+
     metadata = _metadata(task)
-    if metadata.get("reconciliation_anomaly") == code:
-        return True
-    text = "\n".join(str(task.get(key) or "") for key in ("task_id", "title", "description", "phase")).lower()
-    if code == "missing_repository_strategy":
-        return "repository strategy" in text or "repo strategy" in text or "g0" in text or "branch" in text or "worktree" in text
-    if code == "missing_notion_project":
-        return "pm tracker" in text or "tracker metadata" in text or "notion_required" in text or "required notion" in text
-    if code == "notion_pm_projection_warning":
-        return "pm projection" in text or "executive visibility" in text or "reporting surface" in text
-    if code == "missing_project_artifact_dir":
-        return "artifact" in text or "documentation" in text or "documentación" in text
-    if code == "missing_required_docs":
-        return any(term in text for term in ("documentation", "documentación", "docs", "tracker", "delivery report"))
-    if code == "docs_not_indexed":
-        return "documentation_index" in text or "documentation index" in text or "índice" in text or "indexed" in text
-    if code == "uncommitted_project_artifacts":
-        return "commit" in text or "uncommitted" in text or "git" in text or "checkpoint" in text
-    if code == "missing_task_graph":
-        return "task graph" in text or "task-graph" in text or "canonical task" in text or "task graph recovery" in text
-    if code == "missing_mandatory_factory_phases":
-        if not _is_reconciliation_task(task):
-            return False
-        return "mandatory phase" in text or "phase contract" in text or "canonical factory phase" in text or "playwright" in text or "sandbox deploy" in text
-    if code == "pending_effective_gates":
-        return str(task.get("phase") or "").lower() in {"review", "qa", "security"} or "gate" in text
-    if code == "deliverable_unverified":
-        return str(task.get("phase") or "").lower() in {"delivery", "qa", "security"} or any(term in text for term in ("delivery", "deliverable", "qa", "security review"))
-    return False
+    return _is_structured_reconciliation_task(task) and metadata.get("reconciliation_anomaly") == code
 
 
 def _task_reconciliation_max_retries(task: dict[str, Any]) -> int:
@@ -2582,7 +2590,7 @@ def _source_increment_integration_blockers(
         status_value = str(task.get("status") or "").lower()
         if status_value not in POSITIVE_TERMINAL_TASK_STATUSES:
             continue
-        if _is_reconciliation_task(task) or _is_runtime_bootstrap_repair_task(task) or _task_integration_waived(task):
+        if _is_structured_reconciliation_task(task) or _is_runtime_bootstrap_repair_task(task) or _task_integration_waived(task):
             continue
         branch = str(task.get("branch") or "").strip()
         if not branch or branch in {base_branch, f"origin/{base_branch}", f"refs/heads/{base_branch}", f"refs/remotes/origin/{base_branch}"}:
@@ -2703,7 +2711,7 @@ def reconciliation_findings(project: dict[str, Any], tasks: list[dict[str, Any]]
                 artifact_dir=artifact_dir,
             )
 
-    non_reconciliation_tasks = [task for task in tasks if not _is_reconciliation_task(task)]
+    non_reconciliation_tasks = [task for task in tasks if not _is_structured_reconciliation_task(task)]
     if not non_reconciliation_tasks:
         add("missing_task_graph", "Factory DB has no canonical non-reconciliation task graph for this project")
     missing_phase_categories = _missing_mandatory_phase_categories(project, non_reconciliation_tasks)
@@ -2745,6 +2753,81 @@ def ensure_reconciliation_tasks(project: dict[str, Any], findings: list[dict[str
             continue
         matching_tasks = [task for task in tasks if _task_covers_reconciliation_anomaly(task, code)]
         for task in matching_tasks:
+            task_id = str(task.get("task_id") or "")
+            if not task_id:
+                continue
+            if str(task.get("status") or "") in TERMINAL_TASK_STATUSES:
+                conflict = _reconciliation_assignment_conflict(project, code, task)
+                if conflict:
+                    sql.psql(
+                        f"""
+                        INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
+                        VALUES ({_q(project_id)}, {_q(task.get('lane_id'))}, {_q(task_id)}, 'factory-reconciler', 'reconciliation_assignment_conflict',
+                                'Terminal reconciliation task was not reopened because its assigned branch/worktree conflicts with canonical G0/G1 assignment',
+                                {_j({'task_id': task_id, 'reconciliation_anomaly': code, 'assignment_conflict': conflict})});
+                        """,
+                        user=_user(),
+                    )
+                    continue
+                assignment = _reconciliation_task_assignment(project, code, task)
+                if not assignment:
+                    sql.psql(
+                        f"""
+                        INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
+                        VALUES ({_q(project_id)}, {_q(task.get('lane_id'))}, {_q(task_id)}, 'factory-reconciler', 'reconciliation_assignment_incomplete',
+                                'Terminal reconciliation task was not reopened because canonical G0/G1 assignment is incomplete',
+                                {_j({'task_id': task_id, 'reconciliation_anomaly': code})});
+                        """,
+                        user=_user(),
+                    )
+                    continue
+                assignment_metadata = {
+                    "branch": assignment["branch"],
+                    "worktree_path": assignment["worktree_path"],
+                    "provenance": assignment["provenance"],
+                }
+                reopen_note = f"\n\n[factory-reconciler] Reopened because the canonical anomaly recurred: {code}."
+                reopened_rows = sql.json_query(
+                    f"""
+                    WITH reopened AS (
+                      UPDATE factory.tasks
+                      SET status='todo', evidence_status='missing',
+                          branch=CASE WHEN COALESCE(branch, '')='' THEN {_q(assignment['branch'])} ELSE branch END,
+                          worktree_path=CASE WHEN COALESCE(worktree_path, '')='' THEN {_q(assignment['worktree_path'])} ELSE worktree_path END,
+                          result_summary=COALESCE(result_summary, '') || {_q(reopen_note)},
+                          metadata=metadata || {_j({'reopened_by': 'factory_reconciler', 'reopen_reason': 'canonical_anomaly_recurred', 'reconciliation_assignment': assignment_metadata})},
+                          updated_at=now()
+                      WHERE project_id={_q(project_id)} AND task_id={_q(task_id)}
+                        AND status IN ({terminal})
+                        AND (COALESCE(branch, '')='' OR branch={_q(assignment['branch'])})
+                        AND (COALESCE(worktree_path, '')='' OR worktree_path={_q(assignment['worktree_path'])})
+                        AND metadata->>'factory_reconciliation_task'='true'
+                        AND metadata->>'reconciliation_anomaly'={_q(code)}
+                        AND NOT EXISTS (
+                          SELECT 1 FROM factory.task_runs active_run
+                          WHERE active_run.project_id=factory.tasks.project_id
+                            AND active_run.task_id=factory.tasks.task_id
+                            AND active_run.status IN ('queued','running')
+                        )
+                      RETURNING project_id, lane_id, task_id
+                    ), recorded_event AS (
+                      INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
+                      SELECT project_id, lane_id, task_id, 'factory-reconciler', 'reconciliation_task_reopened',
+                             {_q('Terminal reconciliation task reopened after canonical assignment revalidation')},
+                             {_j({'task_id': task_id, 'reconciliation_anomaly': code, 'assignment': assignment_metadata})}
+                      FROM reopened
+                      RETURNING task_id
+                    )
+                    SELECT COALESCE(jsonb_agg(to_jsonb(recorded_event)), '[]'::jsonb)::text
+                    FROM recorded_event
+                    """,
+                    user=_user(),
+                )
+                if isinstance(reopened_rows, dict):
+                    reopened_rows = [reopened_rows]
+                if isinstance(reopened_rows, list) and reopened_rows:
+                    created.append({"task_id": task_id, "code": code, "action": "reopened"})
+                continue
             requeue_context = _blocked_reconciliation_requeue_context(task, code)
             if not requeue_context:
                 continue
@@ -2874,17 +2957,40 @@ def ensure_reconciliation_tasks(project: dict[str, Any], findings: list[dict[str
               {_j(metadata)}, {_q('reconcile-' + code)}, {int(spec['priority'])}, now(), now()
             )
             ON CONFLICT (task_id) DO UPDATE SET
-              status=CASE WHEN factory.tasks.status IN ({terminal}) THEN 'todo' ELSE factory.tasks.status END,
-              evidence_status=CASE WHEN factory.tasks.status IN ({terminal}) THEN 'missing' ELSE factory.tasks.evidence_status END,
+              status=CASE WHEN factory.tasks.status IN ({terminal})
+                                AND factory.tasks.metadata->>'factory_reconciliation_task'='true'
+                                AND factory.tasks.metadata->>'reconciliation_anomaly'={_q(code)}
+                                AND (COALESCE(factory.tasks.branch, '')='' OR factory.tasks.branch=EXCLUDED.branch)
+                                AND (COALESCE(factory.tasks.worktree_path, '')='' OR factory.tasks.worktree_path=EXCLUDED.worktree_path)
+                          THEN 'todo' ELSE factory.tasks.status END,
+              evidence_status=CASE WHEN factory.tasks.status IN ({terminal})
+                                        AND factory.tasks.metadata->>'factory_reconciliation_task'='true'
+                                        AND factory.tasks.metadata->>'reconciliation_anomaly'={_q(code)}
+                                        AND (COALESCE(factory.tasks.branch, '')='' OR factory.tasks.branch=EXCLUDED.branch)
+                                        AND (COALESCE(factory.tasks.worktree_path, '')='' OR factory.tasks.worktree_path=EXCLUDED.worktree_path)
+                                   THEN 'missing' ELSE factory.tasks.evidence_status END,
               branch=CASE WHEN COALESCE(factory.tasks.branch, '')='' AND EXCLUDED.branch IS NOT NULL THEN EXCLUDED.branch ELSE factory.tasks.branch END,
               worktree_path=CASE WHEN COALESCE(factory.tasks.worktree_path, '')='' AND EXCLUDED.worktree_path IS NOT NULL THEN EXCLUDED.worktree_path ELSE factory.tasks.worktree_path END,
               result_summary=CASE
-                WHEN factory.tasks.status IN ({terminal}) THEN COALESCE(factory.tasks.result_summary, '') || {_q(reopen_note)}
+                WHEN factory.tasks.status IN ({terminal})
+                     AND factory.tasks.metadata->>'factory_reconciliation_task'='true'
+                     AND factory.tasks.metadata->>'reconciliation_anomaly'={_q(code)}
+                     AND (COALESCE(factory.tasks.branch, '')='' OR factory.tasks.branch=EXCLUDED.branch)
+                     AND (COALESCE(factory.tasks.worktree_path, '')='' OR factory.tasks.worktree_path=EXCLUDED.worktree_path)
+                THEN COALESCE(factory.tasks.result_summary, '') || {_q(reopen_note)}
                 ELSE factory.tasks.result_summary
               END,
               description=EXCLUDED.description,
               acceptance_criteria=EXCLUDED.acceptance_criteria,
-              metadata=factory.tasks.metadata || EXCLUDED.metadata || {_j({'reopened_by': 'factory_reconciler', 'reopen_reason': 'canonical_anomaly_recurred'})},
+              metadata=CASE
+                WHEN factory.tasks.status IN ({terminal})
+                     AND factory.tasks.metadata->>'factory_reconciliation_task'='true'
+                     AND factory.tasks.metadata->>'reconciliation_anomaly'={_q(code)}
+                     AND (COALESCE(factory.tasks.branch, '')='' OR factory.tasks.branch=EXCLUDED.branch)
+                     AND (COALESCE(factory.tasks.worktree_path, '')='' OR factory.tasks.worktree_path=EXCLUDED.worktree_path)
+                THEN factory.tasks.metadata || EXCLUDED.metadata || {_j({'reopened_by': 'factory_reconciler', 'reopen_reason': 'canonical_anomaly_recurred'})}
+                ELSE factory.tasks.metadata || EXCLUDED.metadata
+              END,
               updated_at=now();
             INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
             VALUES ({_q(project_id)}, (SELECT lane_id FROM factory.lanes WHERE project_id={_q(project_id)} ORDER BY created_at, lane_id LIMIT 1), {_q(task_id)}, 'factory-reconciler', 'reconciliation_task_ensured', {_q(f'Reconciliation task ensured for anomaly {code}')}, {_j(event_metadata)});
@@ -2910,10 +3016,11 @@ def cancel_resolved_reconciliation_tasks(project: dict[str, Any], findings: list
     project_id = str(project.get("project_id") or "")
     active_codes = {str(finding.get("code") or "") for finding in findings if finding.get("code")}
     resolved: list[dict[str, Any]] = []
+    cancellable_statuses = {"todo", "ready", "rework", "blocked", "review_ready"}
     for task in tasks:
-        if str(task.get("status") or "") in TERMINAL_TASK_STATUSES:
+        if str(task.get("status") or "") not in cancellable_statuses:
             continue
-        if not _is_reconciliation_task(task):
+        if not _is_structured_reconciliation_task(task):
             continue
         anomaly = _task_reconciliation_anomaly(task)
         if not anomaly:
@@ -2926,10 +3033,10 @@ def cancel_resolved_reconciliation_tasks(project: dict[str, Any], findings: list
     if not resolved:
         return []
 
-    terminal = ",".join(_q(status) for status in TERMINAL_TASK_STATUSES)
+    cancellable = ",".join(_q(status) for status in sorted(cancellable_statuses))
     task_ids = ",".join(_q(item["task_id"]) for item in resolved)
     note = "\n\n[factory-reconciler] Reconciliation anomaly resolved; task auto-cancelled."
-    sql.psql(
+    cancelled_rows = sql.json_query(
         f"""
         WITH cancelled AS (
           UPDATE factory.tasks
@@ -2940,18 +3047,35 @@ def cancel_resolved_reconciliation_tasks(project: dict[str, Any], findings: list
               updated_at=now()
           WHERE project_id={_q(project_id)}
             AND task_id IN ({task_ids})
-            AND status NOT IN ({terminal})
+            AND status IN ({cancellable})
+            AND NOT EXISTS (
+              SELECT 1 FROM factory.task_runs active_run
+              WHERE active_run.project_id=factory.tasks.project_id
+                AND active_run.task_id=factory.tasks.task_id
+                AND active_run.status IN ('queued','running')
+            )
           RETURNING project_id, lane_id, task_id, metadata
+        ), recorded_event AS (
+          INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
+          SELECT project_id, lane_id, task_id, 'factory-reconciler', 'resolved_reconciliation_task_cancelled',
+                 'Resolved reconciliation task auto-cancelled',
+                 jsonb_build_object('task_id', task_id, 'reconciliation_anomaly', metadata->>'reconciliation_anomaly')
+          FROM cancelled
+          RETURNING task_id
         )
-        INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
-        SELECT project_id, lane_id, task_id, 'factory-reconciler', 'resolved_reconciliation_task_cancelled',
-               'Resolved reconciliation task auto-cancelled',
-               jsonb_build_object('task_id', task_id, 'reconciliation_anomaly', metadata->>'reconciliation_anomaly')
-        FROM cancelled;
+        SELECT COALESCE(jsonb_agg(to_jsonb(recorded_event)), '[]'::jsonb)::text
+        FROM recorded_event
         """,
         user=_user(),
     )
-    return resolved
+    if isinstance(cancelled_rows, dict):
+        cancelled_rows = [cancelled_rows]
+    changed_ids = {
+        str(row.get("task_id") or "")
+        for row in (cancelled_rows if isinstance(cancelled_rows, list) else [])
+        if isinstance(row, dict)
+    }
+    return [item for item in resolved if item["task_id"] in changed_ids]
 
 
 def critical_readiness_findings(project_id: str, *, gate_evidence: Optional[dict[str, Any]] = None) -> list[str]:
@@ -3282,7 +3406,7 @@ def _task_integration_waived(task: dict[str, Any]) -> bool:
 def _increment_integration_required(task: dict[str, Any], project: dict[str, Any], final_status: str) -> bool:
     if str(final_status or "").lower() not in POSITIVE_TERMINAL_TASK_STATUSES:
         return False
-    if _is_reconciliation_task(task) or _is_runtime_bootstrap_repair_task(task) or _task_integration_waived(task):
+    if _is_structured_reconciliation_task(task) or _is_runtime_bootstrap_repair_task(task) or _task_integration_waived(task):
         return False
     branch = str(task.get("branch") or "").strip()
     worktree_path = str(task.get("worktree_path") or "").strip()
@@ -3366,7 +3490,7 @@ def _integrate_increment_to_base(task_id: str, *, actor: str = "factory-orchestr
         return {"increment_integration_status": "skipped", "increment_integration_required": False, "reason": "task_not_found_precheck"}
     if str(final_status or "").lower() not in POSITIVE_TERMINAL_TASK_STATUSES:
         return {"increment_integration_status": "skipped", "increment_integration_required": False, "reason": "non_positive_terminal_status"}
-    if _is_reconciliation_task(task) or _is_runtime_bootstrap_repair_task(task) or _task_integration_waived(task):
+    if _is_structured_reconciliation_task(task) or _is_runtime_bootstrap_repair_task(task) or _task_integration_waived(task):
         return {"increment_integration_status": "skipped", "increment_integration_required": False, "reason": "administrative_or_waived_task"}
     branch = str(task.get("branch") or "").strip()
     worktree_path = str(task.get("worktree_path") or "").strip()
@@ -4378,7 +4502,7 @@ def _next_runnable_task(
     for candidate in normalized_candidates:
         phase = str(candidate.get("phase") or "").lower().replace("-", "_")
         text = _task_text(candidate)
-        if active_rework_exists and not (_is_reconciliation_task(candidate) or phase in {"documentation", "planning"} or phase.startswith(("g0", "g1"))):
+        if active_rework_exists and not (_is_structured_reconciliation_task(candidate) or phase in {"documentation", "planning"} or phase.startswith(("g0", "g1"))):
             continue
         if _candidate_requires_validation_readiness_before_dispatch(candidate):
             validation_blockers = _validation_task_readiness_findings(project_id)
@@ -6152,52 +6276,197 @@ def clear_resolved_blockers(project_id: str) -> dict[str, Any]:
     return {"project_id": project_id, "reopened": reopened, **reconciled}
 
 
+def _claim_task_with_project_lease(
+    *,
+    project_id: str,
+    task_id: str,
+    expected_statuses: tuple[str, ...],
+    claimed_status: str,
+    worker: str,
+    worker_profile: str,
+    run_id: str,
+    run_type: str,
+    event_type: str,
+    event_message: str,
+    document_dispatch_readiness: dict[str, Any] | None = None,
+    run_metadata: dict[str, Any] | None = None,
+    busy_statuses: tuple[str, ...] | None = None,
+) -> dict[str, Any] | None:
+    """Atomically serialize a Factory claim on its project and queue its run.
+
+    The project row is the transaction's first write target.  For product work
+    it additionally compares the durable docs-first snapshot at that
+    linearization point.  A reconciler that persisted a newer (for example,
+    G1-red) snapshot wins before the task can transition; a reconciler that
+    arrives later waits for this claim+run transaction and observes the queued
+    run.  Keeping the task state, run, and event in one writable-CTE closes the
+    former cancellation window between `claimed` and queued-run creation.
+    """
+
+    statuses = tuple(str(status).strip() for status in expected_statuses if str(status).strip())
+    if not statuses:
+        raise ValueError("expected claim statuses are required")
+    status_sql = ",".join(_q(status) for status in statuses)
+    busy = tuple(busy_statuses or tuple(IN_FLIGHT_TASK_STATUSES))
+    in_flight = ",".join(_q(status) for status in busy)
+    manual_takeover_filter = _manual_takeover_dispatch_filter("p")
+    readiness_filter = "TRUE"
+    if document_dispatch_readiness is not None:
+        readiness_filter = "p.metadata->'document_dispatch_readiness' = " + _j(document_dispatch_readiness)
+    metadata = {
+        "claimed_by": worker,
+        "run_type": run_type,
+        **dict(run_metadata or {}),
+    }
+    rows = sql.json_query(
+        f"""
+        WITH locked_project AS (
+          UPDATE factory.projects p
+          SET metadata = COALESCE(p.metadata, '{{}}'::jsonb) || jsonb_build_object(
+                'project_dispatch_claim',
+                jsonb_build_object('run_id', {_q(run_id)}, 'run_type', {_q(run_type)}, 'claimed_at', now())
+              ),
+              updated_at=now()
+          WHERE p.project_id={_q(project_id)}
+            AND p.autonomous_enabled IS TRUE
+            AND p.status IN ('active','planned','intake','blocked')
+            AND {manual_takeover_filter}
+            AND {readiness_filter}
+          RETURNING p.project_id
+        ), claimed AS (
+          UPDATE factory.tasks t
+          SET status={_q(claimed_status)},
+              claimed_by={_q(worker)},
+              claimed_at=now(),
+              lease_until=now() + interval '30 minutes',
+              retry_count=CASE WHEN {_q(claimed_status)}='claimed' AND t.status='rework'
+                               THEN COALESCE(t.retry_count, 0) + 1 ELSE t.retry_count END,
+              updated_at=now()
+          FROM locked_project p
+          WHERE t.project_id=p.project_id
+            AND t.task_id={_q(task_id)}
+            AND t.status IN ({status_sql})
+            AND NOT EXISTS (
+              SELECT 1 FROM factory.task_runs r
+              WHERE r.project_id=t.project_id AND r.status IN ('queued','running')
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM factory.tasks busy
+              WHERE busy.project_id=t.project_id AND busy.status IN ({in_flight})
+            )
+          RETURNING t.*
+        ), queued_run AS (
+          INSERT INTO factory.task_runs(
+            run_id, task_id, project_id, lane_id, worker_profile, reviewer_profile,
+            engine, status, started_at, heartbeat_at, metadata
+          )
+          SELECT {_q(run_id)}, c.task_id, c.project_id, c.lane_id,
+                 {_q(worker_profile)}, c.reviewer_profile, c.engine,
+                 'queued', now(), now(), {_j(metadata)}
+          FROM claimed c
+          RETURNING task_id, project_id
+        ), claim_event AS (
+          INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
+          SELECT c.project_id, c.lane_id, c.task_id, {_q(worker)}, {_q(event_type)}, {_q(event_message)},
+                 {_j({'run_id': run_id, 'worker_profile': worker_profile, 'run_type': run_type})}
+          FROM claimed c
+          JOIN queued_run r ON r.task_id=c.task_id AND r.project_id=c.project_id
+          RETURNING task_id
+        )
+        SELECT COALESCE(jsonb_agg(to_jsonb(claimed)), '[]'::jsonb)::text
+        FROM claimed
+        """,
+        user=_user(),
+    )
+    if isinstance(rows, dict):
+        return rows
+    if isinstance(rows, list) and rows and isinstance(rows[0], dict):
+        return rows[0]
+    return None
+
+
 def claim_next_review(project_id: Optional[str] = None, *, worker: str = "factory-reviewer-dispatch") -> dict[str, Any] | None:
+    """Claim one review through the same docs-first project lease as execution."""
+
     ensure_runtime_schema()
     cleanup_stale_manual_takeover_leases(project_id)
     project_filter = f"AND p.project_id={_q(project_id)}" if project_id else ""
     manual_takeover_filter = _manual_takeover_dispatch_filter("p")
-    row = sql.statement_one(
+    projects = sql.rows(
         f"""
-        UPDATE factory.tasks t
-        SET status='review_running', claimed_by={_q(worker)}, claimed_at=now(), lease_until=now() + interval '30 minutes', updated_at=now()
+        SELECT p.project_id
         FROM factory.projects p
-        WHERE t.project_id=p.project_id
-          AND p.autonomous_enabled IS TRUE
+        WHERE p.autonomous_enabled IS TRUE
           AND p.status IN ('active','planned','intake','blocked')
           AND {manual_takeover_filter}
-          AND t.status='review_ready'
           {project_filter}
-          AND NOT EXISTS (
-            SELECT 1 FROM factory.task_runs r
-            WHERE r.project_id=t.project_id AND r.status IN ('queued','running')
-          )
-          AND t.task_id = (
-            SELECT t2.task_id
-            FROM factory.tasks t2
-            WHERE t2.project_id=t.project_id AND t2.status='review_ready'
-            ORDER BY t2.priority, t2.created_at
-            LIMIT 1
-          )
-        RETURNING t.*
+        ORDER BY p.updated_at, p.started_at
         """,
         user=_user(),
     )
-    if not row:
-        return None
-    normalized = _normalize(row)
-    run_id = f"run-{int(time.time())}-{uuid.uuid4().hex[:8]}"
-    reviewer_profile = normalized.get("reviewer_profile") or normalized.get("reviewer_agent_id") or "quality-reviewer"
-    sql.psql(
-        f"""
-        INSERT INTO factory.task_runs(run_id, task_id, project_id, lane_id, worker_profile, reviewer_profile, engine, status, started_at, heartbeat_at, metadata)
-        VALUES ({_q(run_id)}, {_q(normalized['task_id'])}, {_q(normalized['project_id'])}, {_q(normalized.get('lane_id'))}, {_q(reviewer_profile)}, {_q(reviewer_profile)}, {_q(normalized.get('engine'))}, 'queued', now(), now(), {_j({'claimed_by': worker, 'run_type': 'review'})});
-        INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
-        VALUES ({_q(normalized['project_id'])}, {_q(normalized.get('lane_id'))}, {_q(normalized['task_id'])}, {_q(worker)}, 'review_claimed', {_q(f"Task {normalized['task_id']} claimed for review by {reviewer_profile}")}, {_j({'run_id': run_id, 'worker_profile': reviewer_profile, 'run_type': 'review'})});
-        """,
-        user=_user(),
-    )
-    return {"run_id": run_id, "task": normalized, "worker_profile": reviewer_profile, "run_type": "review"}
+    for project_row in projects:
+        pid = str(project_row["project_id"])
+        reconcile_project(pid)
+        tasks = _tasks(pid)
+        review_in_flight_statuses = IN_FLIGHT_TASK_STATUSES - {"review_ready"}
+        if any(str(task.get("status") or "") in review_in_flight_statuses for task in tasks):
+            continue
+        full_project = _project(pid) or {"project_id": pid, "metadata": {}}
+        pending_gates = _active_pending_gates(pid)
+        latest_gates = _latest_gate_rows(pid)
+        readiness = _document_dispatch_readiness(full_project, tasks, pending_gates, latest_gates)
+        durable_readiness = _metadata(full_project).get("document_dispatch_readiness")
+        denied = False
+        for task in sorted(
+            (item for item in tasks if str(item.get("status") or "") == "review_ready"),
+            key=lambda item: (int(item.get("priority") or 100), str(item.get("created_at") or ""), str(item.get("task_id") or "")),
+        ):
+            blockers = _dispatch_preflight_blockers(
+                task,
+                docs_ready=bool(readiness["docs_ready"]),
+                notion_ready=bool(readiness["notion_ready"]),
+                notion_required=bool(readiness["notion_required"]),
+                docs_first_waived=bool(readiness["docs_first_waived"]),
+            )
+            gated = _is_docs_first_gated_dispatch_task(task)
+            if gated and durable_readiness != readiness:
+                blockers.append("stale_document_dispatch_readiness")
+            if blockers:
+                denied = True
+                _record_dispatch_preflight_denied(pid, task, blockers, worker=worker)
+                continue
+            reviewer_profile = str(task.get("reviewer_profile") or task.get("reviewer_agent_id") or "quality-reviewer")
+            run_id = f"run-{int(time.time())}-{uuid.uuid4().hex[:8]}"
+            row = _claim_task_with_project_lease(
+                project_id=pid,
+                task_id=str(task["task_id"]),
+                expected_statuses=("review_ready",),
+                claimed_status="review_running",
+                worker=worker,
+                worker_profile=reviewer_profile,
+                run_id=run_id,
+                run_type="review",
+                event_type="review_claimed",
+                event_message=f"Task {task['task_id']} claimed for review by {reviewer_profile}",
+                document_dispatch_readiness=readiness if gated else None,
+                busy_statuses=tuple(sorted(review_in_flight_statuses)),
+            )
+            if not row:
+                continue
+            return {
+                "run_id": run_id,
+                "task": _normalize(row),
+                "worker_profile": reviewer_profile,
+                "run_type": "review",
+            }
+        if denied:
+            ensure_reconciliation_tasks(
+                full_project,
+                reconciliation_findings(full_project, tasks, pending_gates, latest_gates),
+                tasks,
+            )
+            reconcile_project(pid)
+    return None
 
 
 def claim_next_rework(project_id: Optional[str] = None, *, worker: str = "factory-dispatcher") -> dict[str, Any] | None:
@@ -6213,7 +6482,6 @@ def claim_next_rework(project_id: Optional[str] = None, *, worker: str = "factor
     cleanup_stale_manual_takeover_leases(project_id)
     project_filter = f"AND p.project_id={_q(project_id)}" if project_id else ""
     manual_takeover_filter = _manual_takeover_dispatch_filter("p")
-    in_flight = ",".join(_q(status) for status in IN_FLIGHT_TASK_STATUSES)
     projects = sql.rows(
         f"""
         SELECT p.project_id
@@ -6254,7 +6522,6 @@ def claim_next_rework(project_id: Optional[str] = None, *, worker: str = "factor
         docs_first_waived = bool(document_dispatch_readiness["docs_first_waived"])
         durable_document_dispatch_readiness = _metadata(full_project).get("document_dispatch_readiness")
         eligible_task_ids: list[str] = []
-        product_task_ids: list[str] = []
         denied_product_rework = False
         for task in sorted(
             (item for item in tasks if str(item.get("status") or "") == "rework"),
@@ -6276,8 +6543,6 @@ def claim_next_rework(project_id: Optional[str] = None, *, worker: str = "factor
             task_id = str(task.get("task_id") or "")
             if task_id:
                 eligible_task_ids.append(task_id)
-                if _is_docs_first_gated_dispatch_task(task):
-                    product_task_ids.append(task_id)
         if denied_product_rework:
             ensure_reconciliation_tasks(
                 full_project,
@@ -6287,76 +6552,38 @@ def claim_next_rework(project_id: Optional[str] = None, *, worker: str = "factor
             reconcile_project(pid)
         if not eligible_task_ids:
             continue
-        eligible_ids = ",".join(_q(task_id) for task_id in eligible_task_ids)
-        product_id_set = set(product_task_ids)
-        recovery_task_ids = [task_id for task_id in eligible_task_ids if task_id not in product_id_set]
-        claimable_task_predicates: list[str] = []
-        if recovery_task_ids:
-            claimable_task_predicates.append(
-                "t.task_id IN (" + ",".join(_q(task_id) for task_id in recovery_task_ids) + ")"
+        for task in sorted(
+            (item for item in tasks if str(item.get("task_id") or "") in eligible_task_ids),
+            key=lambda item: (int(item.get("priority") or 100), str(item.get("updated_at") or ""), str(item.get("created_at") or "")),
+        ):
+            task_id = str(task.get("task_id") or "")
+            if not task_id:
+                continue
+            gated = _is_docs_first_gated_dispatch_task(task)
+            worker_profile = str(task.get("owner_profile") or task.get("owner_agent_id") or "factory-orchestrator")
+            run_id = f"run-{int(time.time())}-{uuid.uuid4().hex[:8]}"
+            row = _claim_task_with_project_lease(
+                project_id=pid,
+                task_id=task_id,
+                expected_statuses=("rework",),
+                claimed_status="claimed",
+                worker=worker,
+                worker_profile=worker_profile,
+                run_id=run_id,
+                run_type="rework",
+                event_type="rework_claimed",
+                event_message=f"Task {task_id} claimed for rework by {worker_profile}",
+                document_dispatch_readiness=document_dispatch_readiness if gated else None,
+                run_metadata={"previous_status": "rework"},
             )
-        if product_task_ids:
-            claimable_task_predicates.append(
-                "(t.task_id IN ("
-                + ",".join(_q(task_id) for task_id in product_task_ids)
-                + ") AND p.metadata->'document_dispatch_readiness' = "
-                + _j(document_dispatch_readiness)
-                + ")"
-            )
-        claimable_task_predicate = " OR ".join(claimable_task_predicates)
-        row = sql.statement_one(
-            f"""
-            UPDATE factory.tasks t
-            SET status='claimed',
-                claimed_by={_q(worker)},
-                claimed_at=now(),
-                lease_until=now() + interval '30 minutes',
-                retry_count=COALESCE(retry_count, 0) + 1,
-                updated_at=now()
-            FROM factory.projects p
-            WHERE t.project_id=p.project_id
-              AND p.project_id={_q(pid)}
-              AND p.autonomous_enabled IS TRUE
-              AND p.status IN ('active','planned','intake','blocked')
-              AND {manual_takeover_filter}
-              AND t.status='rework'
-              AND ({claimable_task_predicate})
-              AND NOT EXISTS (
-                SELECT 1 FROM factory.task_runs r
-                WHERE r.project_id=t.project_id AND r.status IN ('queued','running')
-              )
-              AND NOT EXISTS (
-                SELECT 1 FROM factory.tasks t_busy
-                WHERE t_busy.project_id=t.project_id AND t_busy.status IN ({in_flight})
-              )
-              AND t.task_id = (
-                SELECT t2.task_id
-                FROM factory.tasks t2
-                WHERE t2.project_id=t.project_id
-                  AND t2.status='rework'
-                  AND t2.task_id IN ({eligible_ids})
-                ORDER BY t2.priority, t2.updated_at, t2.created_at
-                LIMIT 1
-              )
-            RETURNING t.*
-            """,
-            user=_user(),
-        )
-        if not row:
-            continue
-        normalized = _normalize(row)
-        run_id = f"run-{int(time.time())}-{uuid.uuid4().hex[:8]}"
-        worker_profile = normalized.get("owner_profile") or normalized.get("owner_agent_id") or "factory-orchestrator"
-        sql.psql(
-            f"""
-            INSERT INTO factory.task_runs(run_id, task_id, project_id, lane_id, worker_profile, reviewer_profile, engine, status, started_at, heartbeat_at, metadata)
-            VALUES ({_q(run_id)}, {_q(normalized['task_id'])}, {_q(normalized['project_id'])}, {_q(normalized.get('lane_id'))}, {_q(worker_profile)}, {_q(normalized.get('reviewer_profile'))}, {_q(normalized.get('engine'))}, 'queued', now(), now(), {_j({'claimed_by': worker, 'run_type': 'rework', 'previous_status': 'rework'})});
-            INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
-            VALUES ({_q(normalized['project_id'])}, {_q(normalized.get('lane_id'))}, {_q(normalized['task_id'])}, {_q(worker)}, 'rework_claimed', {_q(f"Task {normalized['task_id']} claimed for rework by {worker_profile}")}, {_j({'run_id': run_id, 'worker_profile': worker_profile, 'run_type': 'rework'})});
-            """,
-            user=_user(),
-        )
-        return {"run_id": run_id, "task": normalized, "worker_profile": worker_profile, "run_type": "rework"}
+            if not row:
+                continue
+            return {
+                "run_id": run_id,
+                "task": _normalize(row),
+                "worker_profile": worker_profile,
+                "run_type": "rework",
+            }
     return None
 
 
@@ -6404,7 +6631,7 @@ def _is_docs_first_gated_dispatch_task(task: dict[str, Any]) -> bool:
     ship contracts detached from the canonical plan.
     """
 
-    if _is_reconciliation_task(task) or _is_runtime_bootstrap_repair_task(task):
+    if _is_structured_reconciliation_task(task) or _is_runtime_bootstrap_repair_task(task):
         return False
     phase = str(task.get("phase") or "").strip().lower()
     if phase.startswith(("g0", "g1")) or phase in {"documentation", "planning"}:
@@ -6445,7 +6672,7 @@ def _dispatch_preflight_blockers(
 
     if not _is_docs_first_gated_dispatch_task(task):
         return []
-    if _is_reconciliation_task(task) or _is_runtime_bootstrap_repair_task(task) or docs_first_waived:
+    if _is_structured_reconciliation_task(task) or _is_runtime_bootstrap_repair_task(task) or docs_first_waived:
         return []
     blockers: list[str] = []
     if not docs_ready:
@@ -6506,6 +6733,8 @@ def _record_dispatch_preflight_denied(project_id: str, task: dict[str, Any], blo
 
 
 def claim_next_task(project_id: Optional[str] = None, *, worker: str = "factory-dispatcher") -> dict[str, Any] | None:
+    """Claim normal work through the durable docs-first project lease."""
+
     ensure_runtime_schema()
     cleanup_stale_manual_takeover_leases(project_id)
     project_filter = f"AND p.project_id={_q(project_id)}" if project_id else ""
@@ -6522,65 +6751,63 @@ def claim_next_task(project_id: Optional[str] = None, *, worker: str = "factory-
         """,
         user=_user(),
     )
-    for project in projects:
-        pid = project["project_id"]
+    for project_row in projects:
+        pid = str(project_row["project_id"])
+        reconcile_project(pid)
         tasks = _tasks(pid)
         if _has_in_flight_increment(tasks):
             continue
         full_project = _project(pid) or {"project_id": pid, "metadata": {}}
         pending_gates = _active_pending_gates(pid)
         latest_gates = _latest_gate_rows(pid)
-        docs_ready, notion_ready, notion_required, docs_first_waived = _project_docs_notion_preflight(
-            full_project,
-            tasks,
-            pending_gates,
-            latest_gates,
-        )
+        readiness = _document_dispatch_readiness(full_project, tasks, pending_gates, latest_gates)
         task = _next_runnable_task(
             pid,
-            dispatch_preflight=(docs_ready, notion_ready, notion_required, docs_first_waived),
+            dispatch_preflight=(
+                bool(readiness["docs_ready"]),
+                bool(readiness["notion_ready"]),
+                bool(readiness["notion_required"]),
+                bool(readiness["docs_first_waived"]),
+            ),
         )
         if not task:
-            reconcile_project(pid)
             continue
-        preflight_blockers = _dispatch_preflight_blockers(
+        blockers = _dispatch_preflight_blockers(
             task,
-            docs_ready=docs_ready,
-            notion_ready=notion_ready,
-            notion_required=notion_required,
-            docs_first_waived=docs_first_waived,
+            docs_ready=bool(readiness["docs_ready"]),
+            notion_ready=bool(readiness["notion_ready"]),
+            notion_required=bool(readiness["notion_required"]),
+            docs_first_waived=bool(readiness["docs_first_waived"]),
         )
-        if preflight_blockers:
+        gated = _is_docs_first_gated_dispatch_task(task)
+        if gated and _metadata(full_project).get("document_dispatch_readiness") != readiness:
+            blockers.append("stale_document_dispatch_readiness")
+        if blockers:
             ensure_reconciliation_tasks(
                 full_project,
                 reconciliation_findings(full_project, tasks, pending_gates, latest_gates),
                 tasks,
             )
-            _record_dispatch_preflight_denied(pid, task, preflight_blockers, worker=worker)
+            _record_dispatch_preflight_denied(pid, task, blockers, worker=worker)
             reconcile_project(pid)
             continue
         run_id = f"run-{int(time.time())}-{uuid.uuid4().hex[:8]}"
-        worker_profile = task.get("owner_profile") or task.get("owner_agent_id") or "factory-orchestrator"
-        row = sql.statement_one(
-            f"""
-            UPDATE factory.tasks
-            SET status='claimed', claimed_by={_q(worker)}, claimed_at=now(), lease_until=now() + interval '30 minutes', updated_at=now()
-            WHERE task_id={_q(task['task_id'])} AND status IN ('todo','ready')
-            RETURNING *
-            """,
-            user=_user(),
+        worker_profile = str(task.get("owner_profile") or task.get("owner_agent_id") or "factory-orchestrator")
+        row = _claim_task_with_project_lease(
+            project_id=pid,
+            task_id=str(task["task_id"]),
+            expected_statuses=("todo", "ready"),
+            claimed_status="claimed",
+            worker=worker,
+            worker_profile=worker_profile,
+            run_id=run_id,
+            run_type="implementation",
+            event_type="task_claimed",
+            event_message=f"Task {task['task_id']} claimed for {worker_profile}",
+            document_dispatch_readiness=readiness if gated else None,
         )
         if not row:
             continue
-        sql.psql(
-            f"""
-            INSERT INTO factory.task_runs(run_id, task_id, project_id, lane_id, worker_profile, reviewer_profile, engine, status, started_at, heartbeat_at, metadata)
-            VALUES ({_q(run_id)}, {_q(row['task_id'])}, {_q(row['project_id'])}, {_q(row.get('lane_id'))}, {_q(worker_profile)}, {_q(row.get('reviewer_profile'))}, {_q(row.get('engine'))}, 'queued', now(), now(), {_j({'claimed_by': worker})});
-            INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
-            VALUES ({_q(row['project_id'])}, {_q(row.get('lane_id'))}, {_q(row['task_id'])}, {_q(worker)}, 'task_claimed', {_q(f"Task {row['task_id']} claimed for {worker_profile}")}, {_j({'run_id': run_id, 'worker_profile': worker_profile})});
-            """,
-            user=_user(),
-        )
         return {"run_id": run_id, "task": _normalize(row), "worker_profile": worker_profile}
     return None
 
