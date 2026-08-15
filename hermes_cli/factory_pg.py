@@ -2781,7 +2781,7 @@ def ensure_reconciliation_tasks(project: dict[str, Any], findings: list[dict[str
                 "classification": classification,
                 "assignment": assignment_metadata,
             }
-            requeued = sql.one(
+            requeued_rows = sql.json_query(
                 f"""
                 WITH requeued AS (
                   UPDATE factory.tasks
@@ -2820,11 +2820,15 @@ def ensure_reconciliation_tasks(project: dict[str, Any], findings: list[dict[str
                   FROM requeued
                   RETURNING task_id
                 )
-                SELECT task_id FROM recorded_event
+                SELECT COALESCE(jsonb_agg(to_jsonb(recorded_event)), '[]'::jsonb)::text
+                FROM recorded_event
                 """,
                 user=_user(),
             )
-            if requeued:
+            if isinstance(requeued_rows, dict):
+                requeued_rows = [requeued_rows]
+            if isinstance(requeued_rows, list) and requeued_rows:
+                requeued = requeued_rows[0] if isinstance(requeued_rows[0], dict) else {}
                 created.append({"task_id": str(requeued.get("task_id") or task_id), "code": code, "action": "requeued"})
                 break
         if matching_tasks:

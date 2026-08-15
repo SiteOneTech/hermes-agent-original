@@ -13,6 +13,7 @@ class FakeSql:
         self.one_results: list[dict | None] = []
         self.statement_one_results: list[dict | None] = []
         self.rows_results: list[list[dict]] = []
+        self.json_results: list[object] = []
 
     def psql(self, sql, *, user=None, **_):
         self.statements.append(sql)
@@ -32,7 +33,7 @@ class FakeSql:
 
     def json_query(self, sql, *, user=None, **_):
         self.statements.append(sql)
-        return []
+        return self.json_results.pop(0) if self.json_results else []
 
     @staticmethod
     def quote_literal(value):
@@ -312,7 +313,7 @@ def test_reconciler_requeues_technical_docs_repair_blocked_without_human_decisio
             },
         },
     }
-    fake_sql.one_results = [{"task_id": "demo-reconcile-unvalidated-required-docs"}]
+    fake_sql.json_results = [[{"task_id": "demo-reconcile-unvalidated-required-docs"}]]
 
     changes = factory_pg.ensure_reconciliation_tasks(project, [finding], [repair])
 
@@ -364,7 +365,7 @@ def test_reconciler_does_not_report_requeue_when_atomic_update_loses_race(fake_s
             },
         },
     }
-    fake_sql.one_results = [None]
+    fake_sql.json_results = [[]]
 
     changes = factory_pg.ensure_reconciliation_tasks(project, [finding], [repair])
 
@@ -450,7 +451,7 @@ def test_reconciler_does_not_requeue_conflicting_full_assignment(fake_sql):
             },
         },
     }
-    fake_sql.one_results = [{"task_id": "demo-reconcile-unvalidated-required-docs"}]
+    fake_sql.json_results = [[{"task_id": "demo-reconcile-unvalidated-required-docs"}]]
 
     changes = factory_pg.ensure_reconciliation_tasks(project, [finding], [repair])
 
