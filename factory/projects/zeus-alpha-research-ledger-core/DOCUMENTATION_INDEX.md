@@ -1,7 +1,7 @@
 ---
 project_id: zeus-alpha-research-ledger-core
 phase: local_advisory_ledger_v1
-status: g1_rebaseline
+status: r2n_canonical_document_repair
 validated: yes
 reviewed: pending
 owner: factory-orchestrator
@@ -10,7 +10,7 @@ owner: factory-orchestrator
 # DOCUMENTATION INDEX — Zeus Alpha Research Ledger Core
 
 ## Controlling status
-Canonical G1 pack for the **private Zeus-side implementation** succeeding `zeus-independent-alpha-research`. It is not a Vonash implementation plan, grants no external runtime access and does not authorize market execution. Every required document carries explicit `validated` and `reviewed` status metadata plus the index matrix below. The reviewer state remains `reviewed: pending` until the revised committed candidate receives new independent specification and security PASS reviews against its exact SHA. Earlier Factory gate rows are evidence only: gates 686/687 were `REQUEST_CHANGES`; gate 695 was a failed spec review requiring reconciliation of the observed ALR-010-R1 direct merge into `origin/main`; R2j/R2k are canonical provenance repairs, not approval; and any PASS on a pre-correction SHA is not reused for this revision. R2m revalidates the pack on exact current base `ab08b13669903a87b3d60d6c80231d23d6313782` and hands off a fresh candidate for independent exact-SHA review. This worker does not self-approve.
+Canonical G1 pack for the **private Zeus-side implementation** succeeding `zeus-independent-alpha-research`. It is not a Vonash implementation plan, grants no external runtime access and does not authorize market execution. Every required document carries explicit `validated` metadata and an explicit pending review-state in the index matrix below. That review-state remains pending until the revised committed candidate receives new independent specification and security PASS reviews against its exact SHA. Earlier Factory gate rows are evidence only: gates 686/687 were `REQUEST_CHANGES`; gate 695 was a failed spec review requiring reconciliation of the observed ALR-010-R1 direct merge into `origin/main`; R2j/R2k/R2m are provenance and handoff repairs, not approval; and any PASS on a pre-correction SHA is not reused for this revision. R2n is the active current-base handoff: branch `factory/zeus-alpha-research-ledger-core/inc-034-r2n-repair-g1-canonical-document`, worktree `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-034-r2n-repair-g1-canonical-document`, base `origin/main` `df4c77fd1413a65cdb85885a06978ff157c1de4d`. This worker does not self-approve.
 
 | File | Purpose | Owner | Validated | Reviewed |
 |---|---|---|---|---|
@@ -36,7 +36,8 @@ Canonical G1 pack for the **private Zeus-side implementation** succeeding `zeus-
 - `G1_REVIEW.md` records independent review findings/remediation.
 - `R2J_CANONICAL_STATE_REPAIR.md` records the historical PR #29 canonical-state provenance repair: exact PR #29 head `f61a7275048e2135b2b2729a1b9cdf8713c58866`, R2i review-worktree `already_ancestor` mismatch and the intended PR-first handoff that later became PR #30.
 - `R2K_STALE_CANONICAL_G1_PROVENANCE_REPAIR.md` records the stale active provenance repair as historical control evidence. It records that Agent Core project metadata still points to obsolete PR #20 / `dad375f27568c38be771fc597b579d087f034e1d`, PR #30 carried R2j commit `c1943efb2b97b54b42bc5eabe858340d8c391116` into remote `origin/main` as `83d5ee06ba25859f047469baed223fe88e9467e3`, local primary `main` remained at `4eb87e4cd48105af05fe974cf1d493f0e1b57ae1` during that repair, and canonical G1 `document_status` remained non-dispatchable because required docs read back as `reviewed=false` from the primary source.
-- `R2M_CURRENT_BASE_G1_REVIEW_HANDOFF.md` records the current-base recovery on exact `origin/main` `ab08b13669903a87b3d60d6c80231d23d6313782`, keeps PR #20/#29/R2i/R2j/R2k evidence historical only, and binds the next valid review to the fresh R2m PR head SHA after push.
+- `R2M_CURRENT_BASE_G1_REVIEW_HANDOFF.md` records the historical current-base recovery on exact `origin/main` `ab08b13669903a87b3d60d6c80231d23d6313782`, keeps PR #20/#29/R2i/R2j/R2k evidence historical only, and is superseded by R2n as the active review target.
+- `R2N_CANONICAL_DOCUMENT_STATUS_REPAIR.md` supersedes R2m as the active handoff for this repair. It records both observed canonical readings: the dispatch snapshot with 10 G1 blockers plus 4 heuristic false-ready rows (`SPRINT_PLAN.md`, `TRACKER.md`, `DOCUMENTATION_INDEX.md`, `QA_GATES.md`) and the strict read-back from primary repo path `/home/jean/Projects/hermes-agent-original` where all 14 required G1 documents read `exists=true`, `indexed=true`, `committed=true`, `validated=true`, `reviewed=false`. It also binds the next valid review to the fresh R2n PR head SHA after push.
 
 ## Status semantics
 - `validated: yes` means the implementation-planner/local worker confirmed the file exists, is tracked, is indexed where required, and is internally consistent with this G1 contract.
@@ -49,7 +50,7 @@ Canonical G1 pack for the **private Zeus-side implementation** succeeding `zeus-
 1. `DOCUMENTATION_INDEX.md`, `FACTORY_INTAKE.md`, `G0_REPOSITORY_STRATEGY.md`
 2. `REQUIREMENTS_ANALYSIS.md`, `REQUIREMENTS_TRACEABILITY.md`, `PRD.md`, `ADRS.md`
 3. `DATABASE_AND_RUNTIME_CONTRACT.md`, `TECHNICAL_BLUEPRINT.md`, `TASK_GRAPH.md`, `SPRINT_PLAN.md`
-4. `QA_GATES.md`, `SECURITY_GATES.md`, `G1_REVIEW.md`, `R2K_STALE_CANONICAL_G1_PROVENANCE_REPAIR.md`, `R2M_CURRENT_BASE_G1_REVIEW_HANDOFF.md`
+4. `QA_GATES.md`, `SECURITY_GATES.md`, `G1_REVIEW.md`, `R2K_STALE_CANONICAL_G1_PROVENANCE_REPAIR.md`, `R2M_CURRENT_BASE_G1_REVIEW_HANDOFF.md`, `R2N_CANONICAL_DOCUMENT_STATUS_REPAIR.md`
 
 ## G1 rule
-No normal implementation starts until every required G1 document is `reviewed: yes`; the supplemental controlling artifacts, including R2j, R2k and R2m, must be committed and PASS-reviewed against the exact revised SHA too. Base exposure alone is not sufficient: the observed ALR-010-R1 merge, the later R2j/PR #30 merge, and the R2k/PR #31 merge are non-dispatch evidence until canonical Factory metadata and `document_status` are reconciled, and a branch-only or stale-PR pack is likewise never sufficient.
+No normal implementation starts until every required G1 document is `reviewed: yes`; the supplemental controlling artifacts, including R2j, R2k, R2m and R2n, must be committed and PASS-reviewed against the exact revised SHA too. Base exposure alone is not sufficient: the observed ALR-010-R1 merge, the later R2j/PR #30 merge, the R2k/PR #31 merge, and the R2m handoff are non-dispatch evidence until canonical Factory metadata and `document_status` are reconciled, and a branch-only or stale-PR pack is likewise never sufficient.

@@ -10,7 +10,7 @@ reviewed: pending
 
 | Increment | Outcome | Dependencies | Exit evidence |
 |---|---|---|---|
-| ALR-010 | G1 rebaseline + G0 + traceability + gate-695 merge-evidence reconciliation | — | committed corrected docs plus independent exact-SHA spec/security PASS reviews; no reviewed=yes before those reviews |
+| ALR-010 | G1 rebaseline + G0 + traceability + gate-695 merge-evidence reconciliation | — | committed corrected docs plus independent exact-SHA spec/security PASS reviews; no positive reviewed marker before those reviews |
 | ALR-020 | schema, constraints, dedicated role/grants | ALR-010 exact-SHA reviews accepted; ALR-020 acceptance metadata corrected/read back | RED/GREEN migration and direct-role tests |
 | ALR-030 | JSON tools + non-default leaf toolset | ALR-020 accepted | tool/allowlist/forbidden-field tests |
 | ALR-040 | source policy and adapter-neutral local evidence intake | ALR-030 accepted | source-state/duplicate/stale tests; no third-party driver |
@@ -21,6 +21,6 @@ reviewed: pending
 | ALR-070 | live local DB/tool smoke and cleanup | ALR-061/062/063 accepted | synthetic local smoke evidence |
 | ALR-080 | Zeus PR and QA Guardian handoff | ALR-070 accepted | actual labeled PR and QA evidence for final delivery path |
 
-`ALR-060` was canonically superseded by ALR-061/062/063 because one aggregate reviewer task could not demonstrate the required independent review chain.
+`ALR-060` was canonically superseded by ALR-061/062/063 because one aggregate review task could not demonstrate the required independent review chain.
 
 No increment may absorb Vonash integration, third-party driver source code, live market execution or deployment without new approved scope.
