@@ -64,9 +64,17 @@ The correction does **not** claim that the merge was authorized, does not revert
 
 This is implementation/documentation evidence only. It performs no merge, deployment, credential change, direct SQL, product implementation, external-runtime operation, or `reviewed: yes` conversion. No normal ALR-020 work may dispatch until the exact R2k candidate is independently reviewed and canonical Factory metadata/document status are reconciled.
 
+## Review round 7 — R2m current-base exact-SHA handoff
+
+**Current-base recovery:** R2m fetched canonical `origin/main` and recorded exact base `ab08b13669903a87b3d60d6c80231d23d6313782`. The assigned branch/worktree `factory/zeus-alpha-research-ledger-core/inc-001-r2m-current-base-g1-documentatio` was initially equal to that base, then received only project-local documentation updates for current-base review handoff.
+
+**Incorporated repairs:** `R2J_CANONICAL_STATE_REPAIR.md` and `R2K_STALE_CANONICAL_G1_PROVENANCE_REPAIR.md` remain indexed controlling artifacts. PR #20/dad375f, historical PR #29/f61a PASS reviews, R2i review-worktree `already_ancestor` evidence, PR #30/c1943 and PR #31/73b are not active approval or implementation-dispatch evidence.
+
+**Handoff:** the fresh R2m Zeus-signed `agent:zeus` PR is the next review target. Independent reviewers must record PASS/REQUEST_CHANGES against its exact PR head SHA and base `ab08b13669903a87b3d60d6c80231d23d6313782`. This worker leaves `reviewed: pending` intact and performs no merge, deployment, credential change, direct SQL, product implementation or external-runtime operation.
+
 ## Local documentary verification — non-approval
 
 At `2026-08-10T04:50:09-04:00`, the implementation-planner worker verified the project-local pack from the assigned worktree only. `git ls-files --error-unmatch` confirmed the 14 required G1 documents plus `G0_REPOSITORY_STRATEGY.md`, `REQUIREMENTS_TRACEABILITY.md`, `DATABASE_AND_RUNTIME_CONTRACT.md`, and `G1_REVIEW.md` are tracked. `DOCUMENTATION_INDEX.md` indexes required documents and records explicit validated/reviewed status. `G0_REPOSITORY_STRATEGY.md` records the Zeus-only source repo, `origin/main` reference, assigned branch/worktree policy, PR-first delivery, and predecessor linkage. This is implementation evidence, not an independent specification/security PASS.
 
 ## Status
-This is still a remediation record, not approval. After this revision is committed, obtain new independent specification and security reviews against that exact committed SHA, including the gate-695 merge reconciliation. Only then may their independent PASS results support changing required G1 frontmatter/index to `reviewed: yes` and unblocking downstream implementation according to the reconciled delivery policy. Until then, `reviewed: pending` remains binding.
+This is still a remediation record, not approval. After this revision is committed and pushed as the R2m current-base PR, obtain new independent specification and security reviews against that exact PR head SHA, including the gate-695/R2j/R2k provenance reconciliation. Only then may their independent PASS results support changing required G1 frontmatter/index to `reviewed: yes` and unblocking downstream implementation according to the reconciled delivery policy. Until then, `reviewed: pending` remains binding.
