@@ -54,6 +54,16 @@ The correction does **not** claim that the merge was authorized, does not revert
 
 `R2J_CANONICAL_STATE_REPAIR.md` is now the controlling project-local handoff artifact for this mismatch. It names PR #29, its exact head, canonical `main`, the current Factory `document_status` blocker set, the R2i provenance root cause, and the candidate-bound QA Guardian evidence that must be used for any future terminal delivery decision. This R2j repair performs no merge, deployment, credential change, direct SQL, product implementation, external-runtime operation, or `reviewed: yes` conversion.
 
+## Review round 6 — R2k stale canonical provenance repair
+
+**Mismatch reproduced:** live Agent Core project metadata still names `metadata.g1_documentation_checkout` as PR #20 / `dad375f27568c38be771fc597b579d087f034e1d`, while R2j was subsequently delivered through PR #30 at head `c1943efb2b97b54b42bc5eabe858340d8c391116` and remote `origin/main` now reads `83d5ee06ba25859f047469baed223fe88e9467e3`. The local primary `main` ref remains `4eb87e4cd48105af05fe974cf1d493f0e1b57ae1` and does not contain `c1943efb2b97b54b42bc5eabe858340d8c391116` by `git merge-base --is-ancestor ... main` exit `1`.
+
+**Current blocker:** Agent Core `factory status` still reports `unvalidated_required_docs` and `document_status` read-back from the primary source has required G1 documents at `reviewed=false`; this R2k worker does not convert them to `reviewed: yes`.
+
+**Correction:** `R2K_STALE_CANONICAL_G1_PROVENANCE_REPAIR.md` is now the controlling renewal handoff artifact. It explicitly rejects PR #20/dad375f and stale review-worktree attachments as active review provenance, records PR #30/c1943 as historical R2j evidence, and instructs independent reviewers to review the exact head SHA of the R2k Zeus-signed `agent:zeus` PR.
+
+This is implementation/documentation evidence only. It performs no merge, deployment, credential change, direct SQL, product implementation, external-runtime operation, or `reviewed: yes` conversion. No normal ALR-020 work may dispatch until the exact R2k candidate is independently reviewed and canonical Factory metadata/document status are reconciled.
+
 ## Local documentary verification — non-approval
 
 At `2026-08-10T04:50:09-04:00`, the implementation-planner worker verified the project-local pack from the assigned worktree only. `git ls-files --error-unmatch` confirmed the 14 required G1 documents plus `G0_REPOSITORY_STRATEGY.md`, `REQUIREMENTS_TRACEABILITY.md`, `DATABASE_AND_RUNTIME_CONTRACT.md`, and `G1_REVIEW.md` are tracked. `DOCUMENTATION_INDEX.md` indexes required documents and records explicit validated/reviewed status. `G0_REPOSITORY_STRATEGY.md` records the Zeus-only source repo, `origin/main` reference, assigned branch/worktree policy, PR-first delivery, and predecessor linkage. This is implementation evidence, not an independent specification/security PASS.
