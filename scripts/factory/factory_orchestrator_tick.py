@@ -257,6 +257,57 @@ def _prepare_worktree(payload: dict[str, Any], claim: dict[str, Any]) -> dict[st
             check=False,
         )
         if wt_probe.returncode == 0:
+            repo_common = subprocess.run(
+                ["git", "-C", str(repo_path), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+            worktree_common = subprocess.run(
+                ["git", "-C", str(worktree_path), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+            if (
+                repo_common.returncode != 0
+                or worktree_common.returncode != 0
+                or not repo_common.stdout.strip()
+                or repo_common.stdout.strip() != worktree_common.stdout.strip()
+            ):
+                return {
+                    "ready": False,
+                    "reason": "worktree_repository_mismatch",
+                    "repo_path": str(repo_path),
+                    "worktree_path": str(worktree_path),
+                    "cwd": str(repo_path),
+                }
+            branch_probe = subprocess.run(
+                ["git", "-C", str(worktree_path), "branch", "--show-current"],
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+            current_branch = branch_probe.stdout.strip() if branch_probe.returncode == 0 else ""
+            if current_branch != branch:
+                return {
+                    "ready": False,
+                    "reason": "worktree_branch_mismatch",
+                    "repo_path": str(repo_path),
+                    "worktree_path": str(worktree_path),
+                    "branch": branch,
+                    "current_branch": current_branch or None,
+                    "cwd": str(repo_path),
+                }
             return {"ready": True, "reason": "worktree_exists", "repo_path": str(repo_path), "branch": branch, "worktree_path": str(worktree_path), "cwd": str(worktree_path)}
         return {"ready": False, "reason": "worktree_path_exists_not_git", "repo_path": str(repo_path), "worktree_path": str(worktree_path), "cwd": str(repo_path)}
     worktree_path.parent.mkdir(parents=True, exist_ok=True)
