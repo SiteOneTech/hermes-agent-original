@@ -30,7 +30,7 @@ The Factory DB currently records this ALR-020 acceptance literal: `Schema covers
 ### R2j PR #29 canonical-state repair
 
 - Actual delivery candidate: SiteOneTech PR #29, still open at head `f61a7275048e2135b2b2729a1b9cdf8713c58866`, base branch `main`, base commit `5e1e4622e93d8d2fabdfe0f2176889a29afa7f7c`.
-- Current canonical blocker: Agent Core Factory status still reports reconciliation anomaly `unvalidated_required_docs`; the live `document_status` read-back has G1 documents committed/indexed/validated but blocking because `reviewed=false` in the canonical source.
+- Historical canonical blocker: Agent Core Factory status reported reconciliation anomaly `unvalidated_required_docs`; the live `document_status` read-back had G1 documents committed/indexed/validated but blocking because the canonical source carried a false/pending reviewed marker.
 - Provenance correction: R2i gates are valid independent exact-SHA review evidence for PR #29, but their `already_ancestor` increment-integration metadata names the review-only R2i branch commit `5e1e4622e93d8d2fabdfe0f2176889a29afa7f7c`, not the PR #29 candidate `f61a7275048e2135b2b2729a1b9cdf8713c58866`. Do not treat that review-worktree attachment as a source merge.
 - Handoff: QA Guardian / delivery evidence must bind PR #29 and `qa_guardian_evidence.candidate_commit` to `f61a7275048e2135b2b2729a1b9cdf8713c58866` before any terminal source-delivery conclusion. See `R2J_CANONICAL_STATE_REPAIR.md`.
 
