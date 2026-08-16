@@ -207,9 +207,11 @@ running runtime. No direct SQL, no merge, no deploy, no credential change.
   `factory/zeus-alpha-research-ledger-core/inc-001-r2c5-independent-current-base-g1`.
 - Required PR: Zeus-signed (author `Zeus <zeus@sitiouno.com>`) GitHub PR with
   `agent:zeus` label against `main`; PR body/evidence must name the exact base
-  SHA and the final pushed head SHA. This worker does not self-approve or
-  merge the PR; independent exact-SHA review (solution-architect reviewer
-  recorded on the task) is the next mandatory step before closure.
+  SHA and the final pushed head SHA. The R2c5 PR is
+  https://github.com/SiteOneTech/hermes-agent-original/pull/51. This worker
+  does not self-approve or merge the PR; independent exact-SHA review
+  (solution-architect reviewer recorded on the task) is the next mandatory
+  step before closure.
 
 ## No external operation evidence
 

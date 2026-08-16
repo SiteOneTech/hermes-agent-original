@@ -155,7 +155,8 @@ reviewed marker was changed without review evidence (none needed changing —
 the R2c5 review re-affirms them at the current base).
 
 **Handoff requirement:** the fresh R2c5 branch is opened as a non-draft
-Zeus-signed GitHub PR labeled `agent:zeus` against `main`. The PR
+Zeus-signed GitHub PR #51 (`https://github.com/SiteOneTech/hermes-agent-original/pull/51`)
+labeled `agent:zeus` against `main`. The PR
 body/Factory evidence must name the exact base SHA `91aa62b11` and the exact
 final head SHA after the last push. An independent reviewer (task reviewer
 `solution-architect`) must inspect that exact SHA; this R2c5 worker does not
