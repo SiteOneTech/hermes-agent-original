@@ -112,6 +112,56 @@ This is implementation/documentation evidence only. It performs no merge, deploy
 
 **Handoff requirement:** the fresh R2c2 branch is opened as non-draft Zeus-signed GitHub PR #48 (`https://github.com/SiteOneTech/hermes-agent-original/pull/48`) labeled `agent:zeus` against `main`. The PR body/Factory evidence must name the exact final head SHA after the last push. An independent reviewer must inspect that exact SHA; this R2c2 worker does not self-approve, merge, deploy, change credentials, write direct SQL, or touch any runtime/external/trading path.
 
+## Review round 12 — R2c5 independent current-base G1 review and canonical document-status repair
+
+**Current-base identity captured before edits:** the assigned R2c5 worktree
+`/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-001-r2c5-independent-current-base-g1`,
+branch `factory/zeus-alpha-research-ledger-core/inc-001-r2c5-independent-current-base-g1`,
+local `HEAD` and `origin/main` were all exactly `91aa62b11f02f69d88f7d8c18c30033edb4b7355`
+(the R2c4 merge into main) before the first R2c5 edit.
+
+**Independent review performed:** reviewer `quality-reviewer` reviewed all 14
+Factory-required G1 documents at exact base `91aa62b11f02f69d88f7d8c18c30033edb4b7355`
+with real readback evidence (Factory gate `832`). Canonical configured-base
+readback via the approved CLI run from the assigned worktree (resolver code at
+the reviewed base) shows `readiness_source=configured_base_ref`, `base_ref=origin/main`,
+`base_commit=91aa62b11f02f69d88f7d8c18c30033edb4b7355`,
+`configured_base_ref_accepted=true`, `primary_checkout_accepted=false`,
+`primary_checkout_rejected_reason=primary_checkout_not_configured_base`, and
+`exists=true`, `committed=true`, `indexed=true`, `validated=true`,
+`reviewed=true`, `blocking=false` for all 14 G1 required documents — zero
+required-G1 blockers at the configured source (log `/tmp/r2c5_readback_new_resolver.json`,
+lines 17420–17770).
+
+**Live runtime mismatch documented and routed:** the running Factory runtime
+executes the pre-R2v resolver from the stale primary checkout
+`/home/jean/Projects/hermes-agent-original` (HEAD `4eb87e4cd48105af05fe974cf1d493f0e1b57ae1`,
+1367 commits behind origin/main; working tree files carry `reviewed: pending`),
+so its live `document_status` readback still reports 10 required-G1 blockers
+(exact output in
+`/home/jean/.hermes/profiles/quality-reviewer/cache/terminal-output/out-1786901573-3764810-ead0.log`,
+lines 17420–17729). This is routed as bounded technical rework (Factory
+runtime catch-up of the primary checkout to `origin/main`); it is not
+resolvable by this documentation-only increment, which must not modify the
+primary checkout.
+
+**Correction:** `R2C5_INDEPENDENT_CURRENT_BASE_G1_REVIEW.md` records the
+exact-SHA independent review evidence; `DOCUMENTATION_INDEX.md` now names
+exact base `91aa62b11f02f69d88f7d8c18c30033edb4b7355` and gate `832` for the
+current candidate state. The required G1 frontmatter reviewed markers remain
+machine-readable `reviewed: yes` and keep their independent source review
+chain (PR #36 / gate `794` plus gate `790` / PR #34 source evidence); no
+reviewed marker was changed without review evidence (none needed changing —
+the R2c5 review re-affirms them at the current base).
+
+**Handoff requirement:** the fresh R2c5 branch is opened as a non-draft
+Zeus-signed GitHub PR labeled `agent:zeus` against `main`. The PR
+body/Factory evidence must name the exact base SHA `91aa62b11` and the exact
+final head SHA after the last push. An independent reviewer (task reviewer
+`solution-architect`) must inspect that exact SHA; this R2c5 worker does not
+self-approve, merge, deploy, change credentials, write direct SQL, or touch
+any runtime/external/trading path.
+
 ## Local documentary verification — non-approval
 
 At `2026-08-10T04:50:09-04:00`, the implementation-planner worker verified the project-local pack from the assigned worktree only. `git ls-files --error-unmatch` confirmed the 14 required G1 documents plus `G0_REPOSITORY_STRATEGY.md`, `REQUIREMENTS_TRACEABILITY.md`, `DATABASE_AND_RUNTIME_CONTRACT.md`, and `G1_REVIEW.md` are tracked. `DOCUMENTATION_INDEX.md` indexes required documents and records explicit validated/reviewed status. `G0_REPOSITORY_STRATEGY.md` records the Zeus-only source repo, `origin/main` reference, assigned branch/worktree policy, PR-first delivery, and predecessor linkage. This is implementation evidence, not an independent specification/security PASS.
