@@ -3,7 +3,7 @@ document_type: control_plane_repair_evidence
 project_id: zeus-alpha-research-ledger-core
 task_id: zeus-alpha-research-ledger-core-r2v-canonical-g1-status-and-no-auto-merg
 phase: documentation
-status: implemented_pending_pr_and_independent_review
+status: pr_open_pending_independent_exact_sha_review
 validated: yes
 reviewed: pending_independent_exact_sha
 owner: codex-builder
@@ -11,6 +11,8 @@ base_ref: origin/main
 base_sha: 50a9a29c4bb7cee39c8ffafa857ce962066e35cb
 branch: factory/zeus-alpha-research-ledger-core/inc-005-r2v-canonical-g1-status-and-no-a
 worktree: /home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-005-r2v-canonical-g1-status-and-no-a
+implementation_commit_sha: 8cd21cfb9a31bcf45998f4bf76db8f5d28606f0c
+pull_request: https://github.com/SiteOneTech/hermes-agent-original/pull/39
 ---
 
 # R2v — canonical G1 status and no-auto-merge contract repair
@@ -68,8 +70,9 @@ Result after implementation: 2 files passed, 254 tests passed, 0 failed.
 - Base ref: `origin/main`.
 - Base SHA at claim/fetch: `50a9a29c4bb7cee39c8ffafa857ce962066e35cb`.
 - Branch: `factory/zeus-alpha-research-ledger-core/inc-005-r2v-canonical-g1-status-and-no-a`.
-- PR URL: to be recorded after push/PR creation.
-- Exact pushed candidate SHA: to be recorded in PR readback and Factory gate evidence after commit/push; a commit cannot embed its own final SHA without changing that SHA.
+- PR URL: https://github.com/SiteOneTech/hermes-agent-original/pull/39.
+- Exact implementation commit SHA: `8cd21cfb9a31bcf45998f4bf76db8f5d28606f0c`.
+- Exact final PR head SHA must be read back from GitHub and Factory gate evidence after this PR-evidence doc refresh; a commit cannot embed its own final SHA without changing that SHA.
 - Required independent review: quality reviewer must review the exact pushed PR head SHA and record PASS/REQUEST_CHANGES before task closure.
 
 ## No external operation evidence
