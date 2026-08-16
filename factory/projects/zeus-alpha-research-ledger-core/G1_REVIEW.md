@@ -92,9 +92,17 @@ This is implementation/documentation evidence only. It performs no merge, deploy
 
 **Correction:** `R2W_CANONICAL_G1_REVIEWED_FRONTMATTER_PR.md` records the PR-first recovery handoff for this canonical reviewed-frontmatter state. The R2w PR must remain Zeus-signed and labeled `agent:zeus`, must name the exact pushed candidate SHA, and must receive independent exact-SHA quality review before task closure. This round does not change runtime/source code, perform a merge, deploy, direct SQL, credential change, connector action, messaging action, or trading/risk/paper/live behavior.
 
+## Review round 10 — R2af dispatchable canonical required-document validation
+
+**Current status read-back:** R2af starts from current `origin/main` / worktree head `1b6bc0f65d3ad49845d20e056203e3b3702ac2a7`, the merge of R2w PR #40. Approved Agent Core Factory status CLI evidence (`/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory status zeus-alpha-research-ledger-core --json`) was captured in Hermes terminal output `out-1786884590-4115045-1490.log`. Its current project `document_status` rows show configured base ref `origin/main`, base commit `1b6bc0f65d3ad49845d20e056203e3b3702ac2a7`, and `exists=true`, `committed=true`, `validated=true`, `indexed=true`, `reviewed=true`, `blocking=false` for all 14 required G1 documents.
+
+**Stale blocker cause:** the R2af prompt and older gate snapshots still named G1 blockers, but each prompt blocker was missing only `reviewed`; no prompt blocker was missing file existence, index membership, commit tracking, or validation. `R2AF_DISPATCHABLE_CANONICAL_REQUIRED_DOC_VALIDATION.md` records the per-document stale cause and separates current canonical base from open candidates PR #43/#44 and stale PR #20 metadata.
+
+**Correction:** R2af adds project-local reconciliation evidence only. It routes a fresh Zeus-signed `agent:zeus` PR for independent G1/QA review and performs no product implementation, merge, deploy, direct SQL, credential change, connector action, messaging action, or trading/risk/paper/live behavior.
+
 ## Local documentary verification — non-approval
 
 At `2026-08-10T04:50:09-04:00`, the implementation-planner worker verified the project-local pack from the assigned worktree only. `git ls-files --error-unmatch` confirmed the 14 required G1 documents plus `G0_REPOSITORY_STRATEGY.md`, `REQUIREMENTS_TRACEABILITY.md`, `DATABASE_AND_RUNTIME_CONTRACT.md`, and `G1_REVIEW.md` are tracked. `DOCUMENTATION_INDEX.md` indexes required documents and records explicit validated/reviewed status. `G0_REPOSITORY_STRATEGY.md` records the Zeus-only source repo, `origin/main` reference, assigned branch/worktree policy, PR-first delivery, and predecessor linkage. This is implementation evidence, not an independent specification/security PASS.
 
 ## Status
-The required G1 pack is now documented as `reviewed: yes` for the R2u candidate using the independent PR #36/gate 794 review chain. This is documentation readiness only: downstream ALR-020+ work remains subject to its own task-specific RED→GREEN, security/no-egress, PR-first delivery and QA gates, and no runtime/product authority is granted by this record.
+The required G1 pack is now documented as `reviewed: yes` using the independent PR #36/gate 794 review chain and is read back by the approved Factory CLI as non-blocking on current configured base `origin/main` `1b6bc0f65d3ad49845d20e056203e3b3702ac2a7`. This is documentation readiness only: downstream ALR-020+ work remains subject to its own task-specific RED→GREEN, security/no-egress, PR-first delivery and QA gates, and no runtime/product authority is granted by this record.

@@ -46,6 +46,11 @@ reviewed_source_sha: 2476e978c545e24b18ee48844b24eb8c58245ab4
 - The configured-base-ref status reader may inspect committed Git blobs from the verified origin base ref but must not checkout, fast-forward, merge, or mutate the primary checkout.
 - The no-auto-integration guard is a fail-closed safety boundary for projects with `factory_auto_integration_forbidden=true`; such projects require PR-first independent QA rather than Factory branch-to-base integration.
 
+## R2af documentation/status repair gate
+- R2af is limited to project-local Markdown evidence and Git/PR/Factory CLI read-back. It must not modify `hermes_cli/`, tests, runtime/product source, credentials, deployments, messaging/connectors, database schemas, or any external runtime.
+- The repair may cite stale metadata and open PRs as provenance context only; it must not treat open candidates, stale PR #20 metadata, or prompt/gate snapshots as current-base authority over the configured-base `document_status` read-back.
+- Clearing the required-document ambiguity does not authorize scheduler registration, provider/network egress, trading/risk/paper/live behavior, or downstream ALR dispatch.
+
 ## Scheduler gate
 - `agent_core.alpha_research.scheduler.enabled` is false absent explicit configuration.
 - Registration and each invocation call the contract §5 verifier without cache. Tests cover every false/missing/failed/expired/wrong-commit readiness component and prove no batch read/run follows `scheduler_not_ready`.
