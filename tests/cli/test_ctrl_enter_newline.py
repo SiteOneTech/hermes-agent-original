@@ -140,6 +140,12 @@ def test_backslash_enter_continuation_replaces_marker_with_newline():
     assert cli_mod._apply_backslash_line_continuation("first line\\   ") == "first line\n"
 
 
+def test_backslash_before_existing_newline_is_not_a_continuation_marker():
+    import cli as cli_mod
+
+    assert cli_mod._is_backslash_line_continuation("first line\\\n") is False
+
+
 def test_iterm_is_allowlisted_for_extended_enter_keys():
     """iTerm2 needs the app to request extended keys before Shift+Enter is distinct."""
     import cli as cli_mod

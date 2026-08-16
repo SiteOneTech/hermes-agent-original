@@ -3887,7 +3887,7 @@ _TERMINAL_INPUT_MODE_RESET_SEQ = (
 _EXTENDED_ENTER_KEYS_SEQ = "\x1b[>4;2m"
 
 
-_BACKSLASH_LINE_CONTINUATION_RE = re.compile(r"\\[ \t]*$")
+_BACKSLASH_LINE_CONTINUATION_RE = re.compile(r"\\[ \t]*\Z")
 
 
 def _terminal_supports_extended_enter_keys(env: Optional[Mapping[str, str]] = None) -> bool:
