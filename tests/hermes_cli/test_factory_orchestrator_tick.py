@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -63,6 +64,80 @@ def test_factory_cli_successor_parser_requires_explicit_flag():
         "--actor", "Jean", "--reason", "Factory green",
     ])
     assert parsed.allow_auto_resume is False
+
+
+def test_project_tick_uses_running_source_tree_not_profile_wrapper(monkeypatch, tmp_path):
+    stale_wrapper = tmp_path / ".hermes" / "scripts" / "factory_orchestrator_tick.py"
+    stale_wrapper.parent.mkdir(parents=True)
+    stale_wrapper.write_text(
+        "SCRIPT = '/home/jean/Projects/hermes-agent-original/scripts/factory/factory_orchestrator_tick.py'\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    captured: dict[str, Any] = {}
+
+    def fake_run(argv, **kwargs):
+        captured["argv"] = [str(part) for part in argv]
+        captured["kwargs"] = kwargs
+        return factory.subprocess.CompletedProcess(
+            argv,
+            0,
+            stdout=json.dumps({"job": "factory_orchestrator_tick", "source": "running_tree"}),
+            stderr="",
+        )
+
+    monkeypatch.setattr(factory.subprocess, "run", fake_run)
+
+    result = factory._run_orchestrator_script("demo-project")
+
+    running_root = Path(factory.__file__).resolve().parents[1]
+    expected_script = running_root / "scripts" / "factory" / "factory_orchestrator_tick.py"
+    assert result["source"] == "running_tree"
+    assert captured["argv"] == [sys.executable, str(expected_script)]
+    assert captured["argv"][1] != str(stale_wrapper)
+    assert captured["kwargs"]["cwd"] == str(running_root)
+    env = captured["kwargs"]["env"]
+    assert env["FACTORY_TICK_PROJECT_ID"] == "demo-project"
+    assert env["PYTHONPATH"].split(os.pathsep)[0] == str(running_root)
+
+
+def test_project_tick_fails_closed_when_running_source_provenance_unavailable(monkeypatch, tmp_path):
+    stale_wrapper = tmp_path / ".hermes" / "scripts" / "factory_orchestrator_tick.py"
+    stale_wrapper.parent.mkdir(parents=True)
+    stale_wrapper.write_text("print('{}')\n", encoding="utf-8")
+    fake_factory = tmp_path / "installed_without_repo_scripts" / "hermes_cli" / "factory.py"
+    fake_factory.parent.mkdir(parents=True)
+    fake_factory.write_text("# fake installed module without repo script\n", encoding="utf-8")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(factory, "__file__", str(fake_factory))
+    monkeypatch.setattr(
+        factory.subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not run a stale profile wrapper")),
+    )
+
+    with pytest.raises(RuntimeError, match="running Hermes source"):
+        factory._run_orchestrator_script("demo-project")
+
+
+def test_project_tick_fails_closed_when_running_source_provenance_malformed(monkeypatch, tmp_path):
+    stale_wrapper = tmp_path / ".hermes" / "scripts" / "factory_orchestrator_tick.py"
+    stale_wrapper.parent.mkdir(parents=True)
+    stale_wrapper.write_text("print('{}')\n", encoding="utf-8")
+    fake_factory = tmp_path / "not_hermes_cli" / "factory.py"
+    fake_factory.parent.mkdir(parents=True)
+    fake_factory.write_text("# malformed module provenance\n", encoding="utf-8")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(factory, "__file__", str(fake_factory))
+    monkeypatch.setattr(
+        factory.subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not run a stale profile wrapper")),
+    )
+
+    with pytest.raises(RuntimeError, match="source provenance malformed"):
+        factory._run_orchestrator_script("demo-project")
 
 
 def test_orchestrator_tick_reports_migration_readiness_before_claim_or_spawn(monkeypatch, capsys):
