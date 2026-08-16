@@ -90,5 +90,17 @@ This is implementation/documentation evidence only. It performs no merge, deploy
 
 At `2026-08-10T04:50:09-04:00`, the implementation-planner worker verified the project-local pack from the assigned worktree only. `git ls-files --error-unmatch` confirmed the 14 required G1 documents plus `G0_REPOSITORY_STRATEGY.md`, `REQUIREMENTS_TRACEABILITY.md`, `DATABASE_AND_RUNTIME_CONTRACT.md`, and `G1_REVIEW.md` are tracked. `DOCUMENTATION_INDEX.md` indexes required documents and records explicit validated/reviewed status. `G0_REPOSITORY_STRATEGY.md` records the Zeus-only source repo, `origin/main` reference, assigned branch/worktree policy, PR-first delivery, and predecessor linkage. This is implementation evidence, not an independent specification/security PASS.
 
+## Review round 9 — R2v control-plane status-source repair
+
+At R2v, the quality-reviewer independently PASS-reviewed the control-plane path that makes Factory document status resolve stale-primary blockers only from verified configured base ref content. Gate `804` reviewed PR #39 exact head `90fcb81abcebc203e16e34e36f4aec0ab1ec6a09`; `QA_GATES.md` records the exact GitHub PR read-back, 254 passing tests, and the no-auto-integration/no-runtime boundary.
+
+## Review round 10 — R2x current-origin/main reconciliation
+
+**Current-base proof:** R2x fetched `origin/main` and verified that the assigned worktree HEAD, merge-base and current `origin/main` all equal `b3c32d149d73156b75c15b5b357898b69737bed0` before documentation edits.
+
+**Canonical status read-back:** Agent Core Postgres Factory status (`db_backend=agent_core_postgres`, `database=zeus_agent`) now reads the G1 pack from `readiness_source=configured_base_ref`, `base_ref=origin/main`, `base_commit=b3c32d149d73156b75c15b5b357898b69737bed0`; every required G1 document is `blocking=false`, `validated=true`, and `reviewed=true`.
+
+**Correction:** `R2X_CURRENT_ORIGIN_MAIN_G1_RECONCILIATION.md` records the stale ten-blocker assignment as historical prompt/gate drift relative to current canonical status. It adds current-origin/main machine-readable evidence to `DOCUMENTATION_INDEX.md` and the ten previously reported blocker files, while preserving the independent reviewed-marker source chain from PR #36/gate `794` and status-reader review from gate `804`. This is documentation-only and performs no merge, deployment, credential change, direct SQL, product implementation, external-runtime operation, or runtime authorization.
+
 ## Status
-The required G1 pack is now documented as `reviewed: yes` for the R2u candidate using the independent PR #36/gate 794 review chain. This is documentation readiness only: downstream ALR-020+ work remains subject to its own task-specific RED→GREEN, security/no-egress, PR-first delivery and QA gates, and no runtime/product authority is granted by this record.
+The required G1 pack is now documented as `reviewed: yes` for the R2u candidate using the independent PR #36/gate 794 review chain, and R2x proves the current `origin/main`/Factory status read-back has zero blocking required G1 rows at `b3c32d149d73156b75c15b5b357898b69737bed0`. This is documentation readiness only: downstream ALR-020+ work remains subject to its own task-specific RED→GREEN, security/no-egress, PR-first delivery and QA gates, and no runtime/product authority is granted by this record.

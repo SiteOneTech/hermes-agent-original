@@ -10,6 +10,9 @@ reviewed_candidate_sha: c81547062c5362a7be6f5a1bb2ef9612b29bac9c
 reviewed_candidate_pr: https://github.com/SiteOneTech/hermes-agent-original/pull/36
 reviewed_source_gate: factory_gate_790
 reviewed_source_sha: 2476e978c545e24b18ee48844b24eb8c58245ab4
+r2x_current_origin_main_sha: b3c32d149d73156b75c15b5b357898b69737bed0
+r2x_document_status_evidence: agent_core_postgres_factory_status_configured_base_ref
+r2x_reconciliation_artifact: R2X_CURRENT_ORIGIN_MAIN_G1_RECONCILIATION.md
 ---
 
 # SECURITY GATES
@@ -45,6 +48,11 @@ reviewed_source_sha: 2476e978c545e24b18ee48844b24eb8c58245ab4
 - R2v is limited to Factory control-plane/document-status and completion enforcement. It must not add runtime provider clients, credential paths, messaging connectors, deployment behavior, trading/risk/paper/live behavior, or product ledger implementation.
 - The configured-base-ref status reader may inspect committed Git blobs from the verified origin base ref but must not checkout, fast-forward, merge, or mutate the primary checkout.
 - The no-auto-integration guard is a fail-closed safety boundary for projects with `factory_auto_integration_forbidden=true`; such projects require PR-first independent QA rather than Factory branch-to-base integration.
+
+## R2x documentation-only reconciliation gate
+- R2x is limited to project-local Markdown evidence under `factory/projects/zeus-alpha-research-ledger-core/`.
+- It records current `origin/main` `b3c32d149d73156b75c15b5b357898b69737bed0`, Agent Core Postgres document-status read-back, and reviewed-marker provenance. It must not change runtime/control-plane code, database schema, credentials, provider/source drivers, scheduler behavior, connectors, deployment, trading/risk/paper/live behavior, or external runtime state.
+- R2x may push only the assigned documentation branch and open/update a Zeus-signed `agent:zeus` PR for independent review; it must not merge to `main`.
 
 ## Scheduler gate
 - `agent_core.alpha_research.scheduler.enabled` is false absent explicit configuration.

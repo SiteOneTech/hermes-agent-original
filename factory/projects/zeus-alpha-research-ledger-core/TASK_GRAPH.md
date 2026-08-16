@@ -10,6 +10,9 @@ reviewed_candidate_sha: c81547062c5362a7be6f5a1bb2ef9612b29bac9c
 reviewed_candidate_pr: https://github.com/SiteOneTech/hermes-agent-original/pull/36
 reviewed_source_gate: factory_gate_790
 reviewed_source_sha: 2476e978c545e24b18ee48844b24eb8c58245ab4
+r2x_current_origin_main_sha: b3c32d149d73156b75c15b5b357898b69737bed0
+r2x_document_status_evidence: agent_core_postgres_factory_status_configured_base_ref
+r2x_reconciliation_artifact: R2X_CURRENT_ORIGIN_MAIN_G1_RECONCILIATION.md
 ---
 
 # TASK GRAPH
@@ -55,6 +58,12 @@ The Factory DB currently records this ALR-020 acceptance literal: `Schema covers
 - Reviewed source: PR #36 `https://github.com/SiteOneTech/hermes-agent-original/pull/36`, exact head `c81547062c5362a7be6f5a1bb2ef9612b29bac9c`, reviewer `solution-architect`, Factory gate `794`, with source reviewed-docs evidence from gate `790` / PR #34 SHA `2476e978c545e24b18ee48844b24eb8c58245ab4`.
 - Repair: R2u changes only project-local documentation/index/traceability artifacts so required G1 docs now carry `reviewed: yes` with candidate-bound provenance. It does not import R2s control-plane code, merge, deploy, change credentials or authorize product/runtime dispatch.
 
+### R2x current-origin/main G1 reconciliation
+
+- Current canonical base: fetched `origin/main` at `b3c32d149d73156b75c15b5b357898b69737bed0`; assigned R2x HEAD and merge-base were equal to that SHA before documentation edits, so no rebase rewrite was required.
+- Canonical Factory read-back: Agent Core Postgres status reads all required G1 rows from `configured_base_ref` / `origin/main` / `b3c32d149d73156b75c15b5b357898b69737bed0` with `blocking=false`, `validated=true`, `reviewed=true`.
+- Repair: R2x records current-origin/main evidence in `R2X_CURRENT_ORIGIN_MAIN_G1_RECONCILIATION.md`, `DOCUMENTATION_INDEX.md`, and the ten stale-blocker files. It preserves PR #36/gate 794 reviewed-marker provenance and gate 804 control-plane review evidence, and creates only a Zeus-signed documentation PR. No merge, deploy, credential change, direct SQL, product implementation or external-runtime operation is performed.
+
 | Task ID | Phase / status | Owner → reviewer | Depends on | Branch | Worktree |
 |---|---|---|---|---|---|
 | `zeus-alpha-research-ledger-core-alr-010-g1-rebaseline-and-local-ledger-c` | planning / done | implementation-planner → solution-architect | — | `factory/zeus-alpha-research-ledger-core/inc-010-alr-010-g1-rebaseline-and-local` | `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-010-alr-010-g1-rebaseline-and-local` |
@@ -74,6 +83,7 @@ The Factory DB currently records this ALR-020 acceptance literal: `Schema covers
 | `zeus-alpha-research-ledger-core-r2k-repair-stale-canonical-g1-review-pro` | documentation / done, historical evidence only | codex-builder → independent reviewer required | stale metadata PR #20/dad375f and non-dispatchable canonical G1 status | `factory/zeus-alpha-research-ledger-core/inc-001-r2k-repair-stale-canonical-g1-re` | `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-001-r2k-repair-stale-canonical-g1-re` |
 | `zeus-alpha-research-ledger-core-r2m-current-base-g1-documentation-pr-rec` | documentation / claimed | codex-builder → independent exact-SHA reviewer required | current-base recovery after R2j/R2k provenance repairs | `factory/zeus-alpha-research-ledger-core/inc-001-r2m-current-base-g1-documentatio` | `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-001-r2m-current-base-g1-documentatio` |
 | `zeus-alpha-research-ledger-core-r2u-canonical-g1-document-status-preflig` | documentation / claimed | codex-builder → quality-reviewer | active `unvalidated_required_docs` anomaly | `factory/zeus-alpha-research-ledger-core/inc-019-r2u-canonical-g1-document-status` | `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-019-r2u-canonical-g1-document-status` |
+| `zeus-alpha-research-ledger-core-r2x-current-origin-main-g1-reconciliatio` | documentation / claimed | factory-reporter → quality-reviewer | stale R2c/R2w blocker evidence after current `origin/main` advanced | `factory/zeus-alpha-research-ledger-core/inc-036-r2x-current-origin-main-g1-reconcile` | `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-036-r2x-current-origin-main-g1-reconcile` |
 
 The reconciliation/documentation rows are audit and handoff rows for document-readiness drift. They cannot close an implementation gate by themselves; ALR-010-R1 still requires exact-SHA independent review evidence and explicit handling of the observed integration anomaly before downstream implementation starts.
 
