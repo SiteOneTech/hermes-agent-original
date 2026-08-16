@@ -367,6 +367,47 @@ def _make_reviewed_primary_with_pending_origin(tmp_path: Path) -> tuple[Path, st
     return repo, reviewed_sha, pending_sha
 
 
+def _make_stale_primary_with_current_base_candidate(
+    tmp_path: Path,
+    *,
+    candidate_reviewed: bool = True,
+) -> tuple[Path, Path, str, str, str, str]:
+    origin = tmp_path / "origin.git"
+    repo = tmp_path / "repo"
+    updater = tmp_path / "updater"
+    candidate = tmp_path / "candidate"
+    subprocess.run(["git", "init", "--bare", str(origin)], check=True, capture_output=True, text=True)
+    subprocess.run(["git", "clone", str(origin), str(repo)], check=True, capture_output=True, text=True)
+    _git(repo, "config", "user.email", "factory@example.com")
+    _git(repo, "config", "user.name", "Factory Test")
+    _write_g1_docs(repo / "factory" / "projects" / "demo", reviewed=False)
+    stale_sha = _commit_all(repo, "primary pending docs")
+    _git(repo, "branch", "-M", "main")
+    _git(repo, "push", "origin", "main")
+
+    subprocess.run(["git", "clone", str(origin), str(updater)], check=True, capture_output=True, text=True)
+    _git(updater, "checkout", "main")
+    _git(updater, "config", "user.email", "factory@example.com")
+    _git(updater, "config", "user.name", "Factory Test")
+    _write_g1_docs(updater / "factory" / "projects" / "demo", reviewed=False)
+    (updater / "factory" / "projects" / "demo" / "TRACKER.md").write_text(
+        "# TRACKER.md\nvalidated: yes\nnot reviewed yet\ncurrent origin base\n",
+        encoding="utf-8",
+    )
+    current_base_sha = _commit_all(updater, "current origin pending docs")
+    _git(updater, "push", "origin", "main")
+    _git(repo, "fetch", "origin", "main:refs/remotes/origin/main")
+
+    branch = "factory/demo/current-base-reviewed-g1"
+    _git(repo, "worktree", "add", "-b", branch, str(candidate), "origin/main")
+    if candidate_reviewed:
+        _write_g1_docs(candidate / "factory" / "projects" / "demo", reviewed=True)
+        candidate_sha = _commit_all(candidate, "reviewed current-base candidate docs")
+    else:
+        candidate_sha = _git(candidate, "rev-parse", "HEAD")
+    return repo, candidate, branch, stale_sha, current_base_sha, candidate_sha
+
+
 def _reviewed_candidate_metadata(candidate: Path, branch: str, sha: str) -> dict:
     return {
         "path": str(candidate),
@@ -383,6 +424,26 @@ def _reviewed_candidate_metadata(candidate: Path, branch: str, sha: str) -> dict
             "state": "open",
             "head_branch": branch,
             "head_sha": sha,
+        },
+    }
+
+
+def _reviewed_current_base_candidate_metadata(candidate: Path, branch: str, sha: str, base_sha: str) -> dict:
+    metadata = _reviewed_candidate_metadata(candidate, branch, sha)
+    metadata.update({"base_branch": "main", "base_commit": base_sha})
+    metadata["pull_request"].update({"base_branch": "main", "base_sha": base_sha})
+    return metadata
+
+
+def _configured_base_candidate_project(repo: Path, candidate_metadata: dict) -> dict:
+    return {
+        "project_id": "demo",
+        "repo_path": str(repo),
+        "base_branch": "main",
+        "metadata": {
+            "artifact_dir": "factory/projects/demo",
+            "repo_strategy": {"primary_repo_path": str(repo), "base_branch": "main"},
+            "reviewed_g1_candidate": candidate_metadata,
         },
     }
 
@@ -689,6 +750,81 @@ def test_document_status_fails_closed_when_configured_base_ref_lacks_indexed_g1_
     assert prd["base_ref"] == "origin/main"
     assert prd["base_commit"] == missing_index_sha
     assert reviewed_sha != missing_index_sha
+
+
+def test_document_status_reads_reviewed_current_base_candidate_without_moving_primary(tmp_path):
+    repo, candidate, branch, stale_sha, base_sha, candidate_sha = _make_stale_primary_with_current_base_candidate(tmp_path)
+    head_before = _git(repo, "rev-parse", "HEAD")
+    candidate_meta = _reviewed_current_base_candidate_metadata(candidate, branch, candidate_sha, base_sha)
+
+    statuses = factory_pg.project_document_status(_configured_base_candidate_project(repo, candidate_meta))
+
+    g1_rows = [row for row in statuses if row["category"] == "g1_required"]
+    assert g1_rows
+    assert head_before == stale_sha
+    assert _git(repo, "rev-parse", "HEAD") == stale_sha
+    assert {row["readiness_source"] for row in g1_rows} == {"reviewed_g1_candidate"}
+    assert {row["base_ref"] for row in g1_rows} == {"origin/main"}
+    assert {row["base_commit"] for row in g1_rows} == {base_sha}
+    assert {row["candidate_branch"] for row in g1_rows} == {branch}
+    assert {row["candidate_sha"] for row in g1_rows} == {candidate_sha}
+    assert {row["reviewed_candidate_accepted"] for row in g1_rows} == {True}
+    assert {row["primary_checkout_accepted"] for row in g1_rows} == {False}
+    assert {row["primary_head"] for row in g1_rows} == {stale_sha}
+    assert not any(row["blocking"] for row in g1_rows)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason"),
+    [
+        ("missing_path", "candidate_path_unavailable"),
+        ("malformed_sha", "malformed_candidate_metadata"),
+        ("dirty_artifact", "dirty_candidate_artifacts"),
+        ("untracked_artifact", "dirty_candidate_artifacts"),
+    ],
+)
+def test_document_status_rejects_invalid_current_base_candidate_and_remains_blocking(tmp_path, mutation, reason):
+    repo, candidate, branch, stale_sha, base_sha, candidate_sha = _make_stale_primary_with_current_base_candidate(tmp_path)
+    candidate_meta = _reviewed_current_base_candidate_metadata(candidate, branch, candidate_sha, base_sha)
+    if mutation == "missing_path":
+        candidate_meta["path"] = str(candidate.parent / "missing-candidate")
+    elif mutation == "malformed_sha":
+        candidate_meta["sha"] = "not-a-sha"
+    elif mutation == "dirty_artifact":
+        (candidate / "factory" / "projects" / "demo" / "PRD.md").write_text(
+            "# PRD\nvalidated: yes\nreviewed: yes\nuncommitted edit\n",
+            encoding="utf-8",
+        )
+    elif mutation == "untracked_artifact":
+        (candidate / "factory" / "projects" / "demo" / "UNTRACKED.md").write_text("# untracked\n", encoding="utf-8")
+
+    statuses = factory_pg.project_document_status(_configured_base_candidate_project(repo, candidate_meta))
+
+    g1_rows = [row for row in statuses if row["category"] == "g1_required"]
+    prd = next(row for row in g1_rows if row["file_name"] == "PRD.md")
+    assert _git(repo, "rev-parse", "HEAD") == stale_sha
+    assert any(row["blocking"] for row in g1_rows)
+    assert {row["readiness_source"] for row in g1_rows} == {"configured_base_ref"}
+    assert prd["reviewed_candidate_accepted"] is False
+    assert prd["reviewed_candidate_rejected_reason"] == reason
+
+
+def test_document_status_keeps_unreviewed_current_base_candidate_blocking(tmp_path):
+    repo, candidate, branch, stale_sha, base_sha, candidate_sha = _make_stale_primary_with_current_base_candidate(
+        tmp_path,
+        candidate_reviewed=False,
+    )
+    candidate_meta = _reviewed_current_base_candidate_metadata(candidate, branch, candidate_sha, base_sha)
+
+    statuses = factory_pg.project_document_status(_configured_base_candidate_project(repo, candidate_meta))
+
+    g1_rows = [row for row in statuses if row["category"] == "g1_required"]
+    prd = next(row for row in g1_rows if row["file_name"] == "PRD.md")
+    assert _git(repo, "rev-parse", "HEAD") == stale_sha
+    assert {row["readiness_source"] for row in g1_rows} == {"reviewed_g1_candidate"}
+    assert {row["reviewed_candidate_accepted"] for row in g1_rows} == {True}
+    assert prd["reviewed"] is False
+    assert prd["blocking"] is True
 
 
 @pytest.mark.parametrize(
