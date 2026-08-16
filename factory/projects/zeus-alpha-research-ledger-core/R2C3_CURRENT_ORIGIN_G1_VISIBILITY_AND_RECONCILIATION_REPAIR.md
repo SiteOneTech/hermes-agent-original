@@ -10,7 +10,7 @@ base_ref: origin/main
 current_base_sha: 2a32066398d500d6dac071bd7f2184d47bb3bcb4
 branch: factory/zeus-alpha-research-ledger-core/inc-019-r2c3-current-origin-g1-visibility
 worktree: /home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-019-r2c3-current-origin-g1-visibility
-pr_url: pending_after_push
+pr_url: https://github.com/SiteOneTech/hermes-agent-original/pull/49
 primary_stale_status_log: /home/jean/.hermes/profiles/codex-builder/cache/terminal-output/out-1786895716-2463118-ae50.log
 current_origin_status_log: /home/jean/.hermes/profiles/codex-builder/cache/terminal-output/out-1786895883-2463118-cd90.log
 post_repair_status_log: /home/jean/.hermes/profiles/codex-builder/cache/terminal-output/out-1786896251-2463118-f710.log
@@ -87,6 +87,6 @@ This repair does not mutate Agent Core project metadata directly. The stale meta
 
 ## PR-first handoff
 
-The R2c3 candidate must be opened as a non-draft GitHub PR against `main`, labeled `agent:zeus`, Zeus-signed, and awaiting independent exact-SHA review. The final PR body and Factory gate evidence must name the exact final head SHA after the last push. This worker must not self-approve, merge, deploy, change credentials, write direct SQL, or touch any runtime/external/trading path.
+The R2c3 candidate is opened as non-draft GitHub PR #49 (`https://github.com/SiteOneTech/hermes-agent-original/pull/49`) against `main`, labeled `agent:zeus`, Zeus-signed, and awaiting independent exact-SHA review. The final PR body and Factory gate evidence must name the exact final head SHA after the last push. This worker must not self-approve, merge, deploy, change credentials, write direct SQL, or touch any runtime/external/trading path.
 
 R2c3 is a handoff artifact only. It does not authorize base-branch merge, deployment, runtime execution, connector activation, direct Factory DB mutation, downstream ALR implementation, or trading/risk/paper/live behavior.
