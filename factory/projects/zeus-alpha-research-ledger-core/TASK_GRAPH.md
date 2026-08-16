@@ -55,6 +55,13 @@ The Factory DB currently records this ALR-020 acceptance literal: `Schema covers
 - Reviewed source: PR #36 `https://github.com/SiteOneTech/hermes-agent-original/pull/36`, exact head `c81547062c5362a7be6f5a1bb2ef9612b29bac9c`, reviewer `solution-architect`, Factory gate `794`, with source reviewed-docs evidence from gate `790` / PR #34 SHA `2476e978c545e24b18ee48844b24eb8c58245ab4`.
 - Repair: R2u changes only project-local documentation/index/traceability artifacts so required G1 docs now carry `reviewed: yes` with candidate-bound provenance. It does not import R2s control-plane code, merge, deploy, change credentials or authorize product/runtime dispatch.
 
+### R2af dispatchable canonical required-document validation repair
+
+- Current base: assigned R2af worktree and branch start at `origin/main` / `1b6bc0f65d3ad49845d20e056203e3b3702ac2a7`, the merge of R2w PR #40.
+- Reproduced stale cause: the R2af prompt and older Factory gate snapshots listed required G1 blockers whose only missing field was `reviewed`; the files were present, indexed, committed and validated.
+- Current canonical read-back: approved Factory CLI status shows `document_status` rows from configured base ref `origin/main`, base commit `1b6bc0f65d3ad49845d20e056203e3b3702ac2a7`, with all 14 required G1 documents `reviewed=true`, `validated=true`, `indexed=true`, `committed=true` and `blocking=false`.
+- Repair: R2af records this distinction in `R2AF_DISPATCHABLE_CANONICAL_REQUIRED_DOC_VALIDATION.md`, keeps open PRs #43/#44 as candidate/provenance context only, performs no product-source/runtime change, and routes a fresh Zeus-signed `agent:zeus` PR to independent G1/QA review.
+
 | Task ID | Phase / status | Owner → reviewer | Depends on | Branch | Worktree |
 |---|---|---|---|---|---|
 | `zeus-alpha-research-ledger-core-alr-010-g1-rebaseline-and-local-ledger-c` | planning / done | implementation-planner → solution-architect | — | `factory/zeus-alpha-research-ledger-core/inc-010-alr-010-g1-rebaseline-and-local` | `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-010-alr-010-g1-rebaseline-and-local` |
@@ -74,6 +81,7 @@ The Factory DB currently records this ALR-020 acceptance literal: `Schema covers
 | `zeus-alpha-research-ledger-core-r2k-repair-stale-canonical-g1-review-pro` | documentation / done, historical evidence only | codex-builder → independent reviewer required | stale metadata PR #20/dad375f and non-dispatchable canonical G1 status | `factory/zeus-alpha-research-ledger-core/inc-001-r2k-repair-stale-canonical-g1-re` | `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-001-r2k-repair-stale-canonical-g1-re` |
 | `zeus-alpha-research-ledger-core-r2m-current-base-g1-documentation-pr-rec` | documentation / claimed | codex-builder → independent exact-SHA reviewer required | current-base recovery after R2j/R2k provenance repairs | `factory/zeus-alpha-research-ledger-core/inc-001-r2m-current-base-g1-documentatio` | `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-001-r2m-current-base-g1-documentatio` |
 | `zeus-alpha-research-ledger-core-r2u-canonical-g1-document-status-preflig` | documentation / claimed | codex-builder → quality-reviewer | active `unvalidated_required_docs` anomaly | `factory/zeus-alpha-research-ledger-core/inc-019-r2u-canonical-g1-document-status` | `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-019-r2u-canonical-g1-document-status` |
+| `zeus-alpha-research-ledger-core-r2af-dispatchable-canonical-required-doc` | documentation / claimed | codex-builder → independent G1/QA review required | active stale `unvalidated_required_docs` / prompt blocker anomaly after current-base readiness | `factory/zeus-alpha-research-ledger-core/inc-019-r2af-dispatchable-canonical-requ` | `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-019-r2af-dispatchable-canonical-requ` |
 
 The reconciliation/documentation rows are audit and handoff rows for document-readiness drift. They cannot close an implementation gate by themselves; ALR-010-R1 still requires exact-SHA independent review evidence and explicit handling of the observed integration anomaly before downstream implementation starts.
 
@@ -87,6 +95,7 @@ The reconciliation/documentation rows are audit and handoff rows for document-re
 - R2k adds an explicit guard for stale active metadata: `metadata.g1_documentation_checkout` naming PR #20 / `dad375f27568c38be771fc597b579d087f034e1d` is obsolete and cannot be used to dispatch ALR-020. After PR #31/R2k reached `origin/main`, R2k is historical repair evidence rather than the active review target.
 - R2m superseded the active review target after current-base recovery on `origin/main` `ab08b13669903a87b3d60d6c80231d23d6313782`; R2k/PR #31 is historical evidence only.
 - R2u applies the reviewed G1 markers from independently reviewed PR #36/gate 794 into the canonical documentation pack on current base `df4c77fd1413a65cdb85885a06978ff157c1de4d`, so document-status preflight can reach zero required-document blockers without relying on R2s runtime/control-plane changes.
+- R2af records the current dispatchable required-document read-back on configured base `origin/main` `1b6bc0f65d3ad49845d20e056203e3b3702ac2a7`: stale prompt/gate blockers had only `reviewed=false`, while current canonical `document_status` has zero blocking required G1 rows. This is documentation/status evidence only, not ALR-020 dispatch approval.
 - ALR-010-R1 resolves only the documentation findings from failed gates 686/687 and the merge-evidence documentation finding from gate 695. It does not implement ledger code, alter Factory task metadata, open a PR, perform another merge, deploy or grant downstream implementation authority.
 - ALR-020 additionally may not start until the required bounded-local-sessions metadata reconciliation above is recorded and read back exactly; it does not add a collaboration-session implementation task.
 
