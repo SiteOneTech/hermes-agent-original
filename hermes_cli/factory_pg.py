@@ -1220,6 +1220,19 @@ def _latest_gate_rows(project_id: str) -> list[dict[str, Any]]:
     ))
 
 
+def _recent_gate_rows(project_id: str, limit: int = 300) -> list[dict[str, Any]]:
+    return _normalize_rows(sql.rows(
+        f"""
+        SELECT *
+        FROM factory.gates
+        WHERE project_id={_q(project_id)}
+        ORDER BY timestamp DESC, gate_id DESC
+        LIMIT {int(limit)}
+        """,
+        user=_user(),
+    ))
+
+
 def _active_pending_gates(project_id: str) -> list[dict[str, Any]]:
     return [gate for gate in _latest_gate_rows(project_id) if str(gate.get("status") or "") == "pending"]
 
@@ -1984,24 +1997,14 @@ _DOCUMENT_STATUS_TRUE_VALUES = {"true", "yes", "y", "1", "passed", "validated", 
 _DOCUMENT_STATUS_FALSE_VALUES = {"false", "no", "n", "0", "failed", "pending", "todo", "tbd", "unvalidated", "unreviewed"}
 
 
-def _document_has_explicit_negative_status(index_line: str, file_text: str, flag: str) -> bool:
-    status_header = index_line + "\n" + "\n".join(file_text.splitlines()[:40])
+def _document_has_explicit_negative_status_in_text(text: str, flag: str) -> bool:
     false_values = "|".join(sorted(re.escape(value) for value in _DOCUMENT_STATUS_FALSE_VALUES))
-    return bool(re.search(rf"\b{re.escape(flag)}\b\s*[:=]\s*(?:{false_values})\b", status_header, re.IGNORECASE))
+    return bool(re.search(rf"\b{re.escape(flag)}\b\s*[:=]\s*(?:{false_values})\b", text, re.IGNORECASE))
 
 
-def _document_has_explicit_positive_status(index_line: str, file_text: str, flag: str) -> bool:
-    """Return whether the doc declares a machine-readable positive status.
-
-    Front-matter/status-table declarations are control-plane evidence. They must
-    win over later prose that describes fail-closed rules such as "not reviewed".
-    Keep this intentionally narrow so loose positive prose still goes through
-    the negation check below.
-    """
-
-    status_header = index_line + "\n" + "\n".join(file_text.splitlines()[:40])
+def _document_has_explicit_positive_status_in_text(text: str, flag: str) -> bool:
     true_values = "|".join(sorted(re.escape(value) for value in _DOCUMENT_STATUS_TRUE_VALUES))
-    return bool(re.search(rf"\b{re.escape(flag)}\b\s*[:=]\s*(?:{true_values})\b", status_header, re.IGNORECASE))
+    return bool(re.search(rf"\b{re.escape(flag)}\b\s*[:=]\s*(?:{true_values})\b", text, re.IGNORECASE))
 
 
 def _document_flag_from_text(metadata: dict[str, Any], index_line: str, file_text: str, flag: str) -> bool:
@@ -2010,10 +2013,18 @@ def _document_flag_from_text(metadata: dict[str, Any], index_line: str, file_tex
         return value
     if isinstance(value, str):
         return value.strip().lower() in _DOCUMENT_STATUS_TRUE_VALUES
-    if _document_has_explicit_negative_status(index_line, file_text, flag):
-        return False
-    if _document_has_explicit_positive_status(index_line, file_text, flag):
+    file_header = "\n".join(file_text.splitlines()[:40])
+    # Current file-local front-matter/status tables are authoritative over the
+    # index row and over later historical prose (for example, a TASK_GRAPH note
+    # that the primary checkout once had ``reviewed=false``).
+    if _document_has_explicit_positive_status_in_text(file_header, flag):
         return True
+    if _document_has_explicit_negative_status_in_text(file_header, flag):
+        return False
+    if _document_has_explicit_positive_status_in_text(index_line, flag):
+        return True
+    if _document_has_explicit_negative_status_in_text(index_line, flag):
+        return False
     text = (index_line + "\n" + file_text[:2000]).lower()
     if re.search(rf"\b(not|no|pending|todo|tbd|unvalidated|unreviewed)\b[^\n]{{0,40}}\b{re.escape(flag)}\b", text):
         return False
@@ -2062,7 +2073,175 @@ def _candidate_review_evidence(candidate: dict[str, Any]) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def _reviewed_g1_candidate_readback(project: dict[str, Any], artifact_dir: str) -> dict[str, Any]:
+def _gate_sort_key(gate: dict[str, Any]) -> tuple[str, int]:
+    try:
+        gate_id = int(gate.get("gate_id") or 0)
+    except (TypeError, ValueError):
+        gate_id = 0
+    return str(gate.get("timestamp") or gate.get("created_at") or ""), gate_id
+
+
+def _candidate_gate_text(gate: dict[str, Any]) -> str:
+    raw_evidence = gate.get("evidence")
+    evidence: dict[str, Any] = raw_evidence if isinstance(raw_evidence, dict) else {}
+    return "\n".join(
+        str(part or "")
+        for part in (
+            gate.get("notes"),
+            gate.get("message"),
+            evidence.get("notes"),
+            evidence.get("summary"),
+            evidence.get("result_summary"),
+        )
+    )
+
+
+def _gate_text_describes_reviewed_g1_candidate(text: str) -> bool:
+    lower = text.lower()
+    if any(marker in lower for marker in ("no accepted reviewed_g1_candidate", "reviewed=false", "reviewed: false", "not reviewed yet")):
+        return False
+    carries_required_docs = bool(re.search(r"\b(?:14/14|14)\s+required\s+g1\s+docs\s+carry\b", lower))
+    carries_reviewed_yes = bool(re.search(r"\breviewed\s*:\s*yes\b", lower))
+    candidate_context = any(marker in lower for marker in ("candidate readiness", "reviewed g1", "reviewed_g1_candidate", "r2o"))
+    return carries_required_docs and carries_reviewed_yes and candidate_context
+
+
+def _open_pr_head_from_gate_text(text: str) -> tuple[int, str] | None:
+    for match in re.finditer(r"\bPR\s*#\s*(\d+)\b", text, re.IGNORECASE):
+        window = text[match.start(): match.start() + 260]
+        if not re.search(r"\bopen\b", window, re.IGNORECASE):
+            continue
+        head_match = re.search(r"\bhead\s+([0-9a-fA-F]{40})\b", window, re.IGNORECASE)
+        if not head_match:
+            continue
+        return int(match.group(1)), head_match.group(1).lower()
+    return None
+
+
+def _structured_candidate_from_gate(gate: dict[str, Any]) -> dict[str, Any]:
+    raw_evidence = gate.get("evidence")
+    evidence: dict[str, Any] = raw_evidence if isinstance(raw_evidence, dict) else {}
+    for key in ("reviewed_g1_candidate", "g1_reviewed_candidate", "document_readiness_candidate"):
+        value = evidence.get(key)
+        if isinstance(value, dict):
+            return dict(value)
+    return {}
+
+
+def _candidate_pr_number(candidate: dict[str, Any]) -> str:
+    pr = _candidate_pr_evidence(candidate)
+    raw = pr.get("number") or pr.get("pr_number")
+    if raw is not None:
+        return str(raw).strip()
+    text = str(pr.get("url") or pr.get("html_url") or candidate.get("pr_url") or "")
+    match = re.search(r"/(?:pull|pulls)/(\d+)(?:\D|$)", text)
+    return match.group(1) if match else ""
+
+
+def _stale_documentation_checkout_pr_number(project: dict[str, Any]) -> str:
+    checkout = _metadata(project).get("g1_documentation_checkout")
+    if not isinstance(checkout, dict):
+        return ""
+    text = "\n".join(str(checkout.get(key) or "") for key in ("pr_url", "pull_request", "pr", "reason"))
+    match = re.search(r"(?:/pull/|\bPR\s*#\s*)(\d+)\b", text, re.IGNORECASE)
+    return match.group(1) if match else ""
+
+
+def _candidate_matches_stale_documentation_checkout(project: dict[str, Any], candidate: dict[str, Any]) -> bool:
+    checkout = _metadata(project).get("g1_documentation_checkout")
+    if not isinstance(checkout, dict) or checkout.get("not_merged") is not True:
+        return False
+    candidate_sha = str(candidate.get("sha") or candidate.get("head_sha") or candidate.get("commit_sha") or "").strip().lower()
+    stale_sha = str(checkout.get("commit") or checkout.get("sha") or checkout.get("head_sha") or "").strip().lower()
+    if stale_sha and candidate_sha == stale_sha:
+        return True
+    stale_pr = _stale_documentation_checkout_pr_number(project)
+    return bool(stale_pr and stale_pr == _candidate_pr_number(candidate))
+
+
+def _candidate_repo_url(project: dict[str, Any], pr_number: int) -> str | None:
+    metadata = _metadata(project)
+    raw_strategy = metadata.get("repo_strategy")
+    strategy: dict[str, Any] = raw_strategy if isinstance(raw_strategy, dict) else {}
+    repo = str(project.get("repo_remote") or strategy.get("primary_repo") or "").strip()
+    if repo.startswith("https://github.com/"):
+        repo = repo.removeprefix("https://github.com/").removesuffix(".git")
+    if "/" not in repo:
+        return None
+    return f"https://github.com/{repo}/pull/{pr_number}"
+
+
+def _candidate_from_gate_evidence(project: dict[str, Any], gate: dict[str, Any], tasks_by_id: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    if str(gate.get("status") or "").strip().lower() not in {"passed", "approved", "success"}:
+        return {}
+    candidate = _structured_candidate_from_gate(gate)
+    text = _candidate_gate_text(gate)
+    if not candidate:
+        if not _gate_text_describes_reviewed_g1_candidate(text):
+            return {}
+        pr_head = _open_pr_head_from_gate_text(text)
+        if not pr_head:
+            return {}
+        pr_number, sha = pr_head
+        task = tasks_by_id.get(str(gate.get("task_id") or ""), {})
+        branch = str(task.get("branch") or "").strip()
+        path = str(task.get("worktree_path") or "").strip()
+        if not branch or not path:
+            return {}
+        reviewer = str(gate.get("reviewer") or "").strip()
+        owner = str(task.get("owner_profile") or task.get("owner_agent_id") or "").strip()
+        gate_id = gate.get("gate_id")
+        candidate = {
+            "path": path,
+            "branch": branch,
+            "sha": sha,
+            "owner": owner,
+            "review": {
+                "status": "passed",
+                "reviewer": reviewer,
+                "evidence_ref": f"factory_gate_{gate_id}",
+                "independent": bool(reviewer and reviewer != owner),
+            },
+            "pull_request": {
+                "number": pr_number,
+                "url": _candidate_repo_url(project, pr_number),
+                "state": "open",
+                "head_branch": branch,
+                "head_sha": sha,
+            },
+        }
+    if _candidate_matches_stale_documentation_checkout(project, candidate):
+        candidate["_rejected_reason"] = "stale_metadata_candidate_provenance"
+    return candidate
+
+
+def _candidate_reviewed_g1_metadata_from_gates(
+    project: dict[str, Any],
+    gates: list[dict[str, Any]] | None,
+    tasks: list[dict[str, Any]] | None,
+) -> dict[str, Any]:
+    if not gates:
+        return {}
+    tasks_by_id = {str(task.get("task_id") or ""): task for task in (tasks or []) if isinstance(task, dict)}
+    rejected: dict[str, Any] = {}
+    for gate in sorted((g for g in gates if isinstance(g, dict)), key=_gate_sort_key, reverse=True):
+        candidate = _candidate_from_gate_evidence(project, gate, tasks_by_id)
+        if not candidate:
+            continue
+        if candidate.get("_rejected_reason"):
+            rejected = {"_rejected_reason": candidate["_rejected_reason"]}
+            continue
+        return candidate
+    return rejected
+
+
+def _reviewed_g1_candidate_readback(
+    project: dict[str, Any],
+    artifact_dir: str,
+    *,
+    gates: list[dict[str, Any]] | None = None,
+    tasks: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Validate an explicit reviewed G1 candidate checkout, failing closed.
 
     The candidate is only trusted when project metadata names the exact path,
@@ -2073,9 +2252,13 @@ def _reviewed_g1_candidate_readback(project: dict[str, Any], artifact_dir: str) 
     """
 
     metadata = _metadata(project)
-    candidate = _candidate_reviewed_g1_metadata(metadata)
+    candidate = _candidate_reviewed_g1_metadata(metadata) or _candidate_reviewed_g1_metadata_from_gates(project, gates, tasks)
     if not candidate:
         return {"accepted": False, "reason": "missing_candidate_metadata"}
+    if candidate.get("_rejected_reason"):
+        return {"accepted": False, "reason": str(candidate["_rejected_reason"])}
+    if _candidate_matches_stale_documentation_checkout(project, candidate):
+        return {"accepted": False, "reason": "stale_metadata_candidate_provenance"}
 
     raw_path = str(candidate.get("path") or candidate.get("worktree_path") or candidate.get("repo_path") or "").strip()
     branch = str(candidate.get("branch") or candidate.get("head_branch") or "").strip()
@@ -2218,7 +2401,12 @@ def _annotate_candidate_rejection(rows: list[dict[str, Any]], reason: str, detai
     return rows
 
 
-def project_document_status(project: dict[str, Any]) -> list[dict[str, Any]]:
+def project_document_status(
+    project: dict[str, Any],
+    *,
+    gates: list[dict[str, Any]] | None = None,
+    tasks: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     """Return first-class per-file Factory document readiness state.
 
     G1 documents are blocking source-of-truth artifacts for implementation
@@ -2235,7 +2423,7 @@ def project_document_status(project: dict[str, Any]) -> list[dict[str, Any]]:
         return primary_rows
 
     _factory_dir, artifact_dir = _project_artifact_dir(project)
-    candidate_summary = _reviewed_g1_candidate_readback(project, artifact_dir)
+    candidate_summary = _reviewed_g1_candidate_readback(project, artifact_dir, gates=gates, tasks=tasks)
     if not candidate_summary.get("accepted"):
         return _annotate_candidate_rejection(primary_rows, str(candidate_summary.get("reason") or "candidate_rejected"), candidate_summary)
 
@@ -2265,8 +2453,13 @@ def project_document_status(project: dict[str, Any]) -> list[dict[str, Any]]:
     return candidate_rows
 
 
-def _g1_document_blockers(project: dict[str, Any]) -> list[dict[str, Any]]:
-    return [row for row in project_document_status(project) if row.get("category") == "g1_required" and row.get("blocking")]
+def _g1_document_blockers(
+    project: dict[str, Any],
+    *,
+    gates: list[dict[str, Any]] | None = None,
+    tasks: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    return [row for row in project_document_status(project, gates=gates, tasks=tasks) if row.get("category") == "g1_required" and row.get("blocking")]
 
 
 def _repo_commit_explicitly_waived(metadata: dict[str, Any]) -> bool:
@@ -2552,7 +2745,7 @@ def reconciliation_findings(project: dict[str, Any], tasks: list[dict[str, Any]]
                 missing_from_index=missing_from_index,
                 artifact_dir=artifact_dir,
             )
-        document_blockers = _g1_document_blockers(project)
+        document_blockers = _g1_document_blockers(project, tasks=tasks, gates=gates)
         if document_blockers and not _required_docs_explicitly_waived(metadata):
             add(
                 "unvalidated_required_docs",
@@ -2733,6 +2926,8 @@ def critical_readiness_findings(project_id: str, *, gate_evidence: Optional[dict
     repo_path = str(project.get("repo_path") or "").strip()
     artifact_dir = metadata.get("artifact_dir") or f"factory/projects/{project_id}"
     factory_dir = Path(repo_path).expanduser() / str(artifact_dir) if repo_path else None
+    project_tasks = _tasks(project_id)
+    project_gates = _recent_gate_rows(project_id)
 
     if critical_project:
         notion_issue = _notion_projection_issue(metadata)
@@ -2746,7 +2941,7 @@ def critical_readiness_findings(project_id: str, *, gate_evidence: Optional[dict
         if not factory_dir or not factory_dir.is_dir():
             findings.append(f"missing project-local factory documentation directory: {artifact_dir}")
         else:
-            document_blockers = [] if _required_docs_explicitly_waived(metadata) else _g1_document_blockers(project)
+            document_blockers = [] if _required_docs_explicitly_waived(metadata) else _g1_document_blockers(project, tasks=project_tasks, gates=project_gates)
             if document_blockers:
                 findings.append(
                     "g1 documentary readiness blockers: "
@@ -2775,7 +2970,7 @@ def critical_readiness_findings(project_id: str, *, gate_evidence: Optional[dict
 
     if gate_evidence is not None:
         findings.extend(_validation_task_readiness_findings(project_id))
-        source_blockers = _source_increment_integration_blockers(project, _tasks(project_id))
+        source_blockers = _source_increment_integration_blockers(project, project_tasks)
         findings.extend(
             f"positive terminal source task {item['task_id']} branch {item['branch']} is not verified in {item['required_base_ref']}"
             for item in source_blockers
@@ -2790,7 +2985,7 @@ def _document_status_snapshot(project_id: str) -> dict[str, Any]:
     project = _project(project_id)
     if not project:
         return {"available": False, "project_id": project_id, "reason": "project_not_found"}
-    statuses = project_document_status(project)
+    statuses = project_document_status(project, tasks=_tasks(project_id), gates=_recent_gate_rows(project_id))
     blockers = [row for row in statuses if row.get("category") == "g1_required" and row.get("blocking")]
     return {
         "available": True,
@@ -4164,7 +4359,7 @@ def reconcile_project(project_id: str) -> dict[str, Any]:
         raise ValueError(f"Factory project not found: {project_id}")
     metadata = _metadata(project)
     pending_gates = _active_pending_gates(project_id)
-    latest_gates = _latest_gate_rows(project_id)
+    latest_gates = _recent_gate_rows(project_id)
     findings = reconciliation_findings(project, tasks, pending_gates, latest_gates)
     created_reconciliation_tasks = ensure_reconciliation_tasks(project, findings, tasks) if findings else []
     cancelled_reconciliation_tasks = cancel_resolved_reconciliation_tasks(project, findings, tasks)
@@ -6126,7 +6321,7 @@ def _project_docs_notion_preflight(project: dict[str, Any], tasks: list[dict[str
     metadata = _metadata(project)
     findings = reconciliation_findings(project, tasks, pending_gates, gates)
     codes = {str(finding.get("code") or "") for finding in findings}
-    docs_ready = not bool(_g1_document_blockers(project)) and "missing_project_artifact_dir" not in codes
+    docs_ready = not bool(_g1_document_blockers(project, tasks=tasks, gates=gates)) and "missing_project_artifact_dir" not in codes
     notion_ready = _notion_projection_issue(metadata) is None
     return docs_ready, notion_ready, _metadata_bool(metadata, "notion_required"), _dispatch_docs_first_waived(metadata)
 
@@ -6167,7 +6362,7 @@ def claim_next_task(project_id: Optional[str] = None, *, worker: str = "factory-
             continue
         full_project = _project(pid) or {"project_id": pid, "metadata": {}}
         pending_gates = _active_pending_gates(pid)
-        latest_gates = _latest_gate_rows(pid)
+        latest_gates = _recent_gate_rows(pid)
         docs_ready, notion_ready, notion_required, docs_first_waived = _project_docs_notion_preflight(
             full_project,
             tasks,
@@ -6992,8 +7187,19 @@ def status(project_id: Optional[str] = None, **_: Any) -> dict[str, Any]:
     task_runs = _normalize_rows(sql.rows(f"SELECT * FROM factory.task_runs WHERE {filter_expr} ORDER BY started_at DESC LIMIT 300", user=_user()))
     human_questions = _normalize_rows(sql.rows(f"SELECT * FROM factory.human_questions WHERE {filter_expr} ORDER BY created_at DESC LIMIT 100", user=_user()))
     agents = list_agents()
+    tasks_by_project: dict[str, list[dict[str, Any]]] = {}
+    for task in tasks:
+        tasks_by_project.setdefault(str(task.get("project_id") or ""), []).append(task)
+    gates_by_project: dict[str, list[dict[str, Any]]] = {}
+    for gate in gates:
+        gates_by_project.setdefault(str(gate.get("project_id") or ""), []).append(gate)
     for project in projects:
-        project["document_status"] = project_document_status(project)
+        pid = str(project.get("project_id") or "")
+        project["document_status"] = project_document_status(
+            project,
+            tasks=tasks_by_project.get(pid, []),
+            gates=gates_by_project.get(pid, []),
+        )
     payload = {
         "db_backend": "agent_core_postgres",
         "database": sql.runtime_env().get("AGENT_DB_NAME", "zeus_agent"),
