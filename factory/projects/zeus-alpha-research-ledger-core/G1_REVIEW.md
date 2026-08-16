@@ -70,11 +70,49 @@ This is implementation/documentation evidence only. It performs no merge, deploy
 
 **Incorporated repairs:** `R2J_CANONICAL_STATE_REPAIR.md` and `R2K_STALE_CANONICAL_G1_PROVENANCE_REPAIR.md` remain indexed controlling artifacts. PR #20/dad375f, historical PR #29/f61a PASS reviews, R2i review-worktree `already_ancestor` evidence, PR #30/c1943 and PR #31/73b are not active approval or implementation-dispatch evidence.
 
-**Handoff:** the fresh R2m Zeus-signed `agent:zeus` PR is the next review target. Independent reviewers must record PASS/REQUEST_CHANGES against its exact PR head SHA and base `ab08b13669903a87b3d60d6c80231d23d6313782`. This worker leaves `reviewed: pending` intact and performs no merge, deployment, credential change, direct SQL, product implementation or external-runtime operation.
+**Handoff at that time:** the fresh R2m Zeus-signed `agent:zeus` PR was the next review target. R2n, R2o and R2q supersede that active target; R2m remains historical current-base recovery evidence only.
+
+## Review round 8 — R2n exact-SHA quality PASS (Gate 789)
+
+**Reviewed candidate:** PR #33 head `1e82340dddf52071d14c3c7a00b04b3c17ee2821` on base `df4c77fd1413a65cdb85885a06978ff157c1de4d`, branch `factory/zeus-alpha-research-ledger-core/inc-034-r2n-repair-g1-canonical-document`, label `agent:zeus`, not merged at the time of review.
+
+**Independent evidence:** Gate **789**, `gate_type=quality`, `status=passed`, reviewer `quality-reviewer`, timestamp `2026-08-15T22:59:08.821504+00:00`. The gate note recorded a PASS against exact PR #33 SHA, strict primary read-back (`blocking_count=14`, `reviewed=false`, readiness source `primary`) and the need for authorized metadata reconciliation before dispatch.
+
+**Interpretation:** gate 789 is valid source-document review evidence for a reviewed candidate. It is not primary-readiness evidence because PR #33 was open/not merged and Agent Core still read primary source plus stale metadata.
+
+## Review round 9 — R2o reviewed-marker candidate PASS (Gate 790)
+
+**Reviewed candidate:** PR #34 head `2476e978c545e24b18ee48844b24eb8c58245ab4` on base `df4c77fd1413a65cdb85885a06978ff157c1de4d`, branch `factory/zeus-alpha-research-ledger-core/inc-024-r2o-reconciliation-apply-indepen`, label `agent:zeus`, not merged at the time of review.
+
+**Independent evidence:** Factory gate **790**, `gate_type=quality`, `status=passed`, reviewer `quality-reviewer`. PR #34 comment evidence records that the review verified docs-only scope, the 14 required G1 documents carrying candidate-level reviewed markers backed by gate 789 / PR #33 SHA `1e82340dddf52071d14c3c7a00b04b3c17ee2821`, and the candidate-readiness versus primary-readiness separation.
+
+**Interpretation for R2q:** gate 790 is the latest valid reviewed-docs candidate evidence. It supports candidate-level `reviewed: yes` markers tied to PR #34 exact SHA `2476e978c545e24b18ee48844b24eb8c58245ab4`. It does not authorize dispatch without canonical Factory read-back or an authorized reviewed-candidate path.
+
+## Review round 10 — R2p invalid provider-failed review
+
+**R2p candidate:** PR #35 head `ef23a73b39057bb07c1f86f21b6cb7f97e43fe62` on base `df4c77fd1413a65cdb85885a06978ff157c1de4d`, branch `factory/zeus-alpha-research-ledger-core/inc-001-r2p-repair-canonical-reviewed-g1`, label `agent:zeus`.
+
+**Invalid review run:** quality-reviewer run `run-1786840866-90f55f9d` did not execute a review. Worker log lines 365–408 show MiniMax OAuth HTTP 429 on all three attempts, a final provider failure, and `Messages: 1 (1 user, 0 tool calls)`. The exit-code file contains `0`, but this is not a semantic PASS because no reviewer inspected files, diffs, commands, evidence or acceptance criteria.
+
+**Interpretation:** R2p must remain blocked/retriable for review purposes. Provider failure and zero tool calls must never be recorded as completion evidence.
+
+## Review round 11 — R2q current-main recovery handoff
+
+**Recovery base:** R2q starts from `origin/main` `df4c77fd1413a65cdb85885a06978ff157c1de4d` in branch `factory/zeus-alpha-research-ledger-core/inc-035-r2q-g1-review-candidate-recovery` and restores a docs-only reviewed-G1 candidate using PR #34/gate-790 provenance.
+
+**Required next review:** the final R2q PR head SHA must be cited by an independent `solution-architect` review that actually executes. The review evidence must show tool/file/diff/command work and must explicitly reject R2p `run-1786840866-90f55f9d` as invalid completion evidence. If the provider fails or the review has zero tool calls, the result remains BLOCKED/retriable.
+
+## Review round 12 — R2r PR-first recovery of R2q candidate
+
+**Source candidate recovered:** R2q commit `11639ab1650a4d7abfa88820bc266c983a56d1fd` on parent/base `df4c77fd1413a65cdb85885a06978ff157c1de4d` is documentation-only and restores the reviewed-docs candidate using PR #34/gate-790 provenance.
+
+**Provenance defect repaired:** the R2q source commit was authored/committed by `sitiouno <7621230+sitiouno@users.noreply.github.com>`, had no `Signed-off-by` trailer and no open GitHub PR. R2r therefore produces a replacement commit from branch `factory/zeus-alpha-research-ledger-core/inc-001-r2r-pr-first-recovery-of-the-r2q` with Zeus author/sign-off, push, open `agent:zeus` PR and exact-head solution-architect review.
+
+**Required next review:** the final R2r PR head SHA must be cited by an independent `solution-architect` review that actually executes. The review evidence must show tool/file/diff/command work, confirm docs-only/no-runtime scope, reject R2p `run-1786840866-90f55f9d` as invalid completion evidence, and verify the open PR head equals the reviewed SHA.
 
 ## Local documentary verification — non-approval
 
 At `2026-08-10T04:50:09-04:00`, the implementation-planner worker verified the project-local pack from the assigned worktree only. `git ls-files --error-unmatch` confirmed the 14 required G1 documents plus `G0_REPOSITORY_STRATEGY.md`, `REQUIREMENTS_TRACEABILITY.md`, `DATABASE_AND_RUNTIME_CONTRACT.md`, and `G1_REVIEW.md` are tracked. `DOCUMENTATION_INDEX.md` indexes required documents and records explicit validated/reviewed status. `G0_REPOSITORY_STRATEGY.md` records the Zeus-only source repo, `origin/main` reference, assigned branch/worktree policy, PR-first delivery, and predecessor linkage. This is implementation evidence, not an independent specification/security PASS.
 
 ## Status
-This is still a remediation record, not approval. After this revision is committed and pushed as the R2m current-base PR, obtain new independent specification and security reviews against that exact PR head SHA, including the gate-695/R2j/R2k provenance reconciliation. Only then may their independent PASS results support changing required G1 frontmatter/index to `reviewed: yes` and unblocking downstream implementation according to the reconciled delivery policy. Until then, `reviewed: pending` remains binding.
+Required G1 frontmatter/index markers are candidate-reviewed, not primary-ready. The support evidence is gate 790 by `quality-reviewer` against PR #34 exact SHA `2476e978c545e24b18ee48844b24eb8c58245ab4`, with source-document review gate 789 against PR #33 exact SHA `1e82340dddf52071d14c3c7a00b04b3c17ee2821`. Downstream implementation remains blocked until the R2r replacement branch is pushed through a Zeus-signed `agent:zeus` PR, independently reviewed by `solution-architect` against its final open-PR head SHA with real executed-review evidence, and Agent Core `document_status` or an authorized reviewed-candidate metadata path reads back zero required G1 blockers. This record performs no merge, deployment, credential change, direct SQL, product implementation or external-runtime operation.
