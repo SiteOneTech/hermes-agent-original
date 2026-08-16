@@ -70,6 +70,12 @@ reviewed_source_sha: 2476e978c545e24b18ee48844b24eb8c58245ab4
 - Fail-closed behavior is mandatory for unavailable paths, dirty or untracked artifacts, malformed candidate metadata, stale/base-mismatched candidates, missing independent review, and unreviewed document markers. Such candidates cannot clear G1 blockers.
 - The exact current configured base for this repair is `origin/main` `40a188b23a384901f983e4d959d3ebbecf50b318`; primary checkout HEAD `4eb87e4cd48105af05fe974cf1d493f0e1b57ae1` is recorded only as rejected identity evidence.
 
+## R2ai current-origin independent G1 review security gate
+- R2ai is limited to an independent G1 specification/quality assessment plus project-local documentation/index/review-evidence under `factory/projects/zeus-alpha-research-ledger-core/`; it must not add or alter runtime provider clients, credential paths, messaging connectors, deployment behavior, trading/risk/paper/live behavior, product ledger implementation, the primary checkout, or direct Factory DB writes.
+- The exact base for this review/repair is `origin/main` `b525254809fba0ad46e6b7e9405778c44e64bae9`; the fresh PR is a review handoff only and does not authorize merge, deploy, credential change, external runtime execution, or downstream ALR implementation.
+- The assessment preserves every required document's `reviewed` field unchanged; the designated independent security review for the current candidate SHA remains pending and is not replaced by this quality/specification assessment.
+- Open PR #44 is delivery evidence only for the R2ae task (head `bb8495a61611cfd9501c00f7a48fda42cfaee61f`, merge-base with current `origin/main` `1b6bc0f65d3ad49845d20e056203e3b3702ac2a7`, head not an ancestor of `origin/main`) and never canonical readiness authority.
+
 ## Scheduler gate
 - `agent_core.alpha_research.scheduler.enabled` is false absent explicit configuration.
 - Registration and each invocation call the contract §5 verifier without cache. Tests cover every false/missing/failed/expired/wrong-commit readiness component and prove no batch read/run follows `scheduler_not_ready`.
