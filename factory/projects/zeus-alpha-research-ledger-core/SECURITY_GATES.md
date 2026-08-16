@@ -59,6 +59,11 @@ reviewed_source_sha: 2476e978c545e24b18ee48844b24eb8c58245ab4
 - The configured source for this repair is `origin/main` `2a32066398d500d6dac071bd7f2184d47bb3bcb4`; stale primary checkout HEAD `4eb87e4cd48105af05fe974cf1d493f0e1b57ae1` is recorded only as rejected identity evidence and never as canonical readiness authority.
 - Fail-closed behavior is mandatory when configured base identity cannot be verified. No fallback can clear G1 blockers from arbitrary worktree, PR, candidate, metadata, or stale-primary state.
 
+## R2c5 documentation-only independent review security gate
+- R2c5 is limited to project-local documentation/index/review-evidence under `factory/projects/zeus-alpha-research-ledger-core/` plus the approved Factory status/gate-record CLI evidence; it must not add or alter runtime provider clients, credential paths, messaging connectors, deployment behavior, trading/risk/paper/live behavior, product ledger implementation, the primary checkout, or direct Factory DB writes.
+- The exact base for this review/repair is `origin/main` `91aa62b11f02f69d88f7d8c18c30033edb4b7355`; the fresh PR is a review handoff only and does not authorize merge, deploy, credential change, external runtime execution, or downstream ALR implementation.
+- The live runtime mismatch (stale primary checkout at `4eb87e4cd48105af05fe974cf1d493f0e1b57ae1` running the pre-R2v resolver) is evidence to document and route as bounded technical rework, never authority to mutate the primary checkout from this increment.
+
 ## Scheduler gate
 - `agent_core.alpha_research.scheduler.enabled` is false absent explicit configuration.
 - Registration and each invocation call the contract §5 verifier without cache. Tests cover every false/missing/failed/expired/wrong-commit readiness component and prove no batch read/run follows `scheduler_not_ready`.
