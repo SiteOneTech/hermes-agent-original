@@ -296,6 +296,34 @@ def _write_g1_docs(factory_dir: Path, *, reviewed: bool) -> None:
     )
 
 
+def _write_g1_docs_with_frontmatter_index(factory_dir: Path, *, reviewed: bool) -> None:
+    _write_g1_docs(factory_dir, reviewed=reviewed)
+    reviewed_value = "yes" if reviewed else "pending"
+    table_reviewed = "yes" if reviewed else "not reviewed yet"
+    index_lines = [
+        "---",
+        "project_id: demo",
+        "status: g1_rebaseline",
+        "validated: yes",
+        f"reviewed: {reviewed_value}",
+        "reviewed_by: solution-architect",
+        "---",
+        "",
+        "# DOCUMENTATION INDEX — Demo",
+        "",
+        "Historical stale-primary evidence used to say `reviewed: pending`; the current front matter is authoritative.",
+        "This index describes resolver safety: invalid, dirty, malformed, unavailable, untracked, or unreviewed candidates stay blocking.",
+        "",
+        "| File | Purpose | Validated | Reviewed |",
+        "|---|---|---|---|",
+    ]
+    index_lines.extend(
+        f"| `{name}` | required G1 document | yes | {table_reviewed} |"
+        for name in factory_pg.G1_BLOCKING_DOCUMENTS
+    )
+    (factory_dir / "DOCUMENTATION_INDEX.md").write_text("\n".join(index_lines) + "\n", encoding="utf-8")
+
+
 def _commit_all(repo: Path, message: str) -> str:
     _git(repo, "add", "factory")
     _git(repo, "commit", "-m", message)
@@ -666,6 +694,50 @@ def test_document_status_uses_configured_origin_base_when_primary_checkout_stale
     assert {row["readiness_source"] for row in g1_rows} == {"configured_base_ref"}
     assert {row["base_ref"] for row in g1_rows} == {"origin/main"}
     assert {row["base_commit"] for row in g1_rows} == {reviewed_sha}
+
+
+def test_document_status_resolves_frontmatter_reviewed_index_from_configured_origin_base(tmp_path):
+    origin = tmp_path / "origin.git"
+    repo = tmp_path / "repo"
+    updater = tmp_path / "updater"
+    subprocess.run(["git", "init", "--bare", str(origin)], check=True, capture_output=True, text=True)
+    subprocess.run(["git", "clone", str(origin), str(repo)], check=True, capture_output=True, text=True)
+    _git(repo, "config", "user.email", "factory@example.com")
+    _git(repo, "config", "user.name", "Factory Test")
+    _write_g1_docs_with_frontmatter_index(repo / "factory" / "projects" / "demo", reviewed=False)
+    stale_sha = _commit_all(repo, "primary pending frontmatter index docs")
+    _git(repo, "branch", "-M", "main")
+    _git(repo, "push", "origin", "main")
+
+    subprocess.run(["git", "clone", str(origin), str(updater)], check=True, capture_output=True, text=True)
+    _git(updater, "checkout", "main")
+    _git(updater, "config", "user.email", "factory@example.com")
+    _git(updater, "config", "user.name", "Factory Test")
+    _write_g1_docs_with_frontmatter_index(updater / "factory" / "projects" / "demo", reviewed=True)
+    reviewed_sha = _commit_all(updater, "reviewed origin frontmatter index docs")
+    _git(updater, "push", "origin", "main")
+    _git(repo, "fetch", "origin", "main:refs/remotes/origin/main")
+
+    statuses = factory_pg.project_document_status(
+        {
+            "project_id": "demo",
+            "repo_path": str(repo),
+            "base_branch": "main",
+            "metadata": {
+                "artifact_dir": "factory/projects/demo",
+                "repo_strategy": {"primary_repo_path": str(repo), "base_branch": "main"},
+            },
+        }
+    )
+
+    g1_rows = [row for row in statuses if row["category"] == "g1_required"]
+    by_name = {row["file_name"]: row for row in g1_rows}
+    assert _git(repo, "rev-parse", "HEAD") == stale_sha
+    assert g1_rows
+    assert not any(row["blocking"] for row in g1_rows)
+    assert {row["readiness_source"] for row in g1_rows} == {"configured_base_ref"}
+    assert {row["base_commit"] for row in g1_rows} == {reviewed_sha}
+    assert by_name["DOCUMENTATION_INDEX.md"]["reviewed"] is True
 
 
 def test_document_status_rejects_stale_primary_even_when_primary_docs_are_ready(tmp_path):

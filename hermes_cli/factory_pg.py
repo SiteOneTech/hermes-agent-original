@@ -2003,6 +2003,43 @@ _DOCUMENT_STATUS_TRUE_VALUES = {"true", "yes", "y", "1", "passed", "validated", 
 _DOCUMENT_STATUS_FALSE_VALUES = {"false", "no", "n", "0", "failed", "pending", "todo", "tbd", "unvalidated", "unreviewed"}
 
 
+def _normalized_document_status_value(value: str) -> str:
+    normalized = str(value or "").strip().strip("'\"").lower()
+    return re.split(r"[\s,;#|]+", normalized, maxsplit=1)[0]
+
+
+def _document_frontmatter_flag(file_text: str, flag: str) -> bool | None:
+    """Return an explicit YAML-frontmatter status for ``flag`` when present.
+
+    Required Factory docs use top-of-file frontmatter as their machine-readable
+    status authority. Historical body prose may quote stale states such as
+    ``reviewed: pending``; those quotes must not override a current reviewed
+    frontmatter marker, while a pending frontmatter marker must still fail
+    closed.
+    """
+
+    lines = file_text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return None
+    pattern = re.compile(rf"^\s*{re.escape(flag)}\s*:\s*(?P<value>.*?)\s*$", re.IGNORECASE)
+    for line in lines[1:80]:
+        if line.strip() == "---":
+            return None
+        match = pattern.match(line)
+        if not match:
+            continue
+        value = _normalized_document_status_value(match.group("value"))
+        if value in _DOCUMENT_STATUS_TRUE_VALUES:
+            return True
+        if value in _DOCUMENT_STATUS_FALSE_VALUES or any(
+            value.startswith(prefix)
+            for prefix in ("pending", "todo", "tbd", "unvalidated", "unreviewed")
+        ):
+            return False
+        return False
+    return None
+
+
 def _document_has_explicit_negative_status(index_line: str, file_text: str, flag: str) -> bool:
     status_header = index_line + "\n" + "\n".join(file_text.splitlines()[:40])
     false_values = "|".join(sorted(re.escape(value) for value in _DOCUMENT_STATUS_FALSE_VALUES))
@@ -2029,6 +2066,9 @@ def _document_flag_from_text(metadata: dict[str, Any], index_line: str, file_tex
         return value
     if isinstance(value, str):
         return value.strip().lower() in _DOCUMENT_STATUS_TRUE_VALUES
+    frontmatter_value = _document_frontmatter_flag(file_text, flag)
+    if frontmatter_value is not None:
+        return frontmatter_value
     if _document_has_explicit_negative_status(index_line, file_text, flag):
         return False
     if _document_has_explicit_positive_status(index_line, file_text, flag):
