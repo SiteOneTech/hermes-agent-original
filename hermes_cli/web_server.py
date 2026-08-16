@@ -4886,9 +4886,6 @@ async def run_factory_project_action(project_id: str, action: str):
         raise HTTPException(status_code=400, detail=f"Unsupported Factory action: {action}")
     try:
         if canonical_action in {"tick", "resume"}:
-            script = Path.home() / ".hermes" / "scripts" / "factory_orchestrator_tick.py"
-            if not script.exists():
-                raise RuntimeError(f"Factory orchestrator script not found: {script}")
             resume_result = None
             if canonical_action == "resume":
                 from hermes_cli import factory_backend
@@ -4897,23 +4894,9 @@ async def run_factory_project_action(project_id: str, action: str):
                 resume_result = backend.control_action(project_id, "resume")
                 if resume_result.get("resume_blocked") or resume_result.get("dispatch_allowed") is False:
                     return {"ok": True, "project_id": project_id, **resume_result, "tick": None, "claimed": None}
-            env = {**os.environ, "FACTORY_TICK_PROJECT_ID": project_id}
-            proc = subprocess.run(
-                [sys.executable, str(script)],
-                cwd=str(Path.cwd()),
-                env=env,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                capture_output=True,
-                timeout=180,
-            )
-            if proc.returncode != 0:
-                raise RuntimeError(proc.stderr.strip() or proc.stdout.strip() or f"tick exited {proc.returncode}")
-            try:
-                result = json.loads(proc.stdout or "{}")
-            except Exception:
-                result = {"raw_output": proc.stdout}
+            from hermes_cli import factory as factory_cli
+
+            result = factory_cli._run_orchestrator_script(project_id)
             if resume_result is not None:
                 return {"ok": True, "project_id": project_id, **resume_result, "tick": result, "claimed": result.get("claimed")}
             return {"ok": True, "project_id": project_id, "action": canonical_action, **result}

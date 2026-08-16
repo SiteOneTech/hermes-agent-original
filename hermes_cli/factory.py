@@ -271,15 +271,33 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _running_factory_source_root() -> Path:
+    factory_file = Path(__file__).resolve()
+    if factory_file.name != "factory.py" or factory_file.parent.name != "hermes_cli":
+        raise RuntimeError(f"Factory tick source provenance malformed: {factory_file}")
+    return factory_file.parents[1]
+
+
+def _resolve_orchestrator_script() -> tuple[Path, Path]:
+    source_root = _running_factory_source_root()
+    script = source_root / "scripts" / "factory" / "factory_orchestrator_tick.py"
+    if not script.is_file():
+        raise RuntimeError(f"Factory orchestrator script not found in running Hermes source: {script}")
+    return script, source_root
+
+
 def _run_orchestrator_script(project_id: str | None = None) -> dict[str, Any]:
-    script = Path.home() / ".hermes" / "scripts" / "factory_orchestrator_tick.py"
-    if not script.exists():
-        raise RuntimeError(f"Factory orchestrator script not found: {script}")
+    script, source_root = _resolve_orchestrator_script()
     env = {**os.environ}
+    pythonpath = str(source_root)
+    if env.get("PYTHONPATH"):
+        pythonpath = f"{pythonpath}{os.pathsep}{env['PYTHONPATH']}"
+    env["PYTHONPATH"] = pythonpath
     if project_id:
         env["FACTORY_TICK_PROJECT_ID"] = project_id
     proc = subprocess.run(
         [sys.executable, str(script)],
+        cwd=str(source_root),
         env=env,
         text=True,
         encoding="utf-8",
