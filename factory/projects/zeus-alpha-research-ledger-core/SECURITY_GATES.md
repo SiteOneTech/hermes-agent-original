@@ -46,6 +46,11 @@ reviewed_source_sha: 2476e978c545e24b18ee48844b24eb8c58245ab4
 - The configured-base-ref status reader may inspect committed Git blobs from the verified origin base ref but must not checkout, fast-forward, merge, or mutate the primary checkout.
 - The no-auto-integration guard is a fail-closed safety boundary for projects with `factory_auto_integration_forbidden=true`; such projects require PR-first independent QA rather than Factory branch-to-base integration.
 
+## R2y document-status source-alignment gate
+- R2y is documentation/reconciliation evidence only. It must not add or modify product/runtime code, Agent Core schema, provider clients, credentials, messaging connectors, deployment behavior, trading/risk/paper/live behavior, or external runtime authority.
+- The approved status evidence may read Factory DB through `/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory status zeus-alpha-research-ledger-core --json` and inspect committed Git metadata. It must not use direct SQL, mutate Factory `factory.*` state outside approved Factory gate recording, checkout/fast-forward/merge the shared primary checkout, or run a dispatch/control-plane tick that could claim another increment.
+- The status-source decision must stay fail-closed: a stale reconciler event or stale `metadata.g1_documentation_checkout` pointer is not accepted as reviewed readiness, but a current row-level `project.document_status` blocker would still block downstream work until independently repaired.
+
 ## Scheduler gate
 - `agent_core.alpha_research.scheduler.enabled` is false absent explicit configuration.
 - Registration and each invocation call the contract §5 verifier without cache. Tests cover every false/missing/failed/expired/wrong-commit readiness component and prove no batch read/run follows `scheduler_not_ready`.
