@@ -3,7 +3,13 @@ project_id: zeus-alpha-research-ledger-core
 phase: local_advisory_ledger_v1
 status: g1_rebaseline
 validated: yes
-reviewed: pending
+reviewed: yes
+reviewed_by: solution-architect
+review_evidence: factory_gate_794
+reviewed_candidate_sha: c81547062c5362a7be6f5a1bb2ef9612b29bac9c
+reviewed_candidate_pr: https://github.com/SiteOneTech/hermes-agent-original/pull/36
+reviewed_source_gate: factory_gate_790
+reviewed_source_sha: 2476e978c545e24b18ee48844b24eb8c58245ab4
 ---
 
 # SECURITY GATES
@@ -30,6 +36,10 @@ reviewed: pending
 - Default toolsets contain none of the ten handlers; the non-default leaf contains exactly `alpha_research_status`, `program_create`, `source_submit`, `evidence_record`, `alpha_card_create`, `alpha_card_review`, `cycle_start`, `cycle_close`, `inert_handoff_prepare`, `handoff_list`.
 - Static scan covers every added/replacement line in every ALR-added or ALR-modified implementation diff file from a recorded, ancestor-verified base SHA; no selected-path exception is allowed. It rejects every §4 banned import/SQL pattern and unscannable changed file.
 - Runtime harness executes all handlers and scheduler registration/run with outbound socket/HTTP/subprocess denial. Any attempt fails the test; only the exact local Postgres DSN is permitted.
+
+## R2u documentation-status repair gate
+- R2u modifies only project-local Markdown artifacts under `factory/projects/zeus-alpha-research-ledger-core/` and imports no runtime/control-plane code, provider dependency, network client, credential path, message connector, deployment path, trading/risk/paper/live behavior or external runtime authority.
+- The reviewed G1 markers cite PR #36 head `c81547062c5362a7be6f5a1bb2ef9612b29bac9c` and Factory gate `794`; they are documentation-readiness evidence only and do not grant implementation permission outside the downstream task gates above.
 
 ## Scheduler gate
 - `agent_core.alpha_research.scheduler.enabled` is false absent explicit configuration.

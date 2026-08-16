@@ -3,7 +3,13 @@ project_id: zeus-alpha-research-ledger-core
 phase: local_advisory_ledger_v1
 status: g1_rebaseline
 validated: yes
-reviewed: pending
+reviewed: yes
+reviewed_by: solution-architect
+review_evidence: factory_gate_794
+reviewed_candidate_sha: c81547062c5362a7be6f5a1bb2ef9612b29bac9c
+reviewed_candidate_pr: https://github.com/SiteOneTech/hermes-agent-original/pull/36
+reviewed_source_gate: factory_gate_790
+reviewed_source_sha: 2476e978c545e24b18ee48844b24eb8c58245ab4
 ---
 
 # TRACKER
@@ -13,12 +19,13 @@ reviewed: pending
 |---|---|---|
 | G0 strategy | passed with recorded drift | G0 records Zeus-only repo, remote and worktree policy; it now also records live evidence that ALR-010-R1 commit `b9396bcd7d14ee6f212bd0fd0609e468cecf567f` was merged into `origin/main` as `e3d04ff94b67e6e21be1d5515bdb71400fbedf0a` by Factory event `173433`. That merge is evidence to review, not PASS/PR/QA authority. |
 | Predecessor linkage | passed | `zeus-independent-alpha-research` remains the documentation-only predecessor |
-| ALR-010 G1 | corrected candidate pending exact-SHA review | required docs exist, are indexed/tracked, and carry explicit validated/reviewed status; gates 686/687 were request-changes, gate 695 recorded merge-policy drift, and any PASS on a pre-correction SHA is not reused for this revision |
+| ALR-010 G1 | reviewed documentation pack repaired | required docs exist, are indexed/tracked, and carry explicit validated/reviewed status; R2u binds `reviewed: yes` to PR #36 exact head `c81547062c5362a7be6f5a1bb2ef9612b29bac9c` and Factory gate `794`; gates 686/687/695 remain historical request-changes context, not runtime authority |
 | R2j canonical-state repair | historical, PR #30 merged | R2j commit `c1943efb2b97b54b42bc5eabe858340d8c391116` was delivered as PR #30 with `agent:zeus` and merged into remote `origin/main` as `83d5ee06ba25859f047469baed223fe88e9467e3`; this is evidence to reconcile, not ALR-020 dispatch authority. |
 | R2k stale provenance repair | historical, PR #31 merged | Agent Core project metadata still points to obsolete PR #20 / `dad375f27568c38be771fc597b579d087f034e1d`, but R2k itself was delivered as PR #31 at head `73b74f03e3c73830f69fb487a7439529190c21c2` and is now historical provenance repair evidence. It does not mark G1 reviewed or dispatch ALR-020. |
-| R2m current-base recovery | active bounded handoff | Assigned branch/worktree recreated from current `origin/main` `ab08b13669903a87b3d60d6c80231d23d6313782`; R2j/R2k repairs are indexed and preserved; the next valid review target is the fresh R2m PR head SHA, not PR #20/#29 or historical bases. See `R2M_CURRENT_BASE_G1_REVIEW_HANDOFF.md`. |
-| ALR-010-R1 | active bounded rework | resolves only the documented gates 686/687 findings plus gate 695's requirement to record the actual direct-merge evidence; no ledger code, Factory metadata mutation, PR, new merge, deploy, prohibited external-system call, PASS claim or reviewed=yes change |
-| ALR-020..050 | not started | blocked on exact-SHA independent PASS reviews, reconciliation of the observed ALR-010-R1 base-merge evidence, and deterministic Factory metadata correction removing incompatible bounded-local-sessions acceptance |
+| R2m current-base recovery | historical handoff | Assigned branch/worktree recreated from `origin/main` `ab08b13669903a87b3d60d6c80231d23d6313782`; R2j/R2k repairs are indexed and preserved. R2u supersedes its pending-review state for canonical document-status preflight by applying reviewed PR #36/gate 794 markers. |
+| R2u document-status preflight repair | active delivery | Current assigned branch/worktree starts from `df4c77fd1413a65cdb85885a06978ff157c1de4d`; required G1 docs/index/traceability now carry reviewed provenance so docs-first preflight can report zero required blockers. See `R2U_CANONICAL_G1_DOCUMENT_STATUS_PREFLIGHT_REPAIR.md`. |
+| ALR-010-R1 | historical bounded rework | resolves only the documented gates 686/687 findings plus gate 695's requirement to record the actual direct-merge evidence; no ledger code, Factory metadata mutation, new merge, deploy or prohibited external-system call |
+| ALR-020..050 | not started | blocked until their own scoped TDD/security/QA gates run; G1 document readiness does not grant product/runtime dispatch authority |
 | Source APIs | policy only | v1 supports local normalized evidence batch; no provider driver/credential is enabled in core |
 | Daily scheduler | disabled by design | must wait for recorded ALR-070 local prerequisites |
 | Vonash exchange | intentionally excluded | external platform owns any later secure intake/evaluation work |
@@ -35,10 +42,11 @@ reviewed: pending
 - Gate 695's real finding is now recorded: Factory event `173433` integrated branch commit `b9396bcd7d14ee6f212bd0fd0609e468cecf567f` into `origin/main` as merge commit `e3d04ff94b67e6e21be1d5515bdb71400fbedf0a`; this is non-approval evidence and removes false branch-only/no-merge statements.
 - R2j now records that R2i's `already_ancestor` integration metadata belongs to the review-only branch and must not be used as source visibility evidence for PR #29; QA Guardian/source-delivery evidence must bind to PR #29 head `f61a7275048e2135b2b2729a1b9cdf8713c58866`.
 - R2k now records that the active Factory metadata pointer is stale: `metadata.g1_documentation_checkout` still names PR #20 / `dad375f27568c38be771fc597b579d087f034e1d` even after R2j was delivered through PR #30 at `c1943efb2b97b54b42bc5eabe858340d8c391116`; renewed review must not reuse PR #20/#29 or review-worktree metadata.
-- R2m now records the current canonical base `ab08b13669903a87b3d60d6c80231d23d6313782`, adds a fresh exact-SHA handoff artifact, and keeps `reviewed: pending` until independent reviewers inspect the R2m PR head.
+- R2m records the current canonical base `ab08b13669903a87b3d60d6c80231d23d6313782`, adds a fresh exact-SHA handoff artifact, and remains historical pending-review context.
+- R2u records the active docs-first repair: current base `df4c77fd1413a65cdb85885a06978ff157c1de4d`, PR #36 exact head `c81547062c5362a7be6f5a1bb2ef9612b29bac9c`, Factory gate `794`, and canonical required-document markers set to `reviewed: yes`.
 - Collaboration session/message storage was removed from v1.
 - Factory's ALR-020 bounded-local-sessions acceptance clause conflicts with that exclusion; required reconciliation is documented in `TASK_GRAPH.md` and must be completed/read back by the authorized metadata owner before implementation, without expanding v1.
 - ALR-060 was superseded by three independent review tasks; ALR-070 depends on all three.
 
 ## Immediate next event
-Commit this bounded R2m current-base correction, push it through a Zeus-signed `agent:zeus` PR, record documentary evidence, then obtain new independent quality/spec/security review against the exact R2m PR head SHA. Implementation remains blocked until `reviewed: yes` is validly supported by that exact-SHA review path, stale PR #20 metadata is reconciled in Agent Core, canonical `document_status` has no required G1 blockers, gate-695/R2j/R2k merge reconciliation is independently accepted, and the ALR-020 metadata reconciliation is recorded/read back exactly.
+Commit this bounded R2u documentation-status repair, push it through a Zeus-signed `agent:zeus` PR, record command evidence, and use the PR evidence to show docs-first preflight reads zero required-document blockers. Product implementation remains blocked until each downstream ALR task independently passes its own TDD/security/QA delivery gates.

@@ -3,13 +3,19 @@ project_id: zeus-alpha-research-ledger-core
 phase: local_advisory_ledger_v1
 status: g1_rebaseline
 validated: yes
-reviewed: pending
+reviewed: yes
+reviewed_by: solution-architect
+review_evidence: factory_gate_794
+reviewed_candidate_sha: c81547062c5362a7be6f5a1bb2ef9612b29bac9c
+reviewed_candidate_pr: https://github.com/SiteOneTech/hermes-agent-original/pull/36
+reviewed_source_gate: factory_gate_790
+reviewed_source_sha: 2476e978c545e24b18ee48844b24eb8c58245ab4
 ---
 
 # QA GATES
 
 ## ALR-010 documentary gate
-- All 14 G1 documents plus G0, `REQUIREMENTS_TRACEABILITY.md`, `DATABASE_AND_RUNTIME_CONTRACT.md` and `G1_REVIEW.md` exist, are indexed, committed and independently PASS-reviewed.
+- All 14 G1 documents plus G0, `REQUIREMENTS_TRACEABILITY.md`, `DATABASE_AND_RUNTIME_CONTRACT.md` and `G1_REVIEW.md` exist, are indexed, committed and independently PASS-reviewed; R2u binds the reviewed markers to PR #36 head `c81547062c5362a7be6f5a1bb2ef9612b29bac9c` and Factory gate `794`.
 - `TASK_GRAPH.md` reconciliation matches current Factory task IDs, phases, owner/reviewer profiles, dependencies, branches, worktrees, PR-first metadata and the observed ALR-010-R1 direct integration event; before ALR-020, the incompatible bounded-local-sessions acceptance clause has the exact documented metadata correction/read-back evidence and v1 session/message exclusion remains intact.
 - No document implies direct Vonash/trading authority, provider integration in core, or that the observed ALR-010-R1 direct Factory merge is approval/waiver/repeatable policy.
 
@@ -43,3 +49,4 @@ reviewed: pending
 - For future source increments, QA Guardian merge evidence is mandatory before terminal closure; per-task waiver metadata remains the expected guard against Factory direct branch-to-base integration. The observed ALR-010-R1 `merge_no_ff_push_origin` event must be treated as reconciled audit evidence, not as delivery approval or deployment authority.
 - PR-first/QA Guardian evidence must be candidate-bound: for PR #29 the candidate commit is `f61a7275048e2135b2b2729a1b9cdf8713c58866`. A review-only branch `already_ancestor` record at `5e1e4622e93d8d2fabdfe0f2176889a29afa7f7c` is not acceptable source-merge or QA Guardian evidence for that PR.
 - R2m renewal evidence must be candidate-bound to the exact R2m PR head SHA on base `origin/main` `ab08b13669903a87b3d60d6c80231d23d6313782`. Obsolete project metadata pointing to PR #20 / `dad375f27568c38be771fc597b579d087f034e1d`, historical PR #29/f61a review PASS records, PR #30/c1943 merge evidence and PR #31/R2k exposure are not sufficient to change G1 docs to `reviewed: yes` or dispatch ALR-020 until canonical Factory metadata and `document_status` read back reconciled.
+- R2u delivery evidence must remain documentation-only: the PR evidence records the exact R2u head/base SHA, `git diff --check`, tracked-document validation, local candidate document-status preflight with zero required blockers, and no merge/deploy/credential/external-runtime/product code change. Clearing G1 document blockers does not bypass downstream ALR task gates.
