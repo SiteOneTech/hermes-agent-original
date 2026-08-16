@@ -339,6 +339,44 @@ def _reviewed_candidate_metadata(candidate: Path, branch: str, sha: str) -> dict
     }
 
 
+def _reviewed_candidate_task(candidate: Path, branch: str, *, status: str = "done") -> dict:
+    return {
+        "task_id": "demo-r2r-reviewed-candidate",
+        "project_id": "demo",
+        "status": status,
+        "branch": branch,
+        "worktree_path": str(candidate),
+        "owner_profile": "claude-builder",
+    }
+
+
+def _reviewed_candidate_gate(
+    *,
+    task_id: str = "demo-r2r-reviewed-candidate",
+    branch: str,
+    sha: str,
+    base_sha: str,
+    pr_state: str = "OPEN",
+    status: str = "passed",
+) -> dict:
+    return {
+        "gate_id": 794,
+        "gate_type": "architecture",
+        "project_id": "demo",
+        "task_id": task_id,
+        "status": status,
+        "reviewer": "solution-architect",
+        "timestamp": "2026-08-16T02:05:31Z",
+        "notes": (
+            f"R2r independent solution-architect PASS for {pr_state} PR #36 "
+            f"https://github.com/SiteOneTech/hermes-agent-original/pull/36 "
+            f"exact head {sha} base {base_sha}; branch {branch}; "
+            "label agent:zeus verified; docs-only factory/projects/demo/*.md; "
+            "Zeus author/sign-off verified; no-runtime/no-external-execution boundary."
+        ),
+    }
+
+
 def test_cli_link_notion_uses_backend(monkeypatch, capsys):
     calls = {}
 
@@ -532,6 +570,36 @@ def test_document_status_explicit_status_wins_over_later_normative_negation(tmp_
     assert security_gates["blocking"] is False
 
 
+def test_document_status_frontmatter_wins_over_embedded_primary_readback_false(tmp_path):
+    factory_dir = tmp_path / "factory" / "projects" / "demo"
+    factory_dir.mkdir(parents=True)
+    for name in factory_pg.G1_BLOCKING_DOCUMENTS:
+        body = ["---", "validated: yes", "reviewed: yes", "---", f"# {name}"]
+        if name == "TASK_GRAPH.md":
+            body.extend(
+                [
+                    "",
+                    "This file documents that the primary checkout is still blocking because `reviewed=false`.",
+                    "That embedded primary-readback evidence must not override this file's frontmatter.",
+                ]
+            )
+        (factory_dir / name).write_text("\n".join(body) + "\n", encoding="utf-8")
+    (factory_dir / "DOCUMENTATION_INDEX.md").write_text(
+        "\n".join(f"| `{name}` | yes | yes | yes | true | true |" for name in factory_pg.G1_BLOCKING_DOCUMENTS),
+        encoding="utf-8",
+    )
+    _commit_factory_docs(tmp_path)
+
+    statuses = factory_pg.project_document_status(
+        {"project_id": "demo", "repo_path": str(tmp_path), "metadata": {"artifact_dir": "factory/projects/demo"}}
+    )
+    task_graph = next(row for row in statuses if row["file_name"] == "TASK_GRAPH.md")
+
+    assert task_graph["validated"] is True
+    assert task_graph["reviewed"] is True
+    assert task_graph["blocking"] is False
+
+
 def test_document_status_can_resolve_from_exact_reviewed_g1_candidate(tmp_path):
     repo, candidate, branch, sha = _make_primary_with_reviewed_candidate(tmp_path)
     project = {
@@ -551,6 +619,57 @@ def test_document_status_can_resolve_from_exact_reviewed_g1_candidate(tmp_path):
     assert {row["readiness_source"] for row in g1_rows} == {"reviewed_candidate"}
     assert {row["candidate_branch"] for row in g1_rows} == {branch}
     assert {row["candidate_sha"] for row in g1_rows} == {sha}
+
+
+def test_document_status_resolves_latest_open_reviewed_candidate_from_factory_gate_evidence(tmp_path):
+    repo, candidate, branch, sha = _make_primary_with_reviewed_candidate(tmp_path)
+    base_sha = _git(repo, "rev-parse", "main")
+    project = {"project_id": "demo", "repo_path": str(repo), "metadata": {"artifact_dir": "factory/projects/demo"}}
+
+    primary_statuses = factory_pg.project_document_status(project)
+    assert any(row["category"] == "g1_required" and row["blocking"] for row in primary_statuses)
+
+    task = _reviewed_candidate_task(candidate, branch)
+    gate = _reviewed_candidate_gate(branch=branch, sha=sha, base_sha=base_sha)
+    statuses = factory_pg.project_document_status(project, tasks=[task], gates=[gate])
+
+    g1_rows = [row for row in statuses if row["category"] == "g1_required"]
+    assert g1_rows
+    assert not any(row["blocking"] for row in g1_rows)
+    assert {row["readiness_source"] for row in g1_rows} == {"reviewed_candidate"}
+    assert {row["candidate_branch"] for row in g1_rows} == {branch}
+    assert {row["candidate_sha"] for row in g1_rows} == {sha}
+    assert {row["candidate_review_evidence_ref"] for row in g1_rows} == {"factory_gate_794"}
+    assert {row["candidate_pr_number"] for row in g1_rows} == {36}
+
+
+@pytest.mark.parametrize(
+    ("task_status", "gate_status", "pr_state"),
+    [
+        ("superseded", "passed", "OPEN"),
+        ("done", "failed", "OPEN"),
+        ("done", "passed", "MERGED"),
+    ],
+)
+def test_document_status_rejects_stale_unreviewed_or_merged_factory_gate_candidates(
+    tmp_path,
+    task_status,
+    gate_status,
+    pr_state,
+):
+    repo, candidate, branch, sha = _make_primary_with_reviewed_candidate(tmp_path)
+    base_sha = _git(repo, "rev-parse", "main")
+    project = {"project_id": "demo", "repo_path": str(repo), "metadata": {"artifact_dir": "factory/projects/demo"}}
+    task = _reviewed_candidate_task(candidate, branch, status=task_status)
+    gate = _reviewed_candidate_gate(branch=branch, sha=sha, base_sha=base_sha, pr_state=pr_state, status=gate_status)
+
+    statuses = factory_pg.project_document_status(project, tasks=[task], gates=[gate])
+
+    prd = next(row for row in statuses if row["file_name"] == "PRD.md")
+    assert prd["readiness_source"] == "primary"
+    assert prd["reviewed"] is False
+    assert prd["blocking"] is True
+    assert prd.get("reviewed_candidate_accepted") is not True
 
 
 @pytest.mark.parametrize(
