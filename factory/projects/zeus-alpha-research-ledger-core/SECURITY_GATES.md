@@ -50,6 +50,10 @@ reviewed_source_sha: 2476e978c545e24b18ee48844b24eb8c58245ab4
 - R2ah is limited to current-origin reviewed-marker/index documentation repair under `factory/projects/zeus-alpha-research-ledger-core/` and must not add or alter runtime provider clients, credential paths, messaging connectors, deployment behavior, trading/risk/paper/live behavior, product ledger implementation, or direct Factory DB writes.
 - The exact base for this repair is `origin/main` `1b6bc0f65d3ad49845d20e056203e3b3702ac2a7`; the fresh PR is a review handoff only and does not authorize merge, deploy, external runtime execution, or downstream ALR implementation.
 
+## R2c2 documentation-only security gate
+- R2c2 is limited to autonomous canonical G1 `document_status` evidence repair under `factory/projects/zeus-alpha-research-ledger-core/` and must not add or alter runtime provider clients, credential paths, messaging connectors, deployment behavior, trading/risk/paper/live behavior, product ledger implementation, or direct Factory DB writes.
+- The exact base for this repair is `origin/main` `dbde1790f8d45f111bc69b3491a1862eafb29fa2`; the fresh PR is a review handoff only and does not authorize merge, deploy, external runtime execution, or downstream ALR implementation.
+
 ## Scheduler gate
 - `agent_core.alpha_research.scheduler.enabled` is false absent explicit configuration.
 - Registration and each invocation call the contract §5 verifier without cache. Tests cover every false/missing/failed/expired/wrong-commit readiness component and prove no batch read/run follows `scheduler_not_ready`.
