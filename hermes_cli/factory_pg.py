@@ -2081,6 +2081,14 @@ def _candidate_review_evidence(candidate: dict[str, Any]) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _normalized_git_branch_name(value: str) -> str:
+    branch = str(value or "").strip()
+    for prefix in ("refs/remotes/origin/", "refs/heads/", "origin/"):
+        if branch.startswith(prefix):
+            return branch.removeprefix(prefix)
+    return branch
+
+
 def _configured_base_ref_readback(project: dict[str, Any]) -> dict[str, Any]:
     strategy = _repository_strategy(project)
     base_branch, base_branch_blocker = _verified_factory_base_branch(project, strategy)
@@ -2167,7 +2175,12 @@ def _primary_checkout_identity(project: dict[str, Any], base_ref_summary: dict[s
     return summary
 
 
-def _reviewed_g1_candidate_readback(project: dict[str, Any], artifact_dir: str) -> dict[str, Any]:
+def _reviewed_g1_candidate_readback(
+    project: dict[str, Any],
+    artifact_dir: str,
+    *,
+    base_ref_summary: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Validate an explicit reviewed G1 candidate checkout, failing closed.
 
     The candidate is only trusted when project metadata names the exact path,
@@ -2229,6 +2242,54 @@ def _reviewed_g1_candidate_readback(project: dict[str, Any], artifact_dir: str) 
     if pr_head_sha != sha or pr_head_branch != branch:
         return {"accepted": False, "reason": "pr_head_readback_mismatch"}
 
+    candidate_base_branch = ""
+    candidate_base_commit = ""
+    if base_ref_summary and base_ref_summary.get("accepted"):
+        configured_base_branch = _normalized_git_branch_name(str(base_ref_summary.get("base_branch") or ""))
+        configured_base_commit = str(base_ref_summary.get("base_commit") or "").strip()
+        candidate_base_branch = _normalized_git_branch_name(
+            str(
+                candidate.get("base_branch")
+                or candidate.get("base_ref")
+                or pr.get("base_branch")
+                or pr.get("baseRefName")
+                or pr.get("base_ref")
+                or ""
+            )
+        )
+        candidate_base_commit = str(
+            candidate.get("base_commit")
+            or candidate.get("base_sha")
+            or candidate.get("base_ref_sha")
+            or pr.get("base_commit")
+            or pr.get("base_sha")
+            or pr.get("baseRefOid")
+            or pr.get("base_head_sha")
+            or ""
+        ).strip()
+        if (
+            not configured_base_branch
+            or not re.fullmatch(r"[0-9a-fA-F]{40}", configured_base_commit)
+            or candidate_base_branch != configured_base_branch
+            or candidate_base_commit != configured_base_commit
+        ):
+            return {
+                "accepted": False,
+                "reason": "candidate_base_readback_mismatch",
+                "candidate_base_branch": candidate_base_branch,
+                "candidate_base_commit": candidate_base_commit,
+                "configured_base_branch": configured_base_branch,
+                "configured_base_commit": configured_base_commit,
+            }
+        base_ancestor = _run_git(resolved_candidate_path, ["merge-base", "--is-ancestor", configured_base_commit, sha], timeout=30)
+        if base_ancestor.returncode != 0:
+            return {
+                "accepted": False,
+                "reason": "candidate_not_based_on_current_base",
+                "candidate_base_commit": candidate_base_commit,
+                "candidate_sha": sha,
+            }
+
     review = _candidate_review_evidence(candidate)
     review_status = str(review.get("status") or review.get("gate_status") or review.get("decision") or "").strip().lower()
     reviewer = str(review.get("reviewer") or review.get("reviewer_profile") or review.get("reviewed_by") or "").strip()
@@ -2245,6 +2306,8 @@ def _reviewed_g1_candidate_readback(project: dict[str, Any], artifact_dir: str) 
         "path": str(resolved_candidate_path),
         "branch": branch,
         "sha": sha,
+        "base_branch": candidate_base_branch or None,
+        "base_commit": candidate_base_commit or None,
         "reviewer": reviewer,
         "review_evidence_ref": durable_ref,
         "pr_url": pr.get("url") or pr.get("html_url"),
@@ -2313,6 +2376,7 @@ def _project_document_status_rows(
         })
         if candidate_summary:
             statuses[-1].update({
+                "reviewed_candidate_accepted": True,
                 "candidate_path": candidate_summary.get("path"),
                 "candidate_branch": candidate_summary.get("branch"),
                 "candidate_sha": candidate_summary.get("sha"),
@@ -2379,8 +2443,10 @@ def project_document_status(project: dict[str, Any]) -> list[dict[str, Any]]:
     are not implementation blockers by default. Primary checkout data remains
     the default when it is already ready; if the primary checkout is stale or
     otherwise still exposes G1 blockers, readiness is read from the configured
-    origin base ref only. Candidate PR/worktree metadata is never a readiness
-    source.
+    origin base ref. If that configured current base still blocks and project
+    metadata names a reviewed candidate tied to that exact base, the candidate
+    checkout may be read without mutating the primary checkout. Invalid or
+    unreviewed candidates fail closed.
     """
 
     strategy = _repository_strategy(project)
@@ -2424,7 +2490,41 @@ def project_document_status(project: dict[str, Any]) -> list[dict[str, Any]]:
     )
     for row in base_rows:
         row["configured_base_ref_accepted"] = True
-    return _annotate_primary_identity(base_rows, primary_identity)
+    base_rows = _annotate_primary_identity(base_rows, primary_identity)
+    base_blockers = [row for row in base_rows if row.get("category") == "g1_required" and row.get("blocking")]
+    if not base_blockers:
+        return base_rows
+
+    _factory_dir, artifact_dir = _project_artifact_dir(project)
+    candidate_summary = _reviewed_g1_candidate_readback(project, artifact_dir, base_ref_summary=base_ref_summary)
+    if not candidate_summary.get("accepted"):
+        return _annotate_candidate_rejection(
+            base_rows,
+            str(candidate_summary.get("reason") or "reviewed_candidate_rejected"),
+            candidate_summary,
+        )
+
+    candidate_project = dict(project)
+    candidate_project["repo_path"] = candidate_summary["path"]
+    candidate_metadata = dict(metadata)
+    candidate_metadata.pop("document_status", None)
+    candidate_metadata.pop("documents", None)
+    candidate_metadata.pop("factory_documents", None)
+    candidate_project["metadata"] = candidate_metadata
+    candidate_rows = _project_document_status_rows(
+        candidate_project,
+        readiness_source="reviewed_g1_candidate",
+        candidate_summary=candidate_summary,
+        use_document_metadata=False,
+    )
+    for row in candidate_rows:
+        row.update({
+            "configured_base_ref_accepted": True,
+            "base_ref": base_ref_summary.get("base_ref"),
+            "base_branch": base_ref_summary.get("base_branch"),
+            "base_commit": base_ref_summary.get("base_commit"),
+        })
+    return _annotate_primary_identity(candidate_rows, primary_identity)
 
 
 def _g1_document_blockers(project: dict[str, Any]) -> list[dict[str, Any]]:

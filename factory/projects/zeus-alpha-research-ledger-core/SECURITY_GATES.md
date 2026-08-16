@@ -64,6 +64,12 @@ reviewed_source_sha: 2476e978c545e24b18ee48844b24eb8c58245ab4
 - The exact base for this review/repair is `origin/main` `91aa62b11f02f69d88f7d8c18c30033edb4b7355`; the fresh PR is a review handoff only and does not authorize merge, deploy, credential change, external runtime execution, or downstream ALR implementation.
 - The live runtime mismatch (stale primary checkout at `4eb87e4cd48105af05fe974cf1d493f0e1b57ae1` running the pre-R2v resolver) is evidence to document and route as bounded technical rework, never authority to mutate the primary checkout from this increment.
 
+## R2c6 bounded current-origin resolver security gate
+- R2c6 is limited to Factory control-plane G1 `document_status` resolution/readback and project-local evidence docs. It must not add or alter runtime provider clients, credential paths, messaging connectors, deployment behavior, trading/risk/paper/live behavior, product ledger implementation, production promotion, external runtimes, or direct Factory DB writes.
+- The resolver may inspect committed Git blobs at the verified configured base ref and may read a separately checked-out candidate only after exact base branch/commit/ancestry, PR head, independent review, and clean artifact-state verification. It must not checkout, fast-forward, merge, write, or otherwise mutate the primary checkout.
+- Fail-closed behavior is mandatory for unavailable paths, dirty or untracked artifacts, malformed candidate metadata, stale/base-mismatched candidates, missing independent review, and unreviewed document markers. Such candidates cannot clear G1 blockers.
+- The exact current configured base for this repair is `origin/main` `40a188b23a384901f983e4d959d3ebbecf50b318`; primary checkout HEAD `4eb87e4cd48105af05fe974cf1d493f0e1b57ae1` is recorded only as rejected identity evidence.
+
 ## Scheduler gate
 - `agent_core.alpha_research.scheduler.enabled` is false absent explicit configuration.
 - Registration and each invocation call the contract §5 verifier without cache. Tests cover every false/missing/failed/expired/wrong-commit readiness component and prove no batch read/run follows `scheduler_not_ready`.
