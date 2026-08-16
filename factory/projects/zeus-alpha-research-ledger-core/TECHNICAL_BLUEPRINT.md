@@ -10,6 +10,9 @@ reviewed_candidate_sha: c81547062c5362a7be6f5a1bb2ef9612b29bac9c
 reviewed_candidate_pr: https://github.com/SiteOneTech/hermes-agent-original/pull/36
 reviewed_source_gate: factory_gate_790
 reviewed_source_sha: 2476e978c545e24b18ee48844b24eb8c58245ab4
+r2x_current_origin_main_sha: b3c32d149d73156b75c15b5b357898b69737bed0
+r2x_document_status_evidence: agent_core_postgres_factory_status_configured_base_ref
+r2x_reconciliation_artifact: R2X_CURRENT_ORIGIN_MAIN_G1_RECONCILIATION.md
 ---
 
 # TECHNICAL BLUEPRINT
