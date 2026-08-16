@@ -343,6 +343,30 @@ def _make_stale_primary_with_reviewed_origin(tmp_path: Path) -> tuple[Path, str,
     return repo, stale_sha, reviewed_sha
 
 
+def _make_reviewed_primary_with_pending_origin(tmp_path: Path) -> tuple[Path, str, str]:
+    origin = tmp_path / "origin.git"
+    repo = tmp_path / "repo"
+    updater = tmp_path / "updater"
+    subprocess.run(["git", "init", "--bare", str(origin)], check=True, capture_output=True, text=True)
+    subprocess.run(["git", "clone", str(origin), str(repo)], check=True, capture_output=True, text=True)
+    _git(repo, "config", "user.email", "factory@example.com")
+    _git(repo, "config", "user.name", "Factory Test")
+    _write_g1_docs(repo / "factory" / "projects" / "demo", reviewed=True)
+    reviewed_sha = _commit_all(repo, "primary reviewed docs")
+    _git(repo, "branch", "-M", "main")
+    _git(repo, "push", "origin", "main")
+
+    subprocess.run(["git", "clone", str(origin), str(updater)], check=True, capture_output=True, text=True)
+    _git(updater, "checkout", "main")
+    _git(updater, "config", "user.email", "factory@example.com")
+    _git(updater, "config", "user.name", "Factory Test")
+    _write_g1_docs(updater / "factory" / "projects" / "demo", reviewed=False)
+    pending_sha = _commit_all(updater, "origin pending docs")
+    _git(updater, "push", "origin", "main")
+    _git(repo, "fetch", "origin", "main:refs/remotes/origin/main")
+    return repo, reviewed_sha, pending_sha
+
+
 def _reviewed_candidate_metadata(candidate: Path, branch: str, sha: str) -> dict:
     return {
         "path": str(candidate),
@@ -581,6 +605,35 @@ def test_document_status_uses_configured_origin_base_when_primary_checkout_stale
     assert {row["readiness_source"] for row in g1_rows} == {"configured_base_ref"}
     assert {row["base_ref"] for row in g1_rows} == {"origin/main"}
     assert {row["base_commit"] for row in g1_rows} == {reviewed_sha}
+
+
+def test_document_status_rejects_stale_primary_even_when_primary_docs_are_ready(tmp_path):
+    repo, reviewed_sha, pending_sha = _make_reviewed_primary_with_pending_origin(tmp_path)
+
+    statuses = factory_pg.project_document_status(
+        {
+            "project_id": "demo",
+            "repo_path": str(repo),
+            "base_branch": "main",
+            "metadata": {
+                "artifact_dir": "factory/projects/demo",
+                "repo_strategy": {"primary_repo_path": str(repo), "base_branch": "main"},
+            },
+        }
+    )
+
+    g1_rows = [row for row in statuses if row["category"] == "g1_required"]
+    prd = next(row for row in g1_rows if row["file_name"] == "PRD.md")
+    assert _git(repo, "rev-parse", "HEAD") == reviewed_sha
+    assert "reviewed: yes" in (repo / "factory" / "projects" / "demo" / "PRD.md").read_text(encoding="utf-8")
+    assert any(row["blocking"] for row in g1_rows)
+    assert {row["readiness_source"] for row in g1_rows} == {"configured_base_ref"}
+    assert {row["base_ref"] for row in g1_rows} == {"origin/main"}
+    assert {row["base_commit"] for row in g1_rows} == {pending_sha}
+    assert prd["reviewed"] is False
+    assert prd["primary_checkout_accepted"] is False
+    assert prd["primary_checkout_rejected_reason"] == "primary_checkout_not_configured_base"
+    assert prd["primary_head"] == reviewed_sha
 
 
 def test_document_status_never_resolves_from_exact_reviewed_g1_candidate(tmp_path):

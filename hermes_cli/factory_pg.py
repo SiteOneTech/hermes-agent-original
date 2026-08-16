@@ -2108,6 +2108,65 @@ def _configured_base_ref_readback(project: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _project_has_configured_base_source(project: dict[str, Any], strategy: dict[str, Any] | None = None) -> bool:
+    """Return whether document status must be bound to a configured base ref."""
+
+    metadata = _metadata(project)
+    repo_strategy_value = metadata.get("repo_strategy")
+    repo_strategy = repo_strategy_value if isinstance(repo_strategy_value, dict) else {}
+    if str(project.get("base_branch") or "").strip():
+        return True
+    if str(metadata.get("base_branch") or "").strip():
+        return True
+    if str(repo_strategy.get("base_branch") or "").strip():
+        return True
+    return factory_contracts.repository_strategy_is_complete(strategy if isinstance(strategy, dict) else _repository_strategy(project))
+
+
+def _primary_checkout_identity(project: dict[str, Any], base_ref_summary: dict[str, Any]) -> dict[str, Any]:
+    """Verify whether the primary checkout is exactly the configured base commit."""
+
+    base_commit = str(base_ref_summary.get("base_commit") or "").strip()
+    base_ref = str(base_ref_summary.get("base_ref") or "").strip()
+    repo_raw = str(project.get("repo_path") or "").strip()
+    summary: dict[str, Any] = {
+        "accepted": False,
+        "base_ref": base_ref,
+        "base_commit": base_commit,
+    }
+    if not repo_raw:
+        summary["reason"] = "primary_repo_path_missing"
+        return summary
+    repo_path = Path(repo_raw).expanduser()
+    summary["path"] = str(repo_path)
+    if not repo_path.exists():
+        summary["reason"] = "primary_repo_path_missing"
+        return summary
+    inside = _git_probe(repo_path, "rev-parse", "--is-inside-work-tree")
+    if inside != "true":
+        summary["reason"] = "primary_repo_path_unreadable"
+        return summary
+    primary_head = _git_probe(repo_path, "rev-parse", "HEAD")
+    primary_branch = _git_probe(repo_path, "rev-parse", "--abbrev-ref", "HEAD")
+    primary_root = _git_probe(repo_path, "rev-parse", "--show-toplevel")
+    summary.update({
+        "head": primary_head,
+        "branch": primary_branch,
+        "worktree_root": primary_root,
+    })
+    if not primary_head:
+        summary["reason"] = "primary_head_unreadable"
+        return summary
+    if not base_commit:
+        summary["reason"] = "configured_base_commit_missing"
+        return summary
+    if primary_head != base_commit:
+        summary["reason"] = "primary_checkout_not_configured_base"
+        return summary
+    summary["accepted"] = True
+    return summary
+
+
 def _reviewed_g1_candidate_readback(project: dict[str, Any], artifact_dir: str) -> dict[str, Any]:
     """Validate an explicit reviewed G1 candidate checkout, failing closed.
 
@@ -2291,6 +2350,27 @@ def _annotate_base_ref_rejection(rows: list[dict[str, Any]], reason: str, detail
     return rows
 
 
+def _annotate_primary_identity(rows: list[dict[str, Any]], identity: dict[str, Any]) -> list[dict[str, Any]]:
+    accepted = bool(identity.get("accepted"))
+    for row in rows:
+        row["primary_checkout_accepted"] = accepted
+        row["primary_path"] = identity.get("path")
+        row["primary_worktree_root"] = identity.get("worktree_root")
+        row["primary_branch"] = identity.get("branch")
+        row["primary_head"] = identity.get("head")
+        if not accepted:
+            row["primary_checkout_rejected_reason"] = identity.get("reason") or "primary_checkout_rejected"
+    return rows
+
+
+def _force_configured_base_failure_blocking(rows: list[dict[str, Any]], reason: str) -> list[dict[str, Any]]:
+    for row in rows:
+        if row.get("category") == "g1_required":
+            row["blocking"] = True
+            row["blocking_reason"] = reason
+    return rows
+
+
 def project_document_status(project: dict[str, Any]) -> list[dict[str, Any]]:
     """Return first-class per-file Factory document readiness state.
 
@@ -2303,14 +2383,31 @@ def project_document_status(project: dict[str, Any]) -> list[dict[str, Any]]:
     source.
     """
 
+    strategy = _repository_strategy(project)
     primary_rows = _project_document_status_rows(project, readiness_source="primary")
     primary_blockers = [row for row in primary_rows if row.get("category") == "g1_required" and row.get("blocking")]
-    if not primary_blockers:
+    if not _project_has_configured_base_source(project, strategy):
         return primary_rows
 
     base_ref_summary = _configured_base_ref_readback(project)
     if not base_ref_summary.get("accepted"):
-        return _annotate_base_ref_rejection(primary_rows, str(base_ref_summary.get("reason") or "base_ref_rejected"), base_ref_summary)
+        reason = str(base_ref_summary.get("reason") or "base_ref_rejected")
+        rows = _annotate_base_ref_rejection(primary_rows, reason, base_ref_summary)
+        if not primary_blockers:
+            rows = _force_configured_base_failure_blocking(rows, reason)
+        return rows
+
+    primary_identity = _primary_checkout_identity(project, base_ref_summary)
+    if primary_identity.get("accepted") and not primary_blockers:
+        for row in primary_rows:
+            row.update({
+                "configured_base_ref_accepted": True,
+                "base_ref": base_ref_summary.get("base_ref"),
+                "base_branch": base_ref_summary.get("base_branch"),
+                "base_commit": base_ref_summary.get("base_commit"),
+            })
+        return _annotate_primary_identity(primary_rows, primary_identity)
+
     metadata = _metadata(project)
     base_project = dict(project)
     base_project["repo_path"] = base_ref_summary["path"]
@@ -2327,7 +2424,7 @@ def project_document_status(project: dict[str, Any]) -> list[dict[str, Any]]:
     )
     for row in base_rows:
         row["configured_base_ref_accepted"] = True
-    return base_rows
+    return _annotate_primary_identity(base_rows, primary_identity)
 
 
 def _g1_document_blockers(project: dict[str, Any]) -> list[dict[str, Any]]:
