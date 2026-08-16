@@ -76,6 +76,11 @@ reviewed_source_sha: 2476e978c545e24b18ee48844b24eb8c58245ab4
 - Fail-closed behavior is mandatory when the running Factory source provenance is malformed or when the source tree lacks the tick script. No fallback may execute a stale profile wrapper or clear G1 blockers from stale-primary code.
 - The exact current configured base for this repair is `origin/main` `b525254809fba0ad46e6b7e9405778c44e64bae9`; primary checkout HEAD `4eb87e4cd48105af05fe974cf1d493f0e1b57ae1` is recorded only as rejected identity evidence.
 
+## G1 document-status technical recovery security gate
+- This recovery is limited to current-origin documentation/provenance under `factory/projects/zeus-alpha-research-ledger-core/`. It must not add or alter runtime provider clients, credential paths, messaging connectors, deployment behavior, trading/risk/paper/live behavior, product ledger implementation, external runtimes, primary checkout state, or direct Factory DB writes.
+- The exact current configured base for this recovery is `origin/main` `139df9ae49137bb4b16152550d53d385310de3b6`; primary checkout HEAD `4eb87e4cd48105af05fe974cf1d493f0e1b57ae1` is recorded only as rejected identity evidence.
+- If stale persisted anomaly metadata remains after current row-level `document_status` is non-blocking, the only authorized follow-up is a bounded Factory control-plane repair through reviewed code/PR/gates or approved Factory CLI gate evidence. No direct SQL, credential access, deploy, runtime call, or primary checkout fast-forward is authorized by this documentation task.
+
 ## Scheduler gate
 - `agent_core.alpha_research.scheduler.enabled` is false absent explicit configuration.
 - Registration and each invocation call the contract §5 verifier without cache. Tests cover every false/missing/failed/expired/wrong-commit readiness component and prove no batch read/run follows `scheduler_not_ready`.
