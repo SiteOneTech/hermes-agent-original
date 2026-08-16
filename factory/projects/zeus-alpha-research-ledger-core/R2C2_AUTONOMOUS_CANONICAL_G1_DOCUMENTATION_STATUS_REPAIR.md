@@ -2,7 +2,7 @@
 project_id: zeus-alpha-research-ledger-core
 task_id: zeus-alpha-research-ledger-core-r2c2-autonomous-canonical-g1-documentati
 phase: documentation
-status: implemented_pending_pr_creation
+status: implemented_pending_independent_review
 validated: yes
 reviewed: pending_independent_quality_review
 owner: codex-builder
@@ -10,7 +10,7 @@ base_ref: origin/main
 current_base_sha: dbde1790f8d45f111bc69b3491a1862eafb29fa2
 branch: factory/zeus-alpha-research-ledger-core/inc-018-r2c2-autonomous-canonical-g1-doc
 worktree: /home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-018-r2c2-autonomous-canonical-g1-doc
-pr_url: pending_creation
+pr_url: https://github.com/SiteOneTech/hermes-agent-original/pull/48
 factory_status_log: /home/jean/.hermes/profiles/codex-builder/cache/terminal-output/out-1786892903-1813387-f690.log
 ---
 
@@ -71,6 +71,6 @@ R2c2 reconciles `DOCUMENTATION_INDEX.md`, `G1_REVIEW.md`, `G0_REPOSITORY_STRATEG
 
 ## PR-first handoff
 
-The R2c2 candidate must be opened as a non-draft GitHub PR against `main`, labeled `agent:zeus`, Zeus-signed, and independently reviewed against the exact pushed head SHA. This worker must not merge the PR, deploy, change credentials, write direct SQL, or record an independent approval for its own work.
+The R2c2 candidate is opened as non-draft GitHub PR #48, `https://github.com/SiteOneTech/hermes-agent-original/pull/48`, against `main`, labeled `agent:zeus`, Zeus-signed, and awaiting independent review against the exact final head SHA recorded in the PR body/Factory evidence. This worker must not merge the PR, deploy, change credentials, write direct SQL, or record an independent approval for its own work.
 
 R2c2 is a handoff artifact only. It does not authorize base-branch merge, deployment, runtime execution, connector activation, direct Factory DB mutation, downstream ALR implementation, or trading/risk/paper/live behavior.

@@ -110,7 +110,7 @@ This is implementation/documentation evidence only. It performs no merge, deploy
 
 **Correction:** `R2C2_AUTONOMOUS_CANONICAL_G1_DOCUMENTATION_STATUS_REPAIR.md` now records the current-base branch/worktree identity, the configured-base document-status read-back, and the PR-first handoff. `DOCUMENTATION_INDEX.md` now names exact base `dbde1790f8d45f111bc69b3491a1862eafb29fa2` for the current candidate state. The required G1 frontmatter reviewed markers remain machine-readable `reviewed: yes` and still cite their independent source review chain, PR #36 / gate `794` plus gate `790` / PR #34 source evidence.
 
-**Handoff requirement:** the fresh R2c2 branch must be opened as a non-draft Zeus-signed GitHub PR labeled `agent:zeus` against `main`. The PR body/Factory evidence must name the exact final head SHA after the last push. An independent reviewer must inspect that exact SHA; this R2c2 worker does not self-approve, merge, deploy, change credentials, write direct SQL, or touch any runtime/external/trading path.
+**Handoff requirement:** the fresh R2c2 branch is opened as non-draft Zeus-signed GitHub PR #48 (`https://github.com/SiteOneTech/hermes-agent-original/pull/48`) labeled `agent:zeus` against `main`. The PR body/Factory evidence must name the exact final head SHA after the last push. An independent reviewer must inspect that exact SHA; this R2c2 worker does not self-approve, merge, deploy, change credentials, write direct SQL, or touch any runtime/external/trading path.
 
 ## Local documentary verification — non-approval
 
