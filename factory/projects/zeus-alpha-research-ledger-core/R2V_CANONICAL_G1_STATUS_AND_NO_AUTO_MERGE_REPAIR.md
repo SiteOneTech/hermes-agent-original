@@ -3,9 +3,13 @@ document_type: control_plane_repair_evidence
 project_id: zeus-alpha-research-ledger-core
 task_id: zeus-alpha-research-ledger-core-r2v-canonical-g1-status-and-no-auto-merg
 phase: documentation
-status: pr_open_pending_independent_exact_sha_review
+status: quality_review_passed_gate_804
 validated: yes
-reviewed: pending_independent_exact_sha
+reviewed: yes
+reviewed_by: quality-reviewer
+review_evidence: factory_gate_804
+reviewed_candidate_sha: 90fcb81abcebc203e16e34e36f4aec0ab1ec6a09
+reviewed_candidate_pr: https://github.com/SiteOneTech/hermes-agent-original/pull/39
 owner: codex-builder
 base_ref: origin/main
 base_sha: 50a9a29c4bb7cee39c8ffafa857ce962066e35cb
@@ -73,7 +77,7 @@ Result after implementation: 2 files passed, 254 tests passed, 0 failed.
 - PR URL: https://github.com/SiteOneTech/hermes-agent-original/pull/39.
 - Exact implementation commit SHA: `8cd21cfb9a31bcf45998f4bf76db8f5d28606f0c`.
 - Exact final PR head SHA must be read back from GitHub and Factory gate evidence after this PR-evidence doc refresh; a commit cannot embed its own final SHA without changing that SHA.
-- Required independent review: quality reviewer must review the exact pushed PR head SHA and record PASS/REQUEST_CHANGES before task closure.
+- Required independent review: quality reviewer must review the exact pushed PR head SHA and record PASS/REQUEST_CHANGES before task closure. Completed: quality reviewer recorded PASS as Factory gate `804` against head `90fcb81abcebc203e16e34e36f4aec0ab1ec6a09` (PR #39); evidence in `QA_GATES.md` "R2v independent quality review — gate 804 (PASS)".
 
 ## No external operation evidence
 
