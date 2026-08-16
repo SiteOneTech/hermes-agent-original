@@ -54,6 +54,10 @@ reviewed_source_sha: 2476e978c545e24b18ee48844b24eb8c58245ab4
 - R2c2 is limited to autonomous canonical G1 `document_status` evidence repair under `factory/projects/zeus-alpha-research-ledger-core/` and must not add or alter runtime provider clients, credential paths, messaging connectors, deployment behavior, trading/risk/paper/live behavior, product ledger implementation, or direct Factory DB writes.
 - The exact base for this repair is `origin/main` `dbde1790f8d45f111bc69b3491a1862eafb29fa2`; the fresh PR is a review handoff only and does not authorize merge, deploy, external runtime execution, or downstream ALR implementation.
 
+## R2c3 documentation-only security gate
+- R2c3 is limited to current-origin G1 visibility/provenance reconciliation under `factory/projects/zeus-alpha-research-ledger-core/` and must not add or alter runtime provider clients, credential paths, messaging connectors, deployment behavior, trading/risk/paper/live behavior, product ledger implementation, direct Factory DB writes, or direct Factory metadata mutation.
+- The exact base for this repair is `origin/main` `2a32066398d500d6dac071bd7f2184d47bb3bcb4`; stale primary checkout state at `4eb87e4cd48105af05fe974cf1d493f0e1b57ae1` and stale inc-011 / PR #20 metadata are diagnostic/historical only and do not authorize dispatch. The fresh PR is a review handoff only and does not authorize merge, deploy, external runtime execution, or downstream ALR implementation.
+
 ## Scheduler gate
 - `agent_core.alpha_research.scheduler.enabled` is false absent explicit configuration.
 - Registration and each invocation call the contract §5 verifier without cache. Tests cover every false/missing/failed/expired/wrong-commit readiness component and prove no batch read/run follows `scheduler_not_ready`.
