@@ -1980,6 +1980,25 @@ def _git_status_by_file(repo_path: str, artifact_dir: str) -> dict[str, str] | N
     return result
 
 
+def _git_file_text_at_ref(repo_path: str, ref: str, rel_path: str) -> str | None:
+    repo = Path(repo_path).expanduser() if repo_path else None
+    if not repo or not repo.exists() or not ref or not rel_path:
+        return None
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo), "show", f"{ref}:{rel_path}"],
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout
+
+
 _DOCUMENT_STATUS_TRUE_VALUES = {"true", "yes", "y", "1", "passed", "validated", "reviewed", "approved"}
 _DOCUMENT_STATUS_FALSE_VALUES = {"false", "no", "n", "0", "failed", "pending", "todo", "tbd", "unvalidated", "unreviewed"}
 
@@ -2060,6 +2079,33 @@ def _candidate_pr_evidence(candidate: dict[str, Any]) -> dict[str, Any]:
 def _candidate_review_evidence(candidate: dict[str, Any]) -> dict[str, Any]:
     value = candidate.get("review") or candidate.get("independent_review") or candidate.get("review_evidence")
     return value if isinstance(value, dict) else {}
+
+
+def _configured_base_ref_readback(project: dict[str, Any]) -> dict[str, Any]:
+    strategy = _repository_strategy(project)
+    base_branch, base_branch_blocker = _verified_factory_base_branch(project, strategy)
+    if base_branch_blocker:
+        return {"accepted": False, "reason": base_branch_blocker}
+    repo_raw = str(strategy.get("primary_repo_path") or project.get("repo_path") or "").strip()
+    if not repo_raw:
+        return {"accepted": False, "reason": "repo_path_missing"}
+    repo_path = Path(repo_raw).expanduser()
+    if not repo_path.exists():
+        return {"accepted": False, "reason": "repo_path_missing"}
+    inside = _git_probe(repo_path, "rev-parse", "--is-inside-work-tree")
+    if inside != "true":
+        return {"accepted": False, "reason": "repo_path_unreadable"}
+    base_ref = f"origin/{base_branch}"
+    base_commit = _git_probe(repo_path, "rev-parse", "--verify", f"{base_ref}^{{commit}}")
+    if not base_commit:
+        return {"accepted": False, "reason": "base_ref_unavailable", "base_ref": base_ref}
+    return {
+        "accepted": True,
+        "path": str(repo_path),
+        "base_branch": base_branch,
+        "base_ref": base_ref,
+        "base_commit": base_commit,
+    }
 
 
 def _reviewed_g1_candidate_readback(project: dict[str, Any], artifact_dir: str) -> dict[str, Any]:
@@ -2152,12 +2198,19 @@ def _project_document_status_rows(
     *,
     readiness_source: str,
     candidate_summary: dict[str, Any] | None = None,
+    base_ref_summary: dict[str, Any] | None = None,
     use_document_metadata: bool = True,
 ) -> list[dict[str, Any]]:
     factory_dir, artifact_dir = _project_artifact_dir(project)
     repo_path = str(project.get("repo_path") or "").strip()
-    index_text = _documentation_index_text(factory_dir)
-    git_state = _git_status_by_file(repo_path, artifact_dir) if repo_path else None
+    base_ref = str((base_ref_summary or {}).get("base_ref") or "").strip()
+    artifact_prefix = str(artifact_dir).strip("/")
+    if base_ref:
+        index_text = _git_file_text_at_ref(repo_path, base_ref, posixpath.join(artifact_prefix, "DOCUMENTATION_INDEX.md")) or ""
+        git_state: dict[str, str] | None = {}
+    else:
+        index_text = _documentation_index_text(factory_dir)
+        git_state = _git_status_by_file(repo_path, artifact_dir) if repo_path else None
     statuses: list[dict[str, Any]] = []
     seen: set[str] = set()
     for file_name, category in FACTORY_DOCUMENT_DEFINITIONS:
@@ -2165,11 +2218,16 @@ def _project_document_status_rows(
             continue
         seen.add(file_name)
         path = factory_dir / file_name if factory_dir is not None else None
-        exists = bool(path and path.is_file())
-        try:
-            file_text = path.read_text(encoding="utf-8", errors="replace") if exists and path is not None else ""
-        except Exception:
-            file_text = ""
+        if base_ref:
+            file_text_at_ref = _git_file_text_at_ref(repo_path, base_ref, posixpath.join(artifact_prefix, file_name))
+            exists = file_text_at_ref is not None
+            file_text = file_text_at_ref or ""
+        else:
+            exists = bool(path and path.is_file())
+            try:
+                file_text = path.read_text(encoding="utf-8", errors="replace") if exists and path is not None else ""
+            except Exception:
+                file_text = ""
         index_line = _documentation_index_line(index_text, file_name)
         indexed = bool(index_line)
         committed = bool(exists and git_state is not None and file_name not in git_state)
@@ -2204,6 +2262,12 @@ def _project_document_status_rows(
                 "candidate_pr_url": candidate_summary.get("pr_url"),
                 "candidate_pr_number": candidate_summary.get("pr_number"),
             })
+        if base_ref_summary:
+            statuses[-1].update({
+                "base_ref": base_ref_summary.get("base_ref"),
+                "base_branch": base_ref_summary.get("base_branch"),
+                "base_commit": base_ref_summary.get("base_commit"),
+            })
     return statuses
 
 
@@ -2218,15 +2282,25 @@ def _annotate_candidate_rejection(rows: list[dict[str, Any]], reason: str, detai
     return rows
 
 
+def _annotate_base_ref_rejection(rows: list[dict[str, Any]], reason: str, details: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    for row in rows:
+        row["configured_base_ref_accepted"] = False
+        row["configured_base_ref_rejected_reason"] = reason
+        if details:
+            row["configured_base_ref_rejection_details"] = details
+    return rows
+
+
 def project_document_status(project: dict[str, Any]) -> list[dict[str, Any]]:
     """Return first-class per-file Factory document readiness state.
 
     G1 documents are blocking source-of-truth artifacts for implementation
     dispatch. Lifecycle and PM projection docs are exposed for UI/reporting but
     are not implementation blockers by default. Primary checkout data remains
-    the default; an explicit reviewed G1 candidate is consulted only when the
-    primary checkout still has G1 blockers and the candidate metadata, git
-    readback, PR evidence, review evidence, and document markers all pass.
+    the default when it is already ready; if the primary checkout is stale or
+    otherwise still exposes G1 blockers, readiness is read from the configured
+    origin base ref only. Candidate PR/worktree metadata is never a readiness
+    source.
     """
 
     primary_rows = _project_document_status_rows(project, readiness_source="primary")
@@ -2234,35 +2308,26 @@ def project_document_status(project: dict[str, Any]) -> list[dict[str, Any]]:
     if not primary_blockers:
         return primary_rows
 
-    _factory_dir, artifact_dir = _project_artifact_dir(project)
-    candidate_summary = _reviewed_g1_candidate_readback(project, artifact_dir)
-    if not candidate_summary.get("accepted"):
-        return _annotate_candidate_rejection(primary_rows, str(candidate_summary.get("reason") or "candidate_rejected"), candidate_summary)
-
+    base_ref_summary = _configured_base_ref_readback(project)
+    if not base_ref_summary.get("accepted"):
+        return _annotate_base_ref_rejection(primary_rows, str(base_ref_summary.get("reason") or "base_ref_rejected"), base_ref_summary)
     metadata = _metadata(project)
-    candidate_project = dict(project)
-    candidate_project["repo_path"] = candidate_summary["path"]
-    candidate_metadata = dict(metadata)
-    candidate_metadata.pop("document_status", None)
-    candidate_metadata.pop("documents", None)
-    candidate_metadata.pop("factory_documents", None)
-    candidate_project["metadata"] = candidate_metadata
-    candidate_rows = _project_document_status_rows(
-        candidate_project,
-        readiness_source="reviewed_candidate",
-        candidate_summary=candidate_summary,
+    base_project = dict(project)
+    base_project["repo_path"] = base_ref_summary["path"]
+    base_metadata = dict(metadata)
+    base_metadata.pop("document_status", None)
+    base_metadata.pop("documents", None)
+    base_metadata.pop("factory_documents", None)
+    base_project["metadata"] = base_metadata
+    base_rows = _project_document_status_rows(
+        base_project,
+        readiness_source="configured_base_ref",
+        base_ref_summary=base_ref_summary,
         use_document_metadata=False,
     )
-    candidate_blockers = [row for row in candidate_rows if row.get("category") == "g1_required" and row.get("blocking")]
-    if candidate_blockers:
-        return _annotate_candidate_rejection(
-            primary_rows,
-            "candidate_document_blockers",
-            {"blocking_documents": [row.get("file_name") for row in candidate_blockers]},
-        )
-    for row in candidate_rows:
-        row["reviewed_candidate_accepted"] = True
-    return candidate_rows
+    for row in base_rows:
+        row["configured_base_ref_accepted"] = True
+    return base_rows
 
 
 def _g1_document_blockers(project: dict[str, Any]) -> list[dict[str, Any]]:
@@ -2446,6 +2511,8 @@ def _source_increment_integration_blockers(
 ) -> list[dict[str, Any]]:
     """Return positive terminal source increments lacking verified base integration."""
 
+    if _project_auto_integration_forbidden(project):
+        return []
     base_branch = _canonical_base_branch(project)
     blockers: list[dict[str, Any]] = []
     for task in tasks:
@@ -3045,8 +3112,25 @@ def _task_integration_waived(task: dict[str, Any]) -> bool:
     return authorizer in {"jean", "jean garcía", "jean garcia"} and bool(reason)
 
 
+def _project_auto_integration_forbidden(project: dict[str, Any]) -> bool:
+    metadata = _metadata(project)
+    values = (
+        project.get("factory_auto_integration_forbidden") if isinstance(project, dict) else None,
+        metadata.get("factory_auto_integration_forbidden"),
+    )
+    for value in values:
+        if isinstance(value, bool):
+            if value:
+                return True
+        elif isinstance(value, str) and value.strip().lower() in {"1", "true", "yes", "y", "on", "forbidden"}:
+            return True
+    return False
+
+
 def _increment_integration_required(task: dict[str, Any], project: dict[str, Any], final_status: str) -> bool:
     if str(final_status or "").lower() not in POSITIVE_TERMINAL_TASK_STATUSES:
+        return False
+    if _project_auto_integration_forbidden(project):
         return False
     if _is_reconciliation_task(task) or _is_runtime_bootstrap_repair_task(task) or _task_integration_waived(task):
         return False
@@ -3142,6 +3226,13 @@ def _integrate_increment_to_base(task_id: str, *, actor: str = "factory-orchestr
     project = _project(project_id) or {}
     if not project:
         raise IncrementIntegrationError(f"Factory project not found for task: {task_id}")
+    if _project_auto_integration_forbidden(project):
+        return {
+            "increment_integration_status": "skipped",
+            "increment_integration_required": False,
+            "reason": "project_auto_integration_forbidden",
+            "factory_auto_integration_forbidden": True,
+        }
     strategy = factory_contracts.repository_strategy_from_project(project)
     base_branch, base_branch_blocker = _verified_factory_base_branch(project, strategy)
     if base_branch_blocker:
