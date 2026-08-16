@@ -175,6 +175,28 @@ def test_fs_default_cwd_falls_back_when_terminal_cwd_is_invalid(client, tmp_path
     assert response.json() == {"cwd": str(fallback), "branch": ""}
 
 
+def test_fs_download_streams_file_without_data_url_cap(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(web_server, "_FS_DATA_URL_MAX_BYTES", 3)
+    target = tmp_path / "report with spaces.pdf"
+    target.write_bytes(b"123456")
+
+    response = client.get("/api/fs/download", params={"path": str(target)})
+
+    assert response.status_code == 200
+    assert response.content == b"123456"
+    assert response.headers["content-type"].startswith("application/pdf")
+    assert "report%20with%20spaces.pdf" in response.headers["content-disposition"]
+
+
+def test_fs_download_rejects_sensitive_files(client, tmp_path):
+    target = tmp_path / ".env"
+    target.write_text("SECRET=1")
+
+    response = client.get("/api/fs/download", params={"path": str(target)})
+
+    assert response.status_code == 403
+
+
 def test_fs_endpoints_require_auth(tmp_path):
     client = TestClient(web_server.app)
     target = tmp_path / "secret.txt"
