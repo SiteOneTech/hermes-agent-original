@@ -48,6 +48,7 @@ This is canonical documentation readiness, not runtime approval. The R2u repair 
 - `R2K_STALE_CANONICAL_G1_PROVENANCE_REPAIR.md` records the stale active provenance repair as historical control evidence. It records that Agent Core project metadata still points to obsolete PR #20 / `dad375f27568c38be771fc597b579d087f034e1d`, PR #30 carried R2j commit `c1943efb2b97b54b42bc5eabe858340d8c391116` into remote `origin/main` as `83d5ee06ba25859f047469baed223fe88e9467e3`, local primary `main` remained at `4eb87e4cd48105af05fe974cf1d493f0e1b57ae1` during that repair, and canonical G1 `document_status` remained non-dispatchable because required docs read back as `reviewed=false` from the primary source.
 - `R2M_CURRENT_BASE_G1_REVIEW_HANDOFF.md` records the current-base recovery on exact `origin/main` `ab08b13669903a87b3d60d6c80231d23d6313782`, keeps PR #20/#29/R2i/R2j/R2k evidence historical only, and binds the next valid review to the fresh R2m PR head SHA after push.
 - `R2U_CANONICAL_G1_DOCUMENT_STATUS_PREFLIGHT_REPAIR.md` records this docs-first repair: current base `df4c77fd1413a65cdb85885a06978ff157c1de4d`, reviewed PR #36 head `c81547062c5362a7be6f5a1bb2ef9612b29bac9c`, gate `794`, and the no-runtime/no-merge validation contract.
+- `R2V_CANONICAL_G1_STATUS_AND_NO_AUTO_MERGE_REPAIR.md` records the control-plane contract repair that makes stale-primary G1 readiness read the verified configured base ref only, rejects candidate PR/worktree readiness sources, and prevents Factory auto-integration when `factory_auto_integration_forbidden=true`.
 
 ## Status semantics
 - `validated: yes` means the implementation-planner/local worker confirmed the file exists, is tracked, is indexed where required, and is internally consistent with this G1 contract.
@@ -60,7 +61,7 @@ This is canonical documentation readiness, not runtime approval. The R2u repair 
 1. `DOCUMENTATION_INDEX.md`, `FACTORY_INTAKE.md`, `G0_REPOSITORY_STRATEGY.md`
 2. `REQUIREMENTS_ANALYSIS.md`, `REQUIREMENTS_TRACEABILITY.md`, `PRD.md`, `ADRS.md`
 3. `DATABASE_AND_RUNTIME_CONTRACT.md`, `TECHNICAL_BLUEPRINT.md`, `TASK_GRAPH.md`, `SPRINT_PLAN.md`
-4. `QA_GATES.md`, `SECURITY_GATES.md`, `G1_REVIEW.md`, `R2K_STALE_CANONICAL_G1_PROVENANCE_REPAIR.md`, `R2M_CURRENT_BASE_G1_REVIEW_HANDOFF.md`, `R2U_CANONICAL_G1_DOCUMENT_STATUS_PREFLIGHT_REPAIR.md`
+4. `QA_GATES.md`, `SECURITY_GATES.md`, `G1_REVIEW.md`, `R2K_STALE_CANONICAL_G1_PROVENANCE_REPAIR.md`, `R2M_CURRENT_BASE_G1_REVIEW_HANDOFF.md`, `R2U_CANONICAL_G1_DOCUMENT_STATUS_PREFLIGHT_REPAIR.md`, `R2V_CANONICAL_G1_STATUS_AND_NO_AUTO_MERGE_REPAIR.md`
 
 ## G1 rule
 No normal implementation starts merely because documentation blockers are cleared. R2u makes the required G1 pack `reviewed: yes` from independently reviewed PR-first evidence, but downstream ALR-020+ work still requires its own assigned branch/worktree, RED→GREEN tests, security/no-egress proof, PR-first delivery evidence and gate-specific approval. Base exposure alone is never sufficient: the observed ALR-010-R1 merge, R2j/PR #30 merge and R2k/PR #31 merge remain historical non-dispatch evidence unless the active task's own gates are green.

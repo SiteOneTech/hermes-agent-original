@@ -97,6 +97,46 @@ def test_close_task_refuses_done_when_increment_integration_fails(fake_sql, monk
     assert "task_closed" not in joined
 
 
+def test_close_task_respects_project_auto_integration_forbidden_without_increment_event(fake_sql, monkeypatch):
+    task = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "task-1",
+        "status": "review_ready",
+        "branch": "factory/demo/task-1",
+        "worktree_path": "/tmp/factory-demo-task-1",
+        "metadata": {},
+    }
+    project = {
+        "project_id": "demo",
+        "repo_path": "/tmp/factory-demo-repo",
+        "base_branch": "main",
+        "metadata": {
+            "factory_auto_integration_forbidden": True,
+            "repo_strategy": {"primary_repo_path": "/tmp/factory-demo-repo", "base_branch": "main"},
+        },
+    }
+    fake_sql.one_results = [task]
+    fake_sql.statement_one_results = [{"project_id": "demo", "lane_id": "lane", "task_id": "task-1", "status": "done"}]
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    calls: list[list[str]] = []
+
+    def record_git(_repo_path, args, *, timeout=120):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(factory_pg, "_run_git", record_git)
+
+    result = factory_pg.close_task("task-1", result_summary="QA passed", evidence={}, actor="qa", reconcile=False)
+
+    assert result["status"] == "done"
+    assert calls == []
+    joined = "\n".join(fake_sql.statements)
+    assert "task_closed" in joined
+    assert "increment_integrated" not in joined
+    assert "merge_no_ff_push_origin" not in joined
+
+
 def test_mark_run_finished_review_success_merges_before_done(fake_sql, monkeypatch):
     calls: list[str] = []
 

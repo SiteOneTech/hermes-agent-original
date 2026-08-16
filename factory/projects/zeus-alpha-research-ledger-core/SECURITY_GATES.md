@@ -41,6 +41,11 @@ reviewed_source_sha: 2476e978c545e24b18ee48844b24eb8c58245ab4
 - R2u modifies only project-local Markdown artifacts under `factory/projects/zeus-alpha-research-ledger-core/` and imports no runtime/control-plane code, provider dependency, network client, credential path, message connector, deployment path, trading/risk/paper/live behavior or external runtime authority.
 - The reviewed G1 markers cite PR #36 head `c81547062c5362a7be6f5a1bb2ef9612b29bac9c` and Factory gate `794`; they are documentation-readiness evidence only and do not grant implementation permission outside the downstream task gates above.
 
+## R2v control-plane repair gate
+- R2v is limited to Factory control-plane/document-status and completion enforcement. It must not add runtime provider clients, credential paths, messaging connectors, deployment behavior, trading/risk/paper/live behavior, or product ledger implementation.
+- The configured-base-ref status reader may inspect committed Git blobs from the verified origin base ref but must not checkout, fast-forward, merge, or mutate the primary checkout.
+- The no-auto-integration guard is a fail-closed safety boundary for projects with `factory_auto_integration_forbidden=true`; such projects require PR-first independent QA rather than Factory branch-to-base integration.
+
 ## Scheduler gate
 - `agent_core.alpha_research.scheduler.enabled` is false absent explicit configuration.
 - Registration and each invocation call the contract §5 verifier without cache. Tests cover every false/missing/failed/expired/wrong-commit readiness component and prove no batch read/run follows `scheduler_not_ready`.
