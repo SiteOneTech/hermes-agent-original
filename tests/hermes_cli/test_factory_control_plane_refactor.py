@@ -343,6 +343,29 @@ def _make_stale_primary_with_reviewed_origin(tmp_path: Path) -> tuple[Path, str,
     return repo, stale_sha, reviewed_sha
 
 
+def _make_unfetched_stale_primary_with_reviewed_origin(tmp_path: Path) -> tuple[Path, str, str]:
+    origin = tmp_path / "origin.git"
+    repo = tmp_path / "repo"
+    updater = tmp_path / "updater"
+    subprocess.run(["git", "init", "--bare", str(origin)], check=True, capture_output=True, text=True)
+    subprocess.run(["git", "clone", str(origin), str(repo)], check=True, capture_output=True, text=True)
+    _git(repo, "config", "user.email", "factory@example.com")
+    _git(repo, "config", "user.name", "Factory Test")
+    _write_g1_docs(repo / "factory" / "projects" / "demo", reviewed=False)
+    stale_sha = _commit_all(repo, "primary pending docs")
+    _git(repo, "branch", "-M", "main")
+    _git(repo, "push", "origin", "main")
+
+    subprocess.run(["git", "clone", str(origin), str(updater)], check=True, capture_output=True, text=True)
+    _git(updater, "checkout", "main")
+    _git(updater, "config", "user.email", "factory@example.com")
+    _git(updater, "config", "user.name", "Factory Test")
+    _write_g1_docs(updater / "factory" / "projects" / "demo", reviewed=True)
+    reviewed_sha = _commit_all(updater, "reviewed origin docs")
+    _git(updater, "push", "origin", "main")
+    return repo, stale_sha, reviewed_sha
+
+
 def _reviewed_candidate_metadata(candidate: Path, branch: str, sha: str) -> dict:
     return {
         "path": str(candidate),
@@ -577,6 +600,36 @@ def test_document_status_uses_configured_origin_base_when_primary_checkout_stale
     assert head_before == stale_sha
     assert _git(repo, "rev-parse", "HEAD") == stale_sha
     assert "not reviewed yet" in (repo / "factory" / "projects" / "demo" / "PRD.md").read_text(encoding="utf-8")
+    assert not any(row["blocking"] for row in g1_rows)
+    assert {row["readiness_source"] for row in g1_rows} == {"configured_base_ref"}
+    assert {row["base_ref"] for row in g1_rows} == {"origin/main"}
+    assert {row["base_commit"] for row in g1_rows} == {reviewed_sha}
+
+
+def test_document_status_fetches_current_configured_base_ref_before_using_stale_checkout(tmp_path, monkeypatch):
+    repo, stale_sha, reviewed_sha = _make_unfetched_stale_primary_with_reviewed_origin(tmp_path)
+    monkeypatch.chdir(repo)
+    head_before = _git(repo, "rev-parse", "HEAD")
+
+    assert head_before == stale_sha
+    assert _git(repo, "rev-parse", "origin/main") == stale_sha
+
+    statuses = factory_pg.project_document_status(
+        {
+            "project_id": "demo",
+            "repo_path": str(repo),
+            "base_branch": "main",
+            "metadata": {
+                "artifact_dir": "factory/projects/demo",
+                "repo_strategy": {"primary_repo_path": str(repo), "base_branch": "main"},
+            },
+        }
+    )
+
+    g1_rows = [row for row in statuses if row["category"] == "g1_required"]
+    assert g1_rows
+    assert _git(repo, "rev-parse", "HEAD") == stale_sha
+    assert _git(repo, "rev-parse", "origin/main") == reviewed_sha
     assert not any(row["blocking"] for row in g1_rows)
     assert {row["readiness_source"] for row in g1_rows} == {"configured_base_ref"}
     assert {row["base_ref"] for row in g1_rows} == {"origin/main"}

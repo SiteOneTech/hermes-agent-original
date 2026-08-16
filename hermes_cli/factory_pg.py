@@ -2081,6 +2081,33 @@ def _candidate_review_evidence(candidate: dict[str, Any]) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _refresh_configured_base_ref(repo_path: Path, base_branch: str, base_ref: str) -> dict[str, Any]:
+    """Fetch the configured Factory base ref before document-status readback.
+
+    The Factory scheduler can run from a long-lived, stale process checkout.  A
+    cached ``origin/<base>`` ref in that checkout is not the canonical G1 source;
+    refresh the configured ref explicitly, without changing the local branch, so
+    document readiness is evaluated against the current configured base.
+    """
+
+    refspec = f"+refs/heads/{base_branch}:refs/remotes/origin/{base_branch}"
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_path), "fetch", "--no-tags", "origin", refspec],
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {"accepted": False, "reason": "base_ref_fetch_timeout", "base_ref": base_ref}
+    if result.returncode != 0:
+        return {"accepted": False, "reason": "base_ref_fetch_failed", "base_ref": base_ref}
+    return {"accepted": True}
+
+
 def _configured_base_ref_readback(project: dict[str, Any]) -> dict[str, Any]:
     strategy = _repository_strategy(project)
     base_branch, base_branch_blocker = _verified_factory_base_branch(project, strategy)
@@ -2096,6 +2123,9 @@ def _configured_base_ref_readback(project: dict[str, Any]) -> dict[str, Any]:
     if inside != "true":
         return {"accepted": False, "reason": "repo_path_unreadable"}
     base_ref = f"origin/{base_branch}"
+    fetch_result = _refresh_configured_base_ref(repo_path, base_branch, base_ref)
+    if not fetch_result.get("accepted"):
+        return fetch_result
     base_commit = _git_probe(repo_path, "rev-parse", "--verify", f"{base_ref}^{{commit}}")
     if not base_commit:
         return {"accepted": False, "reason": "base_ref_unavailable", "base_ref": base_ref}
