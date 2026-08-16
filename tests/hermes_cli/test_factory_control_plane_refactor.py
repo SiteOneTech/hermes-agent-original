@@ -509,7 +509,7 @@ def test_document_status_explicit_status_wins_over_later_normative_negation(tmp_
                     "| Document status | validated:true (planner); reviewed:true (architect) |",
                     "",
                     "## G1 rule",
-                    "G1 remains blocking when required documents are not reviewed.",
+                    "Historical primary evidence said reviewed=false; the explicit current header is the source of truth.",
                 ]
             ),
             encoding="utf-8",
@@ -551,6 +551,81 @@ def test_document_status_can_resolve_from_exact_reviewed_g1_candidate(tmp_path):
     assert {row["readiness_source"] for row in g1_rows} == {"reviewed_candidate"}
     assert {row["candidate_branch"] for row in g1_rows} == {branch}
     assert {row["candidate_sha"] for row in g1_rows} == {sha}
+
+
+def test_document_status_resolves_open_reviewed_g1_candidate_from_gate_evidence_without_primary_ready(tmp_path):
+    repo, candidate, branch, sha = _make_primary_with_reviewed_candidate(tmp_path)
+    project = {"project_id": "demo", "repo_path": str(repo), "metadata": {"artifact_dir": "factory/projects/demo"}}
+    task_id = "demo-r2o-reviewed-g1"
+    tasks = [{"task_id": task_id, "owner_profile": "codex-builder", "branch": branch, "worktree_path": str(candidate)}]
+    gates = [
+        {
+            "gate_id": 790,
+            "task_id": task_id,
+            "gate_type": "quality",
+            "status": "passed",
+            "reviewer": "quality-reviewer",
+            "notes": (
+                f"R2o independent exact-SHA review PASS. PR #34 open, label agent:zeus, head {sha}, "
+                "base df4c77fd1413a65cdb85885a06978ff157c1de4d. Verified docs-only scope; "
+                "14 required G1 docs carry validated: yes + reviewed: yes with reviewed_by quality-reviewer; "
+                "DOCUMENTATION_INDEX.md/G1_REVIEW.md separate candidate readiness from primary readiness and reject PR #20 dad375f."
+            ),
+        }
+    ]
+
+    primary_only = factory_pg.project_document_status(project)
+    assert any(row["category"] == "g1_required" and row["blocking"] for row in primary_only)
+    assert {row["readiness_source"] for row in primary_only if row["category"] == "g1_required"} == {"primary"}
+
+    statuses = factory_pg.project_document_status(project, tasks=tasks, gates=gates)
+
+    g1_rows = [row for row in statuses if row["category"] == "g1_required"]
+    assert g1_rows
+    assert not any(row["blocking"] for row in g1_rows)
+    assert {row["readiness_source"] for row in g1_rows} == {"reviewed_candidate"}
+    assert {row["candidate_pr_number"] for row in g1_rows} == {34}
+    assert {row["candidate_sha"] for row in g1_rows} == {sha}
+    assert {row["candidate_review_evidence_ref"] for row in g1_rows} == {"factory_gate_790"}
+
+
+def test_document_status_rejects_stale_pr20_reviewed_g1_gate_provenance(tmp_path):
+    repo, candidate, branch, sha = _make_primary_with_reviewed_candidate(tmp_path)
+    project = {
+        "project_id": "demo",
+        "repo_path": str(repo),
+        "metadata": {
+            "artifact_dir": "factory/projects/demo",
+            "g1_documentation_checkout": {
+                "pr_url": "https://github.com/SiteOneTech/hermes-agent-original/pull/20",
+                "commit": sha,
+                "not_merged": True,
+                "reason": "stale canonical provenance",
+            },
+        },
+    }
+    task_id = "demo-stale-pr20"
+    tasks = [{"task_id": task_id, "owner_profile": "codex-builder", "branch": branch, "worktree_path": str(candidate)}]
+    gates = [
+        {
+            "gate_id": 700,
+            "task_id": task_id,
+            "gate_type": "quality",
+            "status": "passed",
+            "reviewer": "quality-reviewer",
+            "notes": (
+                f"Historical PR #20 open, head {sha}. 14 required G1 docs carry validated: yes + reviewed: yes; "
+                "candidate readiness was later superseded and must not dispatch current implementation."
+            ),
+        }
+    ]
+
+    statuses = factory_pg.project_document_status(project, tasks=tasks, gates=gates)
+
+    prd = next(row for row in statuses if row["file_name"] == "PRD.md")
+    assert prd["blocking"] is True
+    assert prd["readiness_source"] == "primary"
+    assert prd["reviewed_candidate_rejected_reason"] == "stale_metadata_candidate_provenance"
 
 
 @pytest.mark.parametrize(
@@ -735,7 +810,7 @@ def test_status_attaches_document_status(fake_sql, monkeypatch):
     ]
     monkeypatch.setattr(factory_pg, "list_agents", lambda: [])
     monkeypatch.setattr(factory_pg, "factory_watchdog_alerts", lambda payload, project_id=None: [])
-    monkeypatch.setattr(factory_pg, "project_document_status", lambda project: [{"file_name": "PRD.md", "category": "g1_required"}])
+    monkeypatch.setattr(factory_pg, "project_document_status", lambda project, **_kwargs: [{"file_name": "PRD.md", "category": "g1_required"}])
 
     payload = factory_pg.status("demo")
     assert payload["projects"][0]["document_status"] == [{"file_name": "PRD.md", "category": "g1_required"}]
@@ -743,7 +818,7 @@ def test_status_attaches_document_status(fake_sql, monkeypatch):
 
 def test_record_delivery_gate_persists_document_status_snapshot(fake_sql, monkeypatch):
     monkeypatch.setattr(factory_pg, "_project", lambda project_id: {"project_id": project_id, "risk_level": "medium", "repo_path": None, "metadata": {}})
-    monkeypatch.setattr(factory_pg, "project_document_status", lambda project: [
+    monkeypatch.setattr(factory_pg, "project_document_status", lambda project, **_kwargs: [
         {"file_name": "PRD.md", "category": "g1_required", "blocking": False},
         {"file_name": "QA_REPORT.md", "category": "lifecycle", "blocking": False},
     ])
