@@ -1,9 +1,15 @@
 ---
 project_id: zeus-alpha-research-ledger-core
 phase: local_advisory_ledger_v1
-status: g1_rebaseline
+status: g1_reviewed_candidate_primary_hold
 validated: yes
-reviewed: pending
+reviewed: yes
+reviewed_by: quality-reviewer
+review_evidence: factory_gate_790
+reviewed_candidate_sha: 2476e978c545e24b18ee48844b24eb8c58245ab4
+reviewed_candidate_pr: https://github.com/SiteOneTech/hermes-agent-original/pull/34
+reviewed_source_gate: factory_gate_789
+reviewed_source_sha: 1e82340dddf52071d14c3c7a00b04b3c17ee2821
 ---
 
 # METHODOLOGY PLAN
