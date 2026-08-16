@@ -156,6 +156,9 @@ COMPRESSED_SUMMARY_HAS_USER_TURN_KEY = "_compressed_summary_has_user_turn"
 # rolling summary, so dropping or rewriting one destroys history.
 MICRO_COMPACT_MARKER_KEY = "_micro_compact_marker"
 _DB_PERSISTED_MARKER = "_db_persisted"
+# Private session-store fields that must never cross a compression boundary.
+# A child transcript gets new persistence state and fresh message row identities.
+_PERSISTENCE_MARKERS = frozenset({_DB_PERSISTED_MARKER, "_row_id"})
 PROACTIVE_PRUNE_REARM_MODEL_CONFIG_KEY = "_proactive_prune_rearm_tokens"
 
 _NO_USER_TASK_SENTINEL = "None. This session contains no user-authored turns."
@@ -195,7 +198,8 @@ def _fresh_compaction_message_copy(msg: Dict[str, Any]) -> Dict[str, Any]:
     a future refactor adds.
     """
     fresh = msg.copy()
-    fresh.pop(_DB_PERSISTED_MARKER, None)
+    for marker in _PERSISTENCE_MARKERS:
+        fresh.pop(marker, None)
     return fresh
 
 
@@ -244,7 +248,8 @@ def _strip_persistence_markers(messages: List[Dict[str, Any]]) -> None:
     """
     for msg in messages:
         if isinstance(msg, dict):
-            msg.pop(_DB_PERSISTED_MARKER, None)
+            for marker in _PERSISTENCE_MARKERS:
+                msg.pop(marker, None)
 
 
 def _prune_stale_reasoning_replay(messages: List[Dict[str, Any]]) -> int:

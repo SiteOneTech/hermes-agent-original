@@ -8454,6 +8454,53 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             current = child_id
         return current
 
+    def get_unique_compression_tip(self, session_id: str) -> Optional[str]:
+        """Return a live-write-safe compression tip, or ``None`` if ambiguous.
+
+        Read-only consumers use :meth:`get_compression_tip` to select the best
+        visible descendant when a stale websocket sibling exists.  A stale
+        writer must be stricter: choosing between two live continuations could
+        append the user's next turn to the wrong conversation.  This walk only
+        follows a single canonical child at each compression boundary and
+        treats multiple live or compression-ended candidates as ambiguous.
+        Closed non-compression siblings (for example ``ws_orphan_reap``) are
+        ignored; they cannot be a live continuation.
+        """
+        current = session_id
+        seen = {current} if current else set()
+        for _ in range(100):
+            with self._lock:
+                rows = self._conn.execute(
+                    """
+                    SELECT child.id
+                    FROM sessions parent
+                    JOIN sessions child ON child.parent_session_id = parent.id
+                    WHERE parent.id = ?
+                      AND parent.end_reason = 'compression'
+                      AND (child.ended_at IS NULL OR child.end_reason = 'compression')
+                    """
+                    + self._NON_CONTINUATION_CHILD_FILTER_SQL.format(alias="child.")
+                    + """
+                    ORDER BY child.started_at ASC, child.id ASC
+                    LIMIT 2
+                    """,
+                    (current, current, current),
+                ).fetchall()
+            if not rows:
+                return current
+            if len(rows) != 1:
+                return None
+            child_id = rows[0]["id"]
+            if not child_id or child_id in seen:
+                return None
+            seen.add(child_id)
+            current = child_id
+        logger.warning(
+            "Compression continuation chain from %s exceeded 100 hops; refusing adoption",
+            session_id,
+        )
+        return None
+
     # Columns excluded from compact_rows projections: only the payload-heavy
     # blob no list consumer renders. Everything else — including gateway
     # routing fields and desktop sidebar fields like git_branch — stays, and

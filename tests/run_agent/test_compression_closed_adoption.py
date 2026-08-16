@@ -174,13 +174,13 @@ def test_flush_adopts_exactly_once_no_retry_loop(tmp_path: Path, monkeypatch) ->
         agent = _flush_agent(db, "root")
 
         tip_calls = {"count": 0}
-        orig_tip = SessionDB.get_compression_tip
+        orig_tip = SessionDB.get_unique_compression_tip
 
         def _counting_tip(self, session_id):
             tip_calls["count"] += 1
             return orig_tip(self, session_id)
 
-        monkeypatch.setattr(SessionDB, "get_compression_tip", _counting_tip)
+        monkeypatch.setattr(SessionDB, "get_unique_compression_tip", _counting_tip)
 
         # Every batch write raises closed — including the post-adoption retry
         # against the live tip (simulating the tip rotating again mid-flush).
@@ -195,6 +195,29 @@ def test_flush_adopts_exactly_once_no_retry_loop(tmp_path: Path, monkeypatch) ->
         assert result is False, "second closed-parent write must fail closed"
         assert tip_calls["count"] == 1, "tip lookup must happen exactly once"
         assert agent._compression_adoption_failed is True
+    finally:
+        db.close()
+
+
+def test_flush_fails_closed_when_live_continuation_is_ambiguous(tmp_path: Path) -> None:
+    """A writer must never choose one of two live compression children."""
+    db = SessionDB(db_path=tmp_path / "state.db")
+    try:
+        db.create_session("parent", source="tui")
+        db.end_session("parent", "compression")
+        db.create_session("child-a", source="tui", parent_session_id="parent")
+        db.create_session("child-b", source="tui", parent_session_id="parent")
+
+        agent = _flush_agent(db, "parent")
+        result = agent._flush_messages_to_session_db(
+            [{"role": "user", "content": "must not choose a child"}], []
+        )
+
+        assert result is False
+        assert agent.session_id == "parent"
+        assert agent._compression_adoption_failed is True
+        assert db.get_messages_as_conversation("child-a") == []
+        assert db.get_messages_as_conversation("child-b") == []
     finally:
         db.close()
 

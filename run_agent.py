@@ -2336,21 +2336,28 @@ class AIAgent:
             self._last_persistence_error_cause = classify_persistence_error(e)
             if isinstance(e, CompressionSessionClosedError):
                 # Compression race: another path rotated this session while
-                # this turn was still writing against it. The store resolves
-                # the continuation chain transitively via the canonical API
-                # ``get_compression_tip`` (bounded walk, excludes branch/
-                # delegate/tool children, prefers live children over stale
-                # closed siblings such as ``ws_orphan_reap``). Adopt the tip
-                # ONLY when it is a different row AND still live, and retry
-                # the flush exactly once (adoption budget) — a second
-                # closed-parent write must fail closed, never loop. The tip
-                # walk returns the input id when no continuation exists, so
-                # ``tip == session_id`` means fail closed.
+                # this turn was still writing against it. Writers must follow a
+                # unique transitive continuation chain; choosing among siblings
+                # can append the user's next turn to the wrong conversation.
+                # Read-only consumers retain the best-effort
+                # ``get_compression_tip`` resolver for sidebar/resume display,
+                # while this write path uses the fail-closed variant when the
+                # store provides it. Retry exactly once after a live adoption.
                 if _adoption_budget > 0:
                     old_id = self.session_id
                     tip = None
                     try:
-                        tip = self._session_db.get_compression_tip(old_id)
+                        unique_tip = getattr(
+                            type(self._session_db), "get_unique_compression_tip", None
+                        )
+                        if callable(unique_tip):
+                            tip = unique_tip(self._session_db, old_id)
+                        else:
+                            logger.warning(
+                                "compression-safe tip resolver unavailable for %s; "
+                                "refusing to choose a continuation",
+                                old_id,
+                            )
                     except Exception as tip_exc:
                         logger.warning(
                             "compression tip lookup failed for %s: %s",

@@ -44,6 +44,29 @@ def test_find_live_compression_child_fails_closed_when_ambiguous(db: SessionDB) 
     assert db.find_live_compression_child("parent") is None
 
 
+def test_unique_compression_tip_fails_closed_when_live_children_are_ambiguous(
+    db: SessionDB,
+) -> None:
+    _compression_parent(db)
+    db.create_session("child-a", source="webui", parent_session_id="parent")
+    db.create_session("child-b", source="webui", parent_session_id="parent")
+
+    assert db.get_unique_compression_tip("parent") is None
+
+
+def test_unique_compression_tip_follows_chain_and_ignores_closed_orphan(
+    db: SessionDB,
+) -> None:
+    _compression_parent(db)
+    db.create_session("mid", source="webui", parent_session_id="parent")
+    db.end_session("mid", "compression")
+    db.create_session("orphan", source="webui", parent_session_id="parent")
+    db.end_session("orphan", "ws_orphan_reap")
+    db.create_session("tip", source="webui", parent_session_id="mid")
+
+    assert db.get_unique_compression_tip("parent") == "tip"
+
+
 def test_reopen_orphaned_compression_session_reopens_parent_without_child(
     db: SessionDB,
 ) -> None:

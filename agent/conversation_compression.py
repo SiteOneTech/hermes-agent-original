@@ -1218,15 +1218,13 @@ def _adopt_live_compression_child(
     stale contender fail-closed when lineage is ambiguous or the compacted
     handoff cannot be read.
 
-    Resolution uses the canonical transitive walk ``get_compression_tip`` so a
-    lineage with >=2 compression hops (root -> mid -> tip) recovers to the live
-    tip — the depth-1 ``find_live_compression_child`` lookup this used to call
-    finds no live *direct* child in that shape and skipped recovery (#82001).
-    The tip walk returns the input id when no continuation exists, and a
-    resolved tip is adopted only while its row is still live — both cases fail
-    closed exactly as before.
+    Resolution uses the canonical transitive ``get_unique_compression_tip``
+    walk so a lineage with >=2 compression hops (root -> mid -> tip) recovers
+    to the live tip without selecting between competing continuations. The tip
+    walk returns the input id when no continuation exists and ``None`` when a
+    boundary is ambiguous; both cases fail closed.
     """
-    resolver = getattr(type(session_db), "get_compression_tip", None)
+    resolver = getattr(type(session_db), "get_unique_compression_tip", None)
     row_getter = getattr(type(session_db), "get_session", None)
     loader = getattr(type(session_db), "get_messages_as_conversation", None)
     if not callable(resolver) or not callable(row_getter) or not callable(loader):
@@ -3854,6 +3852,14 @@ def compress_context(
             reset_skill_view_dedup(task_id)
         except Exception:
             pass
+
+        # Publishing the compacted transcript stamps fresh SQLite row ids onto
+        # the same dicts in-place for live reaction surfaces. Those ids are
+        # child-session storage identities, not prompt content: returning them
+        # here would carry a stale persistence marker into the next model turn.
+        for message in compressed:
+            if isinstance(message, dict):
+                message.pop("_row_id", None)
 
         logger.info(
             "context compression done: session=%s messages=%d->%d rough_tokens=~%s awaiting_real_usage=true",
