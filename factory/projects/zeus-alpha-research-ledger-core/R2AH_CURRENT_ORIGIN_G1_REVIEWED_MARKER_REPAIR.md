@@ -2,7 +2,7 @@
 project_id: zeus-alpha-research-ledger-core
 task_id: zeus-alpha-research-ledger-core-r2ah-current-origin-g1-reviewed-marker-a
 phase: documentation
-status: implemented_pending_pr_and_independent_review
+status: implemented_pending_independent_review
 validated: yes
 reviewed: pending_independent_quality_review
 owner: codex-builder
@@ -10,6 +10,7 @@ base_ref: origin/main
 current_base_sha: 1b6bc0f65d3ad49845d20e056203e3b3702ac2a7
 branch: factory/zeus-alpha-research-ledger-core/inc-019-r2ah-current-origin-g1-reviewed
 worktree: /home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-019-r2ah-current-origin-g1-reviewed
+pr_url: https://github.com/SiteOneTech/hermes-agent-original/pull/47
 ---
 
 # R2ah — current-origin G1 reviewed-marker and documentation-index repair
@@ -69,6 +70,6 @@ R2ah reconciles `DOCUMENTATION_INDEX.md`, `G1_REVIEW.md`, `G0_REPOSITORY_STRATEG
 
 ## PR-first handoff
 
-The final R2ah candidate must be pushed to branch `factory/zeus-alpha-research-ledger-core/inc-019-r2ah-current-origin-g1-reviewed`, opened as a non-draft GitHub PR against `main`, labeled `agent:zeus`, Zeus-signed, and independently reviewed against the exact head SHA. This worker must not merge the PR, deploy, change credentials, or record an independent approval for its own work.
+The R2ah candidate is opened as non-draft GitHub PR #47, `https://github.com/SiteOneTech/hermes-agent-original/pull/47`, against `main`, labeled `agent:zeus`, Zeus-signed, and awaiting independent review against the exact final head SHA recorded in the PR body/Factory evidence. This worker must not merge the PR, deploy, change credentials, or record an independent approval for its own work.
 
-After the PR exists, update this artifact and `DOCUMENTATION_INDEX.md` with the exact PR URL and head SHA before final evidence is recorded.
+PR #47 is a handoff artifact only. It does not authorize base-branch merge, deployment, runtime execution, connector activation, direct Factory DB mutation, or downstream ALR implementation.
