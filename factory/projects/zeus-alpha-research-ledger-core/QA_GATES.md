@@ -1,9 +1,15 @@
 ---
 project_id: zeus-alpha-research-ledger-core
 phase: local_advisory_ledger_v1
-status: g1_rebaseline
+status: g1_reviewed_candidate_primary_hold
 validated: yes
-reviewed: pending
+reviewed: yes
+reviewed_by: quality-reviewer
+review_evidence: factory_gate_790
+reviewed_candidate_sha: 2476e978c545e24b18ee48844b24eb8c58245ab4
+reviewed_candidate_pr: https://github.com/SiteOneTech/hermes-agent-original/pull/34
+reviewed_source_gate: factory_gate_789
+reviewed_source_sha: 1e82340dddf52071d14c3c7a00b04b3c17ee2821
 ---
 
 # QA GATES
@@ -42,4 +48,7 @@ reviewed: pending
 - Actual GitHub PR exists with Zeus signature and `agent:zeus` label.
 - For future source increments, QA Guardian merge evidence is mandatory before terminal closure; per-task waiver metadata remains the expected guard against Factory direct branch-to-base integration. The observed ALR-010-R1 `merge_no_ff_push_origin` event must be treated as reconciled audit evidence, not as delivery approval or deployment authority.
 - PR-first/QA Guardian evidence must be candidate-bound: for PR #29 the candidate commit is `f61a7275048e2135b2b2729a1b9cdf8713c58866`. A review-only branch `already_ancestor` record at `5e1e4622e93d8d2fabdfe0f2176889a29afa7f7c` is not acceptable source-merge or QA Guardian evidence for that PR.
-- R2m renewal evidence must be candidate-bound to the exact R2m PR head SHA on base `origin/main` `ab08b13669903a87b3d60d6c80231d23d6313782`. Obsolete project metadata pointing to PR #20 / `dad375f27568c38be771fc597b579d087f034e1d`, historical PR #29/f61a review PASS records, PR #30/c1943 merge evidence and PR #31/R2k exposure are not sufficient to change G1 docs to `reviewed: yes` or dispatch ALR-020 until canonical Factory metadata and `document_status` read back reconciled.
+- R2q reviewed-docs recovery evidence is candidate-bound to Factory gate 790, reviewer `quality-reviewer`, PR #34 head `2476e978c545e24b18ee48844b24eb8c58245ab4`, source gate 789 / PR #33 head `1e82340dddf52071d14c3c7a00b04b3c17ee2821`, and current recovery base `origin/main` `df4c77fd1413a65cdb85885a06978ff157c1de4d`.
+- R2p/PR #35 and run `run-1786840866-90f55f9d` are explicitly invalid as review completion evidence because the quality-reviewer session ended on provider HTTP 429 with zero tool calls. Provider failure leaves work blocked/retriable.
+- The independent R2q solution-architect review must cite the final R2q PR head SHA and include evidence that review work actually ran: files read, diff inspected, commands run and/or tool calls made. A zero-tool or provider-failed review cannot satisfy this gate.
+- Obsolete project metadata pointing to PR #20 / `dad375f27568c38be771fc597b579d087f034e1d`, historical PR #29/f61a review PASS records, PR #30/c1943 merge evidence, PR #31/R2k exposure, R2m handoff evidence and PR #35/R2p code-path evidence are not sufficient to claim primary readiness or dispatch ALR-020. Primary readiness must be read back from Agent Core `document_status` or an authorized reviewed-candidate metadata path after the source state is accepted.
