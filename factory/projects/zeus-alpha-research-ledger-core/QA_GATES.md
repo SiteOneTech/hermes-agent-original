@@ -67,3 +67,8 @@ reviewed_source_sha: 2476e978c545e24b18ee48844b24eb8c58245ab4
 - Factory DB evidence: gate `804` recorded `quality passed` for task `zeus-alpha-research-ledger-core-r2v-canonical-g1-status-and-no-auto-merg`, reviewer `quality-reviewer`.
 - Non-blocking observations (no rework required): (1) no dedicated behavioral test for an entirely missing/unreadable configured base ref — the fail-closed path is covered by code inspection (`_configured_base_ref_readback` returns `accepted=false` for `repo_path_missing`/`repo_path_unreadable`/`base_ref_unavailable`) and the missing-index case is behaviorally tested; (2) `_git_file_text_at_ref` uses a 10s subprocess timeout per document (worst case ~22 docs sequential) — acceptable for a control-plane status call.
 - Verdict: **PASS** — implementation head approved for R2v task closure from the quality perspective.
+
+## R2w reviewed-frontmatter PR recovery gate
+- R2w must remain documentation/review-evidence only under `factory/projects/zeus-alpha-research-ledger-core/`; no runtime/source implementation, deploy, credential, connector, messaging, direct SQL, or trading/risk/paper/live action is authorized.
+- Required local evidence: `git diff --check`, scoped diff path verification, tracked-document verification, and approved Factory status CLI read-back showing zero G1 required-document blockers on configured base ref `origin/main` at `df79aac9d306c0b055fe88dbde5ebd54d9635e36`.
+- Delivery evidence must be PR-first: actual GitHub PR against `main`, Zeus signature, `agent:zeus` label, exact candidate SHA named in the PR body, and independent exact-SHA `quality-reviewer` verification before task closure. This worker must not merge the PR.
