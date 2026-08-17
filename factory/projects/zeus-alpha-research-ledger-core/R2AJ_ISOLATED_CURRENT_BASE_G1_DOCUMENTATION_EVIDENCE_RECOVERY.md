@@ -2,16 +2,17 @@
 project_id: zeus-alpha-research-ledger-core
 task_id: zeus-alpha-research-ledger-core-r2aj-isolated-current-base-g1-documentat
 phase: documentation
-status: implemented_pending_pr_handoff
+status: pr_open_pending_independent_review
 validated: yes
 reviewed: pending_independent_quality_review
 owner: codex-builder
 base_ref: origin/main
 current_base_sha: bf422968f9ea73d70d4ac1e8b8bae4af644ce079
+candidate_sha: 8ce2d8cb6ae9ad2ab5423153f9d06b56fe4623c7
 branch: factory/zeus-alpha-research-ledger-core/inc-017-r2aj-isolated-current-base-g1-do
 worktree: /home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-017-r2aj-isolated-current-base-g1-do
-factory_status_log: /home/jean/.hermes/profiles/codex-builder/cache/terminal-output/out-1786939834-4163626-ca90.log
-pr_url: pending_pr_first_handoff
+factory_status_log: /home/jean/.hermes/profiles/codex-builder/cache/terminal-output/out-1786940314-4163626-31d0.log
+pr_url: https://github.com/SiteOneTech/hermes-agent-original/pull/57
 ---
 
 # R2aj — isolated current-base G1 documentation evidence recovery
@@ -25,7 +26,7 @@ This artifact records the bounded R2aj documentation/provenance recovery for the
 - Entry point and controlling index: `DOCUMENTATION_INDEX.md`.
 - Factory-required G1 docs: `FACTORY_INTAKE.md`, `REQUIREMENTS_ANALYSIS.md`, `PATTERN_ANALYSIS.md`, `ASSUMPTIONS_AND_OPEN_QUESTIONS.md`, `PRD.md`, `ADRS.md`, `METHODOLOGY_PLAN.md`, `TECHNICAL_BLUEPRINT.md`, `SPRINT_PLAN.md`, `TASK_GRAPH.md`, `TRACKER.md`, `QA_GATES.md`, `SECURITY_GATES.md`, and `DOCUMENTATION_INDEX.md`.
 - G0 and provenance docs: `G0_REPOSITORY_STRATEGY.md`, `G1_DOCUMENT_STATUS_TECHNICAL_RECOVERY.md`, `R2C2_AUTONOMOUS_CANONICAL_G1_DOCUMENTATION_STATUS_REPAIR.md`, and `R2AH_CURRENT_ORIGIN_G1_REVIEWED_MARKER_REPAIR.md`.
-- Canonical Factory CLI status command, run from the assigned isolated worktree: `/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory status --json zeus-alpha-research-ledger-core`; exit `0`; full output cached at `/home/jean/.hermes/profiles/codex-builder/cache/terminal-output/out-1786939834-4163626-ca90.log`.
+- Canonical Factory CLI status command, run from the assigned isolated worktree: `/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory status --json zeus-alpha-research-ledger-core`; exit `0`; final post-commit output cached at `/home/jean/.hermes/profiles/codex-builder/cache/terminal-output/out-1786940314-4163626-31d0.log` (pre-edit source log: `/home/jean/.hermes/profiles/codex-builder/cache/terminal-output/out-1786939834-4163626-ca90.log`).
 - GitHub stale-PR readback: PR #44 remains open at head `768444e33ac64bf238e64c1df4c49fe2020b51a8` on branch `factory/zeus-alpha-research-ledger-core/inc-019-r2ae-bounded-canonical-g1-valida`; it is not the current-base R2aj candidate and is not used as evidence.
 
 ## Current-base branch/worktree identity
@@ -84,4 +85,4 @@ Therefore the bounded technical cause, if this remains unresolved after PR revie
 
 R2aj reconstructs only the minimum project-local evidence for the current-base G1 documentation/provenance anomaly: this artifact, the documentation index, the task graph, the tracker, and the G1 QA/security gate notes. The machine-readable reviewed markers on the required G1 documents remain `reviewed: yes` and continue to cite the independent reviewed-docs source chain: PR #36 exact head `c81547062c5362a7be6f5a1bb2ef9612b29bac9c`, Factory gate `794`, source gate `790`, and PR #34 SHA `2476e978c545e24b18ee48844b24eb8c58245ab4`.
 
-The R2aj delivery must be a fresh non-draft GitHub PR against `main`, labeled `agent:zeus`, Zeus-signed, and independently reviewed against the exact final candidate SHA before downstream dispatch relies on this recovery. This worker must not self-approve, merge, deploy, change credentials, mutate the primary checkout, write direct SQL, or activate runtime/external/trading behavior.
+The R2aj delivery is non-draft GitHub PR #57, `https://github.com/SiteOneTech/hermes-agent-original/pull/57`, against `main`, labeled `agent:zeus`, Zeus-signed, and awaiting independent review against exact candidate SHA `8ce2d8cb6ae9ad2ab5423153f9d06b56fe4623c7` before downstream dispatch relies on this recovery. This worker must not self-approve, merge, deploy, change credentials, mutate the primary checkout, write direct SQL, or activate runtime/external/trading behavior.
