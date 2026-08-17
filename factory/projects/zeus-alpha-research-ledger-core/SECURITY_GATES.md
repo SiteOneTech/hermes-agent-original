@@ -122,6 +122,12 @@ reviewed_source_sha: 2476e978c545e24b18ee48844b24eb8c58245ab4
 - Factory status JSON may add deterministic source-root provenance fields but must not treat stale primary checkout, historical events, stale assignment summaries, or PR metadata as current G1 readiness authority. Clean current configured-base rows remain the readiness source; unavailable/non-JSON delegated status output falls back to the prior stdout/stderr passthrough rather than fabricating readiness.
 - Delivery is a Zeus-signed `agent:zeus` PR plus independent exact-SHA quality review. No merge, deploy, credential access, external connector, messaging operation, trading action, risk mutation, paper/live activation, self-approval, no-auto-merge bypass, direct SQL, primary-checkout mutation, or external runtime execution is authorized.
 
+## R2bc canonical origin/main G1 status-source reconciliation repair security gate
+- R2bc is limited to Factory CLI status-source/reconciliation behavior and project-local evidence docs. It must not add or alter Alpha Research Ledger product/runtime code, provider clients, credential paths, messaging connectors, deployment behavior, trading/risk/paper/live behavior, external runtimes, primary checkout state, or direct Factory DB writes.
+- The exact current configured base for this repair is `origin/main` `b503ba3b57fd606956d0ebf925c83eda253bdcc5`. Primary checkout HEAD `4eb87e4cd48105af05fe974cf1d493f0e1b57ae1` is rejected identity evidence only and must not be mutated.
+- Source selection may delegate from a stale running source only to a complete, clean local Git worktree whose HEAD exactly equals the already-fetched current origin ref. Dirty, incomplete, wrong-commit, unavailable, same-root, or non-JSON delegated paths must fail closed or preserve prior passthrough; they must never fabricate reviewed G1 readiness.
+- Delivery is a Zeus-signed `agent:zeus` PR plus independent exact-SHA quality review. No merge, deploy, credential access, external connector, messaging operation, trading action, risk mutation, paper/live activation, self-approval, no-auto-merge bypass, direct SQL, primary-checkout mutation, or external runtime execution is authorized.
+
 ## Scheduler gate
 - `agent_core.alpha_research.scheduler.enabled` is false absent explicit configuration.
 - Registration and each invocation call the contract §5 verifier without cache. Tests cover every false/missing/failed/expired/wrong-commit readiness component and prove no batch read/run follows `scheduler_not_ready`.
