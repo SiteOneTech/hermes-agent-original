@@ -186,10 +186,10 @@ persisted provenance: recent reconciliation events listed `unvalidated_required_
 metadata carried `reconciliation_anomalies=["unvalidated_required_docs"]`, and obsolete
 `g1_documentation_checkout` pointed at PR #20 / `dad375f27568c38be771fc597b579d087f034e1d`.
 Historical gate `845` also recorded old `reviewed=false` rows. The final Agent Core
-readback after implementation gate `846` shows `resolved_reconciliation_task_cancelled`
+readback after implementation evidence was recorded shows `resolved_reconciliation_task_cancelled`
 for `unvalidated_required_docs` and a subsequent reconciliation event with
 `anomalies=[]`; the only remaining project anomaly is the intentionally routed pending
-quality gate `847`.
+quality gate.
 
 **Handoff requirement:** the fresh current-origin branch must be opened as a
 Zeus-signed GitHub PR labeled `agent:zeus` against `main`. The PR body/Factory

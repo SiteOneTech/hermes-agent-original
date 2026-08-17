@@ -63,10 +63,10 @@ The stale anomaly source was not the current-origin document rows. It was persis
 
 Final post-gate Agent Core readback cleared the required-doc anomaly without direct SQL:
 
-- Gate `846` recorded this worker's implementation evidence (`event_id=193027`, log lines `548`–`559`).
+- Gate `846` recorded the initial implementation evidence that triggered reconciliation (`event_id=193027`, log lines `548`–`559`); the current-head implementation/quality gate IDs are recorded in Agent Core after the final PR push.
 - The reconciler auto-cancelled `zeus-alpha-research-ledger-core-reconcile-unvalidated-required-docs` with `reconciliation_anomaly=unvalidated_required_docs` (`event_id=193028`, log lines `533`–`545`).
 - The next reconciliation event shows `anomalies=[]` and cancelled source `structured_reconciliation_metadata` for `unvalidated_required_docs` (`event_id=193029`, log lines `499`–`530`).
-- Independent quality review was routed as pending gate `847` (`event_id=193030`, log lines `485`–`496`), so the latest project-level anomaly is only `pending_effective_gates` (`event_id=193031`, log lines `455`–`483`).
+- Independent quality review was routed as a pending quality gate (`event_id=193030`, log lines `485`–`496` in the captured readback), so the latest project-level anomaly is only `pending_effective_gates` (`event_id=193031`, log lines `455`–`483`).
 
 ## Repair path if the control-plane defect recurs
 
