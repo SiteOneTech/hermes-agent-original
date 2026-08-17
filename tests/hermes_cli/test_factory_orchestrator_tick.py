@@ -218,7 +218,12 @@ def test_status_prefers_isolated_cwd_source_over_stale_running_module(monkeypatc
     rc = factory.cmd_status(argparse.Namespace(project_id="demo", json=True))
 
     assert rc == 0
-    assert json.loads(capsys.readouterr().out)["projects"][0]["project_id"] == "demo"
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["projects"][0]["project_id"] == "demo"
+    assert payload["factory_cli_source_root"] == str(worktree)
+    assert payload["factory_status_source_root"] == str(worktree)
+    assert payload["factory_status_delegated"] is True
+    assert payload["factory_status_delegated_from_source_root"] == str(stale_primary.parents[1])
     assert captured["argv"] == [
         sys.executable,
         "-m",
