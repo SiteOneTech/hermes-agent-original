@@ -8,7 +8,7 @@ reviewed: pending_independent_quality_review
 owner: codex-builder
 base_ref: origin/main
 current_base_sha: bf422968f9ea73d70d4ac1e8b8bae4af644ce079
-candidate_sha: 8ce2d8cb6ae9ad2ab5423153f9d06b56fe4623c7
+candidate_sha: recorded_in_pr_and_factory_gate_after_final_push
 branch: factory/zeus-alpha-research-ledger-core/inc-017-r2aj-isolated-current-base-g1-do
 worktree: /home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-017-r2aj-isolated-current-base-g1-do
 factory_status_log: /home/jean/.hermes/profiles/codex-builder/cache/terminal-output/out-1786940314-4163626-31d0.log
@@ -85,4 +85,4 @@ Therefore the bounded technical cause, if this remains unresolved after PR revie
 
 R2aj reconstructs only the minimum project-local evidence for the current-base G1 documentation/provenance anomaly: this artifact, the documentation index, the task graph, the tracker, and the G1 QA/security gate notes. The machine-readable reviewed markers on the required G1 documents remain `reviewed: yes` and continue to cite the independent reviewed-docs source chain: PR #36 exact head `c81547062c5362a7be6f5a1bb2ef9612b29bac9c`, Factory gate `794`, source gate `790`, and PR #34 SHA `2476e978c545e24b18ee48844b24eb8c58245ab4`.
 
-The R2aj delivery is non-draft GitHub PR #57, `https://github.com/SiteOneTech/hermes-agent-original/pull/57`, against `main`, labeled `agent:zeus`, Zeus-signed, and awaiting independent review against exact candidate SHA `8ce2d8cb6ae9ad2ab5423153f9d06b56fe4623c7` before downstream dispatch relies on this recovery. This worker must not self-approve, merge, deploy, change credentials, mutate the primary checkout, write direct SQL, or activate runtime/external/trading behavior.
+The R2aj delivery is non-draft GitHub PR #57, `https://github.com/SiteOneTech/hermes-agent-original/pull/57`, against `main`, labeled `agent:zeus`, Zeus-signed, and awaiting independent review against the exact PR head SHA recorded after the final push in the PR readback and Factory gate evidence before downstream dispatch relies on this recovery. This worker must not self-approve, merge, deploy, change credentials, mutate the primary checkout, write direct SQL, or activate runtime/external/trading behavior.
