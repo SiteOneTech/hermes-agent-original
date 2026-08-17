@@ -259,6 +259,9 @@ def cmd_project_declare_successor(args: argparse.Namespace) -> int:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
+    delegated = _delegated_status_from_cwd_source(args)
+    if delegated is not None:
+        return delegated
     payload = _status_payload(args)
     if args.json:
         return _print_json(payload)
@@ -278,8 +281,95 @@ def _running_factory_source_root() -> Path:
     return factory_file.parents[1]
 
 
+def _factory_source_root_is_complete(source_root: Path) -> bool:
+    return all(
+        (source_root / rel_path).is_file()
+        for rel_path in (
+            Path("hermes_cli") / "main.py",
+            Path("hermes_cli") / "factory.py",
+            Path("hermes_cli") / "factory_pg.py",
+            Path("scripts") / "factory" / "factory_orchestrator_tick.py",
+        )
+    )
+
+
+def _find_cwd_factory_source_root() -> Path | None:
+    try:
+        cwd = Path.cwd().resolve()
+    except Exception:
+        return None
+    for candidate in (cwd, *cwd.parents):
+        if _factory_source_root_is_complete(candidate):
+            return candidate
+    return None
+
+
+def _same_source_root(left: Path, right: Path) -> bool:
+    try:
+        return left.resolve() == right.resolve()
+    except Exception:
+        return os.path.realpath(str(left)) == os.path.realpath(str(right))
+
+
+def _preferred_cwd_source_root(running_source_root: Path) -> Path | None:
+    if os.environ.get("HERMES_FACTORY_SOURCE_DELEGATED") == "1":
+        return None
+    cwd_source_root = _find_cwd_factory_source_root()
+    if cwd_source_root is None or _same_source_root(cwd_source_root, running_source_root):
+        return None
+    return cwd_source_root
+
+
+def _source_env(source_root: Path, *, project_id: str | None = None) -> dict[str, str]:
+    env = {**os.environ}
+    pythonpath = str(source_root)
+    if env.get("PYTHONPATH"):
+        pythonpath = f"{pythonpath}{os.pathsep}{env['PYTHONPATH']}"
+    env["PYTHONPATH"] = pythonpath
+    if project_id:
+        env["FACTORY_TICK_PROJECT_ID"] = project_id
+    return env
+
+
+def _delegated_status_from_cwd_source(args: argparse.Namespace) -> int | None:
+    try:
+        running_source_root = _running_factory_source_root()
+    except RuntimeError:
+        return None
+    source_root = _preferred_cwd_source_root(running_source_root)
+    if source_root is None:
+        return None
+    argv = [sys.executable, "-m", "hermes_cli.main", "factory", "status"]
+    project_id = getattr(args, "project_id", None)
+    if project_id:
+        argv.append(str(project_id))
+    if getattr(args, "json", False):
+        argv.append("--json")
+    env = _source_env(source_root)
+    env["HERMES_FACTORY_SOURCE_DELEGATED"] = "1"
+    proc = subprocess.run(
+        argv,
+        cwd=str(source_root),
+        env=env,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        capture_output=True,
+        timeout=180,
+    )
+    if proc.stdout:
+        print(proc.stdout, end="")
+    if proc.stderr:
+        print(proc.stderr, end="", file=sys.stderr)
+    return proc.returncode
+
+
 def _resolve_orchestrator_script() -> tuple[Path, Path]:
-    source_root = _running_factory_source_root()
+    running_source_root = _running_factory_source_root()
+    running_script = running_source_root / "scripts" / "factory" / "factory_orchestrator_tick.py"
+    if not running_script.is_file():
+        raise RuntimeError(f"Factory orchestrator script not found in running Hermes source: {running_script}")
+    source_root = _preferred_cwd_source_root(running_source_root) or running_source_root
     script = source_root / "scripts" / "factory" / "factory_orchestrator_tick.py"
     if not script.is_file():
         raise RuntimeError(f"Factory orchestrator script not found in running Hermes source: {script}")
@@ -288,13 +378,7 @@ def _resolve_orchestrator_script() -> tuple[Path, Path]:
 
 def _run_orchestrator_script(project_id: str | None = None) -> dict[str, Any]:
     script, source_root = _resolve_orchestrator_script()
-    env = {**os.environ}
-    pythonpath = str(source_root)
-    if env.get("PYTHONPATH"):
-        pythonpath = f"{pythonpath}{os.pathsep}{env['PYTHONPATH']}"
-    env["PYTHONPATH"] = pythonpath
-    if project_id:
-        env["FACTORY_TICK_PROJECT_ID"] = project_id
+    env = _source_env(source_root, project_id=project_id)
     proc = subprocess.run(
         [sys.executable, str(script)],
         cwd=str(source_root),
@@ -308,9 +392,13 @@ def _run_orchestrator_script(project_id: str | None = None) -> dict[str, Any]:
     if proc.returncode != 0:
         raise RuntimeError(proc.stderr.strip() or proc.stdout.strip() or f"tick exited {proc.returncode}")
     try:
-        return json.loads(proc.stdout or "{}")
+        payload = json.loads(proc.stdout or "{}")
+        if isinstance(payload, dict):
+            payload.setdefault("factory_cli_source_root", str(source_root))
+            payload.setdefault("factory_orchestrator_script", str(script))
+        return payload
     except Exception:
-        return {"raw_output": proc.stdout}
+        return {"raw_output": proc.stdout, "factory_cli_source_root": str(source_root), "factory_orchestrator_script": str(script)}
 
 
 def cmd_project_action(args: argparse.Namespace) -> int:
