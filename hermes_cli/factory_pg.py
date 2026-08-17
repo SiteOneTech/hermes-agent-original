@@ -3067,8 +3067,11 @@ def cancel_resolved_reconciliation_tasks(project: dict[str, Any], findings: list
     Reconciliation tasks are recovery work, not permanent backlog. If the current
     deterministic findings no longer include the task's anomaly, leaving the row
     in ``todo`` makes a project appear planned/active even though there is no
-    defect left to resolve. This reducer records the resolution and lets the
-    normal reconciler compute terminal project status from the refreshed task set.
+    defect left to resolve. In-flight repair/review tasks are not stale backlog:
+    the worker/reviewer must finish and record candidate-bound evidence instead
+    of having its active run cancelled out from under it. This reducer records
+    the resolution for idle recovery rows and lets the normal reconciler compute
+    terminal project status from the refreshed task set.
     """
 
     ensure_runtime_schema()
@@ -3076,7 +3079,8 @@ def cancel_resolved_reconciliation_tasks(project: dict[str, Any], findings: list
     active_codes = {str(finding.get("code") or "") for finding in findings if finding.get("code")}
     resolved: list[dict[str, Any]] = []
     for task in tasks:
-        if str(task.get("status") or "") in TERMINAL_TASK_STATUSES:
+        status_value = str(task.get("status") or "")
+        if status_value in TERMINAL_TASK_STATUSES or status_value in ACTIVE_TASK_STATUSES:
             continue
         if not _is_reconciliation_task(task):
             continue

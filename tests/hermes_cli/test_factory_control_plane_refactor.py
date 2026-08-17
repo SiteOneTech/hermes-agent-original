@@ -1039,6 +1039,25 @@ def test_reconciler_does_not_cancel_product_validation_task_with_reconciliation_
     assert "demo-qa-security" not in joined.split("demo-reconcile-unvalidated-required-docs")[0]
 
 
+def test_reconciler_does_not_cancel_inflight_reconciliation_repair(fake_sql):
+    project = {"project_id": "demo", "metadata": {}}
+    findings = []
+    task = {
+        "project_id": "demo",
+        "task_id": "demo-r2bd-deterministic-g1-documentation-preflight",
+        "status": "running",
+        "phase": "documentation",
+        "title": "R2bd deterministic G1 documentation preflight reconciliation repair",
+        "description": "Repair or preserve unvalidated_required_docs source-backed failure evidence.",
+        "metadata": {"source": "factory_task_create"},
+    }
+
+    resolved = factory_pg.cancel_resolved_reconciliation_tasks(project, findings, [task])
+
+    assert resolved == []
+    assert not any("UPDATE factory.tasks" in statement for statement in fake_sql.statements)
+
+
 def test_unvalidated_required_docs_reconciliation_resolves_from_current_document_status(monkeypatch):
     project = {
         "project_id": "demo",
