@@ -174,22 +174,22 @@ with local `HEAD`, `origin/main`, and merge-base all equal to
 **Canonical Agent Core read-back:** the approved status command
 `/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory status --json zeus-alpha-research-ledger-core`
 read Agent Core Postgres (`db_backend=agent_core_postgres`, `database=zeus_agent`) and wrote full evidence to
-`/home/jean/.hermes/profiles/codex-builder/cache/terminal-output/out-1786924825-620586-d310.log`.
-Project `document_status` lines `19282`–`19632` show configured base ref
+`/home/jean/.hermes/profiles/codex-builder/cache/terminal-output/out-1786925327-620586-1dd0.log`.
+Project `document_status` lines `19341`–`19690` show configured base ref
 `origin/main`, base commit `139df9ae49137bb4b16152550d53d385310de3b6`,
 `readiness_source=configured_base_ref`, stale primary checkout rejected, and
 `exists=true`, `committed=true`, `indexed=true`, `validated=true`,
 `reviewed=true`, `blocking=false` for all 14 required G1 documents.
 
-**Historical mismatch and final outcome:** earlier status payloads exposed stale
+**Remaining control-plane mismatch:** earlier status payloads exposed stale
 persisted provenance: recent reconciliation events listed `unvalidated_required_docs`,
 metadata carried `reconciliation_anomalies=["unvalidated_required_docs"]`, and obsolete
 `g1_documentation_checkout` pointed at PR #20 / `dad375f27568c38be771fc597b579d087f034e1d`.
 Historical gate `845` also recorded old `reviewed=false` rows. The final Agent Core
-readback after implementation evidence was recorded shows `resolved_reconciliation_task_cancelled`
-for `unvalidated_required_docs` and a subsequent reconciliation event with
-`anomalies=[]`; the only remaining project anomaly is the intentionally routed pending
-quality gate.
+readback re-created `unvalidated_required_docs` from stale `metadata.g1_documentation_checkout`
+assignment provenance (`event_id=193040`, log lines `491`–`512`) even while all 14 current
+required-G1 rows are non-blocking; the bounded follow-up is a Factory reconciler repair,
+not direct SQL or primary checkout mutation.
 
 **Handoff requirement:** the fresh current-origin branch must be opened as a
 Zeus-signed GitHub PR labeled `agent:zeus` against `main`. The PR body/Factory
