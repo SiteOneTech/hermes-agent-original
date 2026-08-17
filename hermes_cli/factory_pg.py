@@ -2589,6 +2589,66 @@ def _stale_g1_projection_metadata_keys(project: dict[str, Any], finding_codes: l
     return [key for key in ("g1_documentation_checkout",) if key in project_metadata]
 
 
+def _g1_required_status_rows_ready(project: dict[str, Any], statuses: list[Any]) -> bool:
+    """Return whether an already-computed status payload has clean G1 rows."""
+
+    metadata = _metadata(project)
+    if _required_docs_explicitly_waived(metadata):
+        return True
+    g1_rows = [row for row in statuses if isinstance(row, dict) and row.get("category") == "g1_required"]
+    return bool(g1_rows) and not any(bool(row.get("blocking")) for row in g1_rows)
+
+
+def _project_status_effective_reconciliation_projection(project: dict[str, Any]) -> None:
+    """Apply current document-status truth to the readback reconciliation projection.
+
+    ``status()`` is a readback/projection surface that carries both dynamic
+    ``document_status`` rows and persisted project metadata.  When the dynamic
+    current configured-base rows prove every required G1 document is
+    non-blocking, stale persisted ``unvalidated_required_docs`` and obsolete
+    checkout provenance must not be re-presented to dispatch/watchdog/reviewer
+    consumers as if they were still authoritative.  This is deliberately
+    readback-only; the mutating reconciler persists the same cleanup through
+    ``reconcile_project``.
+    """
+
+    statuses = project.get("document_status")
+    if not isinstance(statuses, list):
+        return
+    metadata = _metadata(project)
+    if not metadata or not _g1_required_status_rows_ready(project, statuses):
+        return
+
+    raw_anomalies = metadata.get("reconciliation_anomalies")
+    anomalies = [str(item) for item in raw_anomalies if str(item or "").strip()] if isinstance(raw_anomalies, list) else []
+    cleaned_anomalies = [code for code in anomalies if code != "unvalidated_required_docs"]
+    stale_unvalidated = cleaned_anomalies != anomalies
+    stale_keys = [key for key in ("g1_documentation_checkout",) if key in metadata]
+    if not stale_unvalidated and not stale_keys:
+        return
+
+    effective = dict(metadata)
+    stale_projection: dict[str, Any] = {}
+    if stale_unvalidated:
+        stale_projection["reconciliation_anomalies"] = anomalies
+        effective["reconciliation_anomalies"] = cleaned_anomalies
+        effective["reconciliation_required"] = bool(cleaned_anomalies)
+    if stale_keys:
+        for key in stale_keys:
+            effective.pop(key, None)
+        existing_cleared = effective.get("cleared_project_metadata_keys")
+        cleared = [str(item) for item in existing_cleared if str(item or "").strip()] if isinstance(existing_cleared, list) else []
+        for key in stale_keys:
+            if key not in cleared:
+                cleared.append(key)
+        effective["cleared_project_metadata_keys"] = cleared
+        stale_projection["removed_metadata_keys"] = stale_keys
+    if stale_projection:
+        effective["stale_reconciliation_projection"] = stale_projection
+        effective["reconciliation_projection_source"] = "current_document_status"
+    project["metadata"] = effective
+
+
 def _repo_commit_explicitly_waived(metadata: dict[str, Any]) -> bool:
     return _any_explicit_waiver(
         metadata,
@@ -7350,6 +7410,7 @@ def status(project_id: Optional[str] = None, **_: Any) -> dict[str, Any]:
     agents = list_agents()
     for project in projects:
         project["document_status"] = project_document_status(project)
+        _project_status_effective_reconciliation_projection(project)
     payload = {
         "db_backend": "agent_core_postgres",
         "database": sql.runtime_env().get("AGENT_DB_NAME", "zeus_agent"),

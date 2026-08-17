@@ -1157,6 +1157,84 @@ def test_status_attaches_document_status(fake_sql, monkeypatch):
     assert payload["projects"][0]["document_status"] == [{"file_name": "PRD.md", "category": "g1_required"}]
 
 
+def test_status_effective_projection_ignores_stale_unvalidated_docs_when_current_rows_clean(fake_sql, monkeypatch):
+    stale_checkout = {"branch": "factory/demo/stale-g1-docs", "commit": "0" * 40, "not_merged": True}
+    fake_sql.rows_results = [
+        [
+            {
+                "project_id": "demo",
+                "status": "active",
+                "repo_path": "/repo",
+                "metadata": {
+                    "reconciliation_anomalies": ["unvalidated_required_docs", "pending_effective_gates"],
+                    "reconciliation_required": True,
+                    "g1_documentation_checkout": stale_checkout,
+                },
+            }
+        ],
+        [], [], [], [], [], [], [], [],
+    ]
+    monkeypatch.setattr(factory_pg, "list_agents", lambda: [])
+    monkeypatch.setattr(factory_pg, "factory_watchdog_alerts", lambda payload, project_id=None: [])
+    monkeypatch.setattr(
+        factory_pg,
+        "project_document_status",
+        lambda project: [
+            {"file_name": "PRD.md", "category": "g1_required", "blocking": False},
+            {"file_name": "QA_GATES.md", "category": "g1_required", "blocking": False},
+        ],
+    )
+
+    payload = factory_pg.status("demo")
+
+    metadata = payload["projects"][0]["metadata"]
+    assert metadata["reconciliation_anomalies"] == ["pending_effective_gates"]
+    assert metadata["reconciliation_required"] is True
+    assert "g1_documentation_checkout" not in metadata
+    assert metadata["cleared_project_metadata_keys"] == ["g1_documentation_checkout"]
+    assert metadata["stale_reconciliation_projection"]["reconciliation_anomalies"] == [
+        "unvalidated_required_docs",
+        "pending_effective_gates",
+    ]
+    assert metadata["stale_reconciliation_projection"]["removed_metadata_keys"] == [
+        "g1_documentation_checkout",
+    ]
+
+
+def test_status_effective_projection_fails_closed_when_current_rows_block(fake_sql, monkeypatch):
+    stale_checkout = {"branch": "factory/demo/stale-g1-docs", "commit": "0" * 40, "not_merged": True}
+    fake_sql.rows_results = [
+        [
+            {
+                "project_id": "demo",
+                "status": "active",
+                "repo_path": "/repo",
+                "metadata": {
+                    "reconciliation_anomalies": ["unvalidated_required_docs"],
+                    "reconciliation_required": True,
+                    "g1_documentation_checkout": stale_checkout,
+                },
+            }
+        ],
+        [], [], [], [], [], [], [], [],
+    ]
+    monkeypatch.setattr(factory_pg, "list_agents", lambda: [])
+    monkeypatch.setattr(factory_pg, "factory_watchdog_alerts", lambda payload, project_id=None: [])
+    monkeypatch.setattr(
+        factory_pg,
+        "project_document_status",
+        lambda project: [{"file_name": "PRD.md", "category": "g1_required", "blocking": True}],
+    )
+
+    payload = factory_pg.status("demo")
+
+    metadata = payload["projects"][0]["metadata"]
+    assert metadata["reconciliation_anomalies"] == ["unvalidated_required_docs"]
+    assert metadata["reconciliation_required"] is True
+    assert metadata["g1_documentation_checkout"] == stale_checkout
+    assert "stale_reconciliation_projection" not in metadata
+
+
 def test_record_delivery_gate_persists_document_status_snapshot(fake_sql, monkeypatch):
     monkeypatch.setattr(factory_pg, "_project", lambda project_id: {"project_id": project_id, "risk_level": "medium", "repo_path": None, "metadata": {}})
     monkeypatch.setattr(factory_pg, "project_document_status", lambda project: [
