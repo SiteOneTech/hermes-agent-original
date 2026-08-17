@@ -5,6 +5,7 @@ route production Factory work to SQLite.
 """
 from __future__ import annotations
 
+import json
 import os
 import posixpath
 import re
@@ -2578,6 +2579,17 @@ def _current_g1_required_documents_ready(project: dict[str, Any], metadata: dict
     return _required_docs_explicitly_waived(project_metadata) or not bool(_g1_document_blockers(project))
 
 
+def _metadata_contains_stale_g1_projection(metadata: dict[str, Any]) -> bool:
+    projection = metadata.get("stale_reconciliation_projection")
+    if not isinstance(projection, dict):
+        return False
+    try:
+        projection_text = json.dumps(projection, sort_keys=True)
+    except TypeError:
+        projection_text = str(projection)
+    return "unvalidated_required_docs" in projection_text or "g1_documentation_checkout" in projection_text
+
+
 def _stale_g1_projection_metadata_keys(project: dict[str, Any], finding_codes: list[str], metadata: dict[str, Any] | None = None) -> list[str]:
     """Project metadata keys that must stop driving G1 dispatch once rows are green."""
 
@@ -2586,7 +2598,10 @@ def _stale_g1_projection_metadata_keys(project: dict[str, Any], finding_codes: l
         return []
     if not _current_g1_required_documents_ready(project, project_metadata):
         return []
-    return [key for key in ("g1_documentation_checkout",) if key in project_metadata]
+    stale_keys = [key for key in ("g1_documentation_checkout",) if key in project_metadata]
+    if _metadata_contains_stale_g1_projection(project_metadata):
+        stale_keys.append("stale_reconciliation_projection")
+    return stale_keys
 
 
 def _g1_required_status_rows_ready(project: dict[str, Any], statuses: list[Any]) -> bool:
@@ -2605,11 +2620,11 @@ def _project_status_effective_reconciliation_projection(project: dict[str, Any])
     ``status()`` is a readback/projection surface that carries both dynamic
     ``document_status`` rows and persisted project metadata.  When the dynamic
     current configured-base rows prove every required G1 document is
-    non-blocking, stale persisted ``unvalidated_required_docs`` and obsolete
-    checkout provenance must not be re-presented to dispatch/watchdog/reviewer
-    consumers as if they were still authoritative.  This is deliberately
-    readback-only; the mutating reconciler persists the same cleanup through
-    ``reconcile_project``.
+    non-blocking, stale required-doc anomalies, their audit-only stale projection,
+    and obsolete checkout provenance must not be re-presented to
+    dispatch/watchdog/reviewer consumers as if they were still authoritative.
+    This is deliberately readback-only; the mutating reconciler persists the same
+    cleanup through ``reconcile_project``.
     """
 
     statuses = project.get("document_status")
@@ -2624,28 +2639,30 @@ def _project_status_effective_reconciliation_projection(project: dict[str, Any])
     cleaned_anomalies = [code for code in anomalies if code != "unvalidated_required_docs"]
     stale_unvalidated = cleaned_anomalies != anomalies
     stale_keys = [key for key in ("g1_documentation_checkout",) if key in metadata]
-    if not stale_unvalidated and not stale_keys:
+    stale_projection_key = _metadata_contains_stale_g1_projection(metadata)
+    if not stale_unvalidated and not stale_keys and not stale_projection_key:
         return
 
     effective = dict(metadata)
-    stale_projection: dict[str, Any] = {}
     if stale_unvalidated:
-        stale_projection["reconciliation_anomalies"] = anomalies
         effective["reconciliation_anomalies"] = cleaned_anomalies
         effective["reconciliation_required"] = bool(cleaned_anomalies)
-    if stale_keys:
-        for key in stale_keys:
+        effective["cleared_g1_document_reconciliation_projection"] = True
+    stale_metadata_keys = list(stale_keys)
+    if stale_projection_key:
+        stale_metadata_keys.append("stale_reconciliation_projection")
+        effective.pop("stale_reconciliation_projection", None)
+        effective["cleared_g1_document_reconciliation_projection"] = True
+    if stale_metadata_keys:
+        for key in stale_metadata_keys:
             effective.pop(key, None)
         existing_cleared = effective.get("cleared_project_metadata_keys")
         cleared = [str(item) for item in existing_cleared if str(item or "").strip()] if isinstance(existing_cleared, list) else []
-        for key in stale_keys:
+        for key in stale_metadata_keys:
             if key not in cleared:
                 cleared.append(key)
         effective["cleared_project_metadata_keys"] = cleared
-        stale_projection["removed_metadata_keys"] = stale_keys
-    if stale_projection:
-        effective["stale_reconciliation_projection"] = stale_projection
-        effective["reconciliation_projection_source"] = "current_document_status"
+    effective["reconciliation_projection_source"] = "current_document_status"
     project["metadata"] = effective
 
 

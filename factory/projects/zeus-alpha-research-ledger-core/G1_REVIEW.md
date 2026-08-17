@@ -225,13 +225,24 @@ current status payload reports active `reconciliation_anomalies=[]`,
 `reconciliation_required=false`, while the old `unvalidated_required_docs` remains
 only under `stale_reconciliation_projection` as audit evidence.
 
-**Handoff requirement:** the fresh R2at branch must be opened as a Zeus-signed
-GitHub PR labeled `agent:zeus` against `main`. The PR body/Factory evidence must
-name exact base `a41acdc4820b92a31b7d42d9a9c28e95b875a3d1`, final head SHA,
-status-output path, no-auto-merge, and no external runtime execution. An
-independent quality reviewer must inspect that exact SHA; this R2at worker does
-not self-approve, merge, deploy, change credentials, write direct SQL, mutate
-the primary checkout, or touch any runtime/external/trading path.
+**R2au projection repair supersession:** the R2au repair keeps the same
+historical event/task audit boundary but no longer re-presents stale required-doc
+projection metadata under active project metadata when current configured-base
+G1 rows are clean. Current readback
+`/home/jean/.hermes/profiles/codex-builder/cache/terminal-output/out-1786959574-145359-db10.log`
+shows all 14 required rows non-blocking at lines `20255`–`20604`, active
+metadata sourced from `current_document_status` at lines `20808`–`20844`, and no
+active `stale_reconciliation_projection` field.
+
+**Handoff requirement:** R2at remains historical validation evidence; the current
+R2au branch must be opened as a Zeus-signed GitHub PR labeled `agent:zeus`
+against `main`. The PR body/Factory evidence must name exact base
+`2b53ee0f14491ff43da7683d475654a03af5d678`, R2at ancestor
+`d4ac6d89994adf823bb50b79afe5a39fd204fdfd`, final head SHA, status-output path,
+no-auto-merge, and no external runtime execution. An independent quality reviewer
+must inspect that exact SHA; this R2au worker does not self-approve, merge,
+deploy, change credentials, write direct SQL, mutate the primary checkout, or
+touch any runtime/external/trading path.
 
 ## Local documentary verification — non-approval
 

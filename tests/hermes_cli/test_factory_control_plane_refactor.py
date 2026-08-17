@@ -1192,12 +1192,64 @@ def test_status_effective_projection_ignores_stale_unvalidated_docs_when_current
     assert metadata["reconciliation_required"] is True
     assert "g1_documentation_checkout" not in metadata
     assert metadata["cleared_project_metadata_keys"] == ["g1_documentation_checkout"]
-    assert metadata["stale_reconciliation_projection"]["reconciliation_anomalies"] == [
-        "unvalidated_required_docs",
-        "pending_effective_gates",
+    assert metadata["cleared_g1_document_reconciliation_projection"] is True
+    assert "stale_reconciliation_projection" not in metadata
+    assert "unvalidated_required_docs" not in json.dumps(metadata, sort_keys=True)
+
+
+def test_status_projection_uses_origin_base_not_stale_head_or_task_metadata(fake_sql, monkeypatch, tmp_path):
+    repo, stale_sha, reviewed_sha = _make_stale_primary_with_reviewed_origin(tmp_path)
+    stale_checkout = {"branch": "factory/demo/stale-g1-docs", "commit": "0" * 40, "not_merged": True}
+    fake_sql.rows_results = [
+        [
+            {
+                "project_id": "demo",
+                "status": "active",
+                "repo_path": str(repo),
+                "base_branch": "main",
+                "metadata": {
+                    "artifact_dir": "factory/projects/demo",
+                    "repo_strategy": {"primary_repo_path": str(repo), "base_branch": "main"},
+                    "reconciliation_anomalies": ["unvalidated_required_docs"],
+                    "reconciliation_required": True,
+                    "stale_reconciliation_projection": {
+                        "reconciliation_anomalies": ["unvalidated_required_docs"],
+                    },
+                    "g1_documentation_checkout": stale_checkout,
+                },
+            }
+        ],
+        [],
+        [
+            {
+                "project_id": "demo",
+                "task_id": "demo-stale-doc-repair",
+                "status": "blocked",
+                "phase": "documentation",
+                "metadata": {"reconciliation_anomaly": "unvalidated_required_docs"},
+            }
+        ],
+        [], [], [], [], [],
     ]
-    assert metadata["stale_reconciliation_projection"]["removed_metadata_keys"] == [
+    monkeypatch.setattr(factory_pg, "list_agents", lambda: [])
+    monkeypatch.setattr(factory_pg, "factory_watchdog_alerts", lambda payload, project_id=None: [])
+
+    payload = factory_pg.status("demo")
+
+    project = payload["projects"][0]
+    metadata_text = json.dumps(project["metadata"], sort_keys=True)
+    g1_rows = [row for row in project["document_status"] if row["category"] == "g1_required"]
+    assert _git(repo, "rev-parse", "HEAD") == stale_sha
+    assert g1_rows
+    assert not any(row["blocking"] for row in g1_rows)
+    assert {row["readiness_source"] for row in g1_rows} == {"configured_base_ref"}
+    assert {row["base_commit"] for row in g1_rows} == {reviewed_sha}
+    assert "unvalidated_required_docs" not in metadata_text
+    assert "g1_documentation_checkout" not in project["metadata"]
+    assert "stale_reconciliation_projection" not in project["metadata"]
+    assert project["metadata"]["cleared_project_metadata_keys"] == [
         "g1_documentation_checkout",
+        "stale_reconciliation_projection",
     ]
 
 
