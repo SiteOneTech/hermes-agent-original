@@ -163,6 +163,42 @@ final head SHA after the last push. An independent reviewer (task reviewer
 self-approve, merge, deploy, change credentials, write direct SQL, or touch
 any runtime/external/trading path.
 
+## Review round 13 — current-origin G1 document-status technical recovery
+
+**Current-origin readback:** this recovery starts from assigned worktree
+`/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-000-g1-document-status-technical-rec`,
+branch `factory/zeus-alpha-research-ledger-core/inc-000-g1-document-status-technical-rec`,
+with local `HEAD`, `origin/main`, and merge-base all equal to
+`139df9ae49137bb4b16152550d53d385310de3b6` before edits.
+
+**Canonical Agent Core read-back:** the approved status command
+`/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory status --json zeus-alpha-research-ledger-core`
+read Agent Core Postgres (`db_backend=agent_core_postgres`, `database=zeus_agent`) and wrote full evidence to
+`/home/jean/.hermes/profiles/codex-builder/cache/terminal-output/out-1786925327-620586-1dd0.log`.
+Project `document_status` lines `19341`–`19690` show configured base ref
+`origin/main`, base commit `139df9ae49137bb4b16152550d53d385310de3b6`,
+`readiness_source=configured_base_ref`, stale primary checkout rejected, and
+`exists=true`, `committed=true`, `indexed=true`, `validated=true`,
+`reviewed=true`, `blocking=false` for all 14 required G1 documents.
+
+**Remaining control-plane mismatch:** earlier status payloads exposed stale
+persisted provenance: recent reconciliation events listed `unvalidated_required_docs`,
+metadata carried `reconciliation_anomalies=["unvalidated_required_docs"]`, and obsolete
+`g1_documentation_checkout` pointed at PR #20 / `dad375f27568c38be771fc597b579d087f034e1d`.
+Historical gate `845` also recorded old `reviewed=false` rows. The final Agent Core
+readback re-created `unvalidated_required_docs` from stale `metadata.g1_documentation_checkout`
+assignment provenance (`event_id=193040`, log lines `491`–`512`) even while all 14 current
+required-G1 rows are non-blocking; the bounded follow-up is a Factory reconciler repair,
+not direct SQL or primary checkout mutation.
+
+**Handoff requirement:** the fresh current-origin branch must be opened as a
+Zeus-signed GitHub PR labeled `agent:zeus` against `main`. The PR body/Factory
+evidence must name exact base `139df9ae49137bb4b16152550d53d385310de3b6`, final
+head SHA, and status-output path. An independent quality reviewer must inspect
+that exact SHA; this worker does not self-approve, merge, deploy, change
+credentials, write direct SQL, mutate the primary checkout, or touch any
+runtime/external/trading path.
+
 ## Local documentary verification — non-approval
 
 At `2026-08-10T04:50:09-04:00`, the implementation-planner worker verified the project-local pack from the assigned worktree only. `git ls-files --error-unmatch` confirmed the 14 required G1 documents plus `G0_REPOSITORY_STRATEGY.md`, `REQUIREMENTS_TRACEABILITY.md`, `DATABASE_AND_RUNTIME_CONTRACT.md`, and `G1_REVIEW.md` are tracked. `DOCUMENTATION_INDEX.md` indexes required documents and records explicit validated/reviewed status. `G0_REPOSITORY_STRATEGY.md` records the Zeus-only source repo, `origin/main` reference, assigned branch/worktree policy, PR-first delivery, and predecessor linkage. This is implementation evidence, not an independent specification/security PASS.
