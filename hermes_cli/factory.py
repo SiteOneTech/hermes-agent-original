@@ -357,13 +357,113 @@ def _same_source_root(left: Path, right: Path) -> bool:
         return os.path.realpath(str(left)) == os.path.realpath(str(right))
 
 
+def _source_git_output(source_root: Path, *args: str, timeout: int = 10) -> str | None:
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(source_root), *args],
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.strip()
+
+
+def _source_origin_ref(source_root: Path) -> str:
+    branch = _source_git_output(source_root, "rev-parse", "--abbrev-ref", "HEAD")
+    if branch and branch != "HEAD":
+        return f"origin/{branch}"
+    origin_head = _source_git_output(source_root, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
+    return origin_head or "origin/main"
+
+
+def _source_worktree_records(source_root: Path) -> list[dict[str, str]]:
+    output = _source_git_output(source_root, "worktree", "list", "--porcelain")
+    if not output:
+        return []
+    records: list[dict[str, str]] = []
+    current: dict[str, str] = {}
+    for line in output.splitlines():
+        if not line.strip():
+            if current:
+                records.append(current)
+                current = {}
+            continue
+        key, _sep, value = line.partition(" ")
+        if key == "worktree":
+            if current:
+                records.append(current)
+            current = {"worktree": value.strip()}
+        elif key in {"HEAD", "branch"}:
+            current[key.lower()] = value.strip()
+    if current:
+        records.append(current)
+    return records
+
+
+def _source_root_is_stale_against_origin(source_root: Path) -> bool:
+    head = _source_git_output(source_root, "rev-parse", "HEAD")
+    origin_ref = _source_origin_ref(source_root)
+    origin_commit = _source_git_output(source_root, "rev-parse", "--verify", f"{origin_ref}^{{commit}}")
+    if not head or not origin_commit or head == origin_commit:
+        return False
+    # Local feature branches may be ahead of their remote tracking branch while
+    # carrying the current in-flight fix.  Treat the source as stale only when it
+    # does not contain the local origin ref at all (the stale primary checkout
+    # shape), using already-fetched refs and no network calls.
+    return (
+        _source_git_output(source_root, "merge-base", "--is-ancestor", origin_commit, "HEAD", timeout=30)
+        is None
+    )
+
+
+def _current_origin_worktree_source_root(running_source_root: Path) -> Path | None:
+    origin_ref = _source_origin_ref(running_source_root)
+    origin_commit = _source_git_output(running_source_root, "rev-parse", "--verify", f"{origin_ref}^{{commit}}")
+    running_head = _source_git_output(running_source_root, "rev-parse", "HEAD")
+    if not origin_commit or running_head == origin_commit:
+        return None
+    for record in _source_worktree_records(running_source_root):
+        raw_path = record.get("worktree")
+        if not raw_path:
+            continue
+        candidate = Path(raw_path).expanduser()
+        if _same_source_root(candidate, running_source_root):
+            continue
+        if not _factory_source_root_is_complete(candidate):
+            continue
+        candidate_head = record.get("head") or _source_git_output(candidate, "rev-parse", "HEAD")
+        if candidate_head != origin_commit:
+            continue
+        if _source_git_output(candidate, "status", "--porcelain"):
+            continue
+        return candidate
+    return None
+
+
 def _preferred_cwd_source_root(running_source_root: Path) -> Path | None:
     if os.environ.get("HERMES_FACTORY_SOURCE_DELEGATED") == "1":
         return None
     cwd_source_root = _find_cwd_factory_source_root()
-    if cwd_source_root is None or _same_source_root(cwd_source_root, running_source_root):
-        return None
-    return cwd_source_root
+    if cwd_source_root is not None and not _same_source_root(cwd_source_root, running_source_root):
+        if _source_root_is_stale_against_origin(cwd_source_root):
+            current_origin_root = _current_origin_worktree_source_root(cwd_source_root) or _current_origin_worktree_source_root(
+                running_source_root
+            )
+            if current_origin_root is not None and not _same_source_root(current_origin_root, running_source_root):
+                return current_origin_root
+            return None
+        return cwd_source_root
+    current_origin_root = _current_origin_worktree_source_root(running_source_root)
+    if current_origin_root is not None:
+        return current_origin_root
+    return None
 
 
 def _source_env(source_root: Path, *, project_id: str | None = None) -> dict[str, str]:
