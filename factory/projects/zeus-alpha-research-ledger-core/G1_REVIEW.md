@@ -332,6 +332,48 @@ Independent quality review remains required; this R2BJ worker does not self-appr
 merge, deploy, change credentials, write direct SQL, mutate the primary checkout,
 or touch any runtime/external/trading path.
 
+## Review round 17 — R2cm G1 review-state provenance repair
+
+**Current-base identity captured before edits:** R2cm uses assigned worktree
+`/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-001-r2cm-repair-g1-review-state-prov`,
+branch `factory/zeus-alpha-research-ledger-core/inc-001-r2cm-repair-g1-review-state-prov`,
+with local `HEAD`, `origin/main`, and merge-base all equal to
+`0ecd9019ba8ec111aaead60a911c9accd854f731` before documentation edits.
+
+**Canonical Agent Core read-back:** the required status command
+`/home/jean/Projects/hermes-agent-original/venv/bin/hermes factory status zeus-alpha-research-ledger-core --json`
+read Agent Core Postgres (`db_backend=agent_core_postgres`, `database=zeus_agent`)
+and wrote `/tmp/r2cm-status-before.json` (2,564,246 bytes). The readback still
+reports the exact ten required G1 blockers with missing `reviewed`:
+`FACTORY_INTAKE.md`, `REQUIREMENTS_ANALYSIS.md`, `PATTERN_ANALYSIS.md`,
+`ASSUMPTIONS_AND_OPEN_QUESTIONS.md`, `PRD.md`, `ADRS.md`,
+`METHODOLOGY_PLAN.md`, `TECHNICAL_BLUEPRINT.md`, `TASK_GRAPH.md`, and
+`SECURITY_GATES.md`.
+
+**Diagnostic resolver read-back:** the allowed worktree-module diagnostic command
+`/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory status zeus-alpha-research-ledger-core --json`
+wrote `/tmp/r2cm-status-worktree-module-before.json` and reported all 14 required
+G1 documents non-blocking from `readiness_source=configured_base_ref`, base
+`0ecd9019ba8ec111aaead60a911c9accd854f731`, with stale primary rejected as
+`primary_checkout_not_configured_base`.
+
+**Correction:** R2cl task/run completion and integration are not independent
+review provenance because the R2cl terminal quality-review path exhausted on
+MiniMax HTTP 429 and did not produce a durable independent verdict. Existing G1
+`reviewed: yes` markers remain valid only through PR #36 / Factory gate `794`
+(source gate `790` / SHA `2476e978c545e24b18ee48844b24eb8c58245ab4`), not
+through R2cl. R2cm itself stays `reviewed: pending_independent_quality_review`
+until a fresh exact-SHA review of the R2cm PR completes.
+
+**Handoff requirement:** the fresh R2cm branch must be opened as a Zeus-signed
+GitHub PR labeled `agent:zeus` against `main`. The PR body/Factory evidence must
+name exact base `0ecd9019ba8ec111aaead60a911c9accd854f731`, final head SHA,
+canonical red status-output path, diagnostic current-base status-output path,
+validation output, no-merge, no direct SQL, no primary mutation, and no external
+runtime execution. Independent quality review remains required; if the review
+provider rate-limits again, this round must remain pending/failed rather than
+auto-green.
+
 ## Local documentary verification — non-approval
 
 At `2026-08-10T04:50:09-04:00`, the implementation-planner worker verified the project-local pack from the assigned worktree only. `git ls-files --error-unmatch` confirmed the 14 required G1 documents plus `G0_REPOSITORY_STRATEGY.md`, `REQUIREMENTS_TRACEABILITY.md`, `DATABASE_AND_RUNTIME_CONTRACT.md`, and `G1_REVIEW.md` are tracked. `DOCUMENTATION_INDEX.md` indexes required documents and records explicit validated/reviewed status. `G0_REPOSITORY_STRATEGY.md` records the Zeus-only source repo, `origin/main` reference, assigned branch/worktree policy, PR-first delivery, and predecessor linkage. This is implementation evidence, not an independent specification/security PASS.
