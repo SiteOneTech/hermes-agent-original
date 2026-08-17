@@ -98,6 +98,12 @@ reviewed_source_sha: 2476e978c545e24b18ee48844b24eb8c58245ab4
 - Historical `unvalidated_required_docs` and `missing_or_unindexed_docs` evidence must remain stale/audit provenance when current required-document rows are non-blocking and active metadata reports `reconciliation_anomalies=[]` from `current_document_status`; it must not be used to clear or recreate blockers through direct SQL or self-approval.
 - Delivery is a Zeus-signed `agent:zeus` PR plus independent exact-SHA quality review. No merge, deploy, credential access, external connector, messaging operation, trading action, risk mutation, paper/live activation, self-approval, or no external runtime execution is authorized.
 
+## R2at current-origin documentation validation security gate
+- R2at is limited to current-origin documentation/provenance under `factory/projects/zeus-alpha-research-ledger-core/`. It must not add or alter Agent Core ledger runtime code, Factory runtime code, provider clients, credential paths, messaging connectors, deployment behavior, trading/risk/paper/live behavior, product ledger implementation, external runtimes, primary checkout state, or direct Factory DB writes.
+- The exact current configured base for this recovery is `origin/main` `a41acdc4820b92a31b7d42d9a9c28e95b875a3d1`; primary checkout HEAD `4eb87e4cd48105af05fe974cf1d493f0e1b57ae1` is recorded only as rejected identity evidence and must not be mutated.
+- Historical `unvalidated_required_docs` and `missing_or_unindexed_docs` evidence from events `194478`, `194477`, and `194474` must remain stale/audit provenance when current required-document rows are non-blocking and active metadata reports `reconciliation_anomalies=[]` from `current_document_status`; it must not be used to clear or recreate blockers through direct SQL, self-approval, primary-checkout mutation, or no-auto-merge bypass.
+- Delivery is a Zeus-signed `agent:zeus` PR plus independent exact-SHA quality review. No merge, deploy, credential access, external connector, messaging operation, trading action, risk mutation, paper/live activation, self-approval, no-auto-merge bypass, or no external runtime execution is authorized.
+
 ## Scheduler gate
 - `agent_core.alpha_research.scheduler.enabled` is false absent explicit configuration.
 - Registration and each invocation call the contract §5 verifier without cache. Tests cover every false/missing/failed/expired/wrong-commit readiness component and prove no batch read/run follows `scheduler_not_ready`.
