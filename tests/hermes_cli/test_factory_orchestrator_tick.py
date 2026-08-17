@@ -94,12 +94,58 @@ def test_project_tick_uses_running_source_tree_not_profile_wrapper(monkeypatch, 
     running_root = Path(factory.__file__).resolve().parents[1]
     expected_script = running_root / "scripts" / "factory" / "factory_orchestrator_tick.py"
     assert result["source"] == "running_tree"
+    assert result["factory_cli_source_root"] == str(running_root)
+    assert result["factory_orchestrator_script"] == str(expected_script)
     assert captured["argv"] == [sys.executable, str(expected_script)]
     assert captured["argv"][1] != str(stale_wrapper)
     assert captured["kwargs"]["cwd"] == str(running_root)
     env = captured["kwargs"]["env"]
     assert env["FACTORY_TICK_PROJECT_ID"] == "demo-project"
     assert env["PYTHONPATH"].split(os.pathsep)[0] == str(running_root)
+
+
+def test_project_tick_prefers_isolated_cwd_source_over_stale_running_module(monkeypatch, tmp_path):
+    stale_primary = tmp_path / "stale-primary" / "hermes_cli" / "factory.py"
+    stale_primary.parent.mkdir(parents=True)
+    stale_primary.write_text("# stale primary module\n", encoding="utf-8")
+    (stale_primary.parents[1] / "scripts" / "factory").mkdir(parents=True)
+    (stale_primary.parents[1] / "scripts" / "factory" / "factory_orchestrator_tick.py").write_text(
+        "print('{\"source\": \"stale-primary\"}')\n",
+        encoding="utf-8",
+    )
+    worktree = tmp_path / "current-origin-worktree"
+    (worktree / "hermes_cli").mkdir(parents=True)
+    (worktree / "scripts" / "factory").mkdir(parents=True)
+    (worktree / "hermes_cli" / "main.py").write_text("# current main\n", encoding="utf-8")
+    (worktree / "hermes_cli" / "factory.py").write_text("# current factory cli\n", encoding="utf-8")
+    (worktree / "hermes_cli" / "factory_pg.py").write_text("# current factory backend\n", encoding="utf-8")
+    current_tick = worktree / "scripts" / "factory" / "factory_orchestrator_tick.py"
+    current_tick.write_text("print('{}')\n", encoding="utf-8")
+    monkeypatch.chdir(worktree)
+    monkeypatch.setattr(factory, "__file__", str(stale_primary))
+
+    captured: dict[str, Any] = {}
+
+    def fake_run(argv, **kwargs):
+        captured["argv"] = [str(part) for part in argv]
+        captured["kwargs"] = kwargs
+        return factory.subprocess.CompletedProcess(
+            argv,
+            0,
+            stdout=json.dumps({"job": "factory_orchestrator_tick", "source": "cwd_worktree"}),
+            stderr="",
+        )
+
+    monkeypatch.setattr(factory.subprocess, "run", fake_run)
+
+    result = factory._run_orchestrator_script("demo-project")
+
+    assert result["source"] == "cwd_worktree"
+    assert result["factory_cli_source_root"] == str(worktree)
+    assert result["factory_orchestrator_script"] == str(current_tick)
+    assert captured["argv"] == [sys.executable, str(current_tick)]
+    assert captured["kwargs"]["cwd"] == str(worktree)
+    assert captured["kwargs"]["env"]["PYTHONPATH"].split(os.pathsep)[0] == str(worktree)
 
 
 def test_project_tick_fails_closed_when_running_source_provenance_unavailable(monkeypatch, tmp_path):
@@ -138,6 +184,53 @@ def test_project_tick_fails_closed_when_running_source_provenance_malformed(monk
 
     with pytest.raises(RuntimeError, match="source provenance malformed"):
         factory._run_orchestrator_script("demo-project")
+
+
+def test_status_prefers_isolated_cwd_source_over_stale_running_module(monkeypatch, tmp_path, capsys):
+    stale_primary = tmp_path / "stale-primary" / "hermes_cli" / "factory.py"
+    stale_primary.parent.mkdir(parents=True)
+    stale_primary.write_text("# stale primary module\n", encoding="utf-8")
+    worktree = tmp_path / "current-origin-worktree"
+    (worktree / "hermes_cli").mkdir(parents=True)
+    (worktree / "scripts" / "factory").mkdir(parents=True)
+    (worktree / "hermes_cli" / "main.py").write_text("# current main\n", encoding="utf-8")
+    (worktree / "hermes_cli" / "factory.py").write_text("# current factory cli\n", encoding="utf-8")
+    (worktree / "hermes_cli" / "factory_pg.py").write_text("# current factory backend\n", encoding="utf-8")
+    (worktree / "scripts" / "factory" / "factory_orchestrator_tick.py").write_text("print('{}')\n", encoding="utf-8")
+    monkeypatch.chdir(worktree)
+    monkeypatch.setattr(factory, "__file__", str(stale_primary))
+
+    captured: dict[str, Any] = {}
+
+    def fake_run(argv, **kwargs):
+        captured["argv"] = [str(part) for part in argv]
+        captured["kwargs"] = kwargs
+        return factory.subprocess.CompletedProcess(
+            argv,
+            0,
+            stdout=json.dumps({"projects": [{"project_id": "demo", "document_status": []}]}),
+            stderr="",
+        )
+
+    monkeypatch.setattr(factory.subprocess, "run", fake_run)
+    monkeypatch.setattr(factory, "_backend", lambda _args: (_ for _ in ()).throw(AssertionError("stale backend must not be used")))
+
+    rc = factory.cmd_status(argparse.Namespace(project_id="demo", json=True))
+
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out)["projects"][0]["project_id"] == "demo"
+    assert captured["argv"] == [
+        sys.executable,
+        "-m",
+        "hermes_cli.main",
+        "factory",
+        "status",
+        "demo",
+        "--json",
+    ]
+    assert captured["kwargs"]["cwd"] == str(worktree)
+    assert captured["kwargs"]["env"]["PYTHONPATH"].split(os.pathsep)[0] == str(worktree)
+    assert captured["kwargs"]["env"]["HERMES_FACTORY_SOURCE_DELEGATED"] == "1"
 
 
 def test_orchestrator_tick_reports_migration_readiness_before_claim_or_spawn(monkeypatch, capsys):
