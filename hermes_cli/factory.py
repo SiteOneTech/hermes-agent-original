@@ -17,9 +17,55 @@ def _backend(args: argparse.Namespace):
     return factory_backend.get_backend()
 
 
+def _annotate_status_payload_source(
+    payload: Any,
+    source_root: Path,
+    *,
+    delegated_from: Path | None = None,
+) -> Any:
+    if not isinstance(payload, dict):
+        return payload
+    payload["factory_cli_source_root"] = str(source_root)
+    payload["factory_status_source_root"] = str(source_root)
+    payload["factory_status_delegated"] = delegated_from is not None
+    if delegated_from is not None:
+        payload["factory_status_delegated_from_source_root"] = str(delegated_from)
+    else:
+        payload.pop("factory_status_delegated_from_source_root", None)
+    return payload
+
+
 def _status_payload(args: argparse.Namespace) -> dict[str, Any]:
     backend = _backend(args)
-    return backend.status(getattr(args, "project_id", None))
+    payload = backend.status(getattr(args, "project_id", None))
+    try:
+        source_root = _running_factory_source_root()
+    except RuntimeError:
+        return payload
+    return _annotate_status_payload_source(payload, source_root)
+
+
+def _print_status_subprocess_output(
+    proc: subprocess.CompletedProcess[str],
+    *,
+    args: argparse.Namespace,
+    source_root: Path,
+    delegated_from: Path,
+) -> None:
+    if getattr(args, "json", False) and (proc.stdout or "").strip():
+        try:
+            payload = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            payload = None
+        if isinstance(payload, dict):
+            _print_json(_annotate_status_payload_source(payload, source_root, delegated_from=delegated_from))
+            if proc.stderr:
+                print(proc.stderr, end="", file=sys.stderr)
+            return
+    if proc.stdout:
+        print(proc.stdout, end="")
+    if proc.stderr:
+        print(proc.stderr, end="", file=sys.stderr)
 
 
 def _print_json(payload: Any) -> int:
@@ -357,10 +403,12 @@ def _delegated_status_from_cwd_source(args: argparse.Namespace) -> int | None:
         capture_output=True,
         timeout=180,
     )
-    if proc.stdout:
-        print(proc.stdout, end="")
-    if proc.stderr:
-        print(proc.stderr, end="", file=sys.stderr)
+    _print_status_subprocess_output(
+        proc,
+        args=args,
+        source_root=source_root,
+        delegated_from=running_source_root,
+    )
     return proc.returncode
 
 
