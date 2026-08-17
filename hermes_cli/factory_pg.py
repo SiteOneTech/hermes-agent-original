@@ -2571,6 +2571,84 @@ def _g1_document_blockers(project: dict[str, Any]) -> list[dict[str, Any]]:
     return [row for row in project_document_status(project) if row.get("category") == "g1_required" and row.get("blocking")]
 
 
+def _current_g1_required_documents_ready(project: dict[str, Any], metadata: dict[str, Any] | None = None) -> bool:
+    """Return whether the canonical current document-status projection is clean."""
+
+    project_metadata = metadata if isinstance(metadata, dict) else _metadata(project)
+    return _required_docs_explicitly_waived(project_metadata) or not bool(_g1_document_blockers(project))
+
+
+def _stale_g1_projection_metadata_keys(project: dict[str, Any], finding_codes: list[str], metadata: dict[str, Any] | None = None) -> list[str]:
+    """Project metadata keys that must stop driving G1 dispatch once rows are green."""
+
+    project_metadata = metadata if isinstance(metadata, dict) else _metadata(project)
+    if "unvalidated_required_docs" in set(finding_codes):
+        return []
+    if not _current_g1_required_documents_ready(project, project_metadata):
+        return []
+    return [key for key in ("g1_documentation_checkout",) if key in project_metadata]
+
+
+def _g1_required_status_rows_ready(project: dict[str, Any], statuses: list[Any]) -> bool:
+    """Return whether an already-computed status payload has clean G1 rows."""
+
+    metadata = _metadata(project)
+    if _required_docs_explicitly_waived(metadata):
+        return True
+    g1_rows = [row for row in statuses if isinstance(row, dict) and row.get("category") == "g1_required"]
+    return bool(g1_rows) and not any(bool(row.get("blocking")) for row in g1_rows)
+
+
+def _project_status_effective_reconciliation_projection(project: dict[str, Any]) -> None:
+    """Apply current document-status truth to the readback reconciliation projection.
+
+    ``status()`` is a readback/projection surface that carries both dynamic
+    ``document_status`` rows and persisted project metadata.  When the dynamic
+    current configured-base rows prove every required G1 document is
+    non-blocking, stale persisted ``unvalidated_required_docs`` and obsolete
+    checkout provenance must not be re-presented to dispatch/watchdog/reviewer
+    consumers as if they were still authoritative.  This is deliberately
+    readback-only; the mutating reconciler persists the same cleanup through
+    ``reconcile_project``.
+    """
+
+    statuses = project.get("document_status")
+    if not isinstance(statuses, list):
+        return
+    metadata = _metadata(project)
+    if not metadata or not _g1_required_status_rows_ready(project, statuses):
+        return
+
+    raw_anomalies = metadata.get("reconciliation_anomalies")
+    anomalies = [str(item) for item in raw_anomalies if str(item or "").strip()] if isinstance(raw_anomalies, list) else []
+    cleaned_anomalies = [code for code in anomalies if code != "unvalidated_required_docs"]
+    stale_unvalidated = cleaned_anomalies != anomalies
+    stale_keys = [key for key in ("g1_documentation_checkout",) if key in metadata]
+    if not stale_unvalidated and not stale_keys:
+        return
+
+    effective = dict(metadata)
+    stale_projection: dict[str, Any] = {}
+    if stale_unvalidated:
+        stale_projection["reconciliation_anomalies"] = anomalies
+        effective["reconciliation_anomalies"] = cleaned_anomalies
+        effective["reconciliation_required"] = bool(cleaned_anomalies)
+    if stale_keys:
+        for key in stale_keys:
+            effective.pop(key, None)
+        existing_cleared = effective.get("cleared_project_metadata_keys")
+        cleared = [str(item) for item in existing_cleared if str(item or "").strip()] if isinstance(existing_cleared, list) else []
+        for key in stale_keys:
+            if key not in cleared:
+                cleared.append(key)
+        effective["cleared_project_metadata_keys"] = cleared
+        stale_projection["removed_metadata_keys"] = stale_keys
+    if stale_projection:
+        effective["stale_reconciliation_projection"] = stale_projection
+        effective["reconciliation_projection_source"] = "current_document_status"
+    project["metadata"] = effective
+
+
 def _repo_commit_explicitly_waived(metadata: dict[str, Any]) -> bool:
     return _any_explicit_waiver(
         metadata,
@@ -4537,18 +4615,24 @@ def reconcile_project(project_id: str) -> dict[str, Any]:
     finding_codes = [str(finding.get("code")) for finding in findings]
     force_autonomy_off = _project_reconcile_forces_autonomy_off(str(project.get("status") or ""), new_status)
     reconcile_metadata = {'reconciliation_required': bool(findings), 'reconciliation_anomalies': finding_codes}
+    cleared_metadata_keys = _stale_g1_projection_metadata_keys(project, finding_codes, metadata)
+    if cleared_metadata_keys:
+        reconcile_metadata['cleared_project_metadata_keys'] = cleared_metadata_keys
     if force_autonomy_off:
         reconcile_metadata.update({
             'autonomous_enabled': False,
             'autonomy_disabled_reason': f'project_status_{new_status}',
         })
     autonomous_sql = "false" if force_autonomy_off else "autonomous_enabled"
+    metadata_base_expr = "metadata"
+    if cleared_metadata_keys:
+        metadata_base_expr = "(" + " - ".join(["metadata", *(_q(key) for key in cleared_metadata_keys)]) + ")"
     sql.psql(
         f"""
         UPDATE factory.projects
         SET status={_q(new_status)},
             autonomous_enabled={autonomous_sql},
-            metadata = metadata || {_j(reconcile_metadata)},
+            metadata = {metadata_base_expr} || {_j(reconcile_metadata)},
             last_reconciled_at=now(), updated_at=now()
         WHERE project_id={_q(project_id)};
         UPDATE factory.lanes
@@ -4556,7 +4640,7 @@ def reconcile_project(project_id: str) -> dict[str, Any]:
             updated_at=now()
         WHERE project_id={_q(project_id)};
         INSERT INTO factory.events(project_id, actor, event_type, message, metadata)
-        VALUES ({_q(project_id)}, 'factory-reconciler', 'project_reconciled', {_q(f'Project reconciled as {new_status}')}, {_j({'task_counts': counts, 'pending_gates': len(pending_gates), 'active_runs': len(active_runs), 'anomalies': finding_codes, 'reconciliation_tasks_created': created_reconciliation_tasks, 'reconciliation_tasks_cancelled': cancelled_reconciliation_tasks, 'autonomy_disabled': force_autonomy_off})});
+        VALUES ({_q(project_id)}, 'factory-reconciler', 'project_reconciled', {_q(f'Project reconciled as {new_status}')}, {_j({'task_counts': counts, 'pending_gates': len(pending_gates), 'active_runs': len(active_runs), 'anomalies': finding_codes, 'reconciliation_tasks_created': created_reconciliation_tasks, 'reconciliation_tasks_cancelled': cancelled_reconciliation_tasks, 'autonomy_disabled': force_autonomy_off, 'cleared_project_metadata_keys': cleared_metadata_keys})});
         """,
         user=_user(),
     )
@@ -4573,6 +4657,7 @@ def reconcile_project(project_id: str) -> dict[str, Any]:
         "anomalies": finding_codes,
         "reconciliation_tasks_created": len(created_reconciliation_tasks),
         "reconciliation_tasks_cancelled": len(cancelled_reconciliation_tasks),
+        "cleared_project_metadata_keys": cleared_metadata_keys,
         "auto_resumed_project_id": auto_resumed.get("project_id") if auto_resumed else None,
     }
 
@@ -6133,6 +6218,9 @@ def _resolved_reconciliation_anomaly(project: dict[str, Any] | None, task: dict[
             return code, source
         return None
 
+    if code == "unvalidated_required_docs":
+        return (code, source) if _current_g1_required_documents_ready(project, project_metadata) else None
+
     if code == "uncommitted_project_artifacts":
         if _repo_commit_explicitly_waived(project_metadata):
             return code, source
@@ -7322,6 +7410,7 @@ def status(project_id: Optional[str] = None, **_: Any) -> dict[str, Any]:
     agents = list_agents()
     for project in projects:
         project["document_status"] = project_document_status(project)
+        _project_status_effective_reconciliation_projection(project)
     payload = {
         "db_backend": "agent_core_postgres",
         "database": sql.runtime_env().get("AGENT_DB_NAME", "zeus_agent"),

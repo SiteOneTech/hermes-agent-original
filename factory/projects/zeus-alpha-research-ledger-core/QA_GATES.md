@@ -76,7 +76,12 @@ reviewed_source_sha: 2476e978c545e24b18ee48844b24eb8c58245ab4
 ## R2ah current-origin reviewed-marker/index repair gate
 - R2ah must remain documentation/review-evidence only under `factory/projects/zeus-alpha-research-ledger-core/`; no runtime/source implementation, deploy, credential, connector, messaging, direct SQL, or trading/risk/paper/live action is authorized.
 - Required local evidence: fresh worktree identity captured before edits, `git diff --check`, scoped diff path verification, tracked-document verification, and approved Factory status CLI read-back showing all 14 G1 required documents exist, are committed, indexed, validated, reviewed, and non-blocking on configured base ref `origin/main` at `1b6bc0f65d3ad49845d20e056203e3b3702ac2a7`.
-- Delivery evidence must be PR-first: actual non-draft GitHub PR against `main`, Zeus signature, `agent:zeus` label, exact candidate SHA named in the PR body/docs, and independent exact-SHA `quality-reviewer` verification before task closure. This worker must not self-approve or merge the PR.
+- Delivery evidence must be PR-first: actual non-draft GitHub PR against `main`, Zeus signature, `agent:zeus` label, exact candidate SHA named in the PR body, and independent exact-SHA `quality-reviewer` verification before task closure. This worker must not merge the PR.
+
+## R2ao current-origin G1 control-plane projection repair gate
+- R2ao must prove with RED then GREEN behavioral tests that structured `unvalidated_required_docs` blockers resolve from current required-document rows when all rows are non-blocking, while remaining fail-closed when any current row still blocks.
+- R2ao must prove reconciliation removes obsolete `metadata.g1_documentation_checkout` from the persisted project projection only after the current finding set no longer includes `unvalidated_required_docs` and current G1 rows are clean.
+- Required local evidence: canonical Factory status reproduction from the assigned worktree, `git diff --check`, targeted RED/GREEN test output, full relevant Factory control-plane and increment integration test-file runs, Zeus-signed `agent:zeus` PR, exact candidate SHA in the PR body, and independent security review request. This worker must not merge, deploy, direct-SQL mutate, or touch the primary checkout.
 
 ## R2c2 autonomous canonical G1 document-status repair gate
 - R2c2 must remain documentation/review-evidence only under `factory/projects/zeus-alpha-research-ledger-core/`; no runtime/source implementation, deploy, credential, connector, messaging, direct SQL, or trading/risk/paper/live action is authorized.
