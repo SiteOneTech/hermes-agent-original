@@ -1008,6 +1008,92 @@ def test_reconciler_creates_task_for_unvalidated_required_docs(tmp_path):
     assert "PRD.md" in finding["metadata"]["blocking_documents"]
 
 
+def test_reconciler_resolves_stale_unvalidated_required_docs_from_current_configured_base(tmp_path):
+    repo, _stale_sha, reviewed_sha = _make_stale_primary_with_reviewed_origin(tmp_path)
+    project = {
+        "project_id": "demo",
+        "repo_path": str(repo),
+        "base_branch": "main",
+        "metadata": {
+            "artifact_dir": "factory/projects/demo",
+            "repo_strategy": {"primary_repo_path": str(repo), "base_branch": "main"},
+            "reconciliation_anomalies": ["unvalidated_required_docs"],
+            "g1_documentation_checkout": {
+                "path": str(tmp_path / "obsolete-g1-checkout"),
+                "branch": "factory/demo/obsolete-g1-docs",
+                "commit": "0" * 40,
+            },
+        },
+    }
+    stale_task = {
+        "project_id": "demo",
+        "task_id": "demo-reconcile-unvalidated-required-docs",
+        "status": "blocked",
+        "phase": "documentation",
+        "title": "R2c — Reconciliation: validate docs",
+        "metadata": {
+            "factory_reconciliation_task": True,
+            "reconciliation_anomaly": "unvalidated_required_docs",
+            "reconciliation_assignment": {
+                "provenance": {
+                    "source": "metadata.g1_documentation_checkout",
+                    "branch_source": "metadata.g1_documentation_checkout.branch",
+                    "worktree_source": "metadata.g1_documentation_checkout.path",
+                }
+            },
+        },
+    }
+
+    statuses = factory_pg.project_document_status(project)
+    g1_rows = [row for row in statuses if row["category"] == "g1_required"]
+    findings = factory_pg.reconciliation_findings(project, tasks=[{"task_id": "demo-t1", "status": "todo"}], pending_gates=[])
+
+    assert g1_rows
+    assert {row["readiness_source"] for row in g1_rows} == {"configured_base_ref"}
+    assert {row["base_commit"] for row in g1_rows} == {reviewed_sha}
+    assert not any(row["blocking"] for row in g1_rows)
+    assert "unvalidated_required_docs" not in {row["code"] for row in findings}
+    assert factory_pg._resolved_reconciliation_anomaly(project, stale_task) == (
+        "unvalidated_required_docs",
+        "structured_reconciliation_metadata",
+    )
+
+
+def test_reconciler_keeps_unvalidated_required_docs_blocking_when_current_base_unreviewed(tmp_path):
+    repo, _reviewed_sha, pending_sha = _make_reviewed_primary_with_pending_origin(tmp_path)
+    project = {
+        "project_id": "demo",
+        "repo_path": str(repo),
+        "base_branch": "main",
+        "metadata": {
+            "artifact_dir": "factory/projects/demo",
+            "repo_strategy": {"primary_repo_path": str(repo), "base_branch": "main"},
+            "reconciliation_anomalies": ["unvalidated_required_docs"],
+            "g1_documentation_checkout": {
+                "path": str(tmp_path / "obsolete-g1-checkout"),
+                "branch": "factory/demo/obsolete-g1-docs",
+                "commit": "0" * 40,
+            },
+        },
+    }
+    stale_task = {
+        "project_id": "demo",
+        "task_id": "demo-reconcile-unvalidated-required-docs",
+        "status": "blocked",
+        "phase": "documentation",
+        "metadata": {"factory_reconciliation_task": True, "reconciliation_anomaly": "unvalidated_required_docs"},
+    }
+
+    statuses = factory_pg.project_document_status(project)
+    g1_rows = [row for row in statuses if row["category"] == "g1_required"]
+    findings = factory_pg.reconciliation_findings(project, tasks=[{"task_id": "demo-t1", "status": "todo"}], pending_gates=[])
+
+    assert {row["base_commit"] for row in g1_rows} == {pending_sha}
+    assert any(row["blocking"] for row in g1_rows)
+    assert "unvalidated_required_docs" in {row["code"] for row in findings}
+    assert factory_pg._resolved_reconciliation_anomaly(project, stale_task) is None
+
+
 def test_reconciler_does_not_cancel_product_validation_task_with_reconciliation_text(fake_sql):
     project = {"project_id": "demo", "metadata": {}}
     findings = []
