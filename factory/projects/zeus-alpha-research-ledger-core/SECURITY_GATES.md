@@ -86,6 +86,12 @@ reviewed_source_sha: 2476e978c545e24b18ee48844b24eb8c58245ab4
 - The exact current configured base for this recovery is `origin/main` `bf422968f9ea73d70d4ac1e8b8bae4af644ce079`; primary checkout HEAD `4eb87e4cd48105af05fe974cf1d493f0e1b57ae1` is recorded only as rejected identity evidence.
 - Stale PR #44 and obsolete PR #20 checkout metadata are not current-base evidence. If stale persisted anomaly or dispatch-preflight projection metadata remains after row-level `document_status` is non-blocking, the only authorized follow-up is a bounded Factory control-plane repair through reviewed code/PR/gates or approved Factory CLI gate evidence. No direct SQL, credential access, deploy, runtime call, primary checkout fast-forward, external connector, messaging action, trading, risk mutation, paper/live activation, or self-approval is authorized by this documentation task.
 
+## R2ao current-origin G1 control-plane projection repair security gate
+- R2ao is limited to Factory control-plane projection/readiness logic and project-local evidence docs. It must not add or alter Agent Core ledger runtime code, provider clients, credential paths, messaging connectors, deployment behavior, trading/risk/paper/live behavior, product ledger implementation, external runtimes, primary checkout state, or direct Factory DB writes.
+- The exact configured base for this repair is `origin/main` `4a0a6bbaea3b1acaf8e83084c058b831d865d8c4`; primary checkout HEAD `4eb87e4cd48105af05fe974cf1d493f0e1b57ae1` remains rejected identity evidence and must not be mutated.
+- Stale PR #20 `metadata.g1_documentation_checkout` may be removed from the persisted projection only by the reviewed reconciler path when current required-document rows are non-blocking. It must not be manually removed through direct SQL, and stale metadata must never clear blockers when current rows still block.
+- Delivery is a Zeus-signed `agent:zeus` PR plus independent exact-SHA security review. No merge, deploy, credential access, external connector, messaging operation, trading action, risk mutation, paper/live activation, or self-approval is authorized.
+
 ## Scheduler gate
 - `agent_core.alpha_research.scheduler.enabled` is false absent explicit configuration.
 - Registration and each invocation call the contract §5 verifier without cache. Tests cover every false/missing/failed/expired/wrong-commit readiness component and prove no batch read/run follows `scheduler_not_ready`.

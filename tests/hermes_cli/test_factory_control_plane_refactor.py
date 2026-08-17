@@ -1039,6 +1039,76 @@ def test_reconciler_does_not_cancel_product_validation_task_with_reconciliation_
     assert "demo-qa-security" not in joined.split("demo-reconcile-unvalidated-required-docs")[0]
 
 
+def test_unvalidated_required_docs_reconciliation_resolves_from_current_document_status(monkeypatch):
+    project = {
+        "project_id": "demo",
+        "metadata": {
+            "g1_documentation_checkout": {
+                "branch": "factory/demo/stale-g1-docs",
+                "commit": "0" * 40,
+                "not_merged": True,
+            },
+            "reconciliation_anomalies": ["unvalidated_required_docs"],
+        },
+    }
+    task = {
+        "project_id": "demo",
+        "task_id": "demo-reconcile-unvalidated-required-docs",
+        "status": "blocked",
+        "metadata": {"reconciliation_anomaly": "unvalidated_required_docs"},
+    }
+    monkeypatch.setattr(factory_pg, "_g1_document_blockers", lambda project_arg: [])
+
+    assert factory_pg._resolved_reconciliation_anomaly(project, task) == (
+        "unvalidated_required_docs",
+        "structured_reconciliation_metadata",
+    )
+
+
+def test_unvalidated_required_docs_reconciliation_stays_blocking_when_current_docs_block(monkeypatch):
+    project = {"project_id": "demo", "metadata": {"reconciliation_anomalies": ["unvalidated_required_docs"]}}
+    task = {
+        "project_id": "demo",
+        "task_id": "demo-reconcile-unvalidated-required-docs",
+        "status": "blocked",
+        "metadata": {"reconciliation_anomaly": "unvalidated_required_docs"},
+    }
+    monkeypatch.setattr(factory_pg, "_g1_document_blockers", lambda project_arg: [{"file_name": "PRD.md", "blocking": True}])
+
+    assert factory_pg._resolved_reconciliation_anomaly(project, task) is None
+
+
+def test_reconcile_clears_stale_g1_checkout_projection_when_current_docs_nonblocking(monkeypatch):
+    fake = FakeSql()
+    monkeypatch.setattr(factory_pg, "sql", fake)
+    monkeypatch.setattr(factory_pg, "ensure_runtime_schema", lambda: None)
+    monkeypatch.setattr(factory_pg, "reconciliation_findings", lambda *args, **kwargs: [])
+    monkeypatch.setattr(factory_pg, "_g1_document_blockers", lambda project_arg: [])
+    project = {
+        "project_id": "demo",
+        "status": "active",
+        "autonomous_enabled": True,
+        "metadata": {
+            "g1_documentation_checkout": {
+                "branch": "factory/demo/stale-g1-docs",
+                "commit": "0" * 40,
+                "not_merged": True,
+            },
+            "reconciliation_anomalies": ["unvalidated_required_docs"],
+        },
+    }
+    fake.one_results = [project]
+    fake.rows_results = [[], [], [], []]
+
+    result = factory_pg.reconcile_project("demo")
+
+    joined = "\n".join(fake.statements)
+    assert "metadata = (metadata - 'g1_documentation_checkout') ||" in joined
+    assert '"reconciliation_anomalies": []' in joined
+    assert '"cleared_project_metadata_keys": ["g1_documentation_checkout"]' in joined
+    assert result["cleared_project_metadata_keys"] == ["g1_documentation_checkout"]
+
+
 def test_delivery_readiness_blocks_cancelled_qa_security_task(monkeypatch):
     project = {"project_id": "demo", "name": "Security QR scanner", "risk_level": "medium", "metadata": {"delivery_target": "sandbox", "ui_deliverable": True}}
     tasks = [
