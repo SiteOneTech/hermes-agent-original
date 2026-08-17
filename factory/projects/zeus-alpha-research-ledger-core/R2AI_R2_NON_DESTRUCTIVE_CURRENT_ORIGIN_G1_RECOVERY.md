@@ -276,6 +276,31 @@ performed by this worker. Exact commit, ancestry, tests, PR state and labels
 are recorded in the PR body and in the R2ai-R2 PR delivery readback section of
 this record.
 
+## PR delivery readback (added after PR creation)
+
+Live `gh` readback for the delivered increment:
+
+```text
+PR #71  https://github.com/SiteOneTech/hermes-agent-original/pull/71
+state   OPEN
+draft   false (non-draft)
+labels  agent:zeus
+head    factory/zeus-alpha-research-ledger-core/inc-017-r2ai-r2-non-destructive-current @ 2cdadb6d4a06a8ee55ad84ff888936999bea3a79
+base    main @ 6c07c2fee59679a5b0063e635f0332895dbb3ec5 (origin/main at delivery)
+mergeable MERGEABLE
+author  sitiouno (Zeus account)
+```
+
+Branch push was a normal non-force push of a brand-new ref (verified absent
+from `git ls-remote` before push; remote ref now equals the commit above). No
+existing remote ref was force-pushed, reset, or rewritten; primary checkout
+`4eb87e4cd4…` untouched; no merge performed by this worker. Independent
+exact-SHA security/quality review of PR #71 remains pending (gate `896` was
+failed); the docs gate stays fail-closed for the stale task-level
+`unvalidated_required_docs` metadata until the named follow-up Factory task
+`zeus-alpha-research-ledger-core-r2ai-r2-canonical-active-metadata-anomaly-repair`
+is executed and reviewed.
+
 ## Boundary confirmation
 
 - Changed paths: only `factory/projects/zeus-alpha-research-ledger-core/`
