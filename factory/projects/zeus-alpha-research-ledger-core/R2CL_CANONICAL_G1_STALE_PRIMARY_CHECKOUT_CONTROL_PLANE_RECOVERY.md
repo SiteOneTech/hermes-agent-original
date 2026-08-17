@@ -130,7 +130,15 @@ HERMES_PYTHON=/home/jean/Projects/hermes-agent-original/venv/bin/python3 \
 
 Result (two independent runs): `✓18 | ✗ 0`, `18 tests passed, 0 failed` (runs 4.0s / 3.7s). Covered tests include `test_document_status_uses_configured_origin_base_when_primary_checkout_stale`, `test_document_status_resolves_frontmatter_reviewed_index_from_configured_origin_base`, `test_document_status_rejects_stale_primary_even_when_primary_docs_are_ready`, `test_document_status_fails_closed_when_configured_base_ref_lacks_indexed_g1_docs`, `test_document_status_reads_reviewed_current_base_candidate_without_moving_primary`, `test_reviewed_g1_candidate_fails_closed_*`, `test_unvalidated_required_docs_reconciliation_*`, and `test_reconcile_clears_stale_g1_checkout_projection_when_current_docs_nonblocking`.
 
-Because current committed code is not defective, no RED-to-GREEN change and no `agent:zeus` PR are warranted for this increment.
+Because current committed code is not defective, R2cl recorded no RED-to-GREEN code change. R2cm later corrects the review-state provenance for this conclusion: the R2cl terminal quality-review path exhausted on MiniMax HTTP 429 and did not produce a durable independent verdict, so the “no PR warranted” conclusion is an unreviewed R2cl worker finding, not an approved quality-review outcome.
+
+## R2cm post-merge review-state correction
+
+R2cl was integrated into `origin/main` as merge commit `0ecd9019ba8ec111aaead60a911c9accd854f731`, but the current canonical wrapper readback (`/home/jean/Projects/hermes-agent-original/venv/bin/hermes factory status zeus-alpha-research-ledger-core --json`) still reports `unvalidated_required_docs` with ten required G1 rows blocking on `reviewed=false`: `FACTORY_INTAKE.md`, `REQUIREMENTS_ANALYSIS.md`, `PATTERN_ANALYSIS.md`, `ASSUMPTIONS_AND_OPEN_QUESTIONS.md`, `PRD.md`, `ADRS.md`, `METHODOLOGY_PLAN.md`, `TECHNICAL_BLUEPRINT.md`, `TASK_GRAPH.md`, and `SECURITY_GATES.md`.
+
+The current `origin/main` documentation pack keeps real reviewed provenance from PR #36 / Factory gate `794` (source gate `790` / PR #34 SHA `2476e978c545e24b18ee48844b24eb8c58245ab4`). R2cm does not alter those G1 `reviewed: yes` markers. The repaired provenance is that R2cl itself remains `reviewed: pending_independent_quality_review`; downstream consumers must not treat R2cl worker completion, terminal auto-finalization, or merge exposure as independent quality approval.
+
+The PR-first R2cm artifact `R2CM_G1_REVIEW_STATE_PROVENANCE_REPAIR.md` is the controlling handoff for this correction. It requires a fresh Zeus-signed `agent:zeus` PR, exact final head SHA, focused resolver tests, and independent exact-SHA review. If the independent review provider rate-limits again, the correction remains pending rather than green.
 
 ## No-mutation compliance (acceptance criterion 3)
 
