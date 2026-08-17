@@ -133,6 +133,22 @@ DEFAULT_CONFIG = {
         # on flaky primaries; raise it if you prefer to tolerate longer
         # provider hiccups on a single provider.
         "api_max_retries": 3,
+        # Empty-response retry guard (NS-503).  The empty-retry loop
+        # re-sends the full conversation input at full price on every
+        # attempt; these settings stop it from re-billing *deterministic*
+        # empties (unsignaled provider refusals with zero output tokens)
+        # while failing open on any ambiguous evidence (missing usage,
+        # any generated tokens, model/provider change mid-streak).
+        "empty_response_guard": {
+            # Master switch for both guards below. False restores the
+            # legacy fixed 3-retry behaviour unconditionally.
+            "enabled": True,
+            # When the estimated input cost of a single empty attempt
+            # meets or exceeds this many USD, the retry budget for the
+            # streak drops from 3 to 1. Unknown pricing or missing usage
+            # leaves the budget untouched.
+            "cost_threshold_usd": 0.25,
+        },
         "service_tier": "",
         # Tool-use enforcement: injects system prompt guidance that tells the
         # model to actually call tools instead of describing intended actions.
@@ -173,6 +189,9 @@ DEFAULT_CONFIG = {
         # (docker/modal/ssh — they have their own probe).  Set False to
         # disable entirely.
         "environment_probe": True,
+        # Bot Mode teammate-messaging protocol section (silent unless a
+        # profile is managed by the desktop's Bot Mode).
+        "bot_mode_protocol": True,
         # Embedder-supplied environment description appended to the system
         # prompt's environment-hints block. Lets a host that wraps Hermes
         # (sandbox runner, managed platform) explain the runtime environment
@@ -1150,6 +1169,9 @@ DEFAULT_CONFIG = {
         # replay; different model = digest. Quality holds (memory capture
         # identical, skill near-identical in benchmarks).
         "background_review": {
+            # Master switch for automatic post-turn memory/skill review forks.
+            # false = skip automatic spawns (manual /refine still works).
+            "enabled": True,
             "provider": "auto",
             "model": "",
             "base_url": "",
@@ -1989,6 +2011,14 @@ DEFAULT_CONFIG = {
         #                     never crammed into a chat bubble), apply with
         #                     /skills approve <id> or drop with /skills reject <id>.
         "write_approval": False,
+        # Per-mutation audit ledger (tracker #79686 P3). Every skill mutation
+        # — curator, agent, or user — appends one JSONL entry to
+        # ~/.hermes/skills/.curator_ledger.jsonl with before/after file
+        # hashes; file contents are stored content-addressed (deduped) under
+        # ~/.hermes/.curator_backups/blobs/. Enables `hermes curator ledger`
+        # and single-mutation `hermes curator rollback <entry-id>`.
+        # Telemetry, never a gate: ledger failures cannot block a mutation.
+        "ledger": True,
     },
 
     # Curator — background skill maintenance.
@@ -2031,6 +2061,11 @@ DEFAULT_CONFIG = {
         # genuine non-use (never a mass-prune on the first run). Set to false
         # to keep all bundled built-ins permanently.
         "prune_builtins": True,
+        # TTL purge of skills/.archive/. 0 (default) = never purge — archived
+        # skills are kept forever. When > 0, `hermes curator purge` deletes
+        # archived skills older than this many days (explicit command only,
+        # never automatic; every purge is recorded in the audit ledger).
+        "archive_ttl_days": 0,
         # Pre-run backup: before every real curator pass (dry-run is
         # skipped), snapshot ~/.hermes/skills/ into
         # ~/.hermes/skills/.curator_backups/<utc-iso>/skills.tar.gz so the
@@ -2198,6 +2233,16 @@ DEFAULT_CONFIG = {
     #   deny    — block the command and let the agent find another way (default, safe)
     #   approve — auto-approve all dangerous commands in cron jobs
     #
+    # single_query_mode — what to do when a single-query (-q) session hits a
+    # dangerous command. -q runs export HERMES_INTERACTIVE=1 (for interactive
+    # sudo prompts) but have NO user waiting to answer approval prompts — an
+    # unanswered prompt just waits the full timeout then fails closed, so the
+    # agent is forced to work around the block (often via execute_code). This
+    # setting makes that intent explicit:
+    #   deny    — block the command and let the agent find another way (default,
+    #             safe; mirrors cron_mode deny)
+    #   approve — auto-approve all dangerous commands in single-query mode
+    #
     # timeout — seconds to wait for the user's approve/deny before failing
     # closed (deny). Shared by the CLI prompt and gateway/messaging waits.
     # Messaging approvals arrive as a push notification the user may not see
@@ -2207,6 +2252,7 @@ DEFAULT_CONFIG = {
         "mode": "smart",
         "timeout": 300,
         "cron_mode": "deny",
+        "single_query_mode": "deny",
         # Operator-customizable policy text for smart approvals. When
         # non-empty, this is appended to the smart-approval guardian's
         # SYSTEM prompt (trusted channel) as additional rules — e.g.
@@ -2295,6 +2341,10 @@ DEFAULT_CONFIG = {
     "security": {
         "allow_private_urls": False,  # Allow requests to private/internal IPs (for OpenWrt, proxies, VPNs)
         "redact_secrets": True,
+        # Persisted acknowledgement for unattended model overrides whose tier
+        # lets the vendor train on prompts/completions. The startup guard still
+        # prints the full warning on every run and never bypasses cost guards.
+        "allow_data_training_tiers_noninteractive": False,
         # Human approval presentation transport. "builtin" preserves the
         # current CLI/TUI/gateway/ACP surfaces. A plugin transport is used only
         # when named explicitly here. Transport timeout/error/invalid response
@@ -3304,21 +3354,23 @@ DEFAULT_CONFIG = {
         #   True  = always disable the overlay
         #   False = always enable the overlay
         "no_overlay": None,
-        # cua-driver permission mode for this Hermes install.
+        # cua-driver permission mode for each Hermes computer-use runtime.
         #   standard (default) — cua-driver's own approval boundary. Protected
         #     operations (e.g. attaching to an existing signed-in browser
         #     profile) fail closed unless grant_existing_profile is enabled
         #     below.
         #   bounded — repeatable automation under a user-reviewed session
-        #     policy manifest (set capability_manifest below). No runtime
+        #     capability manifest (set capability_manifest below). No runtime
         #     prompts; anything outside the manifest fails closed inside
         #     cua-driver.
         # `unrestricted` is intentionally NOT accepted here: it stays bound to
         # the explicit per-session YOLO toggle so a config line can never
         # silently bypass approvals.
         "permission_mode": "standard",
-        # Absolute or ~ path to the reviewed cua-driver session-policy
-        # manifest YAML used when permission_mode is "bounded". See
+        # Absolute or ~ path to the reviewed cua-driver capability
+        # manifest used when permission_mode is "bounded". Hermes passes the
+        # canonical --capability-manifest and --approve-capability-manifest
+        # flags when it launches the runtime. See
         # https://cua.ai/docs/reference/cua-driver/permission-modes
         "capability_manifest": "",
         # Pre-authorize existing-profile browser attachment in standard mode
