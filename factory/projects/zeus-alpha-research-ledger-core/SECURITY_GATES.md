@@ -81,6 +81,11 @@ reviewed_source_sha: 2476e978c545e24b18ee48844b24eb8c58245ab4
 - The exact current configured base for this recovery is `origin/main` `139df9ae49137bb4b16152550d53d385310de3b6`; primary checkout HEAD `4eb87e4cd48105af05fe974cf1d493f0e1b57ae1` is recorded only as rejected identity evidence.
 - If stale persisted anomaly metadata remains after current row-level `document_status` is non-blocking, the only authorized follow-up is a bounded Factory control-plane repair through reviewed code/PR/gates or approved Factory CLI gate evidence. No direct SQL, credential access, deploy, runtime call, or primary checkout fast-forward is authorized by this documentation task.
 
+## R2aj isolated current-base G1 documentation evidence recovery security gate
+- R2aj is limited to current-base documentation/provenance under `factory/projects/zeus-alpha-research-ledger-core/`. It must not add or alter runtime provider clients, credential paths, messaging connectors, deployment behavior, trading/risk/paper/live behavior, product ledger implementation, external runtimes, primary checkout state, or direct Factory DB writes.
+- The exact current configured base for this recovery is `origin/main` `bf422968f9ea73d70d4ac1e8b8bae4af644ce079`; primary checkout HEAD `4eb87e4cd48105af05fe974cf1d493f0e1b57ae1` is recorded only as rejected identity evidence.
+- Stale PR #44 and obsolete PR #20 checkout metadata are not current-base evidence. If stale persisted anomaly or dispatch-preflight projection metadata remains after row-level `document_status` is non-blocking, the only authorized follow-up is a bounded Factory control-plane repair through reviewed code/PR/gates or approved Factory CLI gate evidence. No direct SQL, credential access, deploy, runtime call, primary checkout fast-forward, external connector, messaging action, trading, risk mutation, paper/live activation, or self-approval is authorized by this documentation task.
+
 ## Scheduler gate
 - `agent_core.alpha_research.scheduler.enabled` is false absent explicit configuration.
 - Registration and each invocation call the contract §5 verifier without cache. Tests cover every false/missing/failed/expired/wrong-commit readiness component and prove no batch read/run follows `scheduler_not_ready`.
