@@ -332,6 +332,57 @@ Independent quality review remains required; this R2BJ worker does not self-appr
 merge, deploy, change credentials, write direct SQL, mutate the primary checkout,
 or touch any runtime/external/trading path.
 
+## Review round 17 — R2c technical rework current-origin G1 independent review evidence recovery
+
+**Current-origin identity captured before edits:** R2c uses assigned worktree
+`/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-001-r2c-technical-rework-current-ori`,
+branch `factory/zeus-alpha-research-ledger-core/inc-001-r2c-technical-rework-current-ori`,
+with local `HEAD`, `origin/main`, merge-base, and remote `refs/heads/main` all equal to
+`b260baea223e863b35fe561e6c5d3d77f3a914c9` before documentation edits.
+
+**Canonical Agent Core read-back:** the approved status command
+`/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory status zeus-alpha-research-ledger-core --json`
+read Agent Core Postgres (`db_backend=agent_core_postgres`, `database=zeus_agent`) from the assigned worktree source and wrote parsed evidence to
+`/tmp/r2c-initial-status.json`. The active project status reports
+`factory_cli_source_root` and `factory_status_source_root` as the assigned worktree,
+`factory_status_delegated=false`, `reconciliation_anomalies=[]`,
+`reconciliation_projection_source=current_document_status`, `reconciliation_required=false`,
+`notion_required=false`, zero human questions, and all 14 required G1 documents as
+`exists=true`, `committed=true`, `indexed=true`, `validated=true`,
+`reviewed=true`, `blocking=false` from `readiness_source=configured_base_ref`, base
+`b260baea223e863b35fe561e6c5d3d77f3a914c9`, with stale primary checkout
+`4eb87e4cd48105af05fe974cf1d493f0e1b57ae1` rejected.
+
+**Independent read-only review evidence:** Claude Code session
+`063901ef-304f-41c2-8756-18185d96b4fa` reviewed `DOCUMENTATION_INDEX.md` and all
+14 Factory-required G1 documents at exact candidate
+`b260baea223e863b35fe561e6c5d3d77f3a914c9`. It returned PASS for requirement
+mapping R1–R10, no-authority boundaries, and stale projection classification. This
+is review evidence only and not self-approval, merge/deploy/direct-SQL/credential/
+external-runtime/connector/messaging/trading/risk/paper/live or downstream ALR
+implementation authority.
+
+**Current stale technical predicate:** R2ai gate `857`, R2ae gate `884`, and recent
+project reconciliation / dispatch-preflight events still contain historical
+`unvalidated_required_docs` / `missing_or_unindexed_docs` strings. Those rows are
+technical stale projection/audit evidence when the current configured-base rows are
+clean; they must not create a human question or be treated as current document
+content blockers.
+
+**Correction:** `R2C_TECHNICAL_REWORK_CURRENT_ORIGIN_G1_INDEPENDENT_REVIEW.md`
+records the exact current-origin Factory status readback, documents reviewed,
+R1–R10/no-authority mapping, and stale technical-only cause. `DOCUMENTATION_INDEX.md`,
+`TASK_GRAPH.md`, `TRACKER.md`, `QA_GATES.md`, `SECURITY_GATES.md`, and this
+`G1_REVIEW.md` index the same current evidence.
+
+**Handoff requirement:** the fresh R2c branch must be opened as a Zeus-signed
+GitHub PR labeled `agent:zeus` against `main`. The PR body/Factory evidence must
+name exact base `b260baea223e863b35fe561e6c5d3d77f3a914c9`, final head SHA,
+status-output path, validation output, no-self-approval, no-merge, and no external
+runtime execution. This R2c worker does not merge, deploy, change credentials,
+write direct SQL, mutate the primary checkout, or touch any runtime/external/trading
+path.
+
 ## Local documentary verification — non-approval
 
 At `2026-08-10T04:50:09-04:00`, the implementation-planner worker verified the project-local pack from the assigned worktree only. `git ls-files --error-unmatch` confirmed the 14 required G1 documents plus `G0_REPOSITORY_STRATEGY.md`, `REQUIREMENTS_TRACEABILITY.md`, `DATABASE_AND_RUNTIME_CONTRACT.md`, and `G1_REVIEW.md` are tracked. `DOCUMENTATION_INDEX.md` indexes required documents and records explicit validated/reviewed status. `G0_REPOSITORY_STRATEGY.md` records the Zeus-only source repo, `origin/main` reference, assigned branch/worktree policy, PR-first delivery, and predecessor linkage. This is implementation evidence, not an independent specification/security PASS.
