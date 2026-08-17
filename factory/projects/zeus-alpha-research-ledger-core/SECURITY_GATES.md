@@ -135,6 +135,13 @@ reviewed_source_sha: 2476e978c545e24b18ee48844b24eb8c58245ab4
 - Security invariant: do not turn R2cl task/run completion into review approval. The R2cl terminal quality-review path exhausted on MiniMax HTTP 429, so any green R2cm outcome must come from a fresh independent exact-SHA PR review. If that review fails/rate-limits, the secure state is pending/failed, not auto-green.
 - Delivery is a Zeus-signed `agent:zeus` PR plus independent exact-SHA quality review. No merge, deploy, credential access, external connector, messaging operation, trading action, risk mutation, paper/live activation, self-approval, no-auto-merge bypass, direct SQL, primary-checkout mutation, or external runtime execution is authorized.
 
+## R2cn bounded canonical G1 docs gate security gate
+- R2cn is limited to current-base project-local documentation/provenance. It must not add or alter Agent Core ledger runtime/product code, Factory runtime code, provider clients, credential paths, messaging connectors, deployment behavior, trading/risk/paper/live behavior, external runtimes, primary checkout state, G1 reviewed frontmatter markers, or direct Factory DB writes.
+- The exact current configured base for this repair is `origin/main` `fa24950a228f28d5106ee2125d42045e872f9504`. Primary checkout HEAD `4eb87e4cd48105af05fe974cf1d493f0e1b57ae1` is rejected/stale identity evidence only and must not be mutated.
+- Authorized Factory DB readback/control is limited to the canonical venv CLI invocation from the assigned worktree for `factory status` and `factory project resolve-state`; no direct SQL / psql / psycopg2 / ad-hoc database script is authorized.
+- Security invariant: stale historical `unvalidated_required_docs` events/gates/tasks must not override current configured-base document rows when all required G1 rows are reviewed and non-blocking. Any remaining non-G1 technical rework, such as R2ac, stays separate and must not be used to re-create a G1 docs blocker.
+- Delivery is a Zeus-signed `agent:zeus` PR plus independent exact-SHA quality review. No merge, deploy, credential access, external connector, messaging operation, trading action, risk mutation, paper/live activation, self-approval, no-auto-merge bypass, direct SQL, primary-checkout mutation, or external runtime execution is authorized.
+
 ## Scheduler gate
 - `agent_core.alpha_research.scheduler.enabled` is false absent explicit configuration.
 - Registration and each invocation call the contract §5 verifier without cache. Tests cover every false/missing/failed/expired/wrong-commit readiness component and prove no batch read/run follows `scheduler_not_ready`.

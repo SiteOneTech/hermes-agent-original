@@ -374,6 +374,46 @@ runtime execution. Independent quality review remains required; if the review
 provider rate-limits again, this round must remain pending/failed rather than
 auto-green.
 
+## Review round 18 — R2cn bounded canonical G1 docs gate and PR-provenance repair
+
+**Current-base identity captured before edits:** R2cn uses assigned worktree
+`/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-015-r2cn-bounded-canonical-g1-docs-g`,
+branch `factory/zeus-alpha-research-ledger-core/inc-015-r2cn-bounded-canonical-g1-docs-g`,
+with local `HEAD`, `origin/main`, merge-base, and remote `refs/heads/main` all equal to
+`fa24950a228f28d5106ee2125d42045e872f9504` before documentation edits.
+
+**Canonical Agent Core status read-back:** the approved status command
+`/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory status zeus-alpha-research-ledger-core --json`
+read Agent Core Postgres (`db_backend=agent_core_postgres`, `database=zeus_agent`) from the assigned worktree source and wrote
+`/tmp/r2cn-status-before.json` (2,619,035 bytes). The active project status reports
+source-root provenance equal to the assigned worktree, `factory_status_delegated=false`,
+`reconciliation_anomalies=[]`, `reconciliation_projection_source=current_document_status`,
+and all 14 required G1 documents as `exists=true`, `committed=true`, `indexed=true`,
+`validated=true`, `reviewed=true`, `blocking=false` from `readiness_source=configured_base_ref`,
+base `fa24950a228f28d5106ee2125d42045e872f9504`, with stale primary checkout rejected.
+
+**Canonical resolve-state read-back:** the approved control command
+`/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory project resolve-state zeus-alpha-research-ledger-core --json`
+wrote `/tmp/r2cn-resolve-state.json` (7,119 bytes), cleared stale structured
+`unvalidated_required_docs` anomalies for historical R2ai/R2ae tasks, returned
+`supervisor.health=green` with no supervisor violations, and created no human question.
+The remaining classified blocker is unrelated R2ac technical rework from a prior blocked
+run, not a current G1 required-docs defect. Post-resolve status
+`/tmp/r2cn-status-after-resolve.json` keeps 14/14 required G1 rows non-blocking.
+
+**Correction:** R2cn records the current docs gate and PR-provenance handoff so
+historical R2cl/R2cm/R2ai/R2ae stale projection evidence cannot override clean
+configured-base G1 rows. Existing G1 `reviewed: yes` markers remain valid only
+through PR #36 / Factory gate `794` (source gate `790` / SHA
+`2476e978c545e24b18ee48844b24eb8c58245ab4`); R2cn itself stays
+`reviewed: pending_independent_quality_review` until a fresh exact-SHA PR review completes.
+
+**Handoff requirement:** the fresh R2cn branch must be opened as a Zeus-signed
+GitHub PR labeled `agent:zeus` against `main`. The PR body/Factory evidence must
+name exact source commit `fa24950a228f28d5106ee2125d42045e872f9504`, final head SHA,
+status before/after paths, resolve-state path, validation output, no-merge, no direct SQL,
+no primary mutation, and no external runtime execution. Independent quality review remains required.
+
 ## Local documentary verification — non-approval
 
 At `2026-08-10T04:50:09-04:00`, the implementation-planner worker verified the project-local pack from the assigned worktree only. `git ls-files --error-unmatch` confirmed the 14 required G1 documents plus `G0_REPOSITORY_STRATEGY.md`, `REQUIREMENTS_TRACEABILITY.md`, `DATABASE_AND_RUNTIME_CONTRACT.md`, and `G1_REVIEW.md` are tracked. `DOCUMENTATION_INDEX.md` indexes required documents and records explicit validated/reviewed status. `G0_REPOSITORY_STRATEGY.md` records the Zeus-only source repo, `origin/main` reference, assigned branch/worktree policy, PR-first delivery, and predecessor linkage. This is implementation evidence, not an independent specification/security PASS.
