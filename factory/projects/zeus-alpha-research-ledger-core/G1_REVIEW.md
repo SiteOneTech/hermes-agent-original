@@ -244,6 +244,51 @@ must inspect that exact SHA; this R2au worker does not self-approve, merge,
 deploy, change credentials, write direct SQL, mutate the primary checkout, or
 touch any runtime/external/trading path.
 
+## Review round 15 — R2av current-origin G1 status projection verification
+
+**Current-origin identity captured before edits:** R2av uses assigned worktree
+`/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-017-r2av-current-origin-g1-status-pr`,
+branch `factory/zeus-alpha-research-ledger-core/inc-017-r2av-current-origin-g1-status-pr`,
+with local `HEAD`, `origin/main`, merge-base, and remote `refs/heads/main` all equal to
+`af9fa27eaaaa52ef173f1578fb7f572ce52cebc6` before documentation edits. This is the
+R2au PR #61 merge commit and contains repair commit
+`1afd37a61a8d21af393e393cb77083adb25b41c7`.
+
+**Canonical Agent Core read-back:** the approved status command
+`/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory status --json zeus-alpha-research-ledger-core`
+read Agent Core Postgres (`db_backend=agent_core_postgres`, `database=zeus_agent`) and wrote full evidence to
+`/home/jean/.hermes/profiles/codex-builder/cache/terminal-output/out-1786962029-820188-d410.log`.
+Project `document_status` lines `20270`–`20626` show configured base ref
+`origin/main`, base commit `af9fa27eaaaa52ef173f1578fb7f572ce52cebc6`,
+`readiness_source=configured_base_ref`, stale primary checkout rejected, and
+`exists=true`, `committed=true`, `indexed=true`, `validated=true`,
+`reviewed=true`, `blocking=false` for all 14 required G1 documents.
+
+**Reviewed=false projection source:** the current status payload still carries old
+audit records: recent events `194724`/`194725` list `anomalies=["unvalidated_required_docs"]`,
+and older delivery-gate evidence retains stale `document_status_snapshot` rows. Those
+records are historical and must not be projected as current dispatch readiness. The
+source-backed 10-blocker mismatch remains the stale primary/runtime path documented in
+this file's R2c5 section (`/home/jean/Projects/hermes-agent-original` at
+`4eb87e4cd48105af05fe974cf1d493f0e1b57ae1`, pre-R2v resolver), not current configured-base
+document content.
+
+**Current projection outcome:** active metadata lines `20830`–`20864` report
+`reconciliation_anomalies=[]`, `reconciliation_projection_source=current_document_status`,
+`reconciliation_required=false`, and `cleared_g1_document_reconciliation_projection=true`.
+`R2AV_CURRENT_ORIGIN_G1_STATUS_PROJECTION_RECOVERY.md` records the status lines,
+focused GREEN test output, and no-direct-SQL/no-primary-mutation/no-external-runtime
+boundary.
+
+**Handoff requirement:** the fresh R2av branch must be opened as a Zeus-signed
+GitHub PR labeled `agent:zeus` against `main`. The PR body/Factory evidence must
+name exact base `af9fa27eaaaa52ef173f1578fb7f572ce52cebc6`, final head SHA, R2au
+repair commit `1afd37a61a8d21af393e393cb77083adb25b41c7`, status-output path,
+no-auto-merge, and no external runtime execution. Independent quality review and
+QA Guardian evidence remain required; this R2av worker does not self-approve,
+merge, deploy, change credentials, write direct SQL, mutate the primary checkout,
+or touch any runtime/external/trading path.
+
 ## Local documentary verification — non-approval
 
 At `2026-08-10T04:50:09-04:00`, the implementation-planner worker verified the project-local pack from the assigned worktree only. `git ls-files --error-unmatch` confirmed the 14 required G1 documents plus `G0_REPOSITORY_STRATEGY.md`, `REQUIREMENTS_TRACEABILITY.md`, `DATABASE_AND_RUNTIME_CONTRACT.md`, and `G1_REVIEW.md` are tracked. `DOCUMENTATION_INDEX.md` indexes required documents and records explicit validated/reviewed status. `G0_REPOSITORY_STRATEGY.md` records the Zeus-only source repo, `origin/main` reference, assigned branch/worktree policy, PR-first delivery, and predecessor linkage. This is implementation evidence, not an independent specification/security PASS.
