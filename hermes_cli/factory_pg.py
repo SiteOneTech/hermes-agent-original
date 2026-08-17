@@ -6133,6 +6133,19 @@ def _resolved_reconciliation_anomaly(project: dict[str, Any] | None, task: dict[
             return code, source
         return None
 
+    if code == "unvalidated_required_docs":
+        if _required_docs_explicitly_waived(project_metadata):
+            return code, source
+        # Stale reconciliation tasks may carry obsolete provenance such as an
+        # old ``metadata.g1_documentation_checkout`` assignment. Resolve that
+        # blocker only from the live document-status resolver, which is already
+        # bound to the configured base ref when one is present and fails closed
+        # for missing, dirty/untracked, malformed, unindexed, unvalidated, or
+        # unreviewed required G1 documents.
+        if not _g1_document_blockers(project):
+            return code, source
+        return None
+
     if code == "uncommitted_project_artifacts":
         if _repo_commit_explicitly_waived(project_metadata):
             return code, source
