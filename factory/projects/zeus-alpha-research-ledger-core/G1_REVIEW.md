@@ -199,6 +199,40 @@ that exact SHA; this worker does not self-approve, merge, deploy, change
 credentials, write direct SQL, mutate the primary checkout, or touch any
 runtime/external/trading path.
 
+## Review round 14 — R2at current-origin G1 documentation validation technical rework
+
+**Current-origin identity captured before edits:** R2at uses assigned worktree
+`/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-001-r2at-current-origin-g1-documenta`,
+branch `factory/zeus-alpha-research-ledger-core/inc-001-r2at-current-origin-g1-documenta`,
+with local `HEAD`, `origin/main`, and merge-base all equal to
+`a41acdc4820b92a31b7d42d9a9c28e95b875a3d1` before documentation edits.
+
+**Canonical Agent Core read-back:** the approved status command
+`/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory status zeus-alpha-research-ledger-core --json`
+read Agent Core Postgres (`db_backend=agent_core_postgres`, `database=zeus_agent`) and wrote full evidence to
+`/home/jean/.hermes/profiles/claude-builder/cache/terminal-output/out-1786955910-3629985-7910.log`.
+Project `document_status` lines `20184`–`20534` show configured base ref
+`origin/main`, base commit `a41acdc4820b92a31b7d42d9a9c28e95b875a3d1`,
+`readiness_source=configured_base_ref`, stale primary checkout rejected, and
+`exists=true`, `committed=true`, `indexed=true`, `validated=true`,
+`reviewed=true`, `blocking=false` for all 14 required G1 documents.
+
+**Remaining stale projection evidence:** recent reconciler events `194478` and
+`194477` still list `anomalies=["unvalidated_required_docs"]`, and dispatch-preflight
+event `194474` still lists `blockers=["missing_or_unindexed_docs"]`. The same
+current status payload reports active `reconciliation_anomalies=[]`,
+`reconciliation_projection_source=current_document_status`, and
+`reconciliation_required=false`, while the old `unvalidated_required_docs` remains
+only under `stale_reconciliation_projection` as audit evidence.
+
+**Handoff requirement:** the fresh R2at branch must be opened as a Zeus-signed
+GitHub PR labeled `agent:zeus` against `main`. The PR body/Factory evidence must
+name exact base `a41acdc4820b92a31b7d42d9a9c28e95b875a3d1`, final head SHA,
+status-output path, no-auto-merge, and no external runtime execution. An
+independent quality reviewer must inspect that exact SHA; this R2at worker does
+not self-approve, merge, deploy, change credentials, write direct SQL, mutate
+the primary checkout, or touch any runtime/external/trading path.
+
 ## Local documentary verification — non-approval
 
 At `2026-08-10T04:50:09-04:00`, the implementation-planner worker verified the project-local pack from the assigned worktree only. `git ls-files --error-unmatch` confirmed the 14 required G1 documents plus `G0_REPOSITORY_STRATEGY.md`, `REQUIREMENTS_TRACEABILITY.md`, `DATABASE_AND_RUNTIME_CONTRACT.md`, and `G1_REVIEW.md` are tracked. `DOCUMENTATION_INDEX.md` indexes required documents and records explicit validated/reviewed status. `G0_REPOSITORY_STRATEGY.md` records the Zeus-only source repo, `origin/main` reference, assigned branch/worktree policy, PR-first delivery, and predecessor linkage. This is implementation evidence, not an independent specification/security PASS.
