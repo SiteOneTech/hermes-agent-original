@@ -104,6 +104,12 @@ reviewed_source_sha: 2476e978c545e24b18ee48844b24eb8c58245ab4
 - Historical `unvalidated_required_docs` and `missing_or_unindexed_docs` evidence from events `194478`, `194477`, and `194474` must remain stale/audit provenance when current required-document rows are non-blocking and active metadata reports `reconciliation_anomalies=[]` from `current_document_status`; it must not be used to clear or recreate blockers through direct SQL, self-approval, primary-checkout mutation, or no-auto-merge bypass.
 - Delivery is a Zeus-signed `agent:zeus` PR plus independent exact-SHA quality review. No merge, deploy, credential access, external connector, messaging operation, trading action, risk mutation, paper/live activation, self-approval, no-auto-merge bypass, or no external runtime execution is authorized.
 
+## R2au current-origin G1 projection repair security gate
+- R2au is limited to Factory control-plane document-status projection/readback logic and project-local evidence docs. It must not add or alter Agent Core ledger runtime/product code, provider clients, credential paths, messaging connectors, deployment behavior, trading/risk/paper/live behavior, external runtimes, primary checkout state, or direct Factory DB writes.
+- The exact current configured base for this repair is `origin/main` `2b53ee0f14491ff43da7683d475654a03af5d678`, and that base contains R2at commit `d4ac6d89994adf823bb50b79afe5a39fd204fdfd`. Primary checkout HEAD `4eb87e4cd48105af05fe974cf1d493f0e1b57ae1` is rejected identity evidence only and must not be mutated.
+- Stale required-doc anomaly strings in historical events/tasks remain immutable audit history, but active project status must not re-present them as current required-doc readiness after configured-base rows are clean. The repair must use reviewed code/tests/PR/gates, not direct SQL cleanup.
+- Delivery is a Zeus-signed `agent:zeus` PR plus independent exact-SHA review. No merge, deploy, credential access, external connector, messaging operation, trading action, risk mutation, paper/live activation, self-approval, no-auto-merge bypass, or external runtime execution is authorized.
+
 ## Scheduler gate
 - `agent_core.alpha_research.scheduler.enabled` is false absent explicit configuration.
 - Registration and each invocation call the contract §5 verifier without cache. Tests cover every false/missing/failed/expired/wrong-commit readiness component and prove no batch read/run follows `scheduler_not_ready`.
