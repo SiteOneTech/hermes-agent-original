@@ -289,6 +289,49 @@ QA Guardian evidence remain required; this R2av worker does not self-approve,
 merge, deploy, change credentials, write direct SQL, mutate the primary checkout,
 or touch any runtime/external/trading path.
 
+## Review round 16 — R2BJ bounded canonical G1 documentation/index technical recovery
+
+**Current-base identity captured before edits:** R2BJ uses assigned worktree
+`/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-017-r2bj-bounded-canonical-g1-docume`,
+branch `factory/zeus-alpha-research-ledger-core/inc-017-r2bj-bounded-canonical-g1-docume`,
+with local `HEAD`, `origin/main`, and merge-base all equal to
+`b503ba3b57fd606956d0ebf925c83eda253bdcc5` before documentation edits.
+
+**Canonical Agent Core read-back:** the approved status command
+`/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory status zeus-alpha-research-ledger-core --json`
+read Agent Core Postgres (`db_backend=agent_core_postgres`, `database=zeus_agent`) from the assigned worktree source and wrote parsed evidence to
+`/tmp/r2bj-status-before.json` plus full terminal output
+`/home/jean/.hermes/profiles/codex-builder/cache/terminal-output/out-1786980569-860127-b650.log`.
+The active project status reports `factory_cli_source_root` and
+`factory_status_source_root` as the assigned worktree, `factory_status_delegated=false`,
+`reconciliation_anomalies=[]`, `reconciliation_projection_source=current_document_status`,
+`reconciliation_required=false`, `notion_required=false`, and all 14 required G1
+documents as `exists=true`, `committed=true`, `indexed=true`, `validated=true`,
+`reviewed=true`, `blocking=false` from `readiness_source=configured_base_ref`, base
+`b503ba3b57fd606956d0ebf925c83eda253bdcc5`, with stale primary checkout
+`4eb87e4cd48105af05fe974cf1d493f0e1b57ae1` rejected.
+
+**Current stale predicate evidence:** event `195559` still records ALR-020-R2
+dispatch preflight `blockers=["missing_or_unindexed_docs"]`; events `195563`,
+`195562`, and `195560` still record `anomalies=["unvalidated_required_docs"]`;
+gate `884` failed stale PR #44/R2ae evidence that is conflicting/dirty against
+current `origin/main`. These rows are audit/projection evidence only and do not
+override the current configured-base row readback.
+
+**Correction:** `R2BJ_BOUNDED_CANONICAL_G1_DOCUMENTATION_INDEX_RECOVERY.md` records
+the exact docs-first predicate, current Factory status readback, required document
+locations, stale event/gate source, and no-direct-SQL/no-primary-mutation/no-external-runtime
+boundary. `DOCUMENTATION_INDEX.md`, `TASK_GRAPH.md`, `TRACKER.md`, `QA_GATES.md`,
+and `SECURITY_GATES.md` index the same current evidence.
+
+**Handoff requirement:** the fresh R2BJ branch must be opened as a Zeus-signed
+GitHub PR labeled `agent:zeus` against `main`. The PR body/Factory evidence must
+name exact base `b503ba3b57fd606956d0ebf925c83eda253bdcc5`, final head SHA,
+status-output path, validation output, no-merge, and no external runtime execution.
+Independent quality review remains required; this R2BJ worker does not self-approve,
+merge, deploy, change credentials, write direct SQL, mutate the primary checkout,
+or touch any runtime/external/trading path.
+
 ## Local documentary verification — non-approval
 
 At `2026-08-10T04:50:09-04:00`, the implementation-planner worker verified the project-local pack from the assigned worktree only. `git ls-files --error-unmatch` confirmed the 14 required G1 documents plus `G0_REPOSITORY_STRATEGY.md`, `REQUIREMENTS_TRACEABILITY.md`, `DATABASE_AND_RUNTIME_CONTRACT.md`, and `G1_REVIEW.md` are tracked. `DOCUMENTATION_INDEX.md` indexes required documents and records explicit validated/reviewed status. `G0_REPOSITORY_STRATEGY.md` records the Zeus-only source repo, `origin/main` reference, assigned branch/worktree policy, PR-first delivery, and predecessor linkage. This is implementation evidence, not an independent specification/security PASS.
