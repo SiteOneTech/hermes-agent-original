@@ -110,6 +110,12 @@ reviewed_source_sha: 2476e978c545e24b18ee48844b24eb8c58245ab4
 - Stale required-doc anomaly strings in historical events/tasks remain immutable audit history, but active project status must not re-present them as current required-doc readiness after configured-base rows are clean. The repair must use reviewed code/tests/PR/gates, not direct SQL cleanup.
 - Delivery is a Zeus-signed `agent:zeus` PR plus independent exact-SHA review. No merge, deploy, credential access, external connector, messaging operation, trading action, risk mutation, paper/live activation, self-approval, no-auto-merge bypass, or external runtime execution is authorized.
 
+## R2av current-origin G1 status projection verification security gate
+- R2av is limited to isolated current-origin Factory status verification and project-local evidence docs. It must not add or alter Agent Core ledger runtime/product code, provider clients, credential paths, messaging connectors, deployment behavior, trading/risk/paper/live behavior, external runtimes, primary checkout state, or direct Factory DB writes.
+- The exact current configured base for this verification is `origin/main` `af9fa27eaaaa52ef173f1578fb7f572ce52cebc6`, the R2au PR #61 merge, which contains repair commit `1afd37a61a8d21af393e393cb77083adb25b41c7`. Primary checkout HEAD `4eb87e4cd48105af05fe974cf1d493f0e1b57ae1` is rejected identity evidence only and must not be mutated.
+- Stale `reviewed=false` rows from the stale primary/runtime path or historical gate/event snapshots must remain audit evidence only and must not override current configured-base rows. Any future repair must use reviewed code/tests/PR/gates or approved Factory CLI control path, never direct SQL cleanup.
+- Delivery is a Zeus-signed `agent:zeus` PR plus independent exact-SHA quality review and QA Guardian evidence. No merge, deploy, credential access, external connector, messaging operation, trading action, risk mutation, paper/live activation, self-approval, no-auto-merge bypass, or external runtime execution is authorized.
+
 ## Scheduler gate
 - `agent_core.alpha_research.scheduler.enabled` is false absent explicit configuration.
 - Registration and each invocation call the contract §5 verifier without cache. Tests cover every false/missing/failed/expired/wrong-commit readiness component and prove no batch read/run follows `scheduler_not_ready`.
