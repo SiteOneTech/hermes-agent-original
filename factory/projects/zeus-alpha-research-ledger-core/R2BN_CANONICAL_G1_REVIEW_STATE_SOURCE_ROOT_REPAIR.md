@@ -12,7 +12,7 @@ base_sha: 9ebaa9e7b44c61bb871ca4da0a838c52e62666b2
 branch: factory/zeus-alpha-research-ledger-core/inc-018-r2bn-canonical-g1-review-state-s
 worktree: /home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-018-r2bn-canonical-g1-review-state-s
 run_id: run-1787046385-072b3cc6
-pr_url: pending_after_first_push
+pr_url: https://github.com/SiteOneTech/hermes-agent-original/pull/80
 ---
 
 # R2bn — canonical G1 review-state source-root repair
