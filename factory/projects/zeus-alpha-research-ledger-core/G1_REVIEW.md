@@ -460,6 +460,54 @@ final head SHA, status-output path, validation output, no-merge, no direct SQL,
 no primary mutation, no force-push/ref rewrite, and no external runtime
 execution. Independent quality review remains required.
 
+## Review round 20 — R2az non-destructive current-base G1 evidence recovery
+
+**Current-base identity captured before edits:** R2az uses assigned worktree
+`/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-017-r2az-non-destructive-current-bas`,
+branch `factory/zeus-alpha-research-ledger-core/inc-017-r2az-non-destructive-current-bas`,
+with local `HEAD`, `origin/main`, remote `refs/heads/main`, and merge-base all equal to
+`3b7bc91f2ee1ef603bb512d147c692568c1b465f` before documentation edits. The
+assigned remote branch was absent before the normal first push, so this delivery
+does not require or perform any force-push/ref rewrite of stale R2ai/R2ae/R2ac
+remote refs or PRs.
+
+**Canonical Factory status read-back:** the allowed status command
+`/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory status zeus-alpha-research-ledger-core --json`
+read Agent Core Postgres (`db_backend=agent_core_postgres`, `database=zeus_agent`) from the assigned worktree source and wrote
+`/tmp/r2az-status-before.json`. The active project status reports source-root
+provenance equal to the assigned worktree, `factory_status_delegated=false`,
+`reconciliation_anomalies=[]`, `reconciliation_projection_source=current_document_status`,
+and all 14 required G1 documents as `exists=true`, `committed=true`,
+`indexed=true`, `validated=true`, `reviewed=true`, `blocking=false` from
+`readiness_source=configured_base_ref`, base
+`3b7bc91f2ee1ef603bb512d147c692568c1b465f`, with stale primary checkout rejected.
+
+**Exact residual condition:** the current-base G1 document rows are clean, but
+recent audit/control-plane evidence still contains stale projections:
+`project_reconciled` events `197638`, `197637`, and `197635` list
+`unvalidated_required_docs`; dispatch-preflight event `197634` lists
+`missing_or_unindexed_docs`; and old blocked R2ai/R2ae rows still carry
+`metadata.blocker_source=structured_reconciliation_metadata` plus
+`metadata.reconciliation_anomaly/resolved_anomaly=unvalidated_required_docs`.
+R2ae also retains a historical merge-conflict integration failure; the separate
+blocked R2ac row is technical rework without a current `reconciliation_anomaly`.
+
+**Correction:** `R2AZ_NON_DESTRUCTIVE_CURRENT_BASE_G1_EVIDENCE_RECOVERY.md`
+records the exact current-base evidence deficit as stale event/task-level
+projection, not document content, while preserving all required G1 `reviewed`
+fields and PR #36/gate `794` provenance unchanged. This worker does not close or
+supersede old task rows because the hard DB-write allowlist permits only
+`factory status` and `factory gate record`; `factory gate record` cannot mutate
+task status.
+
+**Handoff requirement:** the fresh R2az branch must be opened as a Zeus-signed
+GitHub PR labeled `agent:zeus` against `main`. The PR body/Factory evidence must
+name exact source commit `3b7bc91f2ee1ef603bb512d147c692568c1b465f`, final head
+SHA, status readback path, validation output, no-merge, no direct SQL, no
+primary mutation, no force-push/ref rewrite, no stale PR mutation, and no
+external runtime execution. Independent exact-SHA quality review remains
+required; R2az does not authorize ALR-020/product dispatch.
+
 ## Local documentary verification — non-approval
 
 At `2026-08-10T04:50:09-04:00`, the implementation-planner worker verified the project-local pack from the assigned worktree only. `git ls-files --error-unmatch` confirmed the 14 required G1 documents plus `G0_REPOSITORY_STRATEGY.md`, `REQUIREMENTS_TRACEABILITY.md`, `DATABASE_AND_RUNTIME_CONTRACT.md`, and `G1_REVIEW.md` are tracked. `DOCUMENTATION_INDEX.md` indexes required documents and records explicit validated/reviewed status. `G0_REPOSITORY_STRATEGY.md` records the Zeus-only source repo, `origin/main` reference, assigned branch/worktree policy, PR-first delivery, and predecessor linkage. This is implementation evidence, not an independent specification/security PASS.
