@@ -6,6 +6,10 @@ import pytest
 
 from hermes_cli import factory_pg
 
+_ORIGINAL_RECONCILE_PROJECT = factory_pg.reconcile_project
+_BASE_CURRENT = "a" * 40
+_BASE_OLD = "b" * 40
+
 
 class FakeSql:
     def __init__(self) -> None:
@@ -13,6 +17,7 @@ class FakeSql:
         self.one_results: list[dict | None] = []
         self.statement_one_results: list[dict | None] = []
         self.rows_results: list[list[dict]] = []
+        self.json_query_results: list[list[dict]] = []
 
     def psql(self, sql, *, user=None, **_):
         self.statements.append(sql)
@@ -32,7 +37,7 @@ class FakeSql:
 
     def json_query(self, sql, *, user=None, **_):
         self.statements.append(sql)
-        return []
+        return self.json_query_results.pop(0) if self.json_query_results else []
 
     @staticmethod
     def quote_literal(value):
@@ -191,7 +196,7 @@ def test_mark_run_finished_review_success_requires_task_bound_gate(fake_sql, mon
     assert calls == []
     joined = "\n".join(fake_sql.statements)
     assert "SET status='failed'" in joined
-    assert "SET status='rework'" in joined
+    assert "SET status='review_ready'" in joined
     assert "SET status='done'" not in joined
     assert "review_success_without_task_bound_passed_gate" in joined
     assert "review_run_failed" in joined
@@ -220,7 +225,7 @@ def test_mark_run_finished_review_success_reworks_when_merge_fails(fake_sql, mon
     assert "Increment integration failed before terminal close" in joined
 
 
-def test_mark_run_finished_failed_review_with_wrapped_instruction_remains_rework(fake_sql, monkeypatch):
+def test_mark_run_finished_failed_review_runtime_failure_requeues_review(fake_sql, monkeypatch):
     calls: list[str] = []
 
     def integrate(task_id: str, *, actor: str, final_status: str):
@@ -243,7 +248,7 @@ def test_mark_run_finished_failed_review_with_wrapped_instruction_remains_rework
     assert calls == []
     joined = "\n".join(fake_sql.statements)
     assert "SET status='failed'" in joined
-    assert "SET status='rework'" in joined
+    assert "SET status='review_ready'" in joined
     assert "SET status='done'" not in joined
     assert "review_run_failed" in joined
     assert "HTTP 429" in joined
@@ -275,10 +280,141 @@ def test_mark_run_finished_review_429_log_cannot_close_even_when_exit_zero(fake_
     assert calls == []
     joined = "\n".join(fake_sql.statements)
     assert "SET status='failed'" in joined
-    assert "SET status='rework'" in joined
+    assert "SET status='review_ready'" in joined
     assert "SET status='done'" not in joined
     assert "review_output_contains_runtime_failure" in joined
     assert "RateLimitError" in joined
+
+
+def test_reconcile_project_recovers_false_terminalized_review_run(fake_sql, monkeypatch):
+    project = {"project_id": "demo", "status": "active", "metadata": {"repo_strategy": {"repo_scope": "zeus_only", "work_intent": "add_functionality", "primary_repo": "demo/repo", "primary_repo_path": "/tmp/demo", "primary_repo_remote": "https://example.test/demo.git", "base_branch": "main", "branch_prefix": "factory/demo", "worktree_policy": "isolated"}}}
+    task = {"project_id": "demo", "task_id": "task-1", "status": "done", "title": "Reviewed task", "phase": "documentation", "owner_profile": "codex-builder", "reviewer_profile": "quality-reviewer", "metadata": {}}
+    fake_sql.json_query_results = [[
+        {
+            "project_id": "demo",
+            "lane_id": "lane",
+            "task_id": "task-1",
+            "run_id": "run-review",
+            "task_status": "done",
+            "increment_base_commit_after": _BASE_CURRENT,
+            "output_summary": "STATE: DONE\nRateLimitError [HTTP 429]\nAPI call failed after 3 retries\nMessages:       1 (1 user, 0 tool calls)",
+            "has_task_bound_passed_review_gate": False,
+        }
+    ]]
+    monkeypatch.setattr(factory_pg, "_configured_base_ref_readback", lambda project: {"accepted": True, "base_commit": _BASE_CURRENT})
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: [task])
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "reconciliation_findings", lambda *args, **kwargs: [])
+    monkeypatch.setattr(factory_pg, "ensure_reconciliation_tasks", lambda *args, **kwargs: [])
+    monkeypatch.setattr(factory_pg, "cancel_resolved_reconciliation_tasks", lambda *args, **kwargs: [])
+    monkeypatch.setattr(factory_pg, "_stale_g1_projection_metadata_keys", lambda *args, **kwargs: [])
+
+    result = _ORIGINAL_RECONCILE_PROJECT("demo")
+
+    assert result["false_review_terminalization_recoveries"] == 1
+    joined = "\n".join(fake_sql.statements)
+    assert "SET status='review_ready'" in joined
+    assert "false_review_terminalization_recovered" in joined
+    assert "review_output_contains_runtime_failure" in joined
+    assert "SET status='done'" not in joined
+
+
+def test_false_terminal_review_recovery_is_bounded_to_current_base(fake_sql, monkeypatch):
+    project = {"project_id": "demo", "metadata": {}}
+    fake_sql.json_query_results = [[
+        {
+            "project_id": "demo",
+            "lane_id": "lane",
+            "task_id": "task-old",
+            "run_id": "run-old-review",
+            "task_status": "done",
+            "increment_base_commit_after": _BASE_OLD,
+            "output_summary": "STATE: DONE\nRateLimitError [HTTP 429]",
+            "has_task_bound_passed_review_gate": False,
+        }
+    ]]
+    monkeypatch.setattr(factory_pg, "_configured_base_ref_readback", lambda project: {"accepted": True, "base_commit": _BASE_CURRENT})
+
+    recovered = factory_pg._recover_false_terminalized_review_runs("demo", project=project)
+
+    assert recovered == []
+    joined = "\n".join(fake_sql.statements)
+    assert "SET status='review_ready'" not in joined
+
+
+def test_reconcile_project_revokes_unscoped_out_of_scope_false_terminal_recovery(fake_sql, monkeypatch):
+    project = {"project_id": "demo", "status": "active", "metadata": {}}
+    task = {"project_id": "demo", "task_id": "task-old", "status": "review_ready", "title": "Historical task", "phase": "documentation", "metadata": {"false_review_terminalization_recovered": True}}
+    fake_sql.json_query_results = [
+        [],
+        [],
+        [
+            {
+                "project_id": "demo",
+                "lane_id": "lane",
+                "task_id": "task-old",
+                "run_id": "run-old-review",
+                "previous_status": "done",
+                "increment_base_commit_after": _BASE_OLD,
+                "result_summary": "False review terminalization recovered by Factory reconcile",
+            }
+        ],
+    ]
+    monkeypatch.setattr(factory_pg, "_configured_base_ref_readback", lambda project: {"accepted": True, "base_commit": _BASE_CURRENT})
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: [task])
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "reconciliation_findings", lambda *args, **kwargs: [])
+    monkeypatch.setattr(factory_pg, "ensure_reconciliation_tasks", lambda *args, **kwargs: [])
+    monkeypatch.setattr(factory_pg, "cancel_resolved_reconciliation_tasks", lambda *args, **kwargs: [])
+    monkeypatch.setattr(factory_pg, "_stale_g1_projection_metadata_keys", lambda *args, **kwargs: [])
+
+    result = _ORIGINAL_RECONCILE_PROJECT("demo")
+
+    assert result["false_review_terminalization_recovery_revocations"] == 1
+    joined = "\n".join(fake_sql.statements)
+    assert "false_review_terminalization_recovery_revoked" in joined
+    assert "SET status='done'" in joined
+    assert _BASE_OLD in joined
+    assert _BASE_CURRENT in joined
+
+
+def test_reconcile_project_scopes_current_unscoped_false_terminal_recovery(fake_sql, monkeypatch):
+    project = {"project_id": "demo", "status": "active", "metadata": {}}
+    task = {"project_id": "demo", "task_id": "task-current", "status": "review_ready", "title": "Current false review", "phase": "documentation", "metadata": {"false_review_terminalization_recovered": True}}
+    fake_sql.json_query_results = [
+        [],
+        [
+            {
+                "project_id": "demo",
+                "lane_id": "lane",
+                "task_id": "task-current",
+                "run_id": "run-current-review",
+                "increment_base_commit_after": _BASE_CURRENT,
+            }
+        ],
+        [],
+    ]
+    monkeypatch.setattr(factory_pg, "_configured_base_ref_readback", lambda project: {"accepted": True, "base_commit": _BASE_CURRENT})
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: [task])
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "reconciliation_findings", lambda *args, **kwargs: [])
+    monkeypatch.setattr(factory_pg, "ensure_reconciliation_tasks", lambda *args, **kwargs: [])
+    monkeypatch.setattr(factory_pg, "cancel_resolved_reconciliation_tasks", lambda *args, **kwargs: [])
+    monkeypatch.setattr(factory_pg, "_stale_g1_projection_metadata_keys", lambda *args, **kwargs: [])
+
+    result = _ORIGINAL_RECONCILE_PROJECT("demo")
+
+    assert result["false_review_terminalization_recovery_scopes"] == 1
+    joined = "\n".join(fake_sql.statements)
+    assert "false_review_terminalization_recovery_scoped" in joined
+    assert "current_configured_base_terminalization" in joined
+    assert _BASE_CURRENT in joined
 
 
 def test_passed_task_gate_requires_increment_integration(fake_sql, monkeypatch):

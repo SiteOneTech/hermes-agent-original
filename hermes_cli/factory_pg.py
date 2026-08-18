@@ -4581,10 +4581,13 @@ def _next_runnable_task(
 
 def reconcile_project(project_id: str) -> dict[str, Any]:
     ensure_runtime_schema()
-    tasks = _tasks(project_id)
     project = _project(project_id)
     if not project:
         raise ValueError(f"Factory project not found: {project_id}")
+    false_review_recoveries = _recover_false_terminalized_review_runs(project_id, project=project)
+    false_review_scopes = _scope_unscoped_current_false_review_terminalization_recoveries(project_id, project=project)
+    false_review_revocations = _revoke_unscoped_false_review_terminalization_recoveries(project_id, project=project)
+    tasks = _tasks(project_id)
     metadata = _metadata(project)
     pending_gates = _active_pending_gates(project_id)
     latest_gates = _latest_gate_rows(project_id)
@@ -4632,6 +4635,12 @@ def reconcile_project(project_id: str) -> dict[str, Any]:
     finding_codes = [str(finding.get("code")) for finding in findings]
     force_autonomy_off = _project_reconcile_forces_autonomy_off(str(project.get("status") or ""), new_status)
     reconcile_metadata = {'reconciliation_required': bool(findings), 'reconciliation_anomalies': finding_codes}
+    if false_review_recoveries:
+        reconcile_metadata['false_review_terminalization_recoveries'] = false_review_recoveries
+    if false_review_scopes:
+        reconcile_metadata['false_review_terminalization_recovery_scopes'] = false_review_scopes
+    if false_review_revocations:
+        reconcile_metadata['false_review_terminalization_recovery_revocations'] = false_review_revocations
     cleared_metadata_keys = _stale_g1_projection_metadata_keys(project, finding_codes, metadata)
     if cleared_metadata_keys:
         reconcile_metadata['cleared_project_metadata_keys'] = cleared_metadata_keys
@@ -4657,7 +4666,7 @@ def reconcile_project(project_id: str) -> dict[str, Any]:
             updated_at=now()
         WHERE project_id={_q(project_id)};
         INSERT INTO factory.events(project_id, actor, event_type, message, metadata)
-        VALUES ({_q(project_id)}, 'factory-reconciler', 'project_reconciled', {_q(f'Project reconciled as {new_status}')}, {_j({'task_counts': counts, 'pending_gates': len(pending_gates), 'active_runs': len(active_runs), 'anomalies': finding_codes, 'reconciliation_tasks_created': created_reconciliation_tasks, 'reconciliation_tasks_cancelled': cancelled_reconciliation_tasks, 'autonomy_disabled': force_autonomy_off, 'cleared_project_metadata_keys': cleared_metadata_keys})});
+        VALUES ({_q(project_id)}, 'factory-reconciler', 'project_reconciled', {_q(f'Project reconciled as {new_status}')}, {_j({'task_counts': counts, 'pending_gates': len(pending_gates), 'active_runs': len(active_runs), 'anomalies': finding_codes, 'reconciliation_tasks_created': created_reconciliation_tasks, 'reconciliation_tasks_cancelled': cancelled_reconciliation_tasks, 'autonomy_disabled': force_autonomy_off, 'cleared_project_metadata_keys': cleared_metadata_keys, 'false_review_terminalization_recoveries': false_review_recoveries, 'false_review_terminalization_recovery_scopes': false_review_scopes, 'false_review_terminalization_recovery_revocations': false_review_revocations})});
         """,
         user=_user(),
     )
@@ -4674,6 +4683,9 @@ def reconcile_project(project_id: str) -> dict[str, Any]:
         "anomalies": finding_codes,
         "reconciliation_tasks_created": len(created_reconciliation_tasks),
         "reconciliation_tasks_cancelled": len(cancelled_reconciliation_tasks),
+        "false_review_terminalization_recoveries": len(false_review_recoveries),
+        "false_review_terminalization_recovery_scopes": len(false_review_scopes),
+        "false_review_terminalization_recovery_revocations": len(false_review_revocations),
         "cleared_project_metadata_keys": cleared_metadata_keys,
         "auto_resumed_project_id": auto_resumed.get("project_id") if auto_resumed else None,
     }
@@ -6861,6 +6873,15 @@ def _review_runtime_failure_reason(output_summary: str) -> str | None:
     return None
 
 
+def _review_terminal_success_blocker(output_summary: str, *, has_task_bound_passed_gate: bool) -> str | None:
+    runtime_reason = _review_runtime_failure_reason(output_summary)
+    if runtime_reason:
+        return runtime_reason
+    if not has_task_bound_passed_gate:
+        return "review_success_without_task_bound_passed_gate"
+    return None
+
+
 def _task_bound_passed_review_gate(task_id: str) -> dict[str, Any] | None:
     tid = str(task_id or "").strip()
     if not tid:
@@ -6882,12 +6903,333 @@ def _task_bound_passed_review_gate(task_id: str) -> dict[str, Any] | None:
 
 
 def _review_positive_terminal_blocker(task_id: str, output_summary: str) -> str | None:
-    runtime_reason = _review_runtime_failure_reason(output_summary)
-    if runtime_reason:
-        return runtime_reason
-    if not _task_bound_passed_review_gate(task_id):
-        return "review_success_without_task_bound_passed_gate"
-    return None
+    return _review_terminal_success_blocker(
+        output_summary,
+        has_task_bound_passed_gate=bool(_task_bound_passed_review_gate(task_id)),
+    )
+
+
+def _truthy_database_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value == 1
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "t", "true", "yes", "y"}
+    return False
+
+
+def _current_configured_base_commit(project: dict[str, Any] | None) -> str:
+    if not project:
+        return ""
+    base_summary = _configured_base_ref_readback(project)
+    if not base_summary.get("accepted"):
+        return ""
+    base_commit = str(base_summary.get("base_commit") or "").strip()
+    return base_commit if re.fullmatch(r"[0-9a-fA-F]{40}", base_commit) else ""
+
+
+def _recover_false_terminalized_review_runs(project_id: str, *, project: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Reopen tasks that a stale monitor falsely closed from invalid review output.
+
+    ``mark_run_finished`` rejects successful review terminalization when the
+    reviewer output is empty/provider-failed or when no same-task review gate was
+    recorded. A long-lived monitor may still be running older code when a fix is
+    first delivered, so reconcile/resolve-state must also repair any already
+    persisted false terminal states before dispatching later work.
+    """
+
+    pid = str(project_id or "").strip()
+    if not pid:
+        return []
+    project_row = project if project is not None else (_project(pid) or {})
+    current_base_commit = _current_configured_base_commit(project_row)
+    if not current_base_commit:
+        return []
+    gate_types = ",".join(_q(gate_type) for gate_type in _TASK_BOUND_REVIEW_GATE_TYPES)
+    positive_statuses = ",".join(_q(status) for status in POSITIVE_TERMINAL_TASK_STATUSES)
+    candidates = _normalize_rows(sql.json_query(
+        f"""
+        WITH candidates AS (
+            SELECT r.project_id,
+                   t.lane_id,
+                   r.task_id,
+                   r.run_id,
+                   t.status AS task_status,
+                   t.metadata->>'increment_base_commit_after' AS increment_base_commit_after,
+                   r.output_summary,
+                   EXISTS (
+                       SELECT 1
+                       FROM factory.gates g
+                       WHERE g.task_id=r.task_id
+                         AND g.status='passed'
+                         AND g.gate_type IN ({gate_types})
+                   ) AS has_task_bound_passed_review_gate
+            FROM factory.task_runs r
+            JOIN factory.tasks t ON t.task_id=r.task_id AND t.project_id=r.project_id
+            WHERE r.project_id={_q(pid)}
+              AND COALESCE(r.metadata->>'run_type', 'implementation')='review'
+              AND r.status='succeeded'
+              AND COALESCE(r.exit_code, 0)=0
+              AND t.status IN ({positive_statuses})
+              AND COALESCE((t.metadata->>'false_review_terminalization_recovered')::boolean, false) IS NOT TRUE
+            ORDER BY r.finished_at DESC NULLS LAST, r.started_at DESC NULLS LAST, r.run_id DESC
+            LIMIT 1
+        )
+        SELECT COALESCE(jsonb_agg(to_jsonb(candidates)), '[]'::jsonb)::text FROM candidates;
+        """,
+        user=_user(),
+    ) or [])
+    recovered: list[dict[str, Any]] = []
+    for row in candidates:
+        task_id = str(row.get("task_id") or "").strip()
+        run_id = str(row.get("run_id") or "").strip()
+        if not task_id or not run_id:
+            continue
+        has_gate = _truthy_database_bool(row.get("has_task_bound_passed_review_gate"))
+        increment_base_after = str(row.get("increment_base_commit_after") or "").strip()
+        if increment_base_after != current_base_commit:
+            continue
+        reason = _review_terminal_success_blocker(str(row.get("output_summary") or ""), has_task_bound_passed_gate=has_gate)
+        if not reason:
+            continue
+        previous_status = str(row.get("task_status") or "").strip() or "unknown"
+        note = (
+            "False review terminalization recovered by Factory reconcile: "
+            + reason
+            + ". Review reset to review_ready; a retry must produce a task-bound passed Factory review gate before source acceptance."
+        )
+        existing_summary = str(row.get("output_summary") or "")
+        recovered_summary = (existing_summary.rstrip() + "\n\n" if existing_summary.strip() else "") + note
+        metadata = {
+            "false_review_terminalization_recovered": True,
+            "false_review_terminalization_reason": reason,
+            "false_review_terminalization_run_id": run_id,
+            "false_review_terminalization_previous_status": previous_status,
+            "false_review_terminalization_recovery_base_commit_after": current_base_commit,
+            "false_review_terminalization_recovery_scope": "current_configured_base_terminalization",
+            "review_requeued_by": "factory-reconciler",
+            "requires_task_bound_passed_review_gate": True,
+        }
+        event_metadata = {
+            **metadata,
+            "run_id": run_id,
+            "task_id": task_id,
+            "runtime_contract": "review_success_requires_nonempty_runtime_output_and_task_bound_passed_gate",
+        }
+        sql.psql(
+            f"""
+            UPDATE factory.task_runs
+            SET status='failed',
+                exit_code=1,
+                output_summary={_q(recovered_summary)},
+                metadata=metadata || {_j(metadata)},
+                heartbeat_at=now()
+            WHERE run_id={_q(run_id)};
+            UPDATE factory.tasks
+            SET status='review_ready',
+                evidence_status=CASE WHEN evidence_status='missing' THEN 'present' ELSE evidence_status END,
+                result_summary={_q(recovered_summary)},
+                finished_at=NULL,
+                claimed_by=NULL,
+                claimed_at=NULL,
+                lease_until=NULL,
+                metadata=metadata || {_j(metadata)},
+                updated_at=now()
+            WHERE task_id={_q(task_id)}
+              AND project_id={_q(pid)}
+              AND status IN ({positive_statuses});
+            INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
+            VALUES ({_q(pid)}, {_q(row.get('lane_id'))}, {_q(task_id)}, 'factory-reconciler', 'false_review_terminalization_recovered', {_q(f'Reopened false terminal review run {run_id}; task reset to review_ready')}, {_j(event_metadata)});
+            """,
+            user=_user(),
+        )
+        recovered.append({
+            "project_id": pid,
+            "task_id": task_id,
+            "run_id": run_id,
+            "reason": reason,
+            "previous_status": previous_status,
+            "current_base_commit": current_base_commit,
+            "new_status": "review_ready",
+        })
+    return recovered
+
+
+def _scope_unscoped_current_false_review_terminalization_recoveries(project_id: str, *, project: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Add the current-base scope marker to previously recovered live rows."""
+
+    pid = str(project_id or "").strip()
+    if not pid:
+        return []
+    project_row = project if project is not None else (_project(pid) or {})
+    current_base_commit = _current_configured_base_commit(project_row)
+    if not current_base_commit:
+        return []
+    rows = _normalize_rows(sql.json_query(
+        f"""
+        WITH candidates AS (
+            SELECT t.project_id,
+                   t.lane_id,
+                   t.task_id,
+                   t.metadata->>'false_review_terminalization_run_id' AS run_id,
+                   t.metadata->>'increment_base_commit_after' AS increment_base_commit_after
+            FROM factory.tasks t
+            WHERE t.project_id={_q(pid)}
+              AND t.status='review_ready'
+              AND COALESCE((t.metadata->>'false_review_terminalization_recovered')::boolean, false) IS TRUE
+              AND NOT (t.metadata ? 'false_review_terminalization_recovery_base_commit_after')
+              AND COALESCE(t.metadata->>'review_requeued_by', '')='factory-reconciler'
+              AND COALESCE(t.metadata->>'increment_base_commit_after', '')={_q(current_base_commit)}
+        )
+        SELECT COALESCE(jsonb_agg(to_jsonb(candidates)), '[]'::jsonb)::text FROM candidates;
+        """,
+        user=_user(),
+    ) or [])
+    scoped: list[dict[str, Any]] = []
+    metadata = {
+        "false_review_terminalization_recovery_base_commit_after": current_base_commit,
+        "false_review_terminalization_recovery_scope": "current_configured_base_terminalization",
+    }
+    for row in rows:
+        task_id = str(row.get("task_id") or "").strip()
+        run_id = str(row.get("run_id") or "").strip()
+        if not task_id or not run_id:
+            continue
+        sql.psql(
+            f"""
+            UPDATE factory.task_runs
+            SET metadata=metadata || {_j(metadata)},
+                heartbeat_at=now()
+            WHERE run_id={_q(run_id)};
+            UPDATE factory.tasks
+            SET metadata=metadata || {_j(metadata)},
+                updated_at=now()
+            WHERE task_id={_q(task_id)}
+              AND project_id={_q(pid)}
+              AND status='review_ready';
+            INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
+            VALUES ({_q(pid)}, {_q(row.get('lane_id'))}, {_q(task_id)}, 'factory-reconciler', 'false_review_terminalization_recovery_scoped', {_q(f'Scoped current-base false review recovery for task {task_id}')}, {_j({**metadata, 'run_id': run_id, 'task_id': task_id})});
+            """,
+            user=_user(),
+        )
+        scoped.append({
+            "project_id": pid,
+            "task_id": task_id,
+            "run_id": run_id,
+            "current_base_commit": current_base_commit,
+            "scope": "current_configured_base_terminalization",
+        })
+    return scoped
+
+
+def _revoke_unscoped_false_review_terminalization_recoveries(project_id: str, *, project: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Undo legacy unscoped retrospective recoveries outside the current base.
+
+    The bounded recovery rule is intentionally current-base only. Rows written by
+    older/unscoped repair logic lack ``false_review_terminalization_recovery_base_commit_after``;
+    if they point at a historical integrated base, restore the prior terminal
+    status so a single resolve-state action cannot resurrect old increments.
+    """
+
+    pid = str(project_id or "").strip()
+    if not pid:
+        return []
+    project_row = project if project is not None else (_project(pid) or {})
+    current_base_commit = _current_configured_base_commit(project_row)
+    if not current_base_commit:
+        return []
+    positive_statuses = ",".join(_q(status) for status in POSITIVE_TERMINAL_TASK_STATUSES)
+    rows = _normalize_rows(sql.json_query(
+        f"""
+        WITH candidates AS (
+            SELECT t.project_id,
+                   t.lane_id,
+                   t.task_id,
+                   t.status AS task_status,
+                   t.metadata->>'false_review_terminalization_run_id' AS run_id,
+                   t.metadata->>'false_review_terminalization_previous_status' AS previous_status,
+                   t.metadata->>'increment_base_commit_after' AS increment_base_commit_after,
+                   t.result_summary
+            FROM factory.tasks t
+            WHERE t.project_id={_q(pid)}
+              AND t.status='review_ready'
+              AND COALESCE((t.metadata->>'false_review_terminalization_recovered')::boolean, false) IS TRUE
+              AND NOT (t.metadata ? 'false_review_terminalization_recovery_base_commit_after')
+              AND COALESCE(t.metadata->>'review_requeued_by', '')='factory-reconciler'
+              AND t.metadata->>'false_review_terminalization_previous_status' IN ({positive_statuses})
+              AND COALESCE(t.metadata->>'increment_base_commit_after', '')<>{_q(current_base_commit)}
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM factory.task_runs active_run
+                  WHERE active_run.task_id=t.task_id
+                    AND active_run.project_id=t.project_id
+                    AND active_run.status IN ('queued','running')
+              )
+        )
+        SELECT COALESCE(jsonb_agg(to_jsonb(candidates)), '[]'::jsonb)::text FROM candidates;
+        """,
+        user=_user(),
+    ) or [])
+    revoked: list[dict[str, Any]] = []
+    for row in rows:
+        task_id = str(row.get("task_id") or "").strip()
+        run_id = str(row.get("run_id") or "").strip()
+        previous_status = str(row.get("previous_status") or "").strip().lower()
+        increment_base_after = str(row.get("increment_base_commit_after") or "").strip()
+        if not task_id or not run_id or previous_status not in POSITIVE_TERMINAL_TASK_STATUSES:
+            continue
+        if increment_base_after == current_base_commit:
+            continue
+        note = (
+            "Unscoped false-review recovery revoked by Factory reconcile: "
+            f"increment base {increment_base_after or 'unknown'} is not current configured base {current_base_commit}. "
+            "Historical terminal state restored; current-base false terminalizations remain fail-closed."
+        )
+        existing_summary = str(row.get("result_summary") or "")
+        restored_summary = (existing_summary.rstrip() + "\n\n" if existing_summary.strip() else "") + note
+        metadata = {
+            "false_review_terminalization_recovery_revoked": True,
+            "false_review_terminalization_recovery_revoked_by": "factory-reconciler",
+            "false_review_terminalization_recovery_revoked_reason": "unscoped_recovery_not_current_configured_base",
+            "false_review_terminalization_recovery_revoked_base_commit_after": increment_base_after,
+            "false_review_terminalization_recovery_current_base_commit": current_base_commit,
+        }
+        sql.psql(
+            f"""
+            UPDATE factory.task_runs
+            SET status='succeeded',
+                exit_code=0,
+                metadata=metadata || {_j(metadata)},
+                heartbeat_at=now()
+            WHERE run_id={_q(run_id)};
+            UPDATE factory.tasks
+            SET status={_q(previous_status)},
+                result_summary={_q(restored_summary)},
+                finished_at=COALESCE(finished_at, now()),
+                claimed_by=NULL,
+                claimed_at=NULL,
+                lease_until=NULL,
+                metadata=metadata || {_j(metadata)},
+                updated_at=now()
+            WHERE task_id={_q(task_id)}
+              AND project_id={_q(pid)}
+              AND status='review_ready';
+            INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
+            VALUES ({_q(pid)}, {_q(row.get('lane_id'))}, {_q(task_id)}, 'factory-reconciler', 'false_review_terminalization_recovery_revoked', {_q(f'Restored historical terminal task {task_id} after unscoped false-review recovery')}, {_j(metadata)});
+            """,
+            user=_user(),
+        )
+        revoked.append({
+            "project_id": pid,
+            "task_id": task_id,
+            "run_id": run_id,
+            "previous_status": previous_status,
+            "increment_base_commit_after": increment_base_after,
+            "current_base_commit": current_base_commit,
+            "restored_status": previous_status,
+        })
+    return revoked
 
 
 def mark_run_finished(run_id: str, *, exit_code: int, output_summary: str = "") -> None:
@@ -6897,11 +7239,13 @@ def mark_run_finished(run_id: str, *, exit_code: int, output_summary: str = "") 
     metadata_value = run_row.get("metadata")
     metadata: dict[str, Any] = metadata_value if isinstance(metadata_value, dict) else {}
     run_type = str(metadata.get("run_type") or "implementation")
+    review_requeue_reason = _review_runtime_failure_reason(output_summary) if run_type == "review" and effective_exit_code != 0 else None
     if run_type == "review" and effective_exit_code == 0:
         task_id = str(run_row.get("task_id") or "").strip()
         terminal_blocker = _review_positive_terminal_blocker(task_id, output_summary)
         if terminal_blocker:
             effective_exit_code = 1
+            review_requeue_reason = terminal_blocker
             output_summary = (
                 (output_summary.rstrip() + "\n\n" if output_summary.strip() else "")
                 + "Review terminal success rejected: "
@@ -6918,7 +7262,7 @@ def mark_run_finished(run_id: str, *, exit_code: int, output_summary: str = "") 
                 if integration_evidence.get("increment_integration_required") is not False:
                     output_summary = (output_summary.rstrip() + "\n\n" if output_summary.strip() else "") + "Increment integration completed: " + str(integration_evidence)
     if run_type == "review":
-        status_value = "done" if effective_exit_code == 0 else "rework"
+        status_value = "done" if effective_exit_code == 0 else ("review_ready" if review_requeue_reason else "rework")
         evidence_status = "present"
     else:
         status_value = "review_ready" if effective_exit_code == 0 else "blocked"
@@ -6947,6 +7291,8 @@ def mark_run_finished(run_id: str, *, exit_code: int, output_summary: str = "") 
                 "task_status": status_value,
                 "failure_summary_tail": output_summary[-2000:],
             }
+            if review_requeue_reason:
+                audit_metadata["review_requeue_reason"] = review_requeue_reason
             sql.psql(
                 f"""
                 INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
