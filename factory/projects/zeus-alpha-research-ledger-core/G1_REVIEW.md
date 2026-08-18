@@ -414,6 +414,52 @@ name exact source commit `fa24950a228f28d5106ee2125d42045e872f9504`, final head 
 status before/after paths, resolve-state path, validation output, no-merge, no direct SQL,
 no primary mutation, and no external runtime execution. Independent quality review remains required.
 
+## Review round 19 — R2ap PR #72 residual G1 task metadata reconciliation
+
+**Current-base identity captured before edits:** R2ap-PR72 uses assigned worktree
+`/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-001-r2ap-reconcile-residual-g1-task`,
+branch `factory/zeus-alpha-research-ledger-core/inc-001-r2ap-reconcile-residual-g1-task`,
+with local `HEAD` and `origin/main` equal to
+`c31e937111bba64e478d3c319e896774bf09e40e` before documentation edits.
+
+**Canonical Factory status read-back:** the approved status command
+`/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory status zeus-alpha-research-ledger-core --json`
+read Agent Core Postgres (`db_backend=agent_core_postgres`, `database=zeus_agent`) from the assigned worktree source and wrote
+`/tmp/r2ap-pr72-status-before.json` (2,835,397 bytes). The active project status
+reports source-root provenance equal to the assigned worktree,
+`factory_status_delegated=false`, `reconciliation_anomalies=[]`,
+`reconciliation_projection_source=current_document_status`, and all 14 required
+G1 documents as `exists=true`, `committed=true`, `indexed=true`, `validated=true`,
+`reviewed=true`, `blocking=false` from `readiness_source=configured_base_ref`,
+base `c31e937111bba64e478d3c319e896774bf09e40e`, with stale primary checkout
+`4eb87e4cd48105af05fe974cf1d493f0e1b57ae1` rejected.
+
+**Exact PR #72 read-back:** GitHub reports PR #72 open, non-draft, labeled
+`agent:zeus`, clean, base `main` / `c31e937111bba64e478d3c319e896774bf09e40e`,
+head `3311b82ee1a29043039003e94582509bb8b89895`, and docs-only under
+`factory/projects/zeus-alpha-research-ledger-core/`. The PR #72 repair task
+already has Factory gates `906` (implementation passed) and `907` (security
+passed).
+
+**Residual source and fail-closed result:** the remaining
+`unvalidated_required_docs` source is stale task-level metadata on blocked R2ai
+and R2ae rows (`blocker_source=structured_reconciliation_metadata`,
+`reconciliation_anomaly/resolved_anomaly=unvalidated_required_docs`), not current
+G1 document rows and not PR #72's candidate content. R2ae also retains a
+historical merge-conflict integration failure. This worker did not close or
+supersede those old rows because the hard DB-write allowlist for the run permits
+only `factory status` and `factory gate record`; `factory gate record` cannot
+change task status, while `factory task close` is a separate subcommand outside
+scope. The stale rows remain fail-closed until a separately authorized canonical
+closure/reconciler path runs.
+
+**Handoff requirement:** this R2ap residual reconciliation branch must be
+delivered as a Zeus-signed GitHub PR labeled `agent:zeus` against `main`. The PR
+body/Factory evidence must name exact base `c31e937111bba64e478d3c319e896774bf09e40e`,
+final head SHA, status-output path, validation output, no-merge, no direct SQL,
+no primary mutation, no force-push/ref rewrite, and no external runtime
+execution. Independent quality review remains required.
+
 ## Local documentary verification — non-approval
 
 At `2026-08-10T04:50:09-04:00`, the implementation-planner worker verified the project-local pack from the assigned worktree only. `git ls-files --error-unmatch` confirmed the 14 required G1 documents plus `G0_REPOSITORY_STRATEGY.md`, `REQUIREMENTS_TRACEABILITY.md`, `DATABASE_AND_RUNTIME_CONTRACT.md`, and `G1_REVIEW.md` are tracked. `DOCUMENTATION_INDEX.md` indexes required documents and records explicit validated/reviewed status. `G0_REPOSITORY_STRATEGY.md` records the Zeus-only source repo, `origin/main` reference, assigned branch/worktree policy, PR-first delivery, and predecessor linkage. This is implementation evidence, not an independent specification/security PASS.
