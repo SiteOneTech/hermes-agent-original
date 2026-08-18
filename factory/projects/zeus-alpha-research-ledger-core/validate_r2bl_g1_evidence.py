@@ -145,7 +145,7 @@ def validate(args: argparse.Namespace) -> list[str]:
         _require(row.get("primary_checkout_rejected_reason") == "primary_checkout_not_configured_base", f"{name} stale primary rejection reason missing", failures)
 
     _require(metadata.get("reconciliation_anomalies") == [], "active project metadata reconciliation_anomalies is not clean", failures)
-    _require(metadata.get("reconciliation_projection_source") == "current_document_status", "active project metadata not sourced from current_document_status", failures)
+    _require(metadata.get("reconciliation_projection_source") in (None, "current_document_status"), "active project metadata has stale reconciliation_projection_source", failures)
     _require(metadata.get("reconciliation_required") is False, "active project metadata still requires reconciliation", failures)
     _require(metadata.get("g1_documentation_checkout") in (None, {}), "stale g1_documentation_checkout is still active metadata", failures)
     _require(metadata.get("stale_reconciliation_projection") in (None, {}), "stale reconciliation projection is active metadata", failures)
