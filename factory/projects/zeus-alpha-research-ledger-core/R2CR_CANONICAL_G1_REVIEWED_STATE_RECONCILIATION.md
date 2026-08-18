@@ -12,7 +12,7 @@ base_sha: 0db9bed7ed9e8ec4dbefda41f95a335ab82fbbc0
 branch: factory/zeus-alpha-research-ledger-core/inc-017-r2cr-canonical-g1-reviewed-state
 worktree: /home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-017-r2cr-canonical-g1-reviewed-state
 run_id: run-1787049536-cdce53bc
-pr_url: pending_after_first_push
+pr_url: https://github.com/SiteOneTech/hermes-agent-original/pull/81
 canonical_status_json: /tmp/r2cr-status-before.json
 canonical_status_bytes: 3079912
 canonical_status_command: /home/jean/Projects/hermes-agent-original/venv/bin/hermes factory status zeus-alpha-research-ledger-core --json
@@ -188,11 +188,10 @@ recording all of these facts together:
 
 ## PR-first handoff
 
-R2cr must be delivered by a normal Zeus-signed, non-draft `agent:zeus` PR from
-branch
-`factory/zeus-alpha-research-ledger-core/inc-017-r2cr-canonical-g1-reviewed-state`.
+R2cr is delivered by a normal Zeus-signed, non-draft `agent:zeus` PR from branch
+`factory/zeus-alpha-research-ledger-core/inc-017-r2cr-canonical-g1-reviewed-state`:
+`https://github.com/SiteOneTech/hermes-agent-original/pull/81`.
 
-The PR URL is recorded after the first push because GitHub assigns the PR number.
 The exact final PR head SHA and independent review gate are recorded in the PR
 body and Factory gate notes after the final push, because a commit cannot contain
 its own immutable SHA or a future gate id.
