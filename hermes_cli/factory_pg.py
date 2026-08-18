@@ -270,6 +270,14 @@ TERMINAL_PROJECT_STATUSES = {
     factory_contracts.ProjectStatus.SUPERSEDED.value,
     "closed",
 }
+TECHNICAL_HOLD_METADATA_KEYS = (
+    "technical_hold",
+    "technical_hold_kind",
+    "technical_hold_reason",
+    "technical_hold_by",
+    "technical_hold_at",
+    "reactivation_policy",
+)
 RESUME_RUNNABLE_TASK_STATUSES = factory_contracts.RUNNABLE_TASK_STATUSES | {"ready", "todo"}
 _UNSAFE_FACTORY_REF_CHARS = re.compile(r"[\x00-\x20\x7f~^:?*\[\\]")
 _FACTORY_PSEUDO_REFS = {"HEAD", "FETCH_HEAD", "ORIG_HEAD", "MERGE_HEAD"}
@@ -2614,14 +2622,76 @@ def _g1_required_status_rows_ready(project: dict[str, Any], statuses: list[Any])
     return bool(g1_rows) and not any(bool(row.get("blocking")) for row in g1_rows)
 
 
-def _project_status_effective_reconciliation_projection(project: dict[str, Any]) -> None:
+def _technical_hold_recovery_task_id(metadata: dict[str, Any]) -> str | None:
+    if not metadata.get("technical_hold"):
+        return None
+    reason = str(metadata.get("technical_hold_reason") or "")
+    if not reason:
+        return None
+    for match in re.finditer(r"\btask\s+([A-Za-z0-9][A-Za-z0-9_-]*-[A-Za-z0-9_-]+)", reason):
+        task_id = match.group(1).strip(".,;:()[]{}")
+        if task_id:
+            return task_id
+    return None
+
+
+def _task_by_id(tasks: list[dict[str, Any]], task_id: str) -> dict[str, Any] | None:
+    for task in tasks:
+        if str(task.get("task_id") or "") == task_id:
+            return task
+    return None
+
+
+def _resolved_technical_hold_metadata_keys(
+    project: dict[str, Any],
+    tasks: list[dict[str, Any]],
+    findings: list[dict[str, Any]] | None = None,
+) -> list[str]:
+    """Return stale technical-hold keys once the named recovery task is done.
+
+    A technical hold is deliberate operator state, so the reconciler must not
+    clear it merely because the project has runnable work again.  The bounded
+    recovery pattern records the exact recovery task in the hold reason
+    (``... bounded to task <task_id> ...``).  Once that task is positive-terminal
+    with evidence and the current G1 document readback is clean, the hold is an
+    obsolete projection rather than an active blocker.
+    """
+
+    metadata = _metadata(project)
+    if not metadata.get("technical_hold"):
+        return []
+    if findings and any(str(finding.get("code") or "") == "unvalidated_required_docs" for finding in findings):
+        return []
+    if not _current_g1_required_documents_ready(project, metadata):
+        return []
+    task_id = _technical_hold_recovery_task_id(metadata)
+    if not task_id:
+        return []
+    recovery_task = _task_by_id(tasks, task_id)
+    if not recovery_task:
+        return []
+    if str(recovery_task.get("status") or "").lower() not in POSITIVE_TERMINAL_TASK_STATUSES:
+        return []
+    if str(recovery_task.get("evidence_status") or "").lower() in {"", "missing", "absent"}:
+        return []
+    return [key for key in TECHNICAL_HOLD_METADATA_KEYS if key in metadata]
+
+
+def _append_unique(values: list[str], additions: list[str]) -> list[str]:
+    for item in additions:
+        if item not in values:
+            values.append(item)
+    return values
+
+
+def _project_status_effective_reconciliation_projection(project: dict[str, Any], tasks: list[dict[str, Any]] | None = None) -> None:
     """Apply current document-status truth to the readback reconciliation projection.
 
     ``status()`` is a readback/projection surface that carries both dynamic
     ``document_status`` rows and persisted project metadata.  When the dynamic
     current configured-base rows prove every required G1 document is
     non-blocking, stale required-doc anomalies, their audit-only stale projection,
-    and obsolete checkout provenance must not be re-presented to
+    obsolete checkout provenance, and resolved recovery technical holds must not be re-presented to
     dispatch/watchdog/reviewer consumers as if they were still authoritative.
     This is deliberately readback-only; the mutating reconciler persists the same
     cleanup through ``reconcile_project``.
@@ -2640,7 +2710,8 @@ def _project_status_effective_reconciliation_projection(project: dict[str, Any])
     stale_unvalidated = cleaned_anomalies != anomalies
     stale_keys = [key for key in ("g1_documentation_checkout",) if key in metadata]
     stale_projection_key = _metadata_contains_stale_g1_projection(metadata)
-    if not stale_unvalidated and not stale_keys and not stale_projection_key:
+    technical_hold_keys = _resolved_technical_hold_metadata_keys(project, tasks or [])
+    if not stale_unvalidated and not stale_keys and not stale_projection_key and not technical_hold_keys:
         return
 
     effective = dict(metadata)
@@ -2653,14 +2724,15 @@ def _project_status_effective_reconciliation_projection(project: dict[str, Any])
         stale_metadata_keys.append("stale_reconciliation_projection")
         effective.pop("stale_reconciliation_projection", None)
         effective["cleared_g1_document_reconciliation_projection"] = True
+    if technical_hold_keys:
+        stale_metadata_keys = _append_unique(stale_metadata_keys, technical_hold_keys)
+        effective["cleared_technical_hold_projection"] = True
     if stale_metadata_keys:
         for key in stale_metadata_keys:
             effective.pop(key, None)
         existing_cleared = effective.get("cleared_project_metadata_keys")
         cleared = [str(item) for item in existing_cleared if str(item or "").strip()] if isinstance(existing_cleared, list) else []
-        for key in stale_metadata_keys:
-            if key not in cleared:
-                cleared.append(key)
+        _append_unique(cleared, stale_metadata_keys)
         effective["cleared_project_metadata_keys"] = cleared
     effective["reconciliation_projection_source"] = "current_document_status"
     project["metadata"] = effective
@@ -4633,6 +4705,10 @@ def reconcile_project(project_id: str) -> dict[str, Any]:
     force_autonomy_off = _project_reconcile_forces_autonomy_off(str(project.get("status") or ""), new_status)
     reconcile_metadata = {'reconciliation_required': bool(findings), 'reconciliation_anomalies': finding_codes}
     cleared_metadata_keys = _stale_g1_projection_metadata_keys(project, finding_codes, metadata)
+    cleared_metadata_keys = _append_unique(
+        cleared_metadata_keys,
+        _resolved_technical_hold_metadata_keys(project, tasks, findings),
+    )
     if cleared_metadata_keys:
         reconcile_metadata['cleared_project_metadata_keys'] = cleared_metadata_keys
     if force_autonomy_off:
@@ -7427,7 +7503,7 @@ def status(project_id: Optional[str] = None, **_: Any) -> dict[str, Any]:
     agents = list_agents()
     for project in projects:
         project["document_status"] = project_document_status(project)
-        _project_status_effective_reconciliation_projection(project)
+        _project_status_effective_reconciliation_projection(project, tasks)
     payload = {
         "db_backend": "agent_core_postgres",
         "database": sql.runtime_env().get("AGENT_DB_NAME", "zeus_agent"),
