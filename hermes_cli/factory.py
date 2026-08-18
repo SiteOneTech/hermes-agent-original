@@ -587,6 +587,7 @@ def _delegated_status_from_cwd_source(args: argparse.Namespace) -> int | None:
 
 
 _CWD_DELEGATED_PROJECT_ACTIONS = {"resolve-state", "resolve", "reconcile", "unblock", "resume"}
+_CONFIGURED_BASE_DELEGATED_PROJECT_ACTIONS = {"resolve-state", "resolve", "reconcile", "unblock"}
 
 
 def _delegated_project_action_from_cwd_source(args: argparse.Namespace) -> int | None:
@@ -597,6 +598,8 @@ def _delegated_project_action_from_cwd_source(args: argparse.Namespace) -> int |
     except RuntimeError:
         return None
     source_root = _preferred_cwd_source_root(running_source_root)
+    if source_root is None and getattr(args, "factory_project_command", None) in _CONFIGURED_BASE_DELEGATED_PROJECT_ACTIONS:
+        source_root = _preferred_configured_base_source_root(running_source_root)
     if source_root is None:
         return None
     argv = [
