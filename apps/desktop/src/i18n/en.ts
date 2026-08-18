@@ -68,6 +68,7 @@ export const en: Translations = {
       connectingGateway: 'Connecting live desktop gateway',
       loadingSettings: 'Loading Hermes settings',
       loadingSessions: 'Loading recent sessions',
+      retryingRemoteBackend: 'Reconnecting to the remote Hermes backend…',
       startingDesktopConnection: 'Starting desktop connection',
       startingHermesDesktop: 'Starting Hermes Desktop…'
     },
@@ -130,6 +131,14 @@ export const en: Translations = {
     updateReadyMessage: count => `${count} new change${count === 1 ? '' : 's'} available.`,
     updateReadyMessageUnknown: 'A new update is available.',
     seeWhatsNew: "See what's new",
+    mcp: {
+      needsAuthTitle: 'MCP server needs re-authentication',
+      needsAuthMessage: name => `${name} MCP needs re-authentication.`,
+      errorTitle: 'MCP server unreachable',
+      errorMessage: name => `${name} MCP failed its health check.`,
+      signIn: 'Sign in',
+      view: 'View'
+    },
     errors: {
       elevenLabsNeedsKey: 'ElevenLabs STT needs ELEVENLABS_API_KEY.',
       elevenLabsRejectedKey: 'ElevenLabs rejected the API key (401).',
@@ -345,8 +354,7 @@ export const en: Translations = {
       providerAccounts: 'Accounts',
       providerApiKeys: 'API keys',
       providerCustomEndpoints: 'Custom Endpoints',
-      gateway: 'Gateway',
-      connections: 'Connections',
+      gateway: 'Gateways',
       apiKeys: 'Tools & Keys',
       keybinds: 'Keyboard Shortcuts',
       keysTools: 'Tools',
@@ -373,7 +381,8 @@ export const en: Translations = {
       agent: {
         title: 'Agent plugins',
         blurb:
-          'Run in the Hermes backend — tools, skills, MCP servers, hooks, and slash commands. Portable ones are Agent Plugins packages (skills + MCP bundles that work in other agents too). Toggles apply to new sessions.',
+          'Plugins you installed into the Hermes backend — tools, skills, MCP servers, hooks, and slash commands. Portable ones are Agent Plugins packages (skills + MCP bundles that work in other agents too). Toggles apply to new sessions.',
+        appliesTo: 'Applies to:',
         empty: 'No agent plugins installed yet.',
         loadFailed: 'Could not load agent plugins',
         portable: 'portable',
@@ -477,6 +486,22 @@ export const en: Translations = {
       terminalFontReset: 'Use default',
       translucencyTitle: 'Window Translucency',
       translucencyDesc: 'See your desktop through the whole window. macOS and Windows only.',
+      translucencyGlassDesc:
+        'Matte glass: the desktop shows through as a smooth blur while text stays sharp. macOS only.',
+      translucencyModeClear: 'Clear',
+      translucencyModeGlass: 'Glass',
+      translucencyFrostTitle: 'Frost',
+      translucencyFrost: {
+        'under-window': 'Deep',
+        popover: 'Soft',
+        titlebar: 'Bright',
+        header: 'Glare'
+      },
+      translucencyScopeTitle: 'Area',
+      translucencyScope: {
+        window: 'Whole window',
+        sidebar: 'Sidebar only'
+      },
       backdropTitle: 'Chat Backdrop',
       backdropDesc: 'The faint statue image behind the conversation.',
       reactionsTitle: 'Message Reactions',
@@ -553,6 +578,10 @@ export const en: Translations = {
       heading: 'Hermes Desktop',
       version: value => `Version ${value}`,
       versionUnavailable: 'Version unavailable',
+      bundleOutOfSync: 'App build out of date',
+      bundleOutOfSyncDesc:
+        'The Hermes runtime was updated, but the desktop app itself is still an older build — new interface features (like Bot Mode) will be missing until it updates. Run the update below to rebuild the app. If that doesn\u2019t clear this warning, reinstall from the latest desktop installer.',
+      bundleOutOfSyncAction: 'Get the installer',
       updates: 'Updates',
       checkNow: 'Check now',
       checking: 'Checking…',
@@ -676,6 +705,20 @@ export const en: Translations = {
       labelPlaceholder: 'Homelab',
       urlTitle: 'Gateway URL',
       sshHostTitle: 'SSH host',
+      headersTitle: 'Extra gateway headers',
+      headersDesc:
+        'Sent with every HTTP and WebSocket request to this gateway — for access proxies such as Cloudflare Access (CF-Access-Client-Id / CF-Access-Client-Secret). Values are stored encrypted. Headers Hermes manages (Authorization, Cookie, Host…) are ignored.',
+      headerValuePlaceholder: 'Value',
+      headerValueSaved: 'Saved — leave blank to keep',
+      headerAdd: 'Add header',
+      headerRemove: 'Remove',
+      duplicateLocal: 'This app already manages a local connection — there can only be one.',
+      duplicateUrl: (label: string) => `A connection to this gateway URL already exists (“${label}”).`,
+      duplicateSsh: (label: string) => `A connection to this SSH host already exists (“${label}”).`,
+      sameBackendHint: (label: string) => `Same backend as “${label}”`,
+      localAddHint: 'Local is unavailable: the managed local connection already exists (there is only ever one).',
+      cloudAddHint:
+        'Tip: signing in under Hermes Cloud above discovers your agents automatically — use this form only to register a known instance URL by hand.',
       save: 'Save connection',
       saving: 'Saving…',
       cancel: 'Cancel',
@@ -688,20 +731,13 @@ export const en: Translations = {
       title: 'Gateway Connection',
       envOverride: 'env override',
       intro:
-        'Local by default. Use remote when this app should drive a Hermes backend elsewhere. Per-profile overrides below.',
-      appliesTo: 'Applies to',
-      allProfiles: 'All profiles',
-      defaultConnection: 'Default connection for every profile that has no override of its own.',
-      profileConnection: profile =>
-        `Connection used only when “${profile}” is the active profile. Choose Use default gateway to remove its override.`,
+        'Local by default. Use remote when this app should drive a Hermes backend elsewhere. Gateway connections are machine-level; profiles are discovered from the gateways you connect.',
       envOverrideTitle: 'Environment variables are controlling this desktop session.',
       envOverrideDesc:
         'Unset HERMES_DESKTOP_REMOTE_URL and HERMES_DESKTOP_REMOTE_TOKEN to use the saved setting below.',
       modeTitle: 'Connection mode',
       localTitle: 'Local gateway',
       localDesc: 'Start a private Hermes backend on localhost. This is the default and works offline.',
-      inheritTitle: 'Use default gateway',
-      inheritDesc: "Remove this profile's override and use the default connection.",
       remoteTitle: 'Remote gateway',
       remoteDesc: 'Connect this desktop shell to a remote Hermes backend.',
       remoteAuthHint: 'Hosted gateways use OAuth or a username and password; self-hosted ones may use a session token.',
@@ -808,8 +844,6 @@ export const en: Translations = {
       sshHermesPathTitle: 'Hermes path (optional)',
       sshHermesPathDesc: 'Full path to the remote hermes binary. Blank = auto-detect.',
       sshHermesPathPlaceholder: 'auto-detect',
-      sshRemoteProfileTitle: 'Remote profile (optional)',
-      sshRemoteProfileDesc: 'Profile name on the remote host. Blank = use the Desktop profile name.',
       sshTestConnection: 'Test SSH',
       sshConnect: 'Connect',
       sshButtonsHint: 'Save applies on the next launch. Connect reconnects now.',
@@ -832,6 +866,10 @@ export const en: Translations = {
       loading: 'Loading API keys and credentials...',
       failedLoad: 'API keys failed to load',
       empty: 'Nothing configured in this category yet.'
+    },
+    profileScope: {
+      appliesTo: 'Applies to',
+      editsProfile: profile => `Changes on this page apply to the “${profile}” profile.`
     },
     mcp: {
       loading: 'Loading MCP servers...',
@@ -885,6 +923,9 @@ export const en: Translations = {
       catalogEnvRequired: 'Fill in the required values before installing.',
       capabilitySummary: (tools, prompts, resources) =>
         `${[`${tools} tools`, ...(prompts ? [`${prompts} prompts`] : []), ...(resources ? [`${resources} resources`] : [])].join(', ')} enabled`,
+      costTokens: tokens => `~${tokens} tok/call`,
+      usage30d: uses => `${uses} uses/30d`,
+      unusedPill: 'unused',
       statusConnecting: 'Connecting…',
       statusNeedsAuth: 'Needs authentication',
       statusError: 'Error',
@@ -897,7 +938,26 @@ export const en: Translations = {
       unsavedConnect: 'Unsaved — save mcp.json to connect.',
       enableTool: tool => `Enable ${tool}`,
       disableTool: tool => `Disable ${tool}`,
-      noOutput: 'No output yet.'
+      noOutput: 'No output yet.',
+      deepLinkTitle: 'Add MCP server?',
+      deepLinkDescription:
+        'A link asked to add this MCP server to Hermes. Review the exact configuration below — it comes from the link, not from Hermes.',
+      deepLinkStdioWarning:
+        'This server runs a local process on your machine with the command shown below. Only continue if you trust its source.',
+      deepLinkConfirm: 'Add server',
+      deepLinkNameInvalid: 'Names use 1-64 letters, digits, dots, dashes, or underscores.',
+      deepLinkNameConflict: name => `A server named ${name} already exists — choose a different name or cancel.`,
+      deepLinkErrorTitle: 'MCP install link rejected',
+      deepLinkErrorName: 'The link\u2019s server name is missing or invalid.',
+      deepLinkErrorConfig: 'The link\u2019s config is not valid base64-encoded JSON.',
+      deepLinkErrorShape: 'The config must be a JSON object with a string `url` or `command` field.',
+      deepLinkErrorUrl: 'Only http:// and https:// server URLs are allowed.',
+      deepLinkErrorTooLarge: 'The config payload exceeds the 32KB limit.',
+      importButton: 'Import',
+      importPlaceholder: 'Paste an mcp.json snippet, npx/docker command, claude mcp add line, URL, or Cursor link…',
+      importNoMatch: 'No server config recognized in the pasted text.',
+      importConfirm: 'Add to mcp.json',
+      importConfirmMany: count => `Add ${count} servers to mcp.json`
     },
     model: {
       loading: 'Loading model configuration...',
@@ -1663,6 +1723,7 @@ export const en: Translations = {
     showAllProfiles: 'Show all profiles',
     switchToProfile: name => `Switch to ${name}`,
     manageProfiles: 'Manage profiles…',
+    connectGateway: 'Connect another Hermes gateway…',
     actions: 'Actions',
     color: 'Color…',
     colorFor: 'Color',
@@ -2002,6 +2063,8 @@ export const en: Translations = {
       baseBranchPlaceholder: 'Search branches…',
       baseBranchNone: 'No branches found',
       startWorkFailed: 'Could not create worktree',
+      worktreeStaleBackend:
+        'Update the Hermes backend to create worktrees over this remote connection — it predates the git worktree API.',
       worktreeProjectLabel: 'Project',
       worktreeProjectPlaceholder: 'Search projects…',
       worktreeProjectNone: 'No projects with a folder',
@@ -2376,6 +2439,20 @@ export const en: Translations = {
     applyingClose: 'This window will close while the update runs, then Hermes reopens on its own.',
     errorTitle: 'Update didn’t finish',
     errorBody: 'No worries — nothing was lost. You can try again now.',
+    blockerTitle: 'Close local previews to update Hermes?',
+    blockerBody:
+      'Hermes needs to stop these local previews before updating. This will not modify or delete your files.',
+    foreignBlockerTitle: 'Close other processes to update Hermes',
+    foreignBlockerBody:
+      'Hermes can’t safely close these processes automatically. Close the app, terminal, or service that owns each one, then try the update again.',
+    mixedBlockerBody:
+      'Hermes can close the local previews listed below. Other processes must be closed manually before the update can continue.',
+    closePreviewsAndUpdate: 'Close previews and update',
+    closePreviewsAndCheckAgain: 'Close previews and check again',
+    localPreview: 'Local preview',
+    portLabel: port => `Port ${port}`,
+    pidLabel: pid => `PID ${pid}`,
+    technicalDetails: 'Technical details',
     notNow: 'Not now',
     applyStatus: {
       preparing: 'Updating backend…',
@@ -2597,6 +2674,7 @@ export const en: Translations = {
       inferenceNotReady: 'Inference not ready',
       checkingInference: 'Checking inference',
       disconnected: 'Disconnected',
+      reconnectGateway: 'Reconnect gateway',
       openSystem: 'Open system panel',
       connection: label => `Connection: ${label}`,
       recentActivity: 'Recent activity',
@@ -3089,6 +3167,7 @@ export const en: Translations = {
     stopFailed: 'Stop failed',
     regenerateFailed: 'Regenerate failed',
     editFailed: 'Edit failed',
+    editTurnUnavailable: 'This turn is no longer in server history (it may have been compressed away).',
     resumeFailed: 'Resume failed',
     resumeStrandedTitle: "Couldn't load this session",
     resumeStrandedBody:

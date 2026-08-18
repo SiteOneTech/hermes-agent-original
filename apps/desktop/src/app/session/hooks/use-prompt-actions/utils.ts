@@ -199,18 +199,22 @@ export async function withSessionNotFoundResume<T>(
  * blocks an IDLE target and reports "session busy" about a session doing
  * nothing, and the converse lets a background send fire mid-turn.
  *
- * The published per-session state is authoritative. Fall back to the
- * foreground flag only when the target has no state yet — a just-minted
- * session whose first publish hasn't landed.
+ * The published per-session state is authoritative. A known target with no
+ * slice yet is idle — never inherit another session's leftover foreground
+ * flag (focusing B while A runs). Fall back to the foreground flag only for
+ * a true draft (no session id), where that flag must be the focused view's
+ * busy, not a process-global lock.
  */
 export function isTargetSessionBusy(
   sessionStates: Record<string, { busy: boolean }>,
   sessionId: null | string,
   foregroundBusy: boolean
 ): boolean {
-  const state = sessionId ? sessionStates[sessionId] : undefined
+  if (!sessionId) {
+    return foregroundBusy
+  }
 
-  return state ? state.busy : foregroundBusy
+  return Boolean(sessionStates[sessionId]?.busy)
 }
 
 // Gateway JSON-RPC calls reject with "request timed out: <method>" when the
@@ -659,6 +663,10 @@ export interface SubmitTextOptions {
    *  body — model-facing scaffolding the UI must never render — so the slash
    *  dispatcher passes the invocation (`/work fix the leak`) here. */
   displayText?: string
+  /** `hidden` types the persisted user row (display_kind) so no bubble
+   *  renders anywhere — the off-screen path for widget intents. The agent
+   *  still receives the text as a normal user turn. */
+  displayKind?: 'hidden'
   fromQueue?: boolean
   /** Runtime session id to submit into. Queue drains pass this so a
    *  backgrounded/source session cannot be replaced by the current foreground

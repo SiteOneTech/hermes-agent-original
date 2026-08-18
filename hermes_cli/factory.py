@@ -17,9 +17,96 @@ def _backend(args: argparse.Namespace):
     return factory_backend.get_backend()
 
 
+def _annotate_status_payload_source(
+    payload: Any,
+    source_root: Path,
+    *,
+    delegated_from: Path | None = None,
+) -> Any:
+    if not isinstance(payload, dict):
+        return payload
+    payload["factory_cli_source_root"] = str(source_root)
+    payload["factory_status_source_root"] = str(source_root)
+    payload["factory_status_delegated"] = delegated_from is not None
+    if delegated_from is not None:
+        payload["factory_status_delegated_from_source_root"] = str(delegated_from)
+    else:
+        payload.pop("factory_status_delegated_from_source_root", None)
+    return payload
+
+
+def _annotate_project_action_payload_source(
+    payload: Any,
+    source_root: Path,
+    *,
+    delegated_from: Path | None = None,
+) -> Any:
+    if not isinstance(payload, dict):
+        return payload
+    payload["factory_cli_source_root"] = str(source_root)
+    payload["factory_project_action_source_root"] = str(source_root)
+    payload["factory_project_action_delegated"] = delegated_from is not None
+    if delegated_from is not None:
+        payload["factory_project_action_delegated_from_source_root"] = str(delegated_from)
+    else:
+        payload.pop("factory_project_action_delegated_from_source_root", None)
+    return payload
+
+
 def _status_payload(args: argparse.Namespace) -> dict[str, Any]:
     backend = _backend(args)
-    return backend.status(getattr(args, "project_id", None))
+    payload = backend.status(getattr(args, "project_id", None))
+    try:
+        source_root = _running_factory_source_root()
+    except RuntimeError:
+        return payload
+    return _annotate_status_payload_source(payload, source_root)
+
+
+def _print_status_subprocess_output(
+    proc: subprocess.CompletedProcess[str],
+    *,
+    args: argparse.Namespace,
+    source_root: Path,
+    delegated_from: Path,
+) -> None:
+    if getattr(args, "json", False) and (proc.stdout or "").strip():
+        try:
+            payload = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            payload = None
+        if isinstance(payload, dict):
+            _print_json(_annotate_status_payload_source(payload, source_root, delegated_from=delegated_from))
+            if proc.stderr:
+                print(proc.stderr, end="", file=sys.stderr)
+            return
+    if proc.stdout:
+        print(proc.stdout, end="")
+    if proc.stderr:
+        print(proc.stderr, end="", file=sys.stderr)
+
+
+def _print_project_action_subprocess_output(
+    proc: subprocess.CompletedProcess[str],
+    *,
+    args: argparse.Namespace,
+    source_root: Path,
+    delegated_from: Path,
+) -> None:
+    if getattr(args, "json", False) and (proc.stdout or "").strip():
+        try:
+            payload = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            payload = None
+        if isinstance(payload, dict):
+            _print_json(_annotate_project_action_payload_source(payload, source_root, delegated_from=delegated_from))
+            if proc.stderr:
+                print(proc.stderr, end="", file=sys.stderr)
+            return
+    if proc.stdout:
+        print(proc.stdout, end="")
+    if proc.stderr:
+        print(proc.stderr, end="", file=sys.stderr)
 
 
 def _print_json(payload: Any) -> int:
@@ -259,6 +346,9 @@ def cmd_project_declare_successor(args: argparse.Namespace) -> int:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
+    delegated = _delegated_status_from_cwd_source(args)
+    if delegated is not None:
+        return delegated
     payload = _status_payload(args)
     if args.json:
         return _print_json(payload)
@@ -271,15 +361,297 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
-def _run_orchestrator_script(project_id: str | None = None) -> dict[str, Any]:
-    script = Path.home() / ".hermes" / "scripts" / "factory_orchestrator_tick.py"
-    if not script.exists():
-        raise RuntimeError(f"Factory orchestrator script not found: {script}")
+def _running_factory_source_root() -> Path:
+    factory_file = Path(__file__).resolve()
+    if factory_file.name != "factory.py" or factory_file.parent.name != "hermes_cli":
+        raise RuntimeError(f"Factory tick source provenance malformed: {factory_file}")
+    return factory_file.parents[1]
+
+
+def _factory_source_root_is_complete(source_root: Path) -> bool:
+    return all(
+        (source_root / rel_path).is_file()
+        for rel_path in (
+            Path("hermes_cli") / "main.py",
+            Path("hermes_cli") / "factory.py",
+            Path("hermes_cli") / "factory_pg.py",
+            Path("scripts") / "factory" / "factory_orchestrator_tick.py",
+        )
+    )
+
+
+def _find_cwd_factory_source_root() -> Path | None:
+    try:
+        cwd = Path.cwd().resolve()
+    except Exception:
+        return None
+    for candidate in (cwd, *cwd.parents):
+        if _factory_source_root_is_complete(candidate):
+            return candidate
+    return None
+
+
+def _same_source_root(left: Path, right: Path) -> bool:
+    try:
+        return left.resolve() == right.resolve()
+    except Exception:
+        return os.path.realpath(str(left)) == os.path.realpath(str(right))
+
+
+def _git_probe_source_root(source_root: Path, *args: str, timeout: int = 10) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(source_root), *args],
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def _git_check_source_root(source_root: Path, *args: str, timeout: int = 10) -> bool | None:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(source_root), *args],
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except Exception:
+        return None
+    if result.returncode == 0:
+        return True
+    if result.returncode == 1:
+        return False
+    return None
+
+
+def _origin_default_base_ref(source_root: Path) -> tuple[str, str] | None:
+    if _git_probe_source_root(source_root, "rev-parse", "--is-inside-work-tree") != "true":
+        return None
+    candidates: list[str] = []
+    origin_head = _git_probe_source_root(source_root, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
+    if origin_head:
+        candidates.append(origin_head)
+    candidates.append("origin/main")
+    seen: set[str] = set()
+    for base_ref in candidates:
+        if not base_ref or base_ref in seen:
+            continue
+        seen.add(base_ref)
+        base_commit = _git_probe_source_root(source_root, "rev-parse", "--verify", f"{base_ref}^{{commit}}")
+        if base_commit:
+            return base_ref, base_commit
+    return None
+
+
+def _git_worktree_entries(source_root: Path) -> list[dict[str, str]]:
+    output = _git_probe_source_root(source_root, "worktree", "list", "--porcelain", timeout=15)
+    if not output:
+        return []
+    entries: list[dict[str, str]] = []
+    current: dict[str, str] | None = None
+    for raw_line in output.splitlines():
+        if raw_line.startswith("worktree "):
+            if current:
+                entries.append(current)
+            current = {"path": raw_line.split(" ", 1)[1]}
+        elif current is not None and raw_line.startswith("HEAD "):
+            current["head"] = raw_line.split(" ", 1)[1]
+        elif current is not None and raw_line.startswith("branch "):
+            current["branch"] = raw_line.split(" ", 1)[1]
+    if current:
+        entries.append(current)
+    return entries
+
+
+def _source_root_is_clean(source_root: Path) -> bool:
+    status = _git_probe_source_root(source_root, "status", "--porcelain", timeout=15)
+    return status == ""
+
+
+def _preferred_configured_base_source_root(running_source_root: Path) -> Path | None:
+    """Return an exact configured-base worktree when the running root is stale.
+
+    ``hermes`` console scripts installed from a primary checkout can be invoked
+    from that same checkout even when its HEAD is behind ``origin/main``.  In
+    that shape there is no distinct cwd source root to prefer, so status must
+    use a verified worktree at the configured base instead of reusing stale
+    primary Factory code.  If the base ref or worktree cannot be proven exactly,
+    return ``None`` and let the normal status path remain fail-closed.
+    """
+
+    if os.environ.get("HERMES_FACTORY_SOURCE_DELEGATED") == "1":
+        return None
+    try:
+        running_source_root = running_source_root.resolve()
+    except Exception:
+        return None
+    base = _origin_default_base_ref(running_source_root)
+    if base is None:
+        return None
+    _base_ref, base_commit = base
+    running_head = _git_probe_source_root(running_source_root, "rev-parse", "HEAD")
+    if not running_head or running_head == base_commit:
+        return None
+    if _git_check_source_root(running_source_root, "merge-base", "--is-ancestor", running_head, base_commit) is not True:
+        return None
+    candidates: list[Path] = []
+    for entry in _git_worktree_entries(running_source_root):
+        if entry.get("head") != base_commit:
+            continue
+        raw_path = entry.get("path")
+        if not raw_path:
+            continue
+        try:
+            candidate = Path(raw_path).expanduser().resolve()
+        except Exception:
+            continue
+        if _same_source_root(candidate, running_source_root):
+            continue
+        if not _factory_source_root_is_complete(candidate):
+            continue
+        if not _source_root_is_clean(candidate):
+            continue
+        candidates.append(candidate)
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda path: str(path))[0]
+
+
+def _preferred_cwd_source_root(running_source_root: Path) -> Path | None:
+    if os.environ.get("HERMES_FACTORY_SOURCE_DELEGATED") == "1":
+        return None
+    cwd_source_root = _find_cwd_factory_source_root()
+    if cwd_source_root is None or _same_source_root(cwd_source_root, running_source_root):
+        return None
+    return cwd_source_root
+
+
+def _source_env(source_root: Path, *, project_id: str | None = None) -> dict[str, str]:
     env = {**os.environ}
+    pythonpath = str(source_root)
+    if env.get("PYTHONPATH"):
+        pythonpath = f"{pythonpath}{os.pathsep}{env['PYTHONPATH']}"
+    env["PYTHONPATH"] = pythonpath
     if project_id:
         env["FACTORY_TICK_PROJECT_ID"] = project_id
+    return env
+
+
+def _delegated_status_from_cwd_source(args: argparse.Namespace) -> int | None:
+    try:
+        running_source_root = _running_factory_source_root()
+    except RuntimeError:
+        return None
+    source_root = _preferred_cwd_source_root(running_source_root) or _preferred_configured_base_source_root(
+        running_source_root
+    )
+    if source_root is None:
+        return None
+    argv = [sys.executable, "-m", "hermes_cli.main", "factory", "status"]
+    project_id = getattr(args, "project_id", None)
+    if project_id:
+        argv.append(str(project_id))
+    if getattr(args, "json", False):
+        argv.append("--json")
+    env = _source_env(source_root)
+    env["HERMES_FACTORY_SOURCE_DELEGATED"] = "1"
+    proc = subprocess.run(
+        argv,
+        cwd=str(source_root),
+        env=env,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        capture_output=True,
+        timeout=180,
+    )
+    _print_status_subprocess_output(
+        proc,
+        args=args,
+        source_root=source_root,
+        delegated_from=running_source_root,
+    )
+    return proc.returncode
+
+
+_CWD_DELEGATED_PROJECT_ACTIONS = {"resolve-state", "resolve", "reconcile", "unblock", "resume"}
+_CONFIGURED_BASE_DELEGATED_PROJECT_ACTIONS = {"resolve-state", "resolve", "reconcile", "unblock"}
+
+
+def _delegated_project_action_from_cwd_source(args: argparse.Namespace) -> int | None:
+    if getattr(args, "factory_project_command", None) not in _CWD_DELEGATED_PROJECT_ACTIONS:
+        return None
+    try:
+        running_source_root = _running_factory_source_root()
+    except RuntimeError:
+        return None
+    source_root = _preferred_cwd_source_root(running_source_root)
+    if source_root is None and getattr(args, "factory_project_command", None) in _CONFIGURED_BASE_DELEGATED_PROJECT_ACTIONS:
+        source_root = _preferred_configured_base_source_root(running_source_root)
+    if source_root is None:
+        return None
+    argv = [
+        sys.executable,
+        "-m",
+        "hermes_cli.main",
+        "factory",
+        "project",
+        str(args.factory_project_command),
+        str(args.project_id),
+    ]
+    if getattr(args, "json", False):
+        argv.append("--json")
+    env = _source_env(source_root)
+    env["HERMES_FACTORY_SOURCE_DELEGATED"] = "1"
+    proc = subprocess.run(
+        argv,
+        cwd=str(source_root),
+        env=env,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        capture_output=True,
+        timeout=180,
+    )
+    _print_project_action_subprocess_output(
+        proc,
+        args=args,
+        source_root=source_root,
+        delegated_from=running_source_root,
+    )
+    return proc.returncode
+
+
+def _resolve_orchestrator_script() -> tuple[Path, Path]:
+    running_source_root = _running_factory_source_root()
+    running_script = running_source_root / "scripts" / "factory" / "factory_orchestrator_tick.py"
+    if not running_script.is_file():
+        raise RuntimeError(f"Factory orchestrator script not found in running Hermes source: {running_script}")
+    source_root = _preferred_cwd_source_root(running_source_root) or running_source_root
+    script = source_root / "scripts" / "factory" / "factory_orchestrator_tick.py"
+    if not script.is_file():
+        raise RuntimeError(f"Factory orchestrator script not found in running Hermes source: {script}")
+    return script, source_root
+
+
+def _run_orchestrator_script(project_id: str | None = None) -> dict[str, Any]:
+    script, source_root = _resolve_orchestrator_script()
+    env = _source_env(source_root, project_id=project_id)
     proc = subprocess.run(
         [sys.executable, str(script)],
+        cwd=str(source_root),
         env=env,
         text=True,
         encoding="utf-8",
@@ -290,12 +662,19 @@ def _run_orchestrator_script(project_id: str | None = None) -> dict[str, Any]:
     if proc.returncode != 0:
         raise RuntimeError(proc.stderr.strip() or proc.stdout.strip() or f"tick exited {proc.returncode}")
     try:
-        return json.loads(proc.stdout or "{}")
+        payload = json.loads(proc.stdout or "{}")
+        if isinstance(payload, dict):
+            payload.setdefault("factory_cli_source_root", str(source_root))
+            payload.setdefault("factory_orchestrator_script", str(script))
+        return payload
     except Exception:
-        return {"raw_output": proc.stdout}
+        return {"raw_output": proc.stdout, "factory_cli_source_root": str(source_root), "factory_orchestrator_script": str(script)}
 
 
 def cmd_project_action(args: argparse.Namespace) -> int:
+    delegated = _delegated_project_action_from_cwd_source(args)
+    if delegated is not None:
+        return delegated
     backend = _backend(args)
     action_map = {
         "resume": "resume",
@@ -334,6 +713,17 @@ def cmd_project_action(args: argparse.Namespace) -> int:
         )
     else:
         result = backend.control_action(args.project_id, action_map[args.factory_project_command])
+    if isinstance(result, dict):
+        result_source_raw = result.get("factory_cli_source_root")
+        if result_source_raw:
+            result_source = Path(str(result_source_raw)).expanduser()
+        else:
+            try:
+                result_source = _running_factory_source_root()
+            except RuntimeError:
+                result_source = None
+        if result_source is not None:
+            result = _annotate_project_action_payload_source(result, result_source)
     if args.json:
         return _print_json(result)
     print(f"✓ Project {args.project_id}: {result.get('action')} -> {result.get('status') or 'ok'}")

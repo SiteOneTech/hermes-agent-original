@@ -68,6 +68,7 @@ export const zhHant = defineLocale({
       connectingGateway: '正在連線桌面閘道',
       loadingSettings: '正在載入 Hermes 設定',
       loadingSessions: '正在載入最近工作階段',
+      retryingRemoteBackend: '正在重新連線遠端 Hermes 後端…',
       startingDesktopConnection: '正在啟動桌面連線',
       startingHermesDesktop: '正在啟動 Hermes Desktop…'
     },
@@ -127,6 +128,14 @@ export const zhHant = defineLocale({
     updateReadyMessage: count => `有 ${count} 項新變更可用。`,
     updateReadyMessageUnknown: '有新更新可用。',
     seeWhatsNew: '查看新增內容',
+    mcp: {
+      needsAuthTitle: 'MCP 伺服器需要重新驗證',
+      needsAuthMessage: name => `${name} MCP 需要重新驗證。`,
+      errorTitle: 'MCP 伺服器無法連線',
+      errorMessage: name => `${name} MCP 健康檢查失敗。`,
+      signIn: '登入',
+      view: '檢視'
+    },
     errors: {
       elevenLabsNeedsKey: 'ElevenLabs STT 需要 ELEVENLABS_API_KEY。',
       elevenLabsRejectedKey: 'ElevenLabs 拒絕了該 API 金鑰 (401)。',
@@ -327,6 +336,21 @@ export const zhHant = defineLocale({
       terminalFontReset: '使用預設字型',
       translucencyTitle: '視窗透明',
       translucencyDesc: '讓整個視窗透出桌面。僅支援 macOS 與 Windows。',
+      translucencyGlassDesc: '霧面玻璃：桌面以柔和模糊透出，文字保持清晰。僅支援 macOS。',
+      translucencyModeClear: '透明',
+      translucencyModeGlass: '玻璃',
+      translucencyFrostTitle: '磨砂質感',
+      translucencyFrost: {
+        'under-window': '深邃',
+        popover: '柔和',
+        titlebar: '明亮',
+        header: '透亮'
+      },
+      translucencyScopeTitle: '套用範圍',
+      translucencyScope: {
+        window: '整個視窗',
+        sidebar: '僅側邊欄'
+      },
       backdropTitle: '聊天背景',
       backdropDesc: '對話後方那張淡淡的雕像圖片。',
       reactionsTitle: '訊息回應',
@@ -622,6 +646,10 @@ export const zhHant = defineLocale({
       heading: 'Hermes Desktop',
       version: value => `版本 ${value}`,
       versionUnavailable: '版本不可用',
+      bundleOutOfSync: '應用程式建置版本過舊',
+      bundleOutOfSyncDesc:
+        'Hermes 執行環境已更新,但桌面應用程式本身仍是舊建置——在應用程式更新之前,新的介面功能(如 Bot Mode)不會顯示。請執行下方的更新以重新建置應用程式。如果此警告仍未消除,請從最新的桌面安裝程式重新安裝。',
+      bundleOutOfSyncAction: '取得安裝程式',
       updates: '更新',
       checkNow: '立即檢查',
       checking: '檢查中…',
@@ -701,17 +729,11 @@ export const zhHant = defineLocale({
       title: '閘道連線',
       envOverride: '環境變數覆寫',
       intro:
-        'Hermes Desktop 預設會啟動自己的本機閘道。如果您希望此應用程式控制另一台機器或可信代理後面已執行的 Hermes 後端，請使用遠端閘道。在下方按設定檔指定各自的遠端主機。',
-      appliesTo: '套用至',
-      allProfiles: '全部設定檔',
-      defaultConnection: '預設連線適用於所有沒有自訂覆寫的設定檔。',
-      profileConnection: profile => `僅當「${profile}」為作用中設定檔時使用此連線。選擇「使用預設閘道」可移除其覆寫。`,
+        'Hermes Desktop 預設會啟動自己的本機閘道。如果您希望此應用程式控制另一台機器或可信代理後面已執行的 Hermes 後端，請使用遠端閘道。閘道連線屬於本機層級設定；設定檔是從已連線的閘道中探索出來的。',
       envOverrideTitle: '環境變數正在控制此桌面工作階段。',
       envOverrideDesc: '取消設定 HERMES_DESKTOP_REMOTE_URL 和 HERMES_DESKTOP_REMOTE_TOKEN 後才會使用下方儲存的設定。',
       localTitle: '本機閘道',
       localDesc: '在 localhost 啟動私有 Hermes 後端。這是預設方式，可離線使用。',
-      inheritTitle: '使用預設閘道',
-      inheritDesc: '移除此設定檔的自訂覆寫並使用預設連線。',
       remoteTitle: '遠端閘道',
       remoteDesc:
         '將此桌面殼層連線至遠端 Hermes 後端。託管閘道使用 OAuth 或帳號密碼；自託管閘道也可使用工作階段 Token。',
@@ -786,8 +808,6 @@ export const zhHant = defineLocale({
       sshHermesPathTitle: 'Hermes 路徑（選用）',
       sshHermesPathDesc: '遠端 hermes 執行檔的完整路徑。留空 = 自動偵測。',
       sshHermesPathPlaceholder: '自動偵測',
-      sshRemoteProfileTitle: '遠端設定檔（選用）',
-      sshRemoteProfileDesc: '遠端主機上的設定檔名稱。留空 = 使用 Desktop 設定檔名稱。',
       sshTestConnection: '測試 SSH',
       sshConnect: '連線',
       sshButtonsHint: '「儲存」會在下次啟動時生效，「連線」則立即重新連線。',
@@ -808,6 +828,10 @@ export const zhHant = defineLocale({
       loading: '正在載入 API 金鑰和憑證...',
       failedLoad: 'API 金鑰載入失敗',
       empty: '此類別尚未有任何設定。'
+    },
+    profileScope: {
+      appliesTo: '套用至',
+      editsProfile: profile => `此頁面的變更將套用至「${profile}」設定檔。`
     },
     mcp: {
       loading: '正在載入 MCP 伺服器...',
@@ -838,6 +862,9 @@ export const zhHant = defineLocale({
       saveServer: '儲存伺服器',
       capabilitySummary: (tools, prompts, resources) =>
         `已啟用 ${[`${tools} 個工具`, ...(prompts ? [`${prompts} 個提示`] : []), ...(resources ? [`${resources} 個資源`] : [])].join('、')}`,
+      costTokens: tokens => `每次呼叫約 ${tokens} token`,
+      usage30d: uses => `30 天內 ${uses} 次呼叫`,
+      unusedPill: '未使用',
       statusConnecting: '連線中…',
       statusNeedsAuth: '需要驗證',
       statusError: '錯誤',
@@ -850,7 +877,24 @@ export const zhHant = defineLocale({
       unsavedConnect: '未儲存 — 儲存 mcp.json 以連線。',
       enableTool: tool => `啟用 ${tool}`,
       disableTool: tool => `停用 ${tool}`,
-      noOutput: '尚無輸出。'
+      noOutput: '尚無輸出。',
+      deepLinkTitle: '新增 MCP 伺服器？',
+      deepLinkDescription: '一個連結要求將此 MCP 伺服器加入 Hermes。請檢查下方的完整設定——它來自該連結，而非 Hermes。',
+      deepLinkStdioWarning: '此伺服器會使用下方所示指令在你的電腦上執行本機程序。僅在信任其來源時繼續。',
+      deepLinkConfirm: '新增伺服器',
+      deepLinkNameInvalid: '名稱須為 1-64 個字母、數字、點、連字號或底線。',
+      deepLinkNameConflict: name => `已存在名為 ${name} 的伺服器——請改用其他名稱或取消。`,
+      deepLinkErrorTitle: '已拒絕 MCP 安裝連結',
+      deepLinkErrorName: '連結中的伺服器名稱缺失或無效。',
+      deepLinkErrorConfig: '連結中的設定不是有效的 base64 編碼 JSON。',
+      deepLinkErrorShape: '設定必須是包含字串 `url` 或 `command` 欄位的 JSON 物件。',
+      deepLinkErrorUrl: '僅允許 http:// 和 https:// 伺服器網址。',
+      deepLinkErrorTooLarge: '設定內容超過 32KB 上限。',
+      importButton: '匯入',
+      importPlaceholder: '貼上 mcp.json 片段、npx/docker 指令、claude mcp add 指令、URL 或 Cursor 連結…',
+      importNoMatch: '貼上的文字中未識別到伺服器設定。',
+      importConfirm: '加入 mcp.json',
+      importConfirmMany: count => `將 ${count} 個伺服器加入 mcp.json`
     },
     model: {
       loading: '正在載入模型設定...',
@@ -1709,6 +1753,7 @@ export const zhHant = defineLocale({
       baseBranchPlaceholder: '搜尋分支…',
       baseBranchNone: '未找到分支',
       startWorkFailed: '無法建立工作樹',
+      worktreeStaleBackend: '請更新 Hermes 後端以在此遠端連線上建立工作樹 —— 該後端早於 git 工作樹 API。',
       worktreeProjectLabel: '專案',
       worktreeProjectPlaceholder: '搜尋專案…',
       worktreeProjectNone: '沒有包含資料夾的專案',
@@ -2034,6 +2079,18 @@ export const zhHant = defineLocale({
     applyingClose: '此視窗會在更新期間關閉，隨後 Hermes 會自動重新開啟。',
     errorTitle: '更新未完成',
     errorBody: '沒有資料遺失。您可以現在重試。',
+    blockerTitle: '關閉本機預覽以更新 Hermes？',
+    blockerBody: 'Hermes 需要在更新前停止這些本機預覽。這不會修改或刪除您的檔案。',
+    foreignBlockerTitle: '關閉其他處理程序以更新 Hermes',
+    foreignBlockerBody:
+      'Hermes 無法安全地自動關閉這些處理程序。請關閉擁有這些處理程序的應用程式、終端機或服務，然後重試更新。',
+    mixedBlockerBody: 'Hermes 可以關閉下方列出的本機預覽。其他處理程序必須手動關閉，更新才能繼續。',
+    closePreviewsAndUpdate: '關閉預覽並更新',
+    closePreviewsAndCheckAgain: '關閉預覽並重新檢查',
+    localPreview: '本機預覽',
+    portLabel: port => `連接埠 ${port}`,
+    pidLabel: pid => `PID ${pid}`,
+    technicalDetails: '技術詳細資料',
     notNow: '暫不',
     applyStatus: {
       preparing: '正在更新後端…',
@@ -2244,6 +2301,7 @@ export const zhHant = defineLocale({
       inferenceNotReady: '推論未就緒',
       checkingInference: '正在檢查推論',
       disconnected: '已中斷連線',
+      reconnectGateway: '重新連線閘道',
       openSystem: '開啟系統面板',
       connection: label => `連線：${label}`,
       recentActivity: '最近活動',
@@ -2680,6 +2738,7 @@ export const zhHant = defineLocale({
     stopFailed: '停止失敗',
     regenerateFailed: '重新生成失敗',
     editFailed: '編輯失敗',
+    editTurnUnavailable: '此回合已不在伺服器歷史中（可能已被壓縮移除）。',
     resumeFailed: '繼續失敗',
     resumeStrandedTitle: '無法載入此工作階段',
     resumeStrandedBody: '與此工作階段的連線失敗，自動重試已停止。請確認閘道正在執行，然後重試。',

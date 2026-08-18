@@ -411,7 +411,24 @@ const NON_CONFIG_SETTINGS: ReadonlyArray<{
     labelKey: 'providerApiKeys',
     tab: 'providers&pview=keys'
   },
-  { icon: Globe, keywords: ['connection', 'messaging'], labelKey: 'gateway', tab: 'gateway' },
+  {
+    icon: Globe,
+    // The Connections registry merged into the unified Gateways page.
+    keywords: [
+      'connection',
+      'connections',
+      'messaging',
+      'remote',
+      'multi',
+      'instances',
+      'ssh',
+      'cloud',
+      'add gateway',
+      'registry'
+    ],
+    labelKey: 'gateway',
+    tab: 'gateway'
+  },
   {
     icon: KeyRound,
     keywords: ['api', 'secrets', 'tokens', 'credentials', 'browser', 'search'],

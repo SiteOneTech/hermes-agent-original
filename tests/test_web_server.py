@@ -87,6 +87,24 @@ def test_start_server_applies_process_local_ssh_bootstrap_state(monkeypatch):
     assert captured["port"] == 0
 
 
+@pytest.mark.asyncio
+async def test_factory_project_tick_route_uses_running_factory_source(monkeypatch):
+    calls: list[str | None] = []
+
+    def fake_tick(project_id: str | None = None):
+        calls.append(project_id)
+        return {"job": "factory_orchestrator_tick", "source": "running_tree", "claimed": None}
+
+    monkeypatch.setattr("hermes_cli.factory._run_orchestrator_script", fake_tick)
+
+    result = await web_server.run_factory_project_action("demo-project", "tick")
+
+    assert calls == ["demo-project"]
+    assert result["ok"] is True
+    assert result["project_id"] == "demo-project"
+    assert result["source"] == "running_tree"
+
+
 def test_start_server_disables_ws_ping_on_loopback(monkeypatch):
     """Loopback binds (the Desktop case) MUST disable uvicorn's protocol-level
     keepalive ping so an event-loop stall can never trigger a false disconnect.

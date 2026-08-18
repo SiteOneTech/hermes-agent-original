@@ -2,6 +2,7 @@ import { useStore } from '@nanostores/react'
 import { type MutableRefObject, useCallback, useEffect, useRef } from 'react'
 import type { NavigateFunction } from 'react-router'
 
+import { graftRefreshedTailOntoBackfill } from '@/app/chat/transcript-backfill'
 import { revealTreePane } from '@/components/pane-shell/tree/store'
 import { deleteSession, getAllSessionMessages, getLatestSessionMessages, setSessionArchived } from '@/hermes'
 import { useI18n } from '@/i18n'
@@ -12,9 +13,16 @@ import { setSessionYolo } from '@/lib/yolo-session'
 import { normalizeChoices, setClarifyRequest } from '@/store/clarify'
 import { migrateSessionDraft } from '@/store/composer'
 import { clearQueuedPrompts, migrateQueuedPrompts } from '@/store/composer-queue'
+import { $gatewaySwitching } from '@/store/gateway-switch'
 import { $pinnedSessionIds } from '@/store/layout'
 import { clearNotifications, notify, notifyError } from '@/store/notifications'
-import { $activeGatewayProfile, $newChatProfile, ensureGatewayProfile, normalizeProfileKey } from '@/store/profile'
+import {
+  $activeGatewayProfile,
+  $gatewaySwapTarget,
+  $newChatProfile,
+  ensureGatewayProfile,
+  normalizeProfileKey
+} from '@/store/profile'
 import {
   beginSessionMutation,
   endSessionMutation,
@@ -84,6 +92,7 @@ import {
   type BranchMessage,
   chatMessageArraysEquivalent,
   dedupeInflightUserAgainstTranscript,
+  goneSessionVerdict,
   isSessionGoneError,
   overlayConcurrentMessageChanges,
   patchSessionWorkspace,
@@ -704,6 +713,10 @@ export function useSessionActions({
       if (!takeWarmCache()) {
         setActiveSessionId(null)
         activeSessionIdRef.current = null
+        // History load is not turn-busy. Drop the previous session's leftover
+        // lock so focusing this session cannot inherit another chat's run.
+        busyRef.current = false
+        setBusy(false)
 
         if (!resumedSameSelectedSession) {
           setMessages([])
@@ -889,7 +902,14 @@ export function useSessionActions({
                   persistedMatchesActivatedSession &&
                   (persisted.messages.length || !activatedMessages.length)
                 ) {
-                  const persistedMessages = toChatMessages(persisted.messages)
+                  // The REST hydration is a newest-tail page; graft it onto any
+                  // older pages the previous view already backfilled so
+                  // re-activating a scrolled-back session keeps its history.
+                  const persistedMessages = graftRefreshedTailOntoBackfill(
+                    toChatMessages(persisted.messages),
+                    cachedViewState.messages
+                  )
+
                   const runtimeMessages = toChatMessages(activated.messages)
                   const previousMessages = removeRepresentedLocalLiveProjection(cachedViewState.messages, activated)
 
@@ -982,9 +1002,10 @@ export function useSessionActions({
         setMessages([])
       }
 
-      // A history load is not a live turn. Toggling busy here and again in the
-      // finally block re-renders the thread viewport after it has loaded.
-      busyRef.current = true
+      // A history load is not a live turn. Do not mark the incoming session
+      // busy — running ≠ loading, and a leftover true locked the composer.
+      busyRef.current = false
+      setBusy(false)
       setAwaitingResponse(false)
       clearNotifications()
       setSelectedStoredSessionId(storedSessionId)
@@ -1030,6 +1051,7 @@ export function useSessionActions({
           session_id: storedSessionId,
           cols: 96,
           source: 'desktop',
+          defer_history: !watchWindow,
           // REST is the transcript authority for Desktop. Avoid duplicating a
           // potentially huge compression lineage in the WebSocket response.
           // Watch windows attach lazily (live mirror). Every other cold resume
@@ -1074,8 +1096,14 @@ export function useSessionActions({
             ? preserveLocalPendingTurnMessages($messages.get(), resumeStartMessages)
             : $messages.get()
 
-          prefetchedTranscriptMessages = toChatMessages(prefetchedResult.messages)
-          localSnapshot = reconcileAuthoritativeChatMessages(prefetchedTranscriptMessages, previousMessages)
+          // Tail page + previously backfilled prefix (same-session re-resume).
+          const graftedPrefetch = graftRefreshedTailOntoBackfill(
+            toChatMessages(prefetchedResult.messages),
+            previousMessages
+          )
+
+          prefetchedTranscriptMessages = graftedPrefetch
+          localSnapshot = reconcileAuthoritativeChatMessages(graftedPrefetch, previousMessages)
           prefetchApplied = true
           prefetchedStoredSessionId = prefetchedResult.session_id || storedSessionId
         }
@@ -1296,11 +1324,39 @@ export function useSessionActions({
         // permanently-dead id. (Booting straight into a no-longer-existent
         // last-session id is the common trigger.)
         if ($messages.get().length === 0 && isSessionGoneError(fallbackError)) {
-          // A session created THIS run isn't gone — its backend just flapped
-          // before the turn-less session persisted. Keep the empty view and arm
-          // the bounded retry to rebind, rather than yanking to a fresh draft.
-          // Only a stale id from a PRIOR run drops to a draft.
-          if (createdThisRun.has(storedSessionId)) {
+          // A 404 is only trustworthy from the backend that OWNS the session.
+          // A cross-profile open (Bots pane) races the gateway swap, so both
+          // lookups can land on a backend that never heard of the id (#88540).
+          // Re-resolve before discarding: a row still listed on any profile —
+          // or a swap in flight — means "retry once things settle", not gone.
+          let stillListed = false
+
+          try {
+            stillListed = Boolean(await resolveStoredSession(storedSessionId))
+          } catch {
+            // Resolution itself failed — inconclusive, treat as not listed.
+          }
+
+          if (!isCurrentResume()) {
+            return
+          }
+
+          const verdict = goneSessionVerdict({
+            createdThisRun: createdThisRun.has(storedSessionId),
+            stillListed,
+            switchInFlight:
+              $gatewaySwitching.get() ||
+              Boolean($gatewaySwapTarget.get()) ||
+              // Known owner ≠ active gateway: the 404 came from the wrong
+              // backend. An UNKNOWN owner must not count — it would block the
+              // draft fallback for genuinely dead ids on secondary profiles.
+              Boolean(
+                sessionProfile?.trim() &&
+                normalizeProfileKey(sessionProfile) !== normalizeProfileKey($activeGatewayProfile.get())
+              )
+          })
+
+          if (verdict === 'retry') {
             setResumeFailedSessionId(storedSessionId)
 
             return

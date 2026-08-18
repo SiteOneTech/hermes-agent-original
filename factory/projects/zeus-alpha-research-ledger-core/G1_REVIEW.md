@@ -163,6 +163,351 @@ final head SHA after the last push. An independent reviewer (task reviewer
 self-approve, merge, deploy, change credentials, write direct SQL, or touch
 any runtime/external/trading path.
 
+## Review round 13 — current-origin G1 document-status technical recovery
+
+**Current-origin readback:** this recovery starts from assigned worktree
+`/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-000-g1-document-status-technical-rec`,
+branch `factory/zeus-alpha-research-ledger-core/inc-000-g1-document-status-technical-rec`,
+with local `HEAD`, `origin/main`, and merge-base all equal to
+`139df9ae49137bb4b16152550d53d385310de3b6` before edits.
+
+**Canonical Agent Core read-back:** the approved status command
+`/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory status --json zeus-alpha-research-ledger-core`
+read Agent Core Postgres (`db_backend=agent_core_postgres`, `database=zeus_agent`) and wrote full evidence to
+`/home/jean/.hermes/profiles/codex-builder/cache/terminal-output/out-1786925327-620586-1dd0.log`.
+Project `document_status` lines `19341`–`19690` show configured base ref
+`origin/main`, base commit `139df9ae49137bb4b16152550d53d385310de3b6`,
+`readiness_source=configured_base_ref`, stale primary checkout rejected, and
+`exists=true`, `committed=true`, `indexed=true`, `validated=true`,
+`reviewed=true`, `blocking=false` for all 14 required G1 documents.
+
+**Remaining control-plane mismatch:** earlier status payloads exposed stale
+persisted provenance: recent reconciliation events listed `unvalidated_required_docs`,
+metadata carried `reconciliation_anomalies=["unvalidated_required_docs"]`, and obsolete
+`g1_documentation_checkout` pointed at PR #20 / `dad375f27568c38be771fc597b579d087f034e1d`.
+Historical gate `845` also recorded old `reviewed=false` rows. The final Agent Core
+readback re-created `unvalidated_required_docs` from stale `metadata.g1_documentation_checkout`
+assignment provenance (`event_id=193040`, log lines `491`–`512`) even while all 14 current
+required-G1 rows are non-blocking; the bounded follow-up is a Factory reconciler repair,
+not direct SQL or primary checkout mutation.
+
+**Handoff requirement:** the fresh current-origin branch must be opened as a
+Zeus-signed GitHub PR labeled `agent:zeus` against `main`. The PR body/Factory
+evidence must name exact base `139df9ae49137bb4b16152550d53d385310de3b6`, final
+head SHA, and status-output path. An independent quality reviewer must inspect
+that exact SHA; this worker does not self-approve, merge, deploy, change
+credentials, write direct SQL, mutate the primary checkout, or touch any
+runtime/external/trading path.
+
+## Review round 14 — R2at current-origin G1 documentation validation technical rework
+
+**Current-origin identity captured before edits:** R2at uses assigned worktree
+`/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-001-r2at-current-origin-g1-documenta`,
+branch `factory/zeus-alpha-research-ledger-core/inc-001-r2at-current-origin-g1-documenta`,
+with local `HEAD`, `origin/main`, and merge-base all equal to
+`a41acdc4820b92a31b7d42d9a9c28e95b875a3d1` before documentation edits.
+
+**Canonical Agent Core read-back:** the approved status command
+`/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory status zeus-alpha-research-ledger-core --json`
+read Agent Core Postgres (`db_backend=agent_core_postgres`, `database=zeus_agent`) and wrote full evidence to
+`/home/jean/.hermes/profiles/claude-builder/cache/terminal-output/out-1786955910-3629985-7910.log`.
+Project `document_status` lines `20184`–`20534` show configured base ref
+`origin/main`, base commit `a41acdc4820b92a31b7d42d9a9c28e95b875a3d1`,
+`readiness_source=configured_base_ref`, stale primary checkout rejected, and
+`exists=true`, `committed=true`, `indexed=true`, `validated=true`,
+`reviewed=true`, `blocking=false` for all 14 required G1 documents.
+
+**Remaining stale projection evidence:** recent reconciler events `194478` and
+`194477` still list `anomalies=["unvalidated_required_docs"]`, and dispatch-preflight
+event `194474` still lists `blockers=["missing_or_unindexed_docs"]`. The same
+current status payload reports active `reconciliation_anomalies=[]`,
+`reconciliation_projection_source=current_document_status`, and
+`reconciliation_required=false`, while the old `unvalidated_required_docs` remains
+only under `stale_reconciliation_projection` as audit evidence.
+
+**R2au projection repair supersession:** the R2au repair keeps the same
+historical event/task audit boundary but no longer re-presents stale required-doc
+projection metadata under active project metadata when current configured-base
+G1 rows are clean. Current readback
+`/home/jean/.hermes/profiles/codex-builder/cache/terminal-output/out-1786959574-145359-db10.log`
+shows all 14 required rows non-blocking at lines `20255`–`20604`, active
+metadata sourced from `current_document_status` at lines `20808`–`20844`, and no
+active `stale_reconciliation_projection` field.
+
+**Handoff requirement:** R2at remains historical validation evidence; the current
+R2au branch must be opened as a Zeus-signed GitHub PR labeled `agent:zeus`
+against `main`. The PR body/Factory evidence must name exact base
+`2b53ee0f14491ff43da7683d475654a03af5d678`, R2at ancestor
+`d4ac6d89994adf823bb50b79afe5a39fd204fdfd`, final head SHA, status-output path,
+no-auto-merge, and no external runtime execution. An independent quality reviewer
+must inspect that exact SHA; this R2au worker does not self-approve, merge,
+deploy, change credentials, write direct SQL, mutate the primary checkout, or
+touch any runtime/external/trading path.
+
+## Review round 15 — R2av current-origin G1 status projection verification
+
+**Current-origin identity captured before edits:** R2av uses assigned worktree
+`/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-017-r2av-current-origin-g1-status-pr`,
+branch `factory/zeus-alpha-research-ledger-core/inc-017-r2av-current-origin-g1-status-pr`,
+with local `HEAD`, `origin/main`, merge-base, and remote `refs/heads/main` all equal to
+`af9fa27eaaaa52ef173f1578fb7f572ce52cebc6` before documentation edits. This is the
+R2au PR #61 merge commit and contains repair commit
+`1afd37a61a8d21af393e393cb77083adb25b41c7`.
+
+**Canonical Agent Core read-back:** the approved status command
+`/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory status --json zeus-alpha-research-ledger-core`
+read Agent Core Postgres (`db_backend=agent_core_postgres`, `database=zeus_agent`) and wrote full evidence to
+`/home/jean/.hermes/profiles/codex-builder/cache/terminal-output/out-1786962029-820188-d410.log`.
+Project `document_status` lines `20270`–`20626` show configured base ref
+`origin/main`, base commit `af9fa27eaaaa52ef173f1578fb7f572ce52cebc6`,
+`readiness_source=configured_base_ref`, stale primary checkout rejected, and
+`exists=true`, `committed=true`, `indexed=true`, `validated=true`,
+`reviewed=true`, `blocking=false` for all 14 required G1 documents.
+
+**Reviewed=false projection source:** the current status payload still carries old
+audit records: recent events `194724`/`194725` list `anomalies=["unvalidated_required_docs"]`,
+and older delivery-gate evidence retains stale `document_status_snapshot` rows. Those
+records are historical and must not be projected as current dispatch readiness. The
+source-backed 10-blocker mismatch remains the stale primary/runtime path documented in
+this file's R2c5 section (`/home/jean/Projects/hermes-agent-original` at
+`4eb87e4cd48105af05fe974cf1d493f0e1b57ae1`, pre-R2v resolver), not current configured-base
+document content.
+
+**Current projection outcome:** active metadata lines `20830`–`20864` report
+`reconciliation_anomalies=[]`, `reconciliation_projection_source=current_document_status`,
+`reconciliation_required=false`, and `cleared_g1_document_reconciliation_projection=true`.
+`R2AV_CURRENT_ORIGIN_G1_STATUS_PROJECTION_RECOVERY.md` records the status lines,
+focused GREEN test output, and no-direct-SQL/no-primary-mutation/no-external-runtime
+boundary.
+
+**Handoff requirement:** the fresh R2av branch must be opened as a Zeus-signed
+GitHub PR labeled `agent:zeus` against `main`. The PR body/Factory evidence must
+name exact base `af9fa27eaaaa52ef173f1578fb7f572ce52cebc6`, final head SHA, R2au
+repair commit `1afd37a61a8d21af393e393cb77083adb25b41c7`, status-output path,
+no-auto-merge, and no external runtime execution. Independent quality review and
+QA Guardian evidence remain required; this R2av worker does not self-approve,
+merge, deploy, change credentials, write direct SQL, mutate the primary checkout,
+or touch any runtime/external/trading path.
+
+## Review round 16 — R2BJ bounded canonical G1 documentation/index technical recovery
+
+**Current-base identity captured before edits:** R2BJ uses assigned worktree
+`/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-017-r2bj-bounded-canonical-g1-docume`,
+branch `factory/zeus-alpha-research-ledger-core/inc-017-r2bj-bounded-canonical-g1-docume`,
+with local `HEAD`, `origin/main`, and merge-base all equal to
+`b503ba3b57fd606956d0ebf925c83eda253bdcc5` before documentation edits.
+
+**Canonical Agent Core read-back:** the approved status command
+`/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory status zeus-alpha-research-ledger-core --json`
+read Agent Core Postgres (`db_backend=agent_core_postgres`, `database=zeus_agent`) from the assigned worktree source and wrote parsed evidence to
+`/tmp/r2bj-status-before.json` plus full terminal output
+`/home/jean/.hermes/profiles/codex-builder/cache/terminal-output/out-1786980569-860127-b650.log`.
+The active project status reports `factory_cli_source_root` and
+`factory_status_source_root` as the assigned worktree, `factory_status_delegated=false`,
+`reconciliation_anomalies=[]`, `reconciliation_projection_source=current_document_status`,
+`reconciliation_required=false`, `notion_required=false`, and all 14 required G1
+documents as `exists=true`, `committed=true`, `indexed=true`, `validated=true`,
+`reviewed=true`, `blocking=false` from `readiness_source=configured_base_ref`, base
+`b503ba3b57fd606956d0ebf925c83eda253bdcc5`, with stale primary checkout
+`4eb87e4cd48105af05fe974cf1d493f0e1b57ae1` rejected.
+
+**Current stale predicate evidence:** event `195559` still records ALR-020-R2
+dispatch preflight `blockers=["missing_or_unindexed_docs"]`; events `195563`,
+`195562`, and `195560` still record `anomalies=["unvalidated_required_docs"]`;
+gate `884` failed stale PR #44/R2ae evidence that is conflicting/dirty against
+current `origin/main`. These rows are audit/projection evidence only and do not
+override the current configured-base row readback.
+
+**Correction:** `R2BJ_BOUNDED_CANONICAL_G1_DOCUMENTATION_INDEX_RECOVERY.md` records
+the exact docs-first predicate, current Factory status readback, required document
+locations, stale event/gate source, and no-direct-SQL/no-primary-mutation/no-external-runtime
+boundary. `DOCUMENTATION_INDEX.md`, `TASK_GRAPH.md`, `TRACKER.md`, `QA_GATES.md`,
+and `SECURITY_GATES.md` index the same current evidence.
+
+**Handoff requirement:** the fresh R2BJ branch must be opened as a Zeus-signed
+GitHub PR labeled `agent:zeus` against `main`. The PR body/Factory evidence must
+name exact base `b503ba3b57fd606956d0ebf925c83eda253bdcc5`, final head SHA,
+status-output path, validation output, no-merge, and no external runtime execution.
+Independent quality review remains required; this R2BJ worker does not self-approve,
+merge, deploy, change credentials, write direct SQL, mutate the primary checkout,
+or touch any runtime/external/trading path.
+
+## Review round 17 — R2cm G1 review-state provenance repair
+
+**Current-base identity captured before edits:** R2cm uses assigned worktree
+`/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-001-r2cm-repair-g1-review-state-prov`,
+branch `factory/zeus-alpha-research-ledger-core/inc-001-r2cm-repair-g1-review-state-prov`,
+with local `HEAD`, `origin/main`, and merge-base all equal to
+`0ecd9019ba8ec111aaead60a911c9accd854f731` before documentation edits.
+
+**Canonical Agent Core read-back:** the required status command
+`/home/jean/Projects/hermes-agent-original/venv/bin/hermes factory status zeus-alpha-research-ledger-core --json`
+read Agent Core Postgres (`db_backend=agent_core_postgres`, `database=zeus_agent`)
+and wrote `/tmp/r2cm-status-before.json` (2,564,246 bytes). The readback still
+reports the exact ten required G1 blockers with missing `reviewed`:
+`FACTORY_INTAKE.md`, `REQUIREMENTS_ANALYSIS.md`, `PATTERN_ANALYSIS.md`,
+`ASSUMPTIONS_AND_OPEN_QUESTIONS.md`, `PRD.md`, `ADRS.md`,
+`METHODOLOGY_PLAN.md`, `TECHNICAL_BLUEPRINT.md`, `TASK_GRAPH.md`, and
+`SECURITY_GATES.md`.
+
+**Diagnostic resolver read-back:** the allowed worktree-module diagnostic command
+`/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory status zeus-alpha-research-ledger-core --json`
+wrote `/tmp/r2cm-status-worktree-module-before.json` and reported all 14 required
+G1 documents non-blocking from `readiness_source=configured_base_ref`, base
+`0ecd9019ba8ec111aaead60a911c9accd854f731`, with stale primary rejected as
+`primary_checkout_not_configured_base`.
+
+**Correction:** R2cl task/run completion and integration are not independent
+review provenance because the R2cl terminal quality-review path exhausted on
+MiniMax HTTP 429 and did not produce a durable independent verdict. Existing G1
+`reviewed: yes` markers remain valid only through PR #36 / Factory gate `794`
+(source gate `790` / SHA `2476e978c545e24b18ee48844b24eb8c58245ab4`), not
+through R2cl. R2cm itself stays `reviewed: pending_independent_quality_review`
+until a fresh exact-SHA review of the R2cm PR completes.
+
+**Handoff requirement:** the fresh R2cm branch must be opened as a Zeus-signed
+GitHub PR labeled `agent:zeus` against `main`. The PR body/Factory evidence must
+name exact base `0ecd9019ba8ec111aaead60a911c9accd854f731`, final head SHA,
+canonical red status-output path, diagnostic current-base status-output path,
+validation output, no-merge, no direct SQL, no primary mutation, and no external
+runtime execution. Independent quality review remains required; if the review
+provider rate-limits again, this round must remain pending/failed rather than
+auto-green.
+
+## Review round 18 — R2cn bounded canonical G1 docs gate and PR-provenance repair
+
+**Current-base identity captured before edits:** R2cn uses assigned worktree
+`/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-015-r2cn-bounded-canonical-g1-docs-g`,
+branch `factory/zeus-alpha-research-ledger-core/inc-015-r2cn-bounded-canonical-g1-docs-g`,
+with local `HEAD`, `origin/main`, merge-base, and remote `refs/heads/main` all equal to
+`fa24950a228f28d5106ee2125d42045e872f9504` before documentation edits.
+
+**Canonical Agent Core status read-back:** the approved status command
+`/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory status zeus-alpha-research-ledger-core --json`
+read Agent Core Postgres (`db_backend=agent_core_postgres`, `database=zeus_agent`) from the assigned worktree source and wrote
+`/tmp/r2cn-status-before.json` (2,619,035 bytes). The active project status reports
+source-root provenance equal to the assigned worktree, `factory_status_delegated=false`,
+`reconciliation_anomalies=[]`, `reconciliation_projection_source=current_document_status`,
+and all 14 required G1 documents as `exists=true`, `committed=true`, `indexed=true`,
+`validated=true`, `reviewed=true`, `blocking=false` from `readiness_source=configured_base_ref`,
+base `fa24950a228f28d5106ee2125d42045e872f9504`, with stale primary checkout rejected.
+
+**Canonical resolve-state read-back:** the approved control command
+`/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory project resolve-state zeus-alpha-research-ledger-core --json`
+wrote `/tmp/r2cn-resolve-state.json` (7,119 bytes), cleared stale structured
+`unvalidated_required_docs` anomalies for historical R2ai/R2ae tasks, returned
+`supervisor.health=green` with no supervisor violations, and created no human question.
+The remaining classified blocker is unrelated R2ac technical rework from a prior blocked
+run, not a current G1 required-docs defect. Post-resolve status
+`/tmp/r2cn-status-after-resolve.json` keeps 14/14 required G1 rows non-blocking.
+
+**Correction:** R2cn records the current docs gate and PR-provenance handoff so
+historical R2cl/R2cm/R2ai/R2ae stale projection evidence cannot override clean
+configured-base G1 rows. Existing G1 `reviewed: yes` markers remain valid only
+through PR #36 / Factory gate `794` (source gate `790` / SHA
+`2476e978c545e24b18ee48844b24eb8c58245ab4`); R2cn itself stays
+`reviewed: pending_independent_quality_review` until a fresh exact-SHA PR review completes.
+
+**Handoff requirement:** the fresh R2cn branch must be opened as a Zeus-signed
+GitHub PR labeled `agent:zeus` against `main`. The PR body/Factory evidence must
+name exact source commit `fa24950a228f28d5106ee2125d42045e872f9504`, final head SHA,
+status before/after paths, resolve-state path, validation output, no-merge, no direct SQL,
+no primary mutation, and no external runtime execution. Independent quality review remains required.
+
+## Review round 19 — R2ap PR #72 residual G1 task metadata reconciliation
+
+**Current-base identity captured before edits:** R2ap-PR72 uses assigned worktree
+`/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-001-r2ap-reconcile-residual-g1-task`,
+branch `factory/zeus-alpha-research-ledger-core/inc-001-r2ap-reconcile-residual-g1-task`,
+with local `HEAD` and `origin/main` equal to
+`c31e937111bba64e478d3c319e896774bf09e40e` before documentation edits.
+
+**Canonical Factory status read-back:** the approved status command
+`/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory status zeus-alpha-research-ledger-core --json`
+read Agent Core Postgres (`db_backend=agent_core_postgres`, `database=zeus_agent`) from the assigned worktree source and wrote
+`/tmp/r2ap-pr72-status-before.json` (2,835,397 bytes). The active project status
+reports source-root provenance equal to the assigned worktree,
+`factory_status_delegated=false`, `reconciliation_anomalies=[]`,
+`reconciliation_projection_source=current_document_status`, and all 14 required
+G1 documents as `exists=true`, `committed=true`, `indexed=true`, `validated=true`,
+`reviewed=true`, `blocking=false` from `readiness_source=configured_base_ref`,
+base `c31e937111bba64e478d3c319e896774bf09e40e`, with stale primary checkout
+`4eb87e4cd48105af05fe974cf1d493f0e1b57ae1` rejected.
+
+**Exact PR #72 read-back:** GitHub reports PR #72 open, non-draft, labeled
+`agent:zeus`, clean, base `main` / `c31e937111bba64e478d3c319e896774bf09e40e`,
+head `3311b82ee1a29043039003e94582509bb8b89895`, and docs-only under
+`factory/projects/zeus-alpha-research-ledger-core/`. The PR #72 repair task
+already has Factory gates `906` (implementation passed) and `907` (security
+passed).
+
+**Residual source and fail-closed result:** the remaining
+`unvalidated_required_docs` source is stale task-level metadata on blocked R2ai
+and R2ae rows (`blocker_source=structured_reconciliation_metadata`,
+`reconciliation_anomaly/resolved_anomaly=unvalidated_required_docs`), not current
+G1 document rows and not PR #72's candidate content. R2ae also retains a
+historical merge-conflict integration failure. This worker did not close or
+supersede those old rows because the hard DB-write allowlist for the run permits
+only `factory status` and `factory gate record`; `factory gate record` cannot
+change task status, while `factory task close` is a separate subcommand outside
+scope. The stale rows remain fail-closed until a separately authorized canonical
+closure/reconciler path runs.
+
+**Handoff requirement:** this R2ap residual reconciliation branch must be
+delivered as a Zeus-signed GitHub PR labeled `agent:zeus` against `main`. The PR
+body/Factory evidence must name exact base `c31e937111bba64e478d3c319e896774bf09e40e`,
+final head SHA, status-output path, validation output, no-merge, no direct SQL,
+no primary mutation, no force-push/ref rewrite, and no external runtime
+execution. Independent quality review remains required.
+
+## Review round 20 — R2az non-destructive current-base G1 evidence recovery
+
+**Current-base identity captured before edits:** R2az uses assigned worktree
+`/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-017-r2az-non-destructive-current-bas`,
+branch `factory/zeus-alpha-research-ledger-core/inc-017-r2az-non-destructive-current-bas`,
+with local `HEAD`, `origin/main`, remote `refs/heads/main`, and merge-base all equal to
+`3b7bc91f2ee1ef603bb512d147c692568c1b465f` before documentation edits. The
+assigned remote branch was absent before the normal first push, so this delivery
+does not require or perform any force-push/ref rewrite of stale R2ai/R2ae/R2ac
+remote refs or PRs.
+
+**Canonical Factory status read-back:** the allowed status command
+`/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory status zeus-alpha-research-ledger-core --json`
+read Agent Core Postgres (`db_backend=agent_core_postgres`, `database=zeus_agent`) from the assigned worktree source and wrote
+`/tmp/r2az-status-before.json`. The active project status reports source-root
+provenance equal to the assigned worktree, `factory_status_delegated=false`,
+`reconciliation_anomalies=[]`, `reconciliation_projection_source=current_document_status`,
+and all 14 required G1 documents as `exists=true`, `committed=true`,
+`indexed=true`, `validated=true`, `reviewed=true`, `blocking=false` from
+`readiness_source=configured_base_ref`, base
+`3b7bc91f2ee1ef603bb512d147c692568c1b465f`, with stale primary checkout rejected.
+
+**Exact residual condition:** the current-base G1 document rows are clean, but
+recent audit/control-plane evidence still contains stale projections:
+`project_reconciled` events `197638`, `197637`, and `197635` list
+`unvalidated_required_docs`; dispatch-preflight event `197634` lists
+`missing_or_unindexed_docs`; and old blocked R2ai/R2ae rows still carry
+`metadata.blocker_source=structured_reconciliation_metadata` plus
+`metadata.reconciliation_anomaly/resolved_anomaly=unvalidated_required_docs`.
+R2ae also retains a historical merge-conflict integration failure; the separate
+blocked R2ac row is technical rework without a current `reconciliation_anomaly`.
+
+**Correction:** `R2AZ_NON_DESTRUCTIVE_CURRENT_BASE_G1_EVIDENCE_RECOVERY.md`
+records the exact current-base evidence deficit as stale event/task-level
+projection, not document content, while preserving all required G1 `reviewed`
+fields and PR #36/gate `794` provenance unchanged. This worker does not close or
+supersede old task rows because the hard DB-write allowlist permits only
+`factory status` and `factory gate record`; `factory gate record` cannot mutate
+task status.
+
+**Handoff requirement:** the fresh R2az branch must be opened as a Zeus-signed
+GitHub PR labeled `agent:zeus` against `main`. The PR body/Factory evidence must
+name exact source commit `3b7bc91f2ee1ef603bb512d147c692568c1b465f`, final head
+SHA, status readback path, validation output, no-merge, no direct SQL, no
+primary mutation, no force-push/ref rewrite, no stale PR mutation, and no
+external runtime execution. Independent exact-SHA quality review remains
+required; R2az does not authorize ALR-020/product dispatch.
+
 ## Local documentary verification — non-approval
 
 At `2026-08-10T04:50:09-04:00`, the implementation-planner worker verified the project-local pack from the assigned worktree only. `git ls-files --error-unmatch` confirmed the 14 required G1 documents plus `G0_REPOSITORY_STRATEGY.md`, `REQUIREMENTS_TRACEABILITY.md`, `DATABASE_AND_RUNTIME_CONTRACT.md`, and `G1_REVIEW.md` are tracked. `DOCUMENTATION_INDEX.md` indexes required documents and records explicit validated/reviewed status. `G0_REPOSITORY_STRATEGY.md` records the Zeus-only source repo, `origin/main` reference, assigned branch/worktree policy, PR-first delivery, and predecessor linkage. This is implementation evidence, not an independent specification/security PASS.

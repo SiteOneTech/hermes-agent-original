@@ -1039,6 +1039,76 @@ def test_reconciler_does_not_cancel_product_validation_task_with_reconciliation_
     assert "demo-qa-security" not in joined.split("demo-reconcile-unvalidated-required-docs")[0]
 
 
+def test_unvalidated_required_docs_reconciliation_resolves_from_current_document_status(monkeypatch):
+    project = {
+        "project_id": "demo",
+        "metadata": {
+            "g1_documentation_checkout": {
+                "branch": "factory/demo/stale-g1-docs",
+                "commit": "0" * 40,
+                "not_merged": True,
+            },
+            "reconciliation_anomalies": ["unvalidated_required_docs"],
+        },
+    }
+    task = {
+        "project_id": "demo",
+        "task_id": "demo-reconcile-unvalidated-required-docs",
+        "status": "blocked",
+        "metadata": {"reconciliation_anomaly": "unvalidated_required_docs"},
+    }
+    monkeypatch.setattr(factory_pg, "_g1_document_blockers", lambda project_arg: [])
+
+    assert factory_pg._resolved_reconciliation_anomaly(project, task) == (
+        "unvalidated_required_docs",
+        "structured_reconciliation_metadata",
+    )
+
+
+def test_unvalidated_required_docs_reconciliation_stays_blocking_when_current_docs_block(monkeypatch):
+    project = {"project_id": "demo", "metadata": {"reconciliation_anomalies": ["unvalidated_required_docs"]}}
+    task = {
+        "project_id": "demo",
+        "task_id": "demo-reconcile-unvalidated-required-docs",
+        "status": "blocked",
+        "metadata": {"reconciliation_anomaly": "unvalidated_required_docs"},
+    }
+    monkeypatch.setattr(factory_pg, "_g1_document_blockers", lambda project_arg: [{"file_name": "PRD.md", "blocking": True}])
+
+    assert factory_pg._resolved_reconciliation_anomaly(project, task) is None
+
+
+def test_reconcile_clears_stale_g1_checkout_projection_when_current_docs_nonblocking(monkeypatch):
+    fake = FakeSql()
+    monkeypatch.setattr(factory_pg, "sql", fake)
+    monkeypatch.setattr(factory_pg, "ensure_runtime_schema", lambda: None)
+    monkeypatch.setattr(factory_pg, "reconciliation_findings", lambda *args, **kwargs: [])
+    monkeypatch.setattr(factory_pg, "_g1_document_blockers", lambda project_arg: [])
+    project = {
+        "project_id": "demo",
+        "status": "active",
+        "autonomous_enabled": True,
+        "metadata": {
+            "g1_documentation_checkout": {
+                "branch": "factory/demo/stale-g1-docs",
+                "commit": "0" * 40,
+                "not_merged": True,
+            },
+            "reconciliation_anomalies": ["unvalidated_required_docs"],
+        },
+    }
+    fake.one_results = [project]
+    fake.rows_results = [[], [], [], []]
+
+    result = factory_pg.reconcile_project("demo")
+
+    joined = "\n".join(fake.statements)
+    assert "metadata = (metadata - 'g1_documentation_checkout') ||" in joined
+    assert '"reconciliation_anomalies": []' in joined
+    assert '"cleared_project_metadata_keys": ["g1_documentation_checkout"]' in joined
+    assert result["cleared_project_metadata_keys"] == ["g1_documentation_checkout"]
+
+
 def test_delivery_readiness_blocks_cancelled_qa_security_task(monkeypatch):
     project = {"project_id": "demo", "name": "Security QR scanner", "risk_level": "medium", "metadata": {"delivery_target": "sandbox", "ui_deliverable": True}}
     tasks = [
@@ -1085,6 +1155,136 @@ def test_status_attaches_document_status(fake_sql, monkeypatch):
 
     payload = factory_pg.status("demo")
     assert payload["projects"][0]["document_status"] == [{"file_name": "PRD.md", "category": "g1_required"}]
+
+
+def test_status_effective_projection_ignores_stale_unvalidated_docs_when_current_rows_clean(fake_sql, monkeypatch):
+    stale_checkout = {"branch": "factory/demo/stale-g1-docs", "commit": "0" * 40, "not_merged": True}
+    fake_sql.rows_results = [
+        [
+            {
+                "project_id": "demo",
+                "status": "active",
+                "repo_path": "/repo",
+                "metadata": {
+                    "reconciliation_anomalies": ["unvalidated_required_docs", "pending_effective_gates"],
+                    "reconciliation_required": True,
+                    "g1_documentation_checkout": stale_checkout,
+                },
+            }
+        ],
+        [], [], [], [], [], [], [], [],
+    ]
+    monkeypatch.setattr(factory_pg, "list_agents", lambda: [])
+    monkeypatch.setattr(factory_pg, "factory_watchdog_alerts", lambda payload, project_id=None: [])
+    monkeypatch.setattr(
+        factory_pg,
+        "project_document_status",
+        lambda project: [
+            {"file_name": "PRD.md", "category": "g1_required", "blocking": False},
+            {"file_name": "QA_GATES.md", "category": "g1_required", "blocking": False},
+        ],
+    )
+
+    payload = factory_pg.status("demo")
+
+    metadata = payload["projects"][0]["metadata"]
+    assert metadata["reconciliation_anomalies"] == ["pending_effective_gates"]
+    assert metadata["reconciliation_required"] is True
+    assert "g1_documentation_checkout" not in metadata
+    assert metadata["cleared_project_metadata_keys"] == ["g1_documentation_checkout"]
+    assert metadata["cleared_g1_document_reconciliation_projection"] is True
+    assert "stale_reconciliation_projection" not in metadata
+    assert "unvalidated_required_docs" not in json.dumps(metadata, sort_keys=True)
+
+
+def test_status_projection_uses_origin_base_not_stale_head_or_task_metadata(fake_sql, monkeypatch, tmp_path):
+    repo, stale_sha, reviewed_sha = _make_stale_primary_with_reviewed_origin(tmp_path)
+    stale_checkout = {"branch": "factory/demo/stale-g1-docs", "commit": "0" * 40, "not_merged": True}
+    fake_sql.rows_results = [
+        [
+            {
+                "project_id": "demo",
+                "status": "active",
+                "repo_path": str(repo),
+                "base_branch": "main",
+                "metadata": {
+                    "artifact_dir": "factory/projects/demo",
+                    "repo_strategy": {"primary_repo_path": str(repo), "base_branch": "main"},
+                    "reconciliation_anomalies": ["unvalidated_required_docs"],
+                    "reconciliation_required": True,
+                    "stale_reconciliation_projection": {
+                        "reconciliation_anomalies": ["unvalidated_required_docs"],
+                    },
+                    "g1_documentation_checkout": stale_checkout,
+                },
+            }
+        ],
+        [],
+        [
+            {
+                "project_id": "demo",
+                "task_id": "demo-stale-doc-repair",
+                "status": "blocked",
+                "phase": "documentation",
+                "metadata": {"reconciliation_anomaly": "unvalidated_required_docs"},
+            }
+        ],
+        [], [], [], [], [],
+    ]
+    monkeypatch.setattr(factory_pg, "list_agents", lambda: [])
+    monkeypatch.setattr(factory_pg, "factory_watchdog_alerts", lambda payload, project_id=None: [])
+
+    payload = factory_pg.status("demo")
+
+    project = payload["projects"][0]
+    metadata_text = json.dumps(project["metadata"], sort_keys=True)
+    g1_rows = [row for row in project["document_status"] if row["category"] == "g1_required"]
+    assert _git(repo, "rev-parse", "HEAD") == stale_sha
+    assert g1_rows
+    assert not any(row["blocking"] for row in g1_rows)
+    assert {row["readiness_source"] for row in g1_rows} == {"configured_base_ref"}
+    assert {row["base_commit"] for row in g1_rows} == {reviewed_sha}
+    assert "unvalidated_required_docs" not in metadata_text
+    assert "g1_documentation_checkout" not in project["metadata"]
+    assert "stale_reconciliation_projection" not in project["metadata"]
+    assert project["metadata"]["cleared_project_metadata_keys"] == [
+        "g1_documentation_checkout",
+        "stale_reconciliation_projection",
+    ]
+
+
+def test_status_effective_projection_fails_closed_when_current_rows_block(fake_sql, monkeypatch):
+    stale_checkout = {"branch": "factory/demo/stale-g1-docs", "commit": "0" * 40, "not_merged": True}
+    fake_sql.rows_results = [
+        [
+            {
+                "project_id": "demo",
+                "status": "active",
+                "repo_path": "/repo",
+                "metadata": {
+                    "reconciliation_anomalies": ["unvalidated_required_docs"],
+                    "reconciliation_required": True,
+                    "g1_documentation_checkout": stale_checkout,
+                },
+            }
+        ],
+        [], [], [], [], [], [], [], [],
+    ]
+    monkeypatch.setattr(factory_pg, "list_agents", lambda: [])
+    monkeypatch.setattr(factory_pg, "factory_watchdog_alerts", lambda payload, project_id=None: [])
+    monkeypatch.setattr(
+        factory_pg,
+        "project_document_status",
+        lambda project: [{"file_name": "PRD.md", "category": "g1_required", "blocking": True}],
+    )
+
+    payload = factory_pg.status("demo")
+
+    metadata = payload["projects"][0]["metadata"]
+    assert metadata["reconciliation_anomalies"] == ["unvalidated_required_docs"]
+    assert metadata["reconciliation_required"] is True
+    assert metadata["g1_documentation_checkout"] == stale_checkout
+    assert "stale_reconciliation_projection" not in metadata
 
 
 def test_record_delivery_gate_persists_document_status_snapshot(fake_sql, monkeypatch):
@@ -1138,6 +1338,100 @@ def test_orchestrator_prompt_injects_g1_docs_and_common_skill():
     assert "DOCUMENTATION_INDEX.md" in prompt
     assert "G1 readiness" in prompt
     assert "/repo/.worktrees/demo/t1/factory/projects/demo/PRD.md" in prompt
+
+
+def test_orchestrator_prompt_recomputes_g1_readiness_from_assigned_worktree(monkeypatch, tmp_path):
+    script = Path(__file__).resolve().parents[2] / "scripts" / "factory" / "factory_orchestrator_tick.py"
+    spec = importlib.util.spec_from_file_location("factory_orchestrator_tick_source_root_test", script)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    worktree = tmp_path / "assigned-worktree"
+    worktree.mkdir()
+    project_dir = "factory/projects/demo"
+    ready_docs = {"SPRINT_PLAN.md", "TRACKER.md", "DOCUMENTATION_INDEX.md", "QA_GATES.md"}
+    stale_rows = [
+        {
+            "file_name": name,
+            "path": f"{project_dir}/{name}",
+            "category": "g1_required",
+            "blocking": name not in ready_docs,
+            "exists": True,
+            "indexed": True,
+            "committed": True,
+            "validated": True,
+            "reviewed": name in ready_docs,
+            "readiness_source": "primary",
+        }
+        for name in factory_pg.G1_BLOCKING_DOCUMENTS
+    ]
+    stale_rows.extend(
+        {
+            "file_name": f"LIFECYCLE_{idx}.md",
+            "path": f"{project_dir}/LIFECYCLE_{idx}.md",
+            "category": "lifecycle",
+            "blocking": False,
+            "exists": True,
+            "indexed": True,
+            "committed": True,
+            "validated": True,
+            "reviewed": True,
+        }
+        for idx in range(8)
+    )
+    clean_rows = [
+        {
+            "file_name": name,
+            "path": f"{project_dir}/{name}",
+            "category": "g1_required",
+            "blocking": False,
+            "exists": True,
+            "indexed": True,
+            "committed": True,
+            "validated": True,
+            "reviewed": True,
+            "readiness_source": "configured_base_ref",
+        }
+        for name in factory_pg.G1_BLOCKING_DOCUMENTS
+    ]
+    calls: list[str] = []
+
+    def fake_project_document_status(project):
+        calls.append(str(project.get("repo_path")))
+        return clean_rows
+
+    monkeypatch.setattr(factory_pg, "project_document_status", fake_project_document_status)
+    payload = {
+        "projects": [{
+            "project_id": "demo",
+            "name": "Demo",
+            "repo_path": "/stale-primary",
+            "metadata": {"artifact_dir": project_dir},
+            "document_status": stale_rows,
+        }],
+        "tasks": [],
+        "gates": [],
+    }
+    claim = {
+        "run_id": "run-1",
+        "run_type": "implementation",
+        "task": {
+            "project_id": "demo",
+            "task_id": "t1",
+            "title": "Implement",
+            "phase": "implementation",
+            "engine": "codex",
+            "worktree_path": str(worktree),
+        },
+    }
+
+    prompt = module._task_prompt(payload, claim)
+
+    assert calls == [str(worktree)]
+    assert "G1 readiness: 14/14 documentos G1 sin blocker; blockers=0" in prompt
+    assert f"source_root={worktree}" in prompt
+    assert "BLOCKED missing=reviewed" not in prompt
+    assert f"{worktree}/factory/projects/demo/FACTORY_INTAKE.md" in prompt
 
 
 def test_orchestrator_prompt_injects_ui_sandbox_delivery_contract():

@@ -452,11 +452,18 @@ export const api = {
     source?: string,
     profile = getManagementProfile(),
   ) =>
-    fetchJSON<{ ok: boolean; removed: number }>("/api/sessions/prune", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ older_than_days, source, profile: profile || undefined }),
-    }),
+    fetchJSON<{ ok: boolean; removed: number; skipped_open: number }>(
+      "/api/sessions/prune",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          older_than_days,
+          source,
+          profile: profile || undefined,
+        }),
+      },
+    ),
   listFiles: (path?: string) => {
     const query = path ? `?path=${encodeURIComponent(path)}` : "";
     return fetchJSON<ManagedFilesResponse>(`/api/files${query}`);
@@ -2320,6 +2327,7 @@ export interface CronJob {
   last_status?: string | null;
   last_error?: string | null;
   last_delivery_error?: string | null;
+  last_fire_error?: { at?: string | null; detail?: string | null } | null;
 }
 
 export interface CronDeliveryTarget {
