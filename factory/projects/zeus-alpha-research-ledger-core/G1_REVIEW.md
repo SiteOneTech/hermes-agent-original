@@ -414,6 +414,45 @@ name exact source commit `fa24950a228f28d5106ee2125d42045e872f9504`, final head 
 status before/after paths, resolve-state path, validation output, no-merge, no direct SQL,
 no primary mutation, and no external runtime execution. Independent quality review remains required.
 
+## Review round 19 — R2ai-R2 canonical active-metadata anomaly repair
+
+**Current-origin identity captured before edits:** R2ai-R2 canonical active-metadata repair uses assigned worktree
+`/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-019-r2ai-r2-canonical-active-metadat`,
+branch `factory/zeus-alpha-research-ledger-core/inc-019-r2ai-r2-canonical-active-metadat`,
+with local `HEAD`, `origin/main`, and merge-base all equal to
+`c31e937111bba64e478d3c319e896774bf09e40e` before documentation edits.
+
+**Canonical Agent Core status/readback:** the allowed status command
+`/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory status zeus-alpha-research-ledger-core --json`
+read Agent Core Postgres (`db_backend=agent_core_postgres`, `database=zeus_agent`) from the assigned worktree source and wrote
+`/tmp/r2ai-r2-canonical-active-status-before.json`. The active project status reports
+source-root provenance equal to the assigned worktree, `factory_status_delegated=false`,
+all 14 required G1 rows non-blocking from `readiness_source=configured_base_ref`, base
+`c31e937111bba64e478d3c319e896774bf09e40e`, stale primary checkout rejected as
+`primary_checkout_not_configured_base`, and active project metadata
+`reconciliation_anomalies=[]`, `reconciliation_projection_source=current_document_status`,
+`reconciliation_required=false`.
+
+**Residual stale source:** the blocked historical R2ai task
+`zeus-alpha-research-ledger-core-r2ai-current-origin-g1-independent-revie` still carries
+task-level stale structured metadata: `blocker_source=structured_reconciliation_metadata`,
+`reconciliation_anomaly=unvalidated_required_docs`, `resolved_anomaly=unvalidated_required_docs`,
+and `requires_human=false`. This is the exact residual task-level source; it is not current
+configured-base document content and must not be projected as a live G1 docs blocker.
+
+**Correction:** `R2AI_R2_CANONICAL_ACTIVE_METADATA_ANOMALY_REPAIR.md` records the active
+project projection as clean while preserving the stale R2ai task row fail-closed until an
+independent exact-SHA security review and approved Factory control path. Existing G1
+`reviewed: yes` markers remain valid only through PR #36 / Factory gate `794`; this round
+does not re-issue reviewed markers or convert historical audit evidence into approval.
+
+**Handoff requirement:** this branch must be opened as a Zeus-signed non-draft GitHub PR
+labeled `agent:zeus` against `main`. The PR body/Factory evidence must name exact base
+`c31e937111bba64e478d3c319e896774bf09e40e`, final head SHA, status-output path,
+validation output, no-force-push, no-merge, no direct SQL, no primary mutation, and no
+external runtime execution. Independent exact-SHA security review remains required before
+terminal acceptance.
+
 ## Local documentary verification — non-approval
 
 At `2026-08-10T04:50:09-04:00`, the implementation-planner worker verified the project-local pack from the assigned worktree only. `git ls-files --error-unmatch` confirmed the 14 required G1 documents plus `G0_REPOSITORY_STRATEGY.md`, `REQUIREMENTS_TRACEABILITY.md`, `DATABASE_AND_RUNTIME_CONTRACT.md`, and `G1_REVIEW.md` are tracked. `DOCUMENTATION_INDEX.md` indexes required documents and records explicit validated/reviewed status. `G0_REPOSITORY_STRATEGY.md` records the Zeus-only source repo, `origin/main` reference, assigned branch/worktree policy, PR-first delivery, and predecessor linkage. This is implementation evidence, not an independent specification/security PASS.
