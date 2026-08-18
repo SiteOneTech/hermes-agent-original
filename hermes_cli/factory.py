@@ -639,7 +639,11 @@ def _resolve_orchestrator_script() -> tuple[Path, Path]:
     running_script = running_source_root / "scripts" / "factory" / "factory_orchestrator_tick.py"
     if not running_script.is_file():
         raise RuntimeError(f"Factory orchestrator script not found in running Hermes source: {running_script}")
-    source_root = _preferred_cwd_source_root(running_source_root) or running_source_root
+    source_root = (
+        _preferred_cwd_source_root(running_source_root)
+        or _preferred_configured_base_source_root(running_source_root)
+        or running_source_root
+    )
     script = source_root / "scripts" / "factory" / "factory_orchestrator_tick.py"
     if not script.is_file():
         raise RuntimeError(f"Factory orchestrator script not found in running Hermes source: {script}")

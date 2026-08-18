@@ -1109,6 +1109,57 @@ def test_reconcile_clears_stale_g1_checkout_projection_when_current_docs_nonbloc
     assert result["cleared_project_metadata_keys"] == ["g1_documentation_checkout"]
 
 
+def test_reconcile_persists_resolved_recovery_technical_hold_cleanup(monkeypatch):
+    fake = FakeSql()
+    monkeypatch.setattr(factory_pg, "sql", fake)
+    monkeypatch.setattr(factory_pg, "ensure_runtime_schema", lambda: None)
+    recovery_task_id = "demo-r2aq-bounded-recovery"
+    project = {
+        "project_id": "demo",
+        "status": "active",
+        "autonomous_enabled": True,
+        "metadata": {
+            "technical_hold": True,
+            "technical_hold_kind": "technical",
+            "technical_hold_reason": f"Recovery is bounded to task {recovery_task_id}.",
+            "technical_hold_by": "zeus",
+            "technical_hold_at": "2026-08-17T07:04:25Z",
+            "reactivation_policy": "autonomous_supervisor_repairs_or_requeues",
+        },
+    }
+    tasks = [{"project_id": "demo", "task_id": recovery_task_id, "status": "done", "evidence_status": "present"}]
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "reconciliation_findings", lambda *args, **kwargs: [])
+    monkeypatch.setattr(factory_pg, "_g1_document_blockers", lambda project_arg: [])
+    fake.rows_results = [[]]
+
+    result = factory_pg.reconcile_project("demo")
+
+    joined = "\n".join(fake.statements)
+    for key in factory_pg.TECHNICAL_HOLD_METADATA_KEYS:
+        assert f"- '{key}'" in joined
+    assert '"reconciliation_anomalies": []' in joined
+    assert result["cleared_project_metadata_keys"] == list(factory_pg.TECHNICAL_HOLD_METADATA_KEYS)
+
+
+def test_reconcile_keeps_unfinished_recovery_technical_hold(monkeypatch):
+    recovery_task_id = "demo-r2aq-bounded-recovery"
+    project = {
+        "project_id": "demo",
+        "metadata": {
+            "technical_hold": True,
+            "technical_hold_reason": f"Recovery is bounded to task {recovery_task_id}.",
+        },
+    }
+    tasks = [{"project_id": "demo", "task_id": recovery_task_id, "status": "todo", "evidence_status": "missing"}]
+    monkeypatch.setattr(factory_pg, "_g1_document_blockers", lambda project_arg: [])
+
+    assert factory_pg._resolved_technical_hold_metadata_keys(project, tasks, []) == []
+
+
 def test_delivery_readiness_blocks_cancelled_qa_security_task(monkeypatch):
     project = {"project_id": "demo", "name": "Security QR scanner", "risk_level": "medium", "metadata": {"delivery_target": "sandbox", "ui_deliverable": True}}
     tasks = [
@@ -1195,6 +1246,49 @@ def test_status_effective_projection_ignores_stale_unvalidated_docs_when_current
     assert metadata["cleared_g1_document_reconciliation_projection"] is True
     assert "stale_reconciliation_projection" not in metadata
     assert "unvalidated_required_docs" not in json.dumps(metadata, sort_keys=True)
+
+
+def test_status_effective_projection_clears_resolved_recovery_technical_hold(fake_sql, monkeypatch):
+    recovery_task_id = "demo-r2aq-bounded-recovery"
+    fake_sql.rows_results = [
+        [
+            {
+                "project_id": "demo",
+                "status": "active",
+                "repo_path": "/repo",
+                "metadata": {
+                    "reconciliation_anomalies": [],
+                    "reconciliation_required": False,
+                    "technical_hold": True,
+                    "technical_hold_kind": "technical",
+                    "technical_hold_reason": f"Canonical control action failed; recovery is bounded to task {recovery_task_id}.",
+                    "technical_hold_by": "zeus",
+                    "technical_hold_at": "2026-08-17T07:04:25Z",
+                    "reactivation_policy": "autonomous_supervisor_repairs_or_requeues",
+                },
+            }
+        ],
+        [],
+        [{"project_id": "demo", "task_id": recovery_task_id, "status": "done", "evidence_status": "present"}],
+        [], [], [], [], [],
+    ]
+    monkeypatch.setattr(factory_pg, "list_agents", lambda: [])
+    monkeypatch.setattr(factory_pg, "factory_watchdog_alerts", lambda payload, project_id=None: [])
+    monkeypatch.setattr(
+        factory_pg,
+        "project_document_status",
+        lambda project: [{"file_name": "PRD.md", "category": "g1_required", "blocking": False}],
+    )
+
+    payload = factory_pg.status("demo")
+
+    metadata = payload["projects"][0]["metadata"]
+    assert metadata["reconciliation_anomalies"] == []
+    assert metadata["reconciliation_required"] is False
+    assert metadata["cleared_technical_hold_projection"] is True
+    for key in factory_pg.TECHNICAL_HOLD_METADATA_KEYS:
+        assert key not in metadata
+    assert set(factory_pg.TECHNICAL_HOLD_METADATA_KEYS) <= set(metadata["cleared_project_metadata_keys"])
 
 
 def test_status_projection_uses_origin_base_not_stale_head_or_task_metadata(fake_sql, monkeypatch, tmp_path):

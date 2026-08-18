@@ -210,6 +210,42 @@ def test_project_tick_prefers_isolated_cwd_source_over_stale_running_module(monk
     assert captured["kwargs"]["env"]["PYTHONPATH"].split(os.pathsep)[0] == str(worktree)
 
 
+def test_project_tick_prefers_configured_base_source_when_invoked_from_stale_primary_root(monkeypatch, tmp_path):
+    primary, current_worktree, stale_sha, current_sha = _make_stale_primary_with_configured_base_worktree(tmp_path)
+    monkeypatch.chdir(primary)
+    monkeypatch.setattr(factory, "__file__", str(primary / "hermes_cli" / "factory.py"))
+    assert _git(primary, "rev-parse", "HEAD") == stale_sha
+    assert _git(primary, "rev-parse", "origin/main") == current_sha
+
+    captured: dict[str, Any] = {}
+    real_run = factory.subprocess.run
+
+    def fake_run(argv, **kwargs):
+        argv_text = [str(part) for part in argv]
+        if argv_text == [sys.executable, str(current_worktree / "scripts" / "factory" / "factory_orchestrator_tick.py")]:
+            captured["argv"] = argv_text
+            captured["kwargs"] = kwargs
+            return factory.subprocess.CompletedProcess(
+                argv,
+                0,
+                stdout=json.dumps({"job": "factory_orchestrator_tick", "source": "configured-base"}),
+                stderr="",
+            )
+        return real_run(argv, **kwargs)
+
+    monkeypatch.setattr(factory.subprocess, "run", fake_run)
+
+    result = factory._run_orchestrator_script("demo-project")
+
+    assert result["source"] == "configured-base"
+    assert result["factory_cli_source_root"] == str(current_worktree)
+    assert result["factory_orchestrator_script"] == str(current_worktree / "scripts" / "factory" / "factory_orchestrator_tick.py")
+    assert captured["kwargs"]["cwd"] == str(current_worktree)
+    env = captured["kwargs"]["env"]
+    assert env["FACTORY_TICK_PROJECT_ID"] == "demo-project"
+    assert env["PYTHONPATH"].split(os.pathsep)[0] == str(current_worktree)
+
+
 def test_project_tick_fails_closed_when_running_source_provenance_unavailable(monkeypatch, tmp_path):
     stale_wrapper = tmp_path / ".hermes" / "scripts" / "factory_orchestrator_tick.py"
     stale_wrapper.parent.mkdir(parents=True)
