@@ -4,6 +4,7 @@ import argparse
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,67 @@ def _load_orchestrator_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _write_complete_factory_source(root: Path, marker: str) -> None:
+    (root / "hermes_cli").mkdir(parents=True, exist_ok=True)
+    (root / "scripts" / "factory").mkdir(parents=True, exist_ok=True)
+    (root / "hermes_cli" / "main.py").write_text(f"# {marker} main\n", encoding="utf-8")
+    (root / "hermes_cli" / "factory.py").write_text(f"# {marker} factory cli\n", encoding="utf-8")
+    (root / "hermes_cli" / "factory_pg.py").write_text(f"# {marker} factory backend\n", encoding="utf-8")
+    (root / "scripts" / "factory" / "factory_orchestrator_tick.py").write_text(
+        f"print('{{\"source\": \"{marker}\"}}')\n",
+        encoding="utf-8",
+    )
+
+
+def _git_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env["GIT_CONFIG_NOSYSTEM"] = "1"
+    env["GIT_CONFIG_GLOBAL"] = os.devnull
+    return env
+
+
+def _git(repo: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repo), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=_git_env(),
+    ).stdout.strip()
+
+
+def _make_stale_primary_with_configured_base_worktree(tmp_path: Path) -> tuple[Path, Path, str, str]:
+    origin = tmp_path / "origin.git"
+    primary = tmp_path / "primary-root"
+    updater = tmp_path / "updater"
+    current_worktree = tmp_path / "configured-base-source"
+
+    subprocess.run(["git", "init", "--bare", str(origin)], check=True, capture_output=True, text=True, env=_git_env())
+    subprocess.run(["git", "clone", str(origin), str(primary)], check=True, capture_output=True, text=True, env=_git_env())
+    _git(primary, "config", "user.email", "factory@example.com")
+    _git(primary, "config", "user.name", "Factory Test")
+    _write_complete_factory_source(primary, "stale-primary")
+    _git(primary, "add", "hermes_cli", "scripts")
+    _git(primary, "commit", "-m", "stale primary factory source")
+    stale_sha = _git(primary, "rev-parse", "HEAD")
+    _git(primary, "branch", "-M", "main")
+    _git(primary, "push", "origin", "main")
+    _git(origin, "symbolic-ref", "HEAD", "refs/heads/main")
+
+    subprocess.run(["git", "clone", str(origin), str(updater)], check=True, capture_output=True, text=True, env=_git_env())
+    _git(updater, "checkout", "main")
+    _git(updater, "config", "user.email", "factory@example.com")
+    _git(updater, "config", "user.name", "Factory Test")
+    _write_complete_factory_source(updater, "configured-base")
+    _git(updater, "add", "hermes_cli", "scripts")
+    _git(updater, "commit", "-m", "configured base factory source")
+    current_sha = _git(updater, "rev-parse", "HEAD")
+    _git(updater, "push", "origin", "main")
+    _git(primary, "fetch", "origin", "main:refs/remotes/origin/main")
+    _git(primary, "worktree", "add", "--detach", str(current_worktree), "origin/main")
+    return primary, current_worktree, stale_sha, current_sha
 
 
 
@@ -236,6 +298,168 @@ def test_status_prefers_isolated_cwd_source_over_stale_running_module(monkeypatc
     assert captured["kwargs"]["cwd"] == str(worktree)
     assert captured["kwargs"]["env"]["PYTHONPATH"].split(os.pathsep)[0] == str(worktree)
     assert captured["kwargs"]["env"]["HERMES_FACTORY_SOURCE_DELEGATED"] == "1"
+
+
+def test_status_prefers_configured_base_source_when_invoked_from_stale_primary_root(monkeypatch, tmp_path, capsys):
+    primary, current_worktree, stale_sha, current_sha = _make_stale_primary_with_configured_base_worktree(tmp_path)
+    monkeypatch.chdir(primary)
+    monkeypatch.setattr(factory, "__file__", str(primary / "hermes_cli" / "factory.py"))
+    assert _git(primary, "rev-parse", "HEAD") == stale_sha
+    assert _git(primary, "rev-parse", "origin/main") == current_sha
+
+    captured: dict[str, Any] = {}
+    real_run = factory.subprocess.run
+
+    def fake_run(argv, **kwargs):
+        argv_text = [str(part) for part in argv]
+        if argv_text[:5] == [sys.executable, "-m", "hermes_cli.main", "factory", "status"]:
+            captured["argv"] = argv_text
+            captured["kwargs"] = kwargs
+            return factory.subprocess.CompletedProcess(
+                argv,
+                0,
+                stdout=json.dumps(
+                    {
+                        "projects": [
+                            {
+                                "project_id": "demo",
+                                "document_status": [
+                                    {
+                                        "file_name": "PRD.md",
+                                        "category": "g1_required",
+                                        "blocking": False,
+                                        "reviewed": True,
+                                        "readiness_source": "configured_base_ref",
+                                        "base_commit": current_sha,
+                                    }
+                                ],
+                            }
+                        ],
+                        "events": [
+                            {
+                                "event_type": "project_reconciled",
+                                "metadata": {"anomalies": ["unvalidated_required_docs"]},
+                            }
+                        ],
+                    }
+                ),
+                stderr="",
+            )
+        return real_run(argv, **kwargs)
+
+    monkeypatch.setattr(factory.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        factory,
+        "_backend",
+        lambda _args: (_ for _ in ()).throw(AssertionError("stale primary backend must not be used")),
+    )
+
+    rc = factory.cmd_status(argparse.Namespace(project_id="demo", json=True))
+
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["factory_cli_source_root"] == str(current_worktree)
+    assert payload["factory_status_source_root"] == str(current_worktree)
+    assert payload["factory_status_delegated"] is True
+    assert payload["factory_status_delegated_from_source_root"] == str(primary)
+    assert payload["projects"][0]["document_status"][0]["readiness_source"] == "configured_base_ref"
+    assert payload["projects"][0]["document_status"][0]["base_commit"] == current_sha
+    assert captured["argv"] == [
+        sys.executable,
+        "-m",
+        "hermes_cli.main",
+        "factory",
+        "status",
+        "demo",
+        "--json",
+    ]
+    assert captured["kwargs"]["cwd"] == str(current_worktree)
+    env = captured["kwargs"]["env"]
+    assert env["PYTHONPATH"].split(os.pathsep)[0] == str(current_worktree)
+    assert env["HERMES_FACTORY_SOURCE_DELEGATED"] == "1"
+
+
+def test_status_keeps_primary_readback_when_configured_base_source_is_unverified(monkeypatch, tmp_path, capsys):
+    primary, current_worktree, _stale_sha, _current_sha = _make_stale_primary_with_configured_base_worktree(tmp_path)
+    (current_worktree / "hermes_cli" / "factory_pg.py").write_text("# dirty configured-base source\n", encoding="utf-8")
+    monkeypatch.chdir(primary)
+    monkeypatch.setattr(factory, "__file__", str(primary / "hermes_cli" / "factory.py"))
+
+    real_run = factory.subprocess.run
+
+    def fake_run(argv, **kwargs):
+        argv_text = [str(part) for part in argv]
+        if argv_text[:5] == [sys.executable, "-m", "hermes_cli.main", "factory", "status"]:
+            raise AssertionError("dirty configured-base source must not be used")
+        return real_run(argv, **kwargs)
+
+    class FakeBackend:
+        @staticmethod
+        def status(project_id):
+            return {
+                "projects": [
+                    {
+                        "project_id": project_id,
+                        "document_status": [
+                            {
+                                "file_name": "PRD.md",
+                                "category": "g1_required",
+                                "blocking": True,
+                                "reviewed": False,
+                                "readiness_source": "primary",
+                            }
+                        ],
+                    }
+                ]
+            }
+
+    monkeypatch.setattr(factory.subprocess, "run", fake_run)
+    monkeypatch.setattr(factory, "_backend", lambda _args: FakeBackend())
+
+    rc = factory.cmd_status(argparse.Namespace(project_id="demo", json=True))
+
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["factory_cli_source_root"] == str(primary)
+    assert payload["factory_status_source_root"] == str(primary)
+    assert payload["factory_status_delegated"] is False
+    assert payload["projects"][0]["document_status"][0]["blocking"] is True
+
+
+def test_status_keeps_running_source_when_it_is_ahead_of_configured_base(monkeypatch, tmp_path, capsys):
+    primary, current_worktree, _stale_sha, _current_sha = _make_stale_primary_with_configured_base_worktree(tmp_path)
+    _git(primary, "merge", "--ff-only", "origin/main")
+    (primary / "hermes_cli" / "factory.py").write_text("# ahead feature source\n", encoding="utf-8")
+    _git(primary, "add", "hermes_cli/factory.py")
+    _git(primary, "commit", "-m", "feature branch factory source")
+    assert _git(primary, "rev-parse", "HEAD") != _git(primary, "rev-parse", "origin/main")
+    assert _git(current_worktree, "rev-parse", "HEAD") == _git(primary, "rev-parse", "origin/main")
+    monkeypatch.chdir(primary)
+    monkeypatch.setattr(factory, "__file__", str(primary / "hermes_cli" / "factory.py"))
+
+    real_run = factory.subprocess.run
+
+    def fake_run(argv, **kwargs):
+        argv_text = [str(part) for part in argv]
+        if argv_text[:5] == [sys.executable, "-m", "hermes_cli.main", "factory", "status"]:
+            raise AssertionError("ahead running source must not delegate to the configured-base worktree")
+        return real_run(argv, **kwargs)
+
+    class FakeBackend:
+        @staticmethod
+        def status(project_id):
+            return {"projects": [{"project_id": project_id, "document_status": []}]}
+
+    monkeypatch.setattr(factory.subprocess, "run", fake_run)
+    monkeypatch.setattr(factory, "_backend", lambda _args: FakeBackend())
+
+    rc = factory.cmd_status(argparse.Namespace(project_id="demo", json=True))
+
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["factory_cli_source_root"] == str(primary)
+    assert payload["factory_status_source_root"] == str(primary)
+    assert payload["factory_status_delegated"] is False
 
 
 def test_resolve_state_prefers_isolated_cwd_source_over_stale_running_module(monkeypatch, tmp_path, capsys):
