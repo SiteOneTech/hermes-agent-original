@@ -238,6 +238,28 @@ def test_status_prefers_isolated_cwd_source_over_stale_running_module(monkeypatc
     assert captured["kwargs"]["env"]["HERMES_FACTORY_SOURCE_DELEGATED"] == "1"
 
 
+def test_status_fails_closed_when_running_source_provenance_malformed(monkeypatch, tmp_path, capsys):
+    fake_factory = tmp_path / "not_hermes_cli" / "factory.py"
+    fake_factory.parent.mkdir(parents=True)
+    fake_factory.write_text("# malformed module provenance\n", encoding="utf-8")
+    monkeypatch.setattr(factory, "__file__", str(fake_factory))
+    monkeypatch.setattr(
+        factory,
+        "_backend",
+        lambda _args: (_ for _ in ()).throw(AssertionError("stale backend must not be used")),
+    )
+
+    rc = factory.cmd_status(argparse.Namespace(project_id="demo", json=True))
+
+    assert rc == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["error_type"] == "factory_status_source_provenance_failed"
+    assert payload["project_id"] == "demo"
+    assert payload["factory_status_source_verified"] is False
+    assert payload["factory_status_source_error"].startswith("Factory CLI source provenance malformed")
+    assert payload["factory_status_source_file"] == str(fake_factory.resolve())
+
+
 def test_orchestrator_tick_reports_migration_readiness_before_claim_or_spawn(monkeypatch, capsys):
     module = _load_orchestrator_module()
     calls: list[str] = []
