@@ -151,16 +151,50 @@ def test_mark_run_finished_review_success_merges_before_done(fake_sql, monkeypat
     monkeypatch.setattr(factory_pg, "_integrate_increment_to_base", integrate)
     fake_sql.one_results = [
         {"task_id": "task-1", "metadata": {"run_type": "review"}},
+        {"gate_id": 42, "gate_type": "quality", "reviewer": "quality-reviewer"},
         {"project_id": "demo"},
     ]
 
-    factory_pg.mark_run_finished("run-1", exit_code=0, output_summary="STATE: DONE")
+    factory_pg.mark_run_finished(
+        "run-1",
+        exit_code=0,
+        output_summary="Reviewed exact candidate SHA abc1234; gate_id 42 passed.\nSTATE: DONE",
+    )
 
     assert calls == ["task-1"]
     joined = "\n".join(fake_sql.statements)
     assert "SET status='succeeded'" in joined
     assert "SET status='done'" in joined
     assert "Increment integration completed" in joined
+
+
+def test_mark_run_finished_review_success_requires_task_bound_gate(fake_sql, monkeypatch):
+    calls: list[str] = []
+
+    def integrate(task_id: str, *, actor: str, final_status: str):
+        calls.append(task_id)
+        return {"increment_integration_required": True, "increment_integration_status": "integrated"}
+
+    monkeypatch.setattr(factory_pg, "_integrate_increment_to_base", integrate)
+    fake_sql.one_results = [
+        {"task_id": "task-1", "metadata": {"run_type": "review"}},
+        None,
+        {"project_id": "demo"},
+    ]
+
+    factory_pg.mark_run_finished(
+        "run-1",
+        exit_code=0,
+        output_summary="Reviewed exact candidate SHA abc1234, but no task-bound Factory gate was recorded.\nSTATE: DONE",
+    )
+
+    assert calls == []
+    joined = "\n".join(fake_sql.statements)
+    assert "SET status='failed'" in joined
+    assert "SET status='rework'" in joined
+    assert "SET status='done'" not in joined
+    assert "review_success_without_task_bound_passed_gate" in joined
+    assert "review_run_failed" in joined
 
 
 def test_mark_run_finished_review_success_reworks_when_merge_fails(fake_sql, monkeypatch):
@@ -170,10 +204,15 @@ def test_mark_run_finished_review_success_reworks_when_merge_fails(fake_sql, mon
     monkeypatch.setattr(factory_pg, "_integrate_increment_to_base", integrate)
     fake_sql.one_results = [
         {"task_id": "task-1", "metadata": {"run_type": "review"}},
+        {"gate_id": 42, "gate_type": "quality", "reviewer": "quality-reviewer"},
         {"project_id": "demo"},
     ]
 
-    factory_pg.mark_run_finished("run-1", exit_code=0, output_summary="STATE: DONE")
+    factory_pg.mark_run_finished(
+        "run-1",
+        exit_code=0,
+        output_summary="Reviewed exact candidate SHA abc1234; gate_id 42 passed.\nSTATE: DONE",
+    )
 
     joined = "\n".join(fake_sql.statements)
     assert "SET status='failed'" in joined
@@ -208,6 +247,38 @@ def test_mark_run_finished_failed_review_with_wrapped_instruction_remains_rework
     assert "SET status='done'" not in joined
     assert "review_run_failed" in joined
     assert "HTTP 429" in joined
+
+
+def test_mark_run_finished_review_429_log_cannot_close_even_when_exit_zero(fake_sql, monkeypatch):
+    calls: list[str] = []
+
+    def integrate(task_id: str, *, actor: str, final_status: str):
+        calls.append(task_id)
+        return {"increment_integration_required": True, "increment_integration_status": "integrated"}
+
+    monkeypatch.setattr(factory_pg, "_integrate_increment_to_base", integrate)
+    fake_sql.one_results = [
+        {"task_id": "task-1", "metadata": {"run_type": "review"}},
+        {"project_id": "demo"},
+    ]
+    output = (
+        "Final semantic state marker:\n"
+        "STATE: DONE; si falla, termina con STATE: BLOCKED y razones/rework.\n\n"
+        "⚠️  API call failed (attempt 1/3): RateLimitError [HTTP 429]\n"
+        "❌ Rate limited after 3 retries — HTTP 429: Token Plan usage limit reached.\n"
+        "API call failed after 3 retries: HTTP 429: Token Plan usage limit reached.\n"
+        "Messages:       1 (1 user, 0 tool calls)\n"
+    )
+
+    factory_pg.mark_run_finished("run-1", exit_code=0, output_summary=output)
+
+    assert calls == []
+    joined = "\n".join(fake_sql.statements)
+    assert "SET status='failed'" in joined
+    assert "SET status='rework'" in joined
+    assert "SET status='done'" not in joined
+    assert "review_output_contains_runtime_failure" in joined
+    assert "RateLimitError" in joined
 
 
 def test_passed_task_gate_requires_increment_integration(fake_sql, monkeypatch):

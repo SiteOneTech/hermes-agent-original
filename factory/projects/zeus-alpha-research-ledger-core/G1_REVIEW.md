@@ -508,6 +508,52 @@ primary mutation, no force-push/ref rewrite, no stale PR mutation, and no
 external runtime execution. Independent exact-SHA quality review remains
 required; R2az does not authorize ALR-020/product dispatch.
 
+## Review round 21 — R2db current-origin G1 reviewed-state PR recovery
+
+**Current-base identity captured before edits:** R2db uses assigned worktree
+`/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-017-r2db-current-origin-g1-reviewed`,
+branch `factory/zeus-alpha-research-ledger-core/inc-017-r2db-current-origin-g1-reviewed`,
+with local `HEAD`, `origin/main`, and merge-base all equal to
+`18ef28e6845d2d15dd0ec3cd7d8bb9b7630b71cc` before code/docs edits.
+
+**Canonical Factory status read-back:** the approved status command
+`/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory status zeus-alpha-research-ledger-core --json`
+read Agent Core Postgres (`db_backend=agent_core_postgres`, `database=zeus_agent`) from the assigned worktree source and wrote
+`/tmp/r2db-status-before.json` (`3409655` bytes) before the candidate and
+`/tmp/r2db-status-final.json` (`3409594` bytes) after the candidate. Both
+payloads report worktree source roots, `factory_status_delegated=false`, and all
+14 required G1 documents as `exists=true`, `committed=true`, `indexed=true`,
+`validated=true`, `reviewed=true`, `blocking=false` from
+`readiness_source=configured_base_ref`, base
+`18ef28e6845d2d15dd0ec3cd7d8bb9b7630b71cc`. The assignment prompt's ten
+`missing=reviewed` rows remain stale control-plane/prompt context unless the
+sanctioned status payload reproduces them; R2db does not present any
+`reviewed=false` row as passing.
+
+**False terminal source:** R2da `quality-reviewer` run `run-1787084920-98b97d67`
+was marked `succeeded` / exit `0` while its output contained MiniMax
+`RateLimitError [HTTP 429]`, `API call failed after 3 retries`, and
+`Messages: 1 (1 user, 0 tool calls)`. Gates `950`/`951`/`952` and PR #86 are
+historical/different-task evidence candidates only; they are not current-origin
+R2db task-bound review evidence.
+
+**Correction:** `hermes_cli/factory_pg.py` now rejects positive review-run
+terminalization when reviewer output is empty, when the transcript contains
+runtime/provider failure signatures, or when no same-task passed Factory review
+gate exists. The rejection records `review_run_failed`/`review_ready` semantics
+instead of integrating or marking the task reviewed. Focused RED/GREEN tests in
+`tests/hermes_cli/test_factory_increment_integration.py` prove HTTP 429 with
+exit `0` cannot close and that clean review output still requires a task-bound
+passed gate.
+
+**Handoff requirement:** the fresh R2db branch must be opened as a Zeus-signed
+GitHub PR labeled `agent:zeus` against `main`. The PR body/Factory evidence must
+name exact source commit `18ef28e6845d2d15dd0ec3cd7d8bb9b7630b71cc`, final head
+SHA, before/after status paths, validation output, no-merge, no direct SQL, no
+primary mutation, no force-push/ref rewrite, no task-status mutation, and no
+external runtime/product dispatch. Independent exact-SHA quality review remains
+required before this task can be represented as reviewed.
+
 ## Local documentary verification — non-approval
 
 At `2026-08-10T04:50:09-04:00`, the implementation-planner worker verified the project-local pack from the assigned worktree only. `git ls-files --error-unmatch` confirmed the 14 required G1 documents plus `G0_REPOSITORY_STRATEGY.md`, `REQUIREMENTS_TRACEABILITY.md`, `DATABASE_AND_RUNTIME_CONTRACT.md`, and `G1_REVIEW.md` are tracked. `DOCUMENTATION_INDEX.md` indexes required documents and records explicit validated/reviewed status. `G0_REPOSITORY_STRATEGY.md` records the Zeus-only source repo, `origin/main` reference, assigned branch/worktree policy, PR-first delivery, and predecessor linkage. This is implementation evidence, not an independent specification/security PASS.

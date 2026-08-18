@@ -6833,6 +6833,63 @@ def _effective_exit_code(exit_code: int, output_summary: str) -> int:
     return exit_code
 
 
+_TASK_BOUND_REVIEW_GATE_TYPES = (
+    "architecture",
+    "critical_readiness",
+    "delivery",
+    "quality",
+    "security",
+    "spec",
+    "test",
+)
+_REVIEW_RUNTIME_FAILURE_PATTERNS = (
+    "api call failed after 3 retries",
+    "ratelimiterror [http 429]",
+    "rate limited after 3 retries",
+    "usage limit reached: upgrade your token plan",
+    "messages:       1 (1 user, 0 tool calls)",
+)
+
+
+def _review_runtime_failure_reason(output_summary: str) -> str | None:
+    text = str(output_summary or "").strip()
+    if not text:
+        return "empty_reviewer_output"
+    folded = text.casefold()
+    if any(pattern in folded for pattern in _REVIEW_RUNTIME_FAILURE_PATTERNS):
+        return "review_output_contains_runtime_failure"
+    return None
+
+
+def _task_bound_passed_review_gate(task_id: str) -> dict[str, Any] | None:
+    tid = str(task_id or "").strip()
+    if not tid:
+        return None
+    gate_types = ",".join(_q(gate_type) for gate_type in _TASK_BOUND_REVIEW_GATE_TYPES)
+    row = sql.one(
+        f"""
+        SELECT gate_id, gate_type, reviewer
+        FROM factory.gates
+        WHERE task_id={_q(tid)}
+          AND status='passed'
+          AND gate_type IN ({gate_types})
+        ORDER BY timestamp DESC, gate_id DESC
+        LIMIT 1
+        """,
+        user=_user(),
+    )
+    return _normalize(row) if row else None
+
+
+def _review_positive_terminal_blocker(task_id: str, output_summary: str) -> str | None:
+    runtime_reason = _review_runtime_failure_reason(output_summary)
+    if runtime_reason:
+        return runtime_reason
+    if not _task_bound_passed_review_gate(task_id):
+        return "review_success_without_task_bound_passed_gate"
+    return None
+
+
 def mark_run_finished(run_id: str, *, exit_code: int, output_summary: str = "") -> None:
     ensure_runtime_schema()
     effective_exit_code = _effective_exit_code(exit_code, output_summary)
@@ -6842,14 +6899,24 @@ def mark_run_finished(run_id: str, *, exit_code: int, output_summary: str = "") 
     run_type = str(metadata.get("run_type") or "implementation")
     if run_type == "review" and effective_exit_code == 0:
         task_id = str(run_row.get("task_id") or "").strip()
-        try:
-            integration_evidence = _integrate_increment_to_base(task_id, actor="factory-reviewer", final_status="done")
-        except IncrementIntegrationError as exc:
+        terminal_blocker = _review_positive_terminal_blocker(task_id, output_summary)
+        if terminal_blocker:
             effective_exit_code = 1
-            output_summary = (output_summary.rstrip() + "\n\n" if output_summary.strip() else "") + f"Increment integration failed before terminal close: {exc}"
+            output_summary = (
+                (output_summary.rstrip() + "\n\n" if output_summary.strip() else "")
+                + "Review terminal success rejected: "
+                + terminal_blocker
+                + ". A positive review run must produce a task-bound passed Factory gate before terminal close; empty output or provider/runtime failure logs cannot mark the task reviewed."
+            )
         else:
-            if integration_evidence.get("increment_integration_required") is not False:
-                output_summary = (output_summary.rstrip() + "\n\n" if output_summary.strip() else "") + "Increment integration completed: " + str(integration_evidence)
+            try:
+                integration_evidence = _integrate_increment_to_base(task_id, actor="factory-reviewer", final_status="done")
+            except IncrementIntegrationError as exc:
+                effective_exit_code = 1
+                output_summary = (output_summary.rstrip() + "\n\n" if output_summary.strip() else "") + f"Increment integration failed before terminal close: {exc}"
+            else:
+                if integration_evidence.get("increment_integration_required") is not False:
+                    output_summary = (output_summary.rstrip() + "\n\n" if output_summary.strip() else "") + "Increment integration completed: " + str(integration_evidence)
     if run_type == "review":
         status_value = "done" if effective_exit_code == 0 else "rework"
         evidence_status = "present"
