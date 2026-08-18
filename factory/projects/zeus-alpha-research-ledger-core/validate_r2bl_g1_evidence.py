@@ -126,6 +126,10 @@ def validate(args: argparse.Namespace) -> list[str]:
     _require(data.get("factory_status_delegated") is False, "status unexpectedly delegated away from assigned worktree", failures)
 
     rows = [row for row in project.get("document_status") or [] if row.get("category") == "g1_required"]
+    row_names = [str(row.get("file_name")) for row in rows]
+    duplicate_names = sorted({name for name in row_names if row_names.count(name) > 1})
+    _require(len(rows) == len(REQUIRED_DOCS), f"required G1 row count is {len(rows)}, expected {len(REQUIRED_DOCS)}", failures)
+    _require(not duplicate_names, f"duplicate required G1 rows found: {duplicate_names}", failures)
     by_name = {str(row.get("file_name")): row for row in rows}
     _require(set(by_name) == set(REQUIRED_DOCS), f"required G1 row set mismatch: {sorted(by_name)}", failures)
     for name in REQUIRED_DOCS:
