@@ -16,7 +16,7 @@ predecessor_pr: https://github.com/SiteOneTech/hermes-agent-original/pull/80
 predecessor_base_sha: 9ebaa9e7b44c61bb871ca4da0a838c52e62666b2
 predecessor_head_sha: 5dcf7d14746457148b045e2ed94aed6114054e6d
 predecessor_quality_gate: factory_gate_929
-r2ct_pr: pending_after_push
+r2ct_pr: https://github.com/SiteOneTech/hermes-agent-original/pull/82
 r2ct_quality_gate: pending_independent_quality_review
 ---
 
@@ -90,7 +90,7 @@ Factory gate `929` is the independent exact-SHA R2bn quality evidence. The gate 
 
 Primary origin/main readiness is the current configured-base row readback at `origin/main` `0db9bed7ed9e8ec4dbefda41f95a335ab82fbbc0`: the current configured-base rows are 14/14 non-blocking and active reconciliation metadata is clean.
 
-Candidate readiness is separate and remains tied to the R2ct PR head after push. The R2ct candidate is the branch `factory/zeus-alpha-research-ledger-core/inc-019-r2ct-bounded-canonical-g1-docume`, not PR #80 and not the stale primary checkout. The exact final candidate SHA cannot be embedded inside the commit that defines it; it must be named in the Zeus-signed PR body and in an independent `quality-reviewer` Factory gate record before R2ct can close.
+Candidate readiness is separate and remains tied to the R2ct PR head after push. The R2ct candidate is PR `https://github.com/SiteOneTech/hermes-agent-original/pull/82` on branch `factory/zeus-alpha-research-ledger-core/inc-019-r2ct-bounded-canonical-g1-docume`, not PR #80 and not the stale primary checkout. The exact final candidate SHA cannot be embedded inside the commit that defines it; it must be named in the Zeus-signed PR body and in an independent `quality-reviewer` Factory gate record before R2ct can close.
 
 ## Residual stale source
 
@@ -106,7 +106,7 @@ Both retain `blocker_source=structured_reconciliation_metadata` and `reconciliat
 R2ct adds `validate_r2ct_g1_evidence.py`. The intended GREEN command after PR push and independent quality gate is:
 
 ```bash
-/home/jean/Projects/hermes-agent-original/venv/bin/python3 factory/projects/zeus-alpha-research-ledger-core/validate_r2ct_g1_evidence.py --project-dir . --status-json /tmp/r2ct-status-after-review.json --expected-base 0db9bed7ed9e8ec4dbefda41f95a335ab82fbbc0 --expected-head <final-r2ct-pr-head-sha> --expected-pr <r2ct-pr-url> --expected-quality-gate <r2ct-quality-gate-id> --predecessor-base 9ebaa9e7b44c61bb871ca4da0a838c52e62666b2 --predecessor-head 5dcf7d14746457148b045e2ed94aed6114054e6d --predecessor-pr https://github.com/SiteOneTech/hermes-agent-original/pull/80 --predecessor-quality-gate 929
+/home/jean/Projects/hermes-agent-original/venv/bin/python3 factory/projects/zeus-alpha-research-ledger-core/validate_r2ct_g1_evidence.py --project-dir . --status-json /tmp/r2ct-status-after-review.json --expected-base 0db9bed7ed9e8ec4dbefda41f95a335ab82fbbc0 --expected-head <final-r2ct-pr-head-sha> --expected-pr https://github.com/SiteOneTech/hermes-agent-original/pull/82 --expected-quality-gate <r2ct-quality-gate-id> --predecessor-base 9ebaa9e7b44c61bb871ca4da0a838c52e62666b2 --predecessor-head 5dcf7d14746457148b045e2ed94aed6114054e6d --predecessor-pr https://github.com/SiteOneTech/hermes-agent-original/pull/80 --predecessor-quality-gate 929
 ```
 
 The validator intentionally fails before the R2ct artifact/index/handoff plus exact PR/gate evidence exist. It checks canonical Factory status, the 14 G1 rows, the source-root identity, the machine-readable frontmatter provenance for all 14 required docs, R2bn PR #80/gate 929 predecessor provenance, R2ct PR/gate notes, and this boundary.
@@ -118,7 +118,7 @@ R2ct must be delivered as a Zeus-signed, non-draft GitHub PR against `main`, lab
 - task id `zeus-alpha-research-ledger-core-r2ct-bounded-canonical-g1-documentation-`
 - base `0db9bed7ed9e8ec4dbefda41f95a335ab82fbbc0`
 - final R2ct candidate SHA after the last push
-- R2ct PR URL
+- R2ct PR URL `https://github.com/SiteOneTech/hermes-agent-original/pull/82`
 - status JSON path
 - validator output
 - predecessor PR #80 head `5dcf7d14746457148b045e2ed94aed6114054e6d`
