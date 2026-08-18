@@ -1340,6 +1340,100 @@ def test_orchestrator_prompt_injects_g1_docs_and_common_skill():
     assert "/repo/.worktrees/demo/t1/factory/projects/demo/PRD.md" in prompt
 
 
+def test_orchestrator_prompt_recomputes_g1_readiness_from_assigned_worktree(monkeypatch, tmp_path):
+    script = Path(__file__).resolve().parents[2] / "scripts" / "factory" / "factory_orchestrator_tick.py"
+    spec = importlib.util.spec_from_file_location("factory_orchestrator_tick_source_root_test", script)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    worktree = tmp_path / "assigned-worktree"
+    worktree.mkdir()
+    project_dir = "factory/projects/demo"
+    ready_docs = {"SPRINT_PLAN.md", "TRACKER.md", "DOCUMENTATION_INDEX.md", "QA_GATES.md"}
+    stale_rows = [
+        {
+            "file_name": name,
+            "path": f"{project_dir}/{name}",
+            "category": "g1_required",
+            "blocking": name not in ready_docs,
+            "exists": True,
+            "indexed": True,
+            "committed": True,
+            "validated": True,
+            "reviewed": name in ready_docs,
+            "readiness_source": "primary",
+        }
+        for name in factory_pg.G1_BLOCKING_DOCUMENTS
+    ]
+    stale_rows.extend(
+        {
+            "file_name": f"LIFECYCLE_{idx}.md",
+            "path": f"{project_dir}/LIFECYCLE_{idx}.md",
+            "category": "lifecycle",
+            "blocking": False,
+            "exists": True,
+            "indexed": True,
+            "committed": True,
+            "validated": True,
+            "reviewed": True,
+        }
+        for idx in range(8)
+    )
+    clean_rows = [
+        {
+            "file_name": name,
+            "path": f"{project_dir}/{name}",
+            "category": "g1_required",
+            "blocking": False,
+            "exists": True,
+            "indexed": True,
+            "committed": True,
+            "validated": True,
+            "reviewed": True,
+            "readiness_source": "configured_base_ref",
+        }
+        for name in factory_pg.G1_BLOCKING_DOCUMENTS
+    ]
+    calls: list[str] = []
+
+    def fake_project_document_status(project):
+        calls.append(str(project.get("repo_path")))
+        return clean_rows
+
+    monkeypatch.setattr(factory_pg, "project_document_status", fake_project_document_status)
+    payload = {
+        "projects": [{
+            "project_id": "demo",
+            "name": "Demo",
+            "repo_path": "/stale-primary",
+            "metadata": {"artifact_dir": project_dir},
+            "document_status": stale_rows,
+        }],
+        "tasks": [],
+        "gates": [],
+    }
+    claim = {
+        "run_id": "run-1",
+        "run_type": "implementation",
+        "task": {
+            "project_id": "demo",
+            "task_id": "t1",
+            "title": "Implement",
+            "phase": "implementation",
+            "engine": "codex",
+            "worktree_path": str(worktree),
+        },
+    }
+
+    prompt = module._task_prompt(payload, claim)
+
+    assert calls == [str(worktree)]
+    assert "G1 readiness: 14/14 documentos G1 sin blocker; blockers=0" in prompt
+    assert f"source_root={worktree}" in prompt
+    assert "BLOCKED missing=reviewed" not in prompt
+    assert f"{worktree}/factory/projects/demo/FACTORY_INTAKE.md" in prompt
+
+
 def test_orchestrator_prompt_injects_ui_sandbox_delivery_contract():
     script = Path(__file__).resolve().parents[2] / "scripts" / "factory" / "factory_orchestrator_tick.py"
     spec = importlib.util.spec_from_file_location("factory_orchestrator_tick_ui_contract_test", script)

@@ -63,6 +63,37 @@ def _effective_gates(gates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(latest.values(), key=_gate_ts, reverse=True)
 
 
+def _prompt_document_status(project: dict[str, Any], work_root: str) -> tuple[list[dict[str, Any]], str | None]:
+    """Return document rows from the assigned worktree source when available.
+
+    The dispatcher payload is produced before the worker prompt is written and
+    can contain rows computed from a stale primary checkout.  The prompt paths,
+    however, point at the assigned worktree.  Recompute the readback from that
+    same source root when the worktree exists so the G1 gate summary and paths
+    describe one consistent source.  If recomputation is unavailable, keep the
+    payload rows and let the prompt remain fail-closed.
+    """
+
+    payload_statuses_raw = project.get("document_status")
+    payload_statuses = [row for row in payload_statuses_raw if isinstance(row, dict)] if isinstance(payload_statuses_raw, list) else []
+    if not work_root:
+        return payload_statuses, None
+    source_root = Path(work_root).expanduser()
+    if not source_root.is_dir():
+        return payload_statuses, None
+    try:
+        from hermes_cli import factory_pg
+
+        source_project = dict(project)
+        source_project["repo_path"] = str(source_root)
+        statuses = factory_pg.project_document_status(source_project)
+    except Exception:
+        return payload_statuses, None
+    if not isinstance(statuses, list) or not statuses:
+        return payload_statuses, None
+    return statuses, str(source_root)
+
+
 def _canonical_doc_lines(project: dict[str, Any], task: dict[str, Any]) -> list[str]:
     """Summarize the G1 documentation pack the spawned worker must read."""
 
@@ -74,7 +105,7 @@ def _canonical_doc_lines(project: dict[str, Any], task: dict[str, Any]) -> list[
     artifact_value = metadata.get("artifact_dir")
     if isinstance(artifact_value, str) and artifact_value.strip():
         artifact_dir = artifact_value.strip()
-    statuses = project.get("document_status") if isinstance(project.get("document_status"), list) else []
+    statuses, status_source_root = _prompt_document_status(project, work_root)
     entrypoint = f"{artifact_dir.rstrip('/')}/DOCUMENTATION_INDEX.md"
     if work_root:
         entrypoint = str(Path(work_root).expanduser() / entrypoint)
@@ -86,9 +117,15 @@ def _canonical_doc_lines(project: dict[str, Any], task: dict[str, Any]) -> list[
     if not statuses:
         lines.append("- document_status no vino en el payload; si la tarea no es de bootstrap/reconciliación, bloquea y pide reconciliación G1.")
         return lines
-    blockers = [row for row in statuses if row.get("category") == "g1_required" and row.get("blocking")]
-    lines.append(f"- G1 readiness: {len(statuses) - len(blockers)}/{len(statuses)} documentos sin blocker; blockers={len(blockers)}.")
-    for row in [r for r in statuses if r.get("category") == "g1_required"][:20]:
+    g1_rows = [row for row in statuses if row.get("category") == "g1_required"]
+    summary_rows = g1_rows or statuses
+    blockers = [row for row in summary_rows if row.get("blocking")]
+    source_note = f"; source_root={status_source_root}" if status_source_root else ""
+    label = "documentos G1" if g1_rows else "documentos"
+    lines.append(
+        f"- G1 readiness: {len(summary_rows) - len(blockers)}/{len(summary_rows)} {label} sin blocker; blockers={len(blockers)}{source_note}."
+    )
+    for row in g1_rows[:20]:
         missing = [key for key in ("exists", "indexed", "committed", "validated", "reviewed") if not row.get(key)]
         state = "READY" if not missing else "BLOCKED missing=" + ",".join(missing)
         path = str(row.get("path") or row.get("file_name") or "")
