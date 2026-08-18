@@ -238,6 +238,93 @@ def test_status_prefers_isolated_cwd_source_over_stale_running_module(monkeypatc
     assert captured["kwargs"]["env"]["HERMES_FACTORY_SOURCE_DELEGATED"] == "1"
 
 
+def test_resolve_state_prefers_isolated_cwd_source_over_stale_running_module(monkeypatch, tmp_path, capsys):
+    stale_primary = tmp_path / "stale-primary" / "hermes_cli" / "factory.py"
+    stale_primary.parent.mkdir(parents=True)
+    stale_primary.write_text("# stale primary module\n", encoding="utf-8")
+    worktree = tmp_path / "current-origin-worktree"
+    (worktree / "hermes_cli").mkdir(parents=True)
+    (worktree / "scripts" / "factory").mkdir(parents=True)
+    (worktree / "hermes_cli" / "main.py").write_text("# current main\n", encoding="utf-8")
+    (worktree / "hermes_cli" / "factory.py").write_text("# current factory cli\n", encoding="utf-8")
+    (worktree / "hermes_cli" / "factory_pg.py").write_text("# current factory backend\n", encoding="utf-8")
+    (worktree / "scripts" / "factory" / "factory_orchestrator_tick.py").write_text("print('{}')\n", encoding="utf-8")
+    monkeypatch.chdir(worktree)
+    monkeypatch.setattr(factory, "__file__", str(stale_primary))
+
+    captured: dict[str, Any] = {}
+
+    def fake_run(argv, **kwargs):
+        captured["argv"] = [str(part) for part in argv]
+        captured["kwargs"] = kwargs
+        return factory.subprocess.CompletedProcess(
+            argv,
+            0,
+            stdout=json.dumps({"action": "resolve-state", "project_id": "demo", "blockers": []}),
+            stderr="",
+        )
+
+    monkeypatch.setattr(factory.subprocess, "run", fake_run)
+    monkeypatch.setattr(factory, "_backend", lambda _args: (_ for _ in ()).throw(AssertionError("stale backend must not be used")))
+
+    rc = factory.cmd_project_action(argparse.Namespace(factory_project_command="resolve-state", project_id="demo", json=True))
+
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["action"] == "resolve-state"
+    assert payload["project_id"] == "demo"
+    assert payload["factory_cli_source_root"] == str(worktree)
+    assert payload["factory_project_action_source_root"] == str(worktree)
+    assert payload["factory_project_action_delegated"] is True
+    assert payload["factory_project_action_delegated_from_source_root"] == str(stale_primary.parents[1])
+    assert captured["argv"] == [
+        sys.executable,
+        "-m",
+        "hermes_cli.main",
+        "factory",
+        "project",
+        "resolve-state",
+        "demo",
+        "--json",
+    ]
+    assert captured["kwargs"]["cwd"] == str(worktree)
+    assert captured["kwargs"]["env"]["PYTHONPATH"].split(os.pathsep)[0] == str(worktree)
+    assert captured["kwargs"]["env"]["HERMES_FACTORY_SOURCE_DELEGATED"] == "1"
+
+
+def test_resolve_state_delegation_failure_does_not_fall_back_to_stale_backend(monkeypatch, tmp_path, capsys):
+    stale_primary = tmp_path / "stale-primary" / "hermes_cli" / "factory.py"
+    stale_primary.parent.mkdir(parents=True)
+    stale_primary.write_text("# stale primary module\n", encoding="utf-8")
+    worktree = tmp_path / "current-origin-worktree"
+    (worktree / "hermes_cli").mkdir(parents=True)
+    (worktree / "scripts" / "factory").mkdir(parents=True)
+    (worktree / "hermes_cli" / "main.py").write_text("# current main\n", encoding="utf-8")
+    (worktree / "hermes_cli" / "factory.py").write_text("# current factory cli\n", encoding="utf-8")
+    (worktree / "hermes_cli" / "factory_pg.py").write_text("# current factory backend\n", encoding="utf-8")
+    (worktree / "scripts" / "factory" / "factory_orchestrator_tick.py").write_text("print('{}')\n", encoding="utf-8")
+    monkeypatch.chdir(worktree)
+    monkeypatch.setattr(factory, "__file__", str(stale_primary))
+
+    def fake_run(argv, **kwargs):
+        return factory.subprocess.CompletedProcess(
+            argv,
+            2,
+            stdout="",
+            stderr="current-origin resolve failed\n",
+        )
+
+    monkeypatch.setattr(factory.subprocess, "run", fake_run)
+    monkeypatch.setattr(factory, "_backend", lambda _args: (_ for _ in ()).throw(AssertionError("stale backend must not be used")))
+
+    rc = factory.cmd_project_action(argparse.Namespace(factory_project_command="resolve-state", project_id="demo", json=True))
+
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert captured.out == ""
+    assert "current-origin resolve failed" in captured.err
+
+
 def test_orchestrator_tick_reports_migration_readiness_before_claim_or_spawn(monkeypatch, capsys):
     module = _load_orchestrator_module()
     calls: list[str] = []

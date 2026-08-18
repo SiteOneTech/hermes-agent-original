@@ -35,6 +35,24 @@ def _annotate_status_payload_source(
     return payload
 
 
+def _annotate_project_action_payload_source(
+    payload: Any,
+    source_root: Path,
+    *,
+    delegated_from: Path | None = None,
+) -> Any:
+    if not isinstance(payload, dict):
+        return payload
+    payload["factory_cli_source_root"] = str(source_root)
+    payload["factory_project_action_source_root"] = str(source_root)
+    payload["factory_project_action_delegated"] = delegated_from is not None
+    if delegated_from is not None:
+        payload["factory_project_action_delegated_from_source_root"] = str(delegated_from)
+    else:
+        payload.pop("factory_project_action_delegated_from_source_root", None)
+    return payload
+
+
 def _status_payload(args: argparse.Namespace) -> dict[str, Any]:
     backend = _backend(args)
     payload = backend.status(getattr(args, "project_id", None))
@@ -59,6 +77,29 @@ def _print_status_subprocess_output(
             payload = None
         if isinstance(payload, dict):
             _print_json(_annotate_status_payload_source(payload, source_root, delegated_from=delegated_from))
+            if proc.stderr:
+                print(proc.stderr, end="", file=sys.stderr)
+            return
+    if proc.stdout:
+        print(proc.stdout, end="")
+    if proc.stderr:
+        print(proc.stderr, end="", file=sys.stderr)
+
+
+def _print_project_action_subprocess_output(
+    proc: subprocess.CompletedProcess[str],
+    *,
+    args: argparse.Namespace,
+    source_root: Path,
+    delegated_from: Path,
+) -> None:
+    if getattr(args, "json", False) and (proc.stdout or "").strip():
+        try:
+            payload = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            payload = None
+        if isinstance(payload, dict):
+            _print_json(_annotate_project_action_payload_source(payload, source_root, delegated_from=delegated_from))
             if proc.stderr:
                 print(proc.stderr, end="", file=sys.stderr)
             return
@@ -412,6 +453,51 @@ def _delegated_status_from_cwd_source(args: argparse.Namespace) -> int | None:
     return proc.returncode
 
 
+_CWD_DELEGATED_PROJECT_ACTIONS = {"resolve-state", "resolve", "reconcile", "unblock", "resume"}
+
+
+def _delegated_project_action_from_cwd_source(args: argparse.Namespace) -> int | None:
+    if getattr(args, "factory_project_command", None) not in _CWD_DELEGATED_PROJECT_ACTIONS:
+        return None
+    try:
+        running_source_root = _running_factory_source_root()
+    except RuntimeError:
+        return None
+    source_root = _preferred_cwd_source_root(running_source_root)
+    if source_root is None:
+        return None
+    argv = [
+        sys.executable,
+        "-m",
+        "hermes_cli.main",
+        "factory",
+        "project",
+        str(args.factory_project_command),
+        str(args.project_id),
+    ]
+    if getattr(args, "json", False):
+        argv.append("--json")
+    env = _source_env(source_root)
+    env["HERMES_FACTORY_SOURCE_DELEGATED"] = "1"
+    proc = subprocess.run(
+        argv,
+        cwd=str(source_root),
+        env=env,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        capture_output=True,
+        timeout=180,
+    )
+    _print_project_action_subprocess_output(
+        proc,
+        args=args,
+        source_root=source_root,
+        delegated_from=running_source_root,
+    )
+    return proc.returncode
+
+
 def _resolve_orchestrator_script() -> tuple[Path, Path]:
     running_source_root = _running_factory_source_root()
     running_script = running_source_root / "scripts" / "factory" / "factory_orchestrator_tick.py"
@@ -450,6 +536,9 @@ def _run_orchestrator_script(project_id: str | None = None) -> dict[str, Any]:
 
 
 def cmd_project_action(args: argparse.Namespace) -> int:
+    delegated = _delegated_project_action_from_cwd_source(args)
+    if delegated is not None:
+        return delegated
     backend = _backend(args)
     action_map = {
         "resume": "resume",
@@ -488,6 +577,17 @@ def cmd_project_action(args: argparse.Namespace) -> int:
         )
     else:
         result = backend.control_action(args.project_id, action_map[args.factory_project_command])
+    if isinstance(result, dict):
+        result_source_raw = result.get("factory_cli_source_root")
+        if result_source_raw:
+            result_source = Path(str(result_source_raw)).expanduser()
+        else:
+            try:
+                result_source = _running_factory_source_root()
+            except RuntimeError:
+                result_source = None
+        if result_source is not None:
+            result = _annotate_project_action_payload_source(result, result_source)
     if args.json:
         return _print_json(result)
     print(f"✓ Project {args.project_id}: {result.get('action')} -> {result.get('status') or 'ok'}")
