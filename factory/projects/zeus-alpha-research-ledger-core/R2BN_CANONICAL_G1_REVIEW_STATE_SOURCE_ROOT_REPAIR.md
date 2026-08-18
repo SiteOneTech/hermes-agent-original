@@ -207,4 +207,7 @@ branch
 The exact final PR head SHA and the independent quality gate are recorded in the
 PR body and Factory gate notes after push, because a commit cannot contain its
 own immutable SHA. The PR URL is updated in this artifact after the first push
-when GitHub assigns it.
+when GitHub assigns it. To preserve the no-merge/no-integration boundary, the
+passed Factory quality gate may be project-scoped rather than task-scoped in the
+current CLI; the notes must still bind `task_id`, final PR head, base SHA, PR
+URL, and no-merge/no-direct-SQL boundaries exactly.

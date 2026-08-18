@@ -212,10 +212,16 @@ def validate(args: argparse.Namespace) -> list[str]:
     if quality_gate:
         notes = str(quality_gate.get("notes") or "")
         _require(quality_gate.get("project_id") == PROJECT_ID, f"gate {quality_gate.get('gate_id')} project mismatch", failures)
-        _require(quality_gate.get("task_id") == TASK_ID, f"gate {quality_gate.get('gate_id')} task mismatch", failures)
+        quality_task_id = quality_gate.get("task_id")
+        # A passed task-scoped gate invokes Factory increment auto-integration in
+        # the current CLI. R2bn is explicitly no-merge/no-integration, so the
+        # quality gate may be project-scoped; the exact task binding is still
+        # required in immutable notes below.
+        _require(quality_task_id in (None, TASK_ID), f"gate {quality_gate.get('gate_id')} task mismatch", failures)
         _require(quality_gate.get("gate_type") == "quality", f"gate {quality_gate.get('gate_id')} type mismatch", failures)
         _require(quality_gate.get("status") == "passed", f"gate {quality_gate.get('gate_id')} did not pass", failures)
         _require(quality_gate.get("reviewer") == "quality-reviewer", f"gate {quality_gate.get('gate_id')} reviewer mismatch", failures)
+        _require(TASK_ID in notes, f"gate {quality_gate.get('gate_id')} notes missing task id", failures)
         _require(args.expected_head in notes, f"gate {quality_gate.get('gate_id')} notes missing head SHA", failures)
         _require(args.expected_pr in notes, f"gate {quality_gate.get('gate_id')} notes missing PR URL", failures)
         _require(args.expected_base in notes, f"gate {quality_gate.get('gate_id')} notes missing base SHA", failures)
