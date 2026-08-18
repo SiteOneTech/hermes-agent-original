@@ -36,13 +36,34 @@ def _annotate_status_payload_source(
 
 
 def _status_payload(args: argparse.Namespace) -> dict[str, Any]:
+    source_root = _running_factory_source_root()
     backend = _backend(args)
     payload = backend.status(getattr(args, "project_id", None))
-    try:
-        source_root = _running_factory_source_root()
-    except RuntimeError:
-        return payload
     return _annotate_status_payload_source(payload, source_root)
+
+
+def _status_source_provenance_failure_payload(args: argparse.Namespace, exc: RuntimeError) -> dict[str, Any]:
+    source_file = Path(__file__).resolve()
+    return {
+        "error_type": "factory_status_source_provenance_failed",
+        "error": str(exc),
+        "project_id": getattr(args, "project_id", None),
+        "factory_cli_source_root": None,
+        "factory_status_source_root": None,
+        "factory_status_source_verified": False,
+        "factory_status_source_error": str(exc),
+        "factory_status_source_file": str(source_file),
+    }
+
+
+def _print_status_source_provenance_failure(args: argparse.Namespace, exc: RuntimeError) -> int:
+    payload = _status_source_provenance_failure_payload(args, exc)
+    if getattr(args, "json", False):
+        _print_json(payload)
+    else:
+        print(f"✗ Factory status source provenance failed: {payload['factory_status_source_error']}", file=sys.stderr)
+        print(f"  factory_status_source_file={payload['factory_status_source_file']}", file=sys.stderr)
+    return 1
 
 
 def _print_status_subprocess_output(
@@ -305,10 +326,13 @@ def cmd_project_declare_successor(args: argparse.Namespace) -> int:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    delegated = _delegated_status_from_cwd_source(args)
-    if delegated is not None:
-        return delegated
-    payload = _status_payload(args)
+    try:
+        delegated = _delegated_status_from_cwd_source(args)
+        if delegated is not None:
+            return delegated
+        payload = _status_payload(args)
+    except RuntimeError as exc:
+        return _print_status_source_provenance_failure(args, exc)
     if args.json:
         return _print_json(payload)
     print(f"Factory DB: Agent Core Postgres/{payload.get('database', 'zeus_agent')}.factory (canonical; SQLite disabled)")
@@ -323,7 +347,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 def _running_factory_source_root() -> Path:
     factory_file = Path(__file__).resolve()
     if factory_file.name != "factory.py" or factory_file.parent.name != "hermes_cli":
-        raise RuntimeError(f"Factory tick source provenance malformed: {factory_file}")
+        raise RuntimeError(f"Factory CLI source provenance malformed: {factory_file}")
     return factory_file.parents[1]
 
 
@@ -378,10 +402,7 @@ def _source_env(source_root: Path, *, project_id: str | None = None) -> dict[str
 
 
 def _delegated_status_from_cwd_source(args: argparse.Namespace) -> int | None:
-    try:
-        running_source_root = _running_factory_source_root()
-    except RuntimeError:
-        return None
+    running_source_root = _running_factory_source_root()
     source_root = _preferred_cwd_source_root(running_source_root)
     if source_root is None:
         return None
