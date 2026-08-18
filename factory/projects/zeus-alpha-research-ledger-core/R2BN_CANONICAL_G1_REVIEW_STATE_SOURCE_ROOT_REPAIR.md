@@ -3,9 +3,11 @@ document_type: canonical_g1_review_state_source_root_repair
 project_id: zeus-alpha-research-ledger-core
 task_id: zeus-alpha-research-ledger-core-r2bn-canonical-g1-review-state-source-ro
 phase: documentation
-status: implemented_pending_pr_and_independent_review
+status: merged_quality_reviewed_source_control_evidence
 validated: yes
-reviewed: pending
+reviewed: yes
+reviewed_by: quality-reviewer
+review_evidence: factory_gate_929
 owner: claude-builder
 base_ref: origin/main
 base_sha: 9ebaa9e7b44c61bb871ca4da0a838c52e62666b2
@@ -13,6 +15,8 @@ branch: factory/zeus-alpha-research-ledger-core/inc-018-r2bn-canonical-g1-review
 worktree: /home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-018-r2bn-canonical-g1-review-state-s
 run_id: run-1787046385-072b3cc6
 pr_url: https://github.com/SiteOneTech/hermes-agent-original/pull/80
+pr_head_sha: 5dcf7d14746457148b045e2ed94aed6114054e6d
+merge_commit: 0db9bed7ed9e8ec4dbefda41f95a335ab82fbbc0
 ---
 
 # R2bn — canonical G1 review-state source-root repair
@@ -75,6 +79,21 @@ with base-before `42c86619b91b3a290462c9582e81499e7de8c4c4`, branch head
 `06051d990821bc7127004313ca3458e0394832d8`, base-after
 `9ebaa9e7b44c61bb871ca4da0a838c52e62666b2`, quality gate `925`, and
 implementation gate `926`.
+
+## Post-handoff reconciliation
+
+R2bn is no longer a pending PR-first handoff. GitHub readback for PR #80 reports
+`state=MERGED`, `headRefOid=5dcf7d14746457148b045e2ed94aed6114054e6d`,
+`baseRefOid=9ebaa9e7b44c61bb871ca4da0a838c52e62666b2`, label `agent:zeus`, and
+`mergeCommit=0db9bed7ed9e8ec4dbefda41f95a335ab82fbbc0` at
+`2026-08-18T10:31:13Z`. Agent Core status readback records project-scoped quality
+gate `929` for R2bn exact head `5dcf7d14746457148b045e2ed94aed6114054e6d` and
+an `increment_integrated` event with `increment_integrated_by=factory-reviewer`.
+
+This records the actual Git/Factory provenance only. It does not convert R2bn
+into ALR-020/product dispatch authority and does not authorize future workers to
+merge, deploy, mutate primary checkout, write direct SQL, or bypass PR-first
+review requirements.
 
 ## Canonical status readback
 
@@ -198,16 +217,17 @@ Expected final invocation after PR push and gate recording:
   --expected-quality-gate <quality-gate-id>
 ```
 
-## PR-first handoff
+## PR-first handoff outcome
 
-R2bn must be delivered by a normal Zeus-signed, non-draft `agent:zeus` PR from
-branch
-`factory/zeus-alpha-research-ledger-core/inc-018-r2bn-canonical-g1-review-state-s`.
+R2bn was delivered by a Zeus-signed, non-draft `agent:zeus` PR from branch
+`factory/zeus-alpha-research-ledger-core/inc-018-r2bn-canonical-g1-review-state-s`:
+`https://github.com/SiteOneTech/hermes-agent-original/pull/80`.
 
-The exact final PR head SHA and the independent quality gate are recorded in the
-PR body and Factory gate notes after push, because a commit cannot contain its
-own immutable SHA. The PR URL is updated in this artifact after the first push
-when GitHub assigns it. To preserve the no-merge/no-integration boundary, the
-passed Factory quality gate may be project-scoped rather than task-scoped in the
-current CLI; the notes must still bind `task_id`, final PR head, base SHA, PR
-URL, and no-merge/no-direct-SQL boundaries exactly.
+The exact final PR head SHA `5dcf7d14746457148b045e2ed94aed6114054e6d` and
+project-scoped independent quality gate `929` are recorded in the PR body and
+Factory gate notes. The gate was project-scoped to avoid the task-scoped passed
+gate auto-integration path in the current CLI, but Factory later integrated PR
+#80 as merge commit `0db9bed7ed9e8ec4dbefda41f95a335ab82fbbc0`. R2cr records
+the post-merge canonical status readback separately because the sanctioned
+`venv/bin/hermes factory status` command still reports ten G1 `reviewed=false`
+blockers after that merge.

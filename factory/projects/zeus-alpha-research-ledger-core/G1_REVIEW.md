@@ -508,6 +508,49 @@ primary mutation, no force-push/ref rewrite, no stale PR mutation, and no
 external runtime execution. Independent exact-SHA quality review remains
 required; R2az does not authorize ALR-020/product dispatch.
 
+## Review round 21 — R2cr canonical G1 reviewed-state reconciliation
+
+**Current-base identity captured before edits:** R2cr uses assigned worktree
+`/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-017-r2cr-canonical-g1-reviewed-state`,
+branch `factory/zeus-alpha-research-ledger-core/inc-017-r2cr-canonical-g1-reviewed-state`,
+with local `HEAD`, `origin/main`, and merge-base equal to
+`0db9bed7ed9e8ec4dbefda41f95a335ab82fbbc0` before documentation edits. That
+commit is the R2bn merge commit from PR #80.
+
+**Canonical Factory status read-back:** the required command
+`/home/jean/Projects/hermes-agent-original/venv/bin/hermes factory status zeus-alpha-research-ledger-core --json`
+read Agent Core Postgres from the assigned R2cr worktree and wrote
+`/tmp/r2cr-status-before.json` (3,079,912 bytes). The active project status
+reports `reconciliation_anomalies=["unvalidated_required_docs"]`, no status
+source-root provenance fields, 14 required G1 rows, exactly ten blocking rows
+with `reviewed=false` (`FACTORY_INTAKE.md`, `REQUIREMENTS_ANALYSIS.md`,
+`PATTERN_ANALYSIS.md`, `ASSUMPTIONS_AND_OPEN_QUESTIONS.md`, `PRD.md`, `ADRS.md`,
+`METHODOLOGY_PLAN.md`, `TECHNICAL_BLUEPRINT.md`, `TASK_GRAPH.md`,
+`SECURITY_GATES.md`), and exactly four reviewed/non-blocking rows
+(`SPRINT_PLAN.md`, `TRACKER.md`, `DOCUMENTATION_INDEX.md`, `QA_GATES.md`).
+
+**Provenance correction:** R2bn is no longer a pending review handoff. GitHub PR
+#80 is merged, non-draft, labeled `agent:zeus`, with base
+`9ebaa9e7b44c61bb871ca4da0a838c52e62666b2`, head
+`5dcf7d14746457148b045e2ed94aed6114054e6d`, and merge commit
+`0db9bed7ed9e8ec4dbefda41f95a335ab82fbbc0`; Agent Core gate `929` records the
+R2bn independent quality PASS. This is provenance/control evidence only and does
+not authorize ALR-020/product dispatch.
+
+**Reviewed-state rule:** R2cr preserves every required document's existing
+`reviewed: yes` frontmatter and its PR #36 / Factory gate `794` source evidence,
+but does not claim the ten blocking rows are canonical-status-visible as reviewed
+in the current sanctioned readback. The secure state remains fail-closed until an
+independent exact-SHA review and approved control path support a green projection.
+
+**Handoff requirement:** the fresh R2cr branch must be opened as a Zeus-signed
+GitHub PR labeled `agent:zeus` against `main`. The PR body/Factory evidence must
+name exact base `0db9bed7ed9e8ec4dbefda41f95a335ab82fbbc0`, final head SHA,
+canonical status path, validation output, no-merge, no direct SQL, no primary
+mutation, no force-push/ref rewrite, no task-status mutation, and no external
+runtime execution. Independent exact-SHA quality review remains required; R2cr
+does not authorize ALR-020/product dispatch.
+
 ## Local documentary verification — non-approval
 
 At `2026-08-10T04:50:09-04:00`, the implementation-planner worker verified the project-local pack from the assigned worktree only. `git ls-files --error-unmatch` confirmed the 14 required G1 documents plus `G0_REPOSITORY_STRATEGY.md`, `REQUIREMENTS_TRACEABILITY.md`, `DATABASE_AND_RUNTIME_CONTRACT.md`, and `G1_REVIEW.md` are tracked. `DOCUMENTATION_INDEX.md` indexes required documents and records explicit validated/reviewed status. `G0_REPOSITORY_STRATEGY.md` records the Zeus-only source repo, `origin/main` reference, assigned branch/worktree policy, PR-first delivery, and predecessor linkage. This is implementation evidence, not an independent specification/security PASS.
