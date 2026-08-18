@@ -398,6 +398,137 @@ def _same_source_root(left: Path, right: Path) -> bool:
         return os.path.realpath(str(left)) == os.path.realpath(str(right))
 
 
+def _git_probe_source_root(source_root: Path, *args: str, timeout: int = 10) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(source_root), *args],
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def _git_check_source_root(source_root: Path, *args: str, timeout: int = 10) -> bool | None:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(source_root), *args],
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except Exception:
+        return None
+    if result.returncode == 0:
+        return True
+    if result.returncode == 1:
+        return False
+    return None
+
+
+def _origin_default_base_ref(source_root: Path) -> tuple[str, str] | None:
+    if _git_probe_source_root(source_root, "rev-parse", "--is-inside-work-tree") != "true":
+        return None
+    candidates: list[str] = []
+    origin_head = _git_probe_source_root(source_root, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
+    if origin_head:
+        candidates.append(origin_head)
+    candidates.append("origin/main")
+    seen: set[str] = set()
+    for base_ref in candidates:
+        if not base_ref or base_ref in seen:
+            continue
+        seen.add(base_ref)
+        base_commit = _git_probe_source_root(source_root, "rev-parse", "--verify", f"{base_ref}^{{commit}}")
+        if base_commit:
+            return base_ref, base_commit
+    return None
+
+
+def _git_worktree_entries(source_root: Path) -> list[dict[str, str]]:
+    output = _git_probe_source_root(source_root, "worktree", "list", "--porcelain", timeout=15)
+    if not output:
+        return []
+    entries: list[dict[str, str]] = []
+    current: dict[str, str] | None = None
+    for raw_line in output.splitlines():
+        if raw_line.startswith("worktree "):
+            if current:
+                entries.append(current)
+            current = {"path": raw_line.split(" ", 1)[1]}
+        elif current is not None and raw_line.startswith("HEAD "):
+            current["head"] = raw_line.split(" ", 1)[1]
+        elif current is not None and raw_line.startswith("branch "):
+            current["branch"] = raw_line.split(" ", 1)[1]
+    if current:
+        entries.append(current)
+    return entries
+
+
+def _source_root_is_clean(source_root: Path) -> bool:
+    status = _git_probe_source_root(source_root, "status", "--porcelain", timeout=15)
+    return status == ""
+
+
+def _preferred_configured_base_source_root(running_source_root: Path) -> Path | None:
+    """Return an exact configured-base worktree when the running root is stale.
+
+    ``hermes`` console scripts installed from a primary checkout can be invoked
+    from that same checkout even when its HEAD is behind ``origin/main``.  In
+    that shape there is no distinct cwd source root to prefer, so status must
+    use a verified worktree at the configured base instead of reusing stale
+    primary Factory code.  If the base ref or worktree cannot be proven exactly,
+    return ``None`` and let the normal status path remain fail-closed.
+    """
+
+    if os.environ.get("HERMES_FACTORY_SOURCE_DELEGATED") == "1":
+        return None
+    try:
+        running_source_root = running_source_root.resolve()
+    except Exception:
+        return None
+    base = _origin_default_base_ref(running_source_root)
+    if base is None:
+        return None
+    _base_ref, base_commit = base
+    running_head = _git_probe_source_root(running_source_root, "rev-parse", "HEAD")
+    if not running_head or running_head == base_commit:
+        return None
+    if _git_check_source_root(running_source_root, "merge-base", "--is-ancestor", running_head, base_commit) is not True:
+        return None
+    candidates: list[Path] = []
+    for entry in _git_worktree_entries(running_source_root):
+        if entry.get("head") != base_commit:
+            continue
+        raw_path = entry.get("path")
+        if not raw_path:
+            continue
+        try:
+            candidate = Path(raw_path).expanduser().resolve()
+        except Exception:
+            continue
+        if _same_source_root(candidate, running_source_root):
+            continue
+        if not _factory_source_root_is_complete(candidate):
+            continue
+        if not _source_root_is_clean(candidate):
+            continue
+        candidates.append(candidate)
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda path: str(path))[0]
+
+
 def _preferred_cwd_source_root(running_source_root: Path) -> Path | None:
     if os.environ.get("HERMES_FACTORY_SOURCE_DELEGATED") == "1":
         return None
@@ -423,7 +554,9 @@ def _delegated_status_from_cwd_source(args: argparse.Namespace) -> int | None:
         running_source_root = _running_factory_source_root()
     except RuntimeError:
         return None
-    source_root = _preferred_cwd_source_root(running_source_root)
+    source_root = _preferred_cwd_source_root(running_source_root) or _preferred_configured_base_source_root(
+        running_source_root
+    )
     if source_root is None:
         return None
     argv = [sys.executable, "-m", "hermes_cli.main", "factory", "status"]
