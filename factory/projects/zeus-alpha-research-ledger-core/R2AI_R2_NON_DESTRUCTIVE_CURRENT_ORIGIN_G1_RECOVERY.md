@@ -13,7 +13,7 @@ base_ref: origin/main
 base_sha: 6c07c2fee59679a5b0063e635f0332895dbb3ec5
 branch: factory/zeus-alpha-research-ledger-core/inc-017-r2ai-r2-non-destructive-current
 worktree: /home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-017-r2ai-r2-non-destructive-current
-rework_of: R2ai task zeus-alpha-research-ledger-core-r2ai-current-origin-g1-independent-revie (blocked, structured `unvalidated_required_docs`); R2ai-R1 candidate commit 2ee96ba1444b832ac35abc3f5e2c362041727d3e (local-only, force-push blocked)
+rework_of: R2ai task zeus-alpha-research-ledger-core-r2ai-current-origin-g1-independent-revie (blocked, structured `unvalidated_required_docs`); R2ai-R1 candidate commit 2ee96ba1444b832ac35abc3f5e2c362041727d3e (local-only, force-push blocked); delivery rework of PR #71 (security gate 904 failed): final-head provenance correction
 primary_checkout_head_at_review: 4eb87e4cd48105af05fe974cf1d493f0e1b57ae1
 ---
 
@@ -276,16 +276,18 @@ performed by this worker. Exact commit, ancestry, tests, PR state and labels
 are recorded in the PR body and in the R2ai-R2 PR delivery readback section of
 this record.
 
-## PR delivery readback (added after PR creation)
+## PR delivery readback (creation-time snapshot)
 
-Live `gh` readback for the delivered increment:
+Live `gh` readback captured at PR creation time, when the branch head was the
+**initial creation SHA** `2cdadb6d4a06a8ee55ad84ff888936999bea3a79`. This
+snapshot is NOT the final head — see the rework section below.
 
 ```text
 PR #71  https://github.com/SiteOneTech/hermes-agent-original/pull/71
 state   OPEN
 draft   false (non-draft)
 labels  agent:zeus
-head    factory/zeus-alpha-research-ledger-core/inc-017-r2ai-r2-non-destructive-current @ 2cdadb6d4a06a8ee55ad84ff888936999bea3a79
+head    factory/zeus-alpha-research-ledger-core/inc-017-r2ai-r2-non-destructive-current @ 2cdadb6d4a06a8ee55ad84ff888936999bea3a79  (creation-time snapshot)
 base    main @ 6c07c2fee59679a5b0063e635f0332895dbb3ec5 (origin/main at delivery)
 mergeable MERGEABLE
 author  sitiouno (Zeus account)
@@ -294,12 +296,48 @@ author  sitiouno (Zeus account)
 Branch push was a normal non-force push of a brand-new ref (verified absent
 from `git ls-remote` before push; remote ref now equals the commit above). No
 existing remote ref was force-pushed, reset, or rewritten; primary checkout
-`4eb87e4cd4…` untouched; no merge performed by this worker. Independent
-exact-SHA security/quality review of PR #71 remains pending (gate `896` was
-failed); the docs gate stays fail-closed for the stale task-level
-`unvalidated_required_docs` metadata until the named follow-up Factory task
+`4eb87e4cd4…` untouched; no merge performed by this worker.
+
+## Rework — final-head provenance correction (security gate 904 failed)
+
+The independent security review of the initial delivery (gate `904`, failed)
+required the PR body and this record to name the **real final head** and to
+stop presenting the creation SHA as the final commit. This rework adds a
+normal correction commit (no amend, no force-push, no rewrite) and explicitly
+distinguishes the SHAs:
+
+- `2cdadb6d4a06a8ee55ad84ff888936999bea3a79` — PR #71 **initial creation SHA**
+  (the commit the PR was opened at; creation-time snapshot above). **Not** the
+  final head.
+- `1e2492205aabdebb8e2dc0ff0ec50025609d403e` — intermediate delivery-readback
+  commit (recorded the creation-time readback before the PR head moved);
+  superseded by this correction commit.
+- **Final head** — the R2ai-R2 rework correction commit (this commit). Its
+  exact SHA is read back from GitHub after the normal push (`gh pr view 71
+  --repo SiteOneTech/hermes-agent-original --json headRefOid`) and recorded in
+  the PR body; it is the exact-SHA review target.
+
+Rework reruns (this run, all real, exit 0):
+
+- `git diff --check` — clean (no whitespace errors).
+- Canonical Factory status from the assigned worktree cwd:
+  `/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory status zeus-alpha-research-ledger-core --json`
+  → saved `/tmp/r2ai-r2-status-rework.json`; 14/14 required G1 rows
+  exists/committed/indexed/validated/reviewed=true, blocking=false,
+  `readiness_source=configured_base_ref`, `base_commit=6c07c2fee5…`; stale
+  primary `4eb87e4cd4…` rejected; active metadata
+  `reconciliation_anomalies=[]`.
+- `gh pr view 71 --repo SiteOneTech/hermes-agent-original` readback — OPEN,
+  non-draft, label `agent:zeus`, head = final head SHA (recorded in PR body),
+  base `main` `6c07c2fee5…`.
+
+Independent exact-SHA security review of the **final head** remains pending
+(gates `896`/`904` failed; no self-approval by this worker). The docs gate
+stays fail-closed for the stale task-level `unvalidated_required_docs`
+metadata until the named follow-up Factory task
 `zeus-alpha-research-ledger-core-r2ai-r2-canonical-active-metadata-anomaly-repair`
-is executed and reviewed.
+is executed and reviewed. The review target is the final head named in the PR
+body, not the creation SHA.
 
 ## Boundary confirmation
 
