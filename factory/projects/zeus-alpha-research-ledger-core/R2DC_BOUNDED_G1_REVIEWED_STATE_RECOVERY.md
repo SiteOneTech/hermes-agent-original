@@ -1,9 +1,9 @@
 ---
 project_id: zeus-alpha-research-ledger-core
 task_id: zeus-alpha-research-ledger-core-r2dc-bounded-g1-reviewed-state-recovery-
-run_id: run-1787088429-2846eebe
+run_id: run-1787093642-7c5901df
 phase: documentation
-status: implemented_pending_pr_and_independent_review
+status: implemented_pending_pr_and_independent_exact_sha_security_review
 validated: yes
 reviewed: pending_independent_exact_sha_security_review
 owner: codex-builder
@@ -57,25 +57,25 @@ merge_base=96f0cc70cf9b9da3a21dc1554673fbefdb5c1247
 remote_main=96f0cc70cf9b9da3a21dc1554673fbefdb5c1247
 ```
 
-Canonical Factory status from the assigned worktree is Agent Core Postgres (`db_backend=agent_core_postgres`). The prompt-level ten `missing=reviewed` rows were not reproduced by the live current-base `document_status` readback. Final status `/tmp/r2dc-status-final3.json` reports all required G1 documents explicitly accounted for from `readiness_source=configured_base_ref`, `base_commit=96f0cc70cf9b9da3a21dc1554673fbefdb5c1247`, with no blocking or unreviewed row:
+Canonical Factory status from the assigned worktree is Agent Core Postgres (`db_backend=agent_core_postgres`). The prompt-level ten `missing=reviewed` rows were not reproduced by the live current-base `document_status` readback. Final post-fix status `/tmp/r2dc-r2-status-post-fix.json` reports all required G1 documents explicitly accounted for from `readiness_source=configured_base_ref`, `base_commit=96f0cc70cf9b9da3a21dc1554673fbefdb5c1247`, with no blocking or unreviewed row:
 
 ```text
-g1_required_count=14 g1_blocking_count=0 reviewed_false= blocking_docs= base_commit=96f0cc70cf9b9da3a21dc1554673fbefdb5c1247 readiness_source=configured_base_ref
+g1_required_count=14 g1_blocking_count=0 reviewed_false=[] blocking_docs=[] base_commit=96f0cc70cf9b9da3a21dc1554673fbefdb5c1247 readiness_source=configured_base_ref
 ```
 
-The live source-backed defect was task/run provenance, not G1 document content. Status after the repair/reconcile readback shows exactly the current false-terminal review task retained in `review_ready`:
+The live source-backed defect was task/run provenance, not G1 document content. Initial R2dc recovery had already failed the original R2db 429 run `run-1787087862-a08217ed`; the rework readback then found the same task had been terminalized a second time by the later rate-limited review run `run-1787091478-8cfc6323` because the task-level `false_review_terminalization_recovered=true` marker suppressed recovery for subsequent false-terminal review runs. Status after the post-fix resolve-state readback shows exactly the current false-terminal review task retained in `review_ready`:
 
 ```text
-false_review_current_tasks=zeus-alpha-research-ledger-core-r2db-current-origin-g1-reviewed-state-pr
-task=zeus-alpha-research-ledger-core-r2db-current-origin-g1-reviewed-state-pr status=review_ready evidence_status=present reason=review_output_contains_runtime_failure increment_base_commit_after=96f0cc70cf9b9da3a21dc1554673fbefdb5c1247 increment_integration_status=integrated
-run=run-1787087862-a08217ed status=failed exit_code=1 contains_429=true
+g1_required_count=14 g1_blocking_count=0 reviewed_false=[] base_commit=96f0cc70cf9b9da3a21dc1554673fbefdb5c1247 readiness_source=configured_base_ref
+task=zeus-alpha-research-ledger-core-r2db-current-origin-g1-reviewed-state-pr status=review_ready evidence_status=present reason=review_output_contains_runtime_failure recovered_run_id=run-1787091478-8cfc6323 increment_base_commit_after=96f0cc70cf9b9da3a21dc1554673fbefdb5c1247
+run=run-1787091478-8cfc6323 status=failed exit_code=1 contains_429=true review_requeued_by=factory-reconciler
 ```
 
-The R2db task had been marked `done` while its independent review output contained MiniMax `RateLimitError [HTTP 429]`, `API call failed after 3 retries`, and `Messages: 1 (1 user, 0 tool calls)`. That transcript is provider/runtime failure evidence, not independent acceptance.
+The R2db task had been marked `done` while its independent review output contained MiniMax `RateLimitError [HTTP 429]`, `API call failed after 3 retries`, generic `HTTP 429`/`Too Many Requests`, and `Messages: 1 (1 user, 0 tool calls)`. Those transcripts are provider/runtime failure evidence, not independent acceptance.
 
 ## Repair implemented
 
-1. Review-run closure now requeues runtime/provider failures to `review_ready` rather than treating an HTTP 429, empty output, or zero-tool prompt-only transcript as code rework or as terminal success.
+1. Review-run closure now requeues runtime/provider failures to `review_ready` rather than treating an HTTP 429, generic `HTTP 429` / `Too Many Requests`, empty output, or zero-tool prompt-only transcript as code rework or as terminal success.
 2. Positive review-run terminalization continues to require a same-task passed Factory review gate before `done`/integration. Project-scoped or different-task gates cannot substitute.
 3. `reconcile_project()` now retrospectively detects stale monitors that already wrote a false successful review terminalization and fails closed by:
    - marking the offending review run `failed` with exit code `1`;
@@ -84,6 +84,7 @@ The R2db task had been marked `done` while its independent review output contain
    - inserting an audit event.
 4. The retrospective recovery is bounded to the current configured base commit only. Historical increments whose integrated base is not the current `origin/main` are not reopened by a single resolve-state action.
 5. A defensive revocation path restores any legacy/unscoped retrospective recovery rows that lack the new current-base scope marker and point at a historical integrated base. This prevents an unbounded recovery candidate from resurrecting old increments.
+6. Repeated false-terminal recovery now compares the stored recovered run id to the current succeeded review run id: the same recovered run is idempotently skipped, but a later review run on the same task can still be failed/requeued when its output contains HTTP-429/provider-failure evidence.
 
 ## RED/GREEN evidence
 
@@ -114,6 +115,22 @@ scripts/run_tests.sh tests/hermes_cli/test_factory_orchestrator_tick.py -k resol
 selected resolve tests passed, 0 failed
 ```
 
+Rework RED/GREEN for generic HTTP 429 and repeated false-terminal recovery:
+
+```text
+HERMES_PYTHON=/home/jean/Projects/hermes-agent-original/venv/bin/python3 scripts/run_tests.sh tests/hermes_cli/test_factory_increment_integration.py -k generic_http_429 -v --tb=short
+RED exit=1; failing assertion showed _integrate_increment_to_base was called for STATE:DONE + HTTP 429 Too Many Requests when a same-task review gate existed.
+
+HERMES_PYTHON=/home/jean/Projects/hermes-agent-original/venv/bin/python3 scripts/run_tests.sh tests/hermes_cli/test_factory_increment_integration.py -k "generic_http_429 or prior_recovered_run" -v --tb=short
+RED exit=1 before the repeated-run guard; GREEN after repair: 2 passed, 0 failed.
+
+HERMES_PYTHON=/home/jean/Projects/hermes-agent-original/venv/bin/python3 scripts/run_tests.sh tests/hermes_cli/test_factory_increment_integration.py
+121 passed, 0 failed.
+
+HERMES_PYTHON=/home/jean/Projects/hermes-agent-original/venv/bin/python3 scripts/run_tests.sh tests/hermes_cli/test_factory_orchestrator_tick.py -k resolve
+6 passed, 0 failed.
+```
+
 The wrapper used the approved project venv fallback:
 
 ```text
@@ -127,29 +144,29 @@ No packages were installed.
 Sanctioned CLI commands used for Agent Core Postgres readback/control:
 
 ```bash
-/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory status zeus-alpha-research-ledger-core --json > /tmp/r2dc-status-after.json
-/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory project resolve-state zeus-alpha-research-ledger-core --json > /tmp/r2dc-resolve-state-final3.json
-/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory status zeus-alpha-research-ledger-core --json > /tmp/r2dc-status-final3.json
+/home/jean/Projects/hermes-agent-original/venv/bin/python -m hermes_cli.main factory status zeus-alpha-research-ledger-core --json > /tmp/r2dc-r2-status-before.json
+/home/jean/Projects/hermes-agent-original/venv/bin/python -m hermes_cli.main factory project resolve-state zeus-alpha-research-ledger-core --json > /tmp/r2dc-r2-resolve-state-post-fix.json
+/home/jean/Projects/hermes-agent-original/venv/bin/python -m hermes_cli.main factory status zeus-alpha-research-ledger-core --json > /tmp/r2dc-r2-status-post-fix.json
 ```
 
 Final resolve-state evidence:
 
 ```text
-action=resolve-state project=zeus-alpha-research-ledger-core status=active recoveries=0 scopes=0 revocations=0 anomalies=
-unblocked_recoveries=0 unblocked_scopes=1 unblocked_revocations=0
-supervisor_health=green blockers=1
+action=resolve-state project=zeus-alpha-research-ledger-core status=active anomalies=[] active_runs=1
+unblocked_false_review_terminalization_recoveries=1 unblocked_revocations=0 unblocked_scopes=0
+task_counts.done=61 task_counts.review_ready=1 task_counts.rework=2 task_counts.running=1 supervisor_health=green blockers=1
 ```
 
 Final status evidence:
 
 ```text
-project=zeus-alpha-research-ledger-core status=active autonomous=true db=agent_core_postgres
+project=zeus-alpha-research-ledger-core status=active autonomous=true db_backend=agent_core_postgres db_path=agent_core_postgres:zeus_agent.factory
 source_root=/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-016-r2dc-bounded-g1-reviewed-state-r readiness_source=configured_base_ref base_commit=96f0cc70cf9b9da3a21dc1554673fbefdb5c1247 primary_rejected=primary_checkout_not_configured_base primary_head=4eb87e4cd48105af05fe974cf1d493f0e1b57ae1
-g1_required_count=14 g1_blocking_count=0 reviewed_false= blocking_docs=
-false_review_current_tasks=zeus-alpha-research-ledger-core-r2db-current-origin-g1-reviewed-state-pr
+g1_required_count=14 g1_blocking_count=0 reviewed_false=[] blocking_docs=[]
+false_review_current_task=zeus-alpha-research-ledger-core-r2db-current-origin-g1-reviewed-state-pr status=review_ready recovered_run_id=run-1787091478-8cfc6323 reason=review_output_contains_runtime_failure
 ```
 
-No `reviewed=false` document is represented as passing. The only remaining current false-review recovery item is the same-project R2db task, now `review_ready` for a distinct independent exact-SHA review.
+No `reviewed=false` document is represented as passing. The only remaining current false-review recovery item is the same-project R2db task, now `review_ready` for a distinct independent exact-SHA review after both rate-limited review runs were failed/requeued.
 
 ## PR-first handoff
 

@@ -6856,8 +6856,12 @@ _TASK_BOUND_REVIEW_GATE_TYPES = (
 )
 _REVIEW_RUNTIME_FAILURE_PATTERNS = (
     "api call failed after 3 retries",
+    "http 429",
+    "http status 429",
     "ratelimiterror [http 429]",
     "rate limited after 3 retries",
+    "status code 429",
+    "too many requests",
     "usage limit reached: upgrade your token plan",
     "messages:       1 (1 user, 0 tool calls)",
 )
@@ -6957,6 +6961,7 @@ def _recover_false_terminalized_review_runs(project_id: str, *, project: dict[st
                    r.run_id,
                    t.status AS task_status,
                    t.metadata->>'increment_base_commit_after' AS increment_base_commit_after,
+                   t.metadata->>'false_review_terminalization_run_id' AS recovered_run_id,
                    r.output_summary,
                    EXISTS (
                        SELECT 1
@@ -6972,7 +6977,10 @@ def _recover_false_terminalized_review_runs(project_id: str, *, project: dict[st
               AND r.status='succeeded'
               AND COALESCE(r.exit_code, 0)=0
               AND t.status IN ({positive_statuses})
-              AND COALESCE((t.metadata->>'false_review_terminalization_recovered')::boolean, false) IS NOT TRUE
+              AND (
+                  COALESCE((t.metadata->>'false_review_terminalization_recovered')::boolean, false) IS NOT TRUE
+                  OR COALESCE(t.metadata->>'false_review_terminalization_run_id', '')<>r.run_id
+              )
             ORDER BY r.finished_at DESC NULLS LAST, r.started_at DESC NULLS LAST, r.run_id DESC
             LIMIT 1
         )
@@ -6985,6 +6993,8 @@ def _recover_false_terminalized_review_runs(project_id: str, *, project: dict[st
         task_id = str(row.get("task_id") or "").strip()
         run_id = str(row.get("run_id") or "").strip()
         if not task_id or not run_id:
+            continue
+        if str(row.get("recovered_run_id") or "").strip() == run_id:
             continue
         has_gate = _truthy_database_bool(row.get("has_task_bound_passed_review_gate"))
         increment_base_after = str(row.get("increment_base_commit_after") or "").strip()

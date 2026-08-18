@@ -286,6 +286,36 @@ def test_mark_run_finished_review_429_log_cannot_close_even_when_exit_zero(fake_
     assert "RateLimitError" in joined
 
 
+def test_mark_run_finished_review_generic_http_429_requeues_even_with_task_gate(fake_sql, monkeypatch):
+    calls: list[str] = []
+
+    def integrate(task_id: str, *, actor: str, final_status: str):
+        calls.append(task_id)
+        return {"increment_integration_required": True, "increment_integration_status": "integrated"}
+
+    monkeypatch.setattr(factory_pg, "_integrate_increment_to_base", integrate)
+    fake_sql.one_results = [
+        {"task_id": "task-1", "metadata": {"run_type": "review"}},
+        {"gate_id": 7, "gate_type": "security", "reviewer": "security-reviewer"},
+        {"project_id": "demo"},
+    ]
+    output = (
+        "Independent review transcript\n"
+        "STATE: DONE\n"
+        "Provider response: HTTP 429 Too Many Requests\n"
+    )
+
+    factory_pg.mark_run_finished("run-1", exit_code=0, output_summary=output)
+
+    assert calls == []
+    joined = "\n".join(fake_sql.statements)
+    assert "SET status='failed'" in joined
+    assert "SET status='review_ready'" in joined
+    assert "SET status='done'" not in joined
+    assert "review_output_contains_runtime_failure" in joined
+    assert "HTTP 429 Too Many Requests" in joined
+
+
 def test_reconcile_project_recovers_false_terminalized_review_run(fake_sql, monkeypatch):
     project = {"project_id": "demo", "status": "active", "metadata": {"repo_strategy": {"repo_scope": "zeus_only", "work_intent": "add_functionality", "primary_repo": "demo/repo", "primary_repo_path": "/tmp/demo", "primary_repo_remote": "https://example.test/demo.git", "base_branch": "main", "branch_prefix": "factory/demo", "worktree_policy": "isolated"}}}
     task = {"project_id": "demo", "task_id": "task-1", "status": "done", "title": "Reviewed task", "phase": "documentation", "owner_profile": "codex-builder", "reviewer_profile": "quality-reviewer", "metadata": {}}
@@ -319,6 +349,43 @@ def test_reconcile_project_recovers_false_terminalized_review_run(fake_sql, monk
     assert "false_review_terminalization_recovered" in joined
     assert "review_output_contains_runtime_failure" in joined
     assert "SET status='done'" not in joined
+
+
+def test_recover_false_terminal_review_skips_prior_recovered_run_but_reopens_later_run(fake_sql, monkeypatch):
+    project = {"project_id": "demo", "metadata": {}}
+    fake_sql.json_query_results = [[
+        {
+            "project_id": "demo",
+            "lane_id": "lane",
+            "task_id": "task-1",
+            "run_id": "run-old-review",
+            "task_status": "done",
+            "increment_base_commit_after": _BASE_CURRENT,
+            "output_summary": "STATE: DONE\nRateLimitError [HTTP 429]",
+            "has_task_bound_passed_review_gate": False,
+            "recovered_run_id": "run-old-review",
+        },
+        {
+            "project_id": "demo",
+            "lane_id": "lane",
+            "task_id": "task-1",
+            "run_id": "run-new-review",
+            "task_status": "done",
+            "increment_base_commit_after": _BASE_CURRENT,
+            "output_summary": "STATE: DONE\nHTTP 429 Too Many Requests",
+            "has_task_bound_passed_review_gate": True,
+            "recovered_run_id": "run-old-review",
+        },
+    ]]
+    monkeypatch.setattr(factory_pg, "_configured_base_ref_readback", lambda project: {"accepted": True, "base_commit": _BASE_CURRENT})
+
+    recovered = factory_pg._recover_false_terminalized_review_runs("demo", project=project)
+
+    assert [row["run_id"] for row in recovered] == ["run-new-review"]
+    joined = "\n".join(fake_sql.statements)
+    assert "run-old-review" not in joined.split("run-new-review")[0]
+    assert "SET status='review_ready'" in joined
+    assert "review_output_contains_runtime_failure" in joined
 
 
 def test_false_terminal_review_recovery_is_bounded_to_current_base(fake_sql, monkeypatch):
