@@ -11,7 +11,7 @@ base_ref: origin/main
 base_sha: faddaf5afb4c1754e03d8c97dd6706353b5b0865
 branch: factory/zeus-alpha-research-ledger-core/inc-001-r2bl-non-destructive-canonical-g
 worktree: /home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-001-r2bl-non-destructive-canonical-g
-pr_url: PENDING_R2BL_PR_URL
+pr_url: https://github.com/SiteOneTech/hermes-agent-original/pull/78
 ---
 
 # R2bl — non-destructive canonical G1 evidence repair
@@ -108,7 +108,7 @@ python3 factory/projects/zeus-alpha-research-ledger-core/validate_r2bl_g1_eviden
   --status-json /tmp/r2bl-status-before.json \
   --expected-base faddaf5afb4c1754e03d8c97dd6706353b5b0865 \
   --expected-head <final-pr-head-sha> \
-  --expected-pr PENDING_R2BL_PR_URL \
+  --expected-pr https://github.com/SiteOneTech/hermes-agent-original/pull/78 \
   --expected-quality-gate <quality-gate-id> \
   --expected-security-gate <security-gate-id>
 ```
@@ -122,7 +122,7 @@ status for the final pushed head.
 
 ## Delivery and review contract
 
-- Required PR: `PENDING_R2BL_PR_URL` (non-draft, label `agent:zeus`, base
+- Required PR: `https://github.com/SiteOneTech/hermes-agent-original/pull/78` (non-draft, label `agent:zeus`, base
   `main`, Zeus signed-off commit).
 - The exact final pushed head SHA is recorded in the PR body and the canonical
   Factory quality/security gate notes after push, because a commit cannot
