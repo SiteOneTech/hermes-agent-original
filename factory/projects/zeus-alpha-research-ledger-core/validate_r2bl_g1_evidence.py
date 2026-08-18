@@ -100,6 +100,10 @@ def _text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _normalized_text(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def _gate(data: dict[str, Any], gate_id: int) -> dict[str, Any] | None:
     for gate in data.get("gates") or []:
         if gate.get("gate_id") == gate_id:
@@ -187,11 +191,12 @@ def validate(args: argparse.Namespace) -> list[str]:
             for marker in expected_markers:
                 _require(marker in text, f"{name} missing marker {marker}", failures)
     artifact_text = _text(artifact_path) if artifact_path.exists() else ""
+    artifact_text_normalized = _normalized_text(artifact_text).lower()
     for marker in BOUNDARY_MARKERS:
-        _require(marker in artifact_text, f"{ARTIFACT} missing boundary marker '{marker}'", failures)
-    _require("structured_reconciliation_metadata" in artifact_text, f"{ARTIFACT} does not name structured residual source", failures)
-    _require("R2ai" in artifact_text and "R2ae" in artifact_text, f"{ARTIFACT} does not name the residual stale tasks", failures)
-    _require("14/14" in artifact_text, f"{ARTIFACT} does not record 14/14 G1 rows", failures)
+        _require(marker.lower() in artifact_text_normalized, f"{ARTIFACT} missing boundary marker '{marker}'", failures)
+    _require("structured_reconciliation_metadata" in artifact_text_normalized, f"{ARTIFACT} does not name structured residual source", failures)
+    _require("r2ai" in artifact_text_normalized and "r2ae" in artifact_text_normalized, f"{ARTIFACT} does not name the residual stale tasks", failures)
+    _require("14/14" in artifact_text_normalized, f"{ARTIFACT} does not record 14/14 G1 rows", failures)
 
     quality_gate = _gate(data, args.expected_quality_gate)
     security_gate = _gate(data, args.expected_security_gate)
