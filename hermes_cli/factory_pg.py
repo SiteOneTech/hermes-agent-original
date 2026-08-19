@@ -2129,6 +2129,7 @@ def _source_increment_is_contained_in_origin(
     *,
     branch: str,
     base_branch: str,
+    refresh_origin: bool = True,
 ) -> bool:
     """Verify the recorded source commit is an ancestor of the current origin base.
 
@@ -2137,6 +2138,11 @@ def _source_increment_is_contained_in_origin(
     Git verifies that exact source SHA against a freshly fetched ``origin`` base.
     This survives normal branch cleanup after a merge without accepting a stale
     or forged ``integrated`` field while its source PR remains open.
+
+    Callers which have already refreshed this project's base for the current
+    reconciliation pass may set ``refresh_origin=False``. That keeps every
+    source SHA comparison tied to the same freshly fetched base snapshot without
+    issuing one network fetch per terminal task.
     """
 
     metadata = _metadata(task)
@@ -2160,9 +2166,10 @@ def _source_increment_is_contained_in_origin(
     if not repo_path.exists():
         return False
     try:
-        fetch_base = _run_git(repo_path, ["fetch", "origin", base_branch], timeout=120)
-        if fetch_base.returncode != 0:
-            return False
+        if refresh_origin:
+            fetch_base = _run_git(repo_path, ["fetch", "origin", base_branch], timeout=120)
+            if fetch_base.returncode != 0:
+                return False
         base_ref = f"origin/{base_branch}"
         source_result = _run_git(repo_path, ["rev-parse", "--verify", f"{source_commit}^{{commit}}"], timeout=30)
         base_result = _run_git(repo_path, ["rev-parse", "--verify", f"{base_ref}^{{commit}}"], timeout=30)
@@ -2174,6 +2181,27 @@ def _source_increment_is_contained_in_origin(
         return False
 
 
+def _refresh_source_increment_origin_base(project: dict[str, Any], base_branch: str) -> bool:
+    """Fetch one project's canonical base once for a reconciliation pass.
+
+    A fetch failure remains fail-closed: a caller must treat every candidate
+    source increment as unverified instead of relying on a stale local origin
+    reference.
+    """
+
+    strategy = _repository_strategy(project)
+    repo_raw = str(strategy.get("primary_repo_path") or project.get("repo_path") or "").strip()
+    if not repo_raw:
+        return False
+    repo_path = Path(repo_raw).expanduser()
+    if not repo_path.exists():
+        return False
+    try:
+        return _run_git(repo_path, ["fetch", "origin", base_branch], timeout=120).returncode == 0
+    except Exception:
+        return False
+
+
 def _source_increment_integration_blockers(
     project: dict[str, Any],
     tasks: list[dict[str, Any]],
@@ -2181,7 +2209,7 @@ def _source_increment_integration_blockers(
     """Return positive terminal source increments lacking verified base integration."""
 
     base_branch = _canonical_base_branch(project)
-    blockers: list[dict[str, Any]] = []
+    candidates: list[tuple[dict[str, Any], str]] = []
     for task in tasks:
         status_value = str(task.get("status") or "").lower()
         if status_value not in POSITIVE_TERMINAL_TASK_STATUSES:
@@ -2191,7 +2219,21 @@ def _source_increment_integration_blockers(
         branch = str(task.get("branch") or "").strip()
         if not branch or branch in {base_branch, f"origin/{base_branch}", f"refs/heads/{base_branch}", f"refs/remotes/origin/{base_branch}"}:
             continue
-        if _source_increment_is_contained_in_origin(task, project, branch=branch, base_branch=base_branch):
+        candidates.append((task, branch))
+
+    # Every candidate compares against the same canonical base. Refresh that base
+    # once and verify each immutable source SHA against the resulting snapshot.
+    # This avoids serially refetching one repository for every terminal task.
+    origin_base_refreshed = _refresh_source_increment_origin_base(project, base_branch) if candidates else False
+    blockers: list[dict[str, Any]] = []
+    for task, branch in candidates:
+        if origin_base_refreshed and _source_increment_is_contained_in_origin(
+            task,
+            project,
+            branch=branch,
+            base_branch=base_branch,
+            refresh_origin=False,
+        ):
             continue
         blockers.append({
             "task_id": str(task.get("task_id") or ""),
@@ -2837,12 +2879,18 @@ class IncrementIntegrationError(RuntimeError):
 
 
 def _run_git(repo_or_worktree: Path, args: list[str], *, timeout: int = 120) -> subprocess.CompletedProcess[str]:
+    # Factory workers are non-interactive cron processes. A credential prompt
+    # cannot be answered there and otherwise leaves reconciliation ticks waiting
+    # for the full subprocess timeout. Fail the verification closed instead.
+    env = os.environ.copy()
+    env["GIT_TERMINAL_PROMPT"] = "0"
     return subprocess.run(
         ["git", "-C", str(repo_or_worktree), *args],
         text=True,
         capture_output=True,
         timeout=timeout,
         check=False,
+        env=env,
     )
 
 

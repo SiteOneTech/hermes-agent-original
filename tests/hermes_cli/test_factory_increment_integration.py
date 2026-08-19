@@ -631,6 +631,7 @@ def test_reconciliation_accepts_verified_git_containment_or_jean_waiver(monkeypa
         "increment_integration_waived_authorized_by": "Jean García",
         "increment_integration_waived_reason": "PR-first independent review remains open",
     })
+    monkeypatch.setattr(factory_pg, "_refresh_source_increment_origin_base", lambda *args, **kwargs: True)
     monkeypatch.setattr(factory_pg, "_source_increment_is_contained_in_origin", lambda *args, **kwargs: True)
 
     for task in (integrated, waived):
@@ -641,6 +642,47 @@ def test_reconciliation_accepts_verified_git_containment_or_jean_waiver(monkeypa
             gates=[],
         )
         assert not any(item["code"] == "source_increment_not_integrated" for item in findings)
+
+
+def test_reconciliation_refreshes_origin_once_for_multiple_source_increments(monkeypatch, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    project = _source_project()
+    project["repo_path"] = str(repo)
+    project["metadata"]["repo_strategy"]["primary_repo_path"] = str(repo)
+    tasks = []
+    for suffix in ("one", "two"):
+        branch = f"factory/demo/task-{suffix}"
+        task = _source_task(metadata={
+            "increment_integration_status": "integrated",
+            "increment_branch": branch,
+            "increment_branch_commit": f"source-{suffix}",
+            "increment_base_branch": "main",
+            "increment_base_commit_after": "base-commit",
+        })
+        task["task_id"] = f"task-{suffix}"
+        task["branch"] = branch
+        tasks.append(task)
+
+    calls = []
+
+    def run_git(repo_path, args, *, timeout):
+        calls.append((repo_path, args, timeout))
+        if args[:3] == ["fetch", "origin", "main"]:
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        if args[:2] == ["rev-parse", "--verify"]:
+            return subprocess.CompletedProcess(args, 0, stdout="commit\n", stderr="")
+        if args[:2] == ["merge-base", "--is-ancestor"]:
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        raise AssertionError(f"unexpected git command: {args}")
+
+    monkeypatch.setattr(factory_pg, "_run_git", run_git)
+
+    assert factory_pg._source_increment_integration_blockers(project, tasks) == []
+    fetches = [args for _, args, _ in calls if args[:3] == ["fetch", "origin", "main"]]
+    comparisons = [args for _, args, _ in calls if args[:2] == ["merge-base", "--is-ancestor"]]
+    assert fetches == [["fetch", "origin", "main"]]
+    assert len(comparisons) == 2
 
 
 def test_reconciliation_keeps_legitimate_non_source_and_reconciliation_tasks_working():
@@ -671,6 +713,23 @@ def test_source_integration_blocker_prevents_completion_auto_resume():
 
 def _git(path, *args):
     return subprocess.run(["git", "-C", str(path), *args], text=True, capture_output=True, check=True)
+
+
+def test_factory_git_commands_disable_interactive_prompts(monkeypatch, tmp_path):
+    captured = {}
+
+    def run(command, **kwargs):
+        captured["command"] = command
+        captured.update(kwargs)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(factory_pg.subprocess, "run", run)
+
+    factory_pg._run_git(tmp_path, ["fetch", "origin", "main"], timeout=17)
+
+    assert captured["command"] == ["git", "-C", str(tmp_path), "fetch", "origin", "main"]
+    assert captured["timeout"] == 17
+    assert captured["env"]["GIT_TERMINAL_PROMPT"] == "0"
 
 
 def test_source_integration_requires_current_origin_base_ancestry(tmp_path):
