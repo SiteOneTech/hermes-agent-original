@@ -601,6 +601,58 @@ self-approve, merge, mutate task status, write direct SQL, change credentials,
 touch primary checkout, perform external runtime/provider/messaging/deploy
 operations, or authorize ALR-020/product dispatch.
 
+## Review round 23 — R2dH bounded G1 documentation reconciliation dispatch repair
+
+**Current-origin identity captured before edits:** R2dH-bounded uses assigned
+worktree
+`/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-001-r2dh-bounded-g1-documentation-re`,
+branch `factory/zeus-alpha-research-ledger-core/inc-001-r2dh-bounded-g1-documentation-re`,
+with local `HEAD`, `origin/main`, and merge-base all equal to
+`cc43e6dace789da06d103ba512a3f4863fb0edc9` before documentation edits. The
+assigned remote branch readback returned no ref before the first normal push.
+
+**Canonical Agent Core read-back:** the approved status command
+`/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory status zeus-alpha-research-ledger-core --json`
+read Agent Core Postgres from the assigned worktree source and wrote
+`/tmp/r2dh-status-before.json` (`3,952,529` bytes). The payload reports
+source roots equal to the assigned worktree, `factory_status_delegated=false`,
+active project metadata `reconciliation_anomalies=[]`,
+`reconciliation_projection_source=current_document_status`,
+`reconciliation_required=false`, and 14/14 required G1 rows as `exists=true`,
+`committed=true`, `indexed=true`, `validated=true`, `reviewed=true`,
+`blocking=false` from `readiness_source=configured_base_ref`, base
+`cc43e6dace789da06d103ba512a3f4863fb0edc9`, with stale primary rejected as
+`primary_checkout_not_configured_base`.
+
+**Exact residual blocker/provenance distinction:** the same status readback
+preserves stale lifecycle/projection evidence separately from current document
+truth. Events `202481` and `202480` still record
+`anomalies=["unvalidated_required_docs"]`; event `202476` denies R2df with
+`unresolved_validation_tasks` naming validation tasks in `superseded`,
+`blocked`, and `todo` states; event `202477` denies R2cw with
+`missing_or_unindexed_docs`; and the current R2dH-bounded task row itself is
+`running`, `claimed_by=factory-force-tick`, `claimed=null`. These rows are not
+current G1 document-content failures and must remain fail-closed until an
+explicitly authorized canonical review/reconciler path acts on them.
+
+**Correction:** `R2DH_BOUNDED_G1_DOCUMENTATION_RECONCILIATION_DISPATCH_REPAIR.md`
+records the current-origin G1 row truth, stale event/task provenance, and
+fail-closed boundaries. `DOCUMENTATION_INDEX.md`, `TRACKER.md`, `TASK_GRAPH.md`,
+`QA_GATES.md`, and `SECURITY_GATES.md` index the same evidence. No required G1
+frontmatter reviewed marker was changed; existing reviewed provenance remains
+PR #36 / Factory gate `794` plus source gate `790` / PR #34 SHA
+`2476e978c545e24b18ee48844b24eb8c58245ab4`.
+
+**Handoff requirement:** this R2dH-bounded branch must be opened as a
+Zeus-signed GitHub PR labeled `agent:zeus` against `main`. The PR body/Factory
+evidence must name exact base `cc43e6dace789da06d103ba512a3f4863fb0edc9`, final
+head SHA, status-output path, validation output, no-merge, no direct SQL, no
+primary mutation, no force-push/ref rewrite, no task-status mutation, and no
+external runtime/product dispatch. Independent exact-SHA quality review remains
+required; this worker does not self-approve, merge, deploy, change credentials,
+write direct SQL, mutate the primary checkout, or touch any runtime/external
+trading path.
+
 ## Local documentary verification — non-approval
 
 At `2026-08-10T04:50:09-04:00`, the implementation-planner worker verified the project-local pack from the assigned worktree only. `git ls-files --error-unmatch` confirmed the 14 required G1 documents plus `G0_REPOSITORY_STRATEGY.md`, `REQUIREMENTS_TRACEABILITY.md`, `DATABASE_AND_RUNTIME_CONTRACT.md`, and `G1_REVIEW.md` are tracked. `DOCUMENTATION_INDEX.md` indexes required documents and records explicit validated/reviewed status. `G0_REPOSITORY_STRATEGY.md` records the Zeus-only source repo, `origin/main` reference, assigned branch/worktree policy, PR-first delivery, and predecessor linkage. This is implementation evidence, not an independent specification/security PASS.
