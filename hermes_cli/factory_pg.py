@@ -4505,12 +4505,23 @@ def _candidate_requires_validation_readiness_before_dispatch(candidate: dict[str
 
     if _is_validation_task(candidate):
         return False
+    if _is_reconciliation_task(candidate) or _is_runtime_bootstrap_repair_task(candidate):
+        return False
     phase = str(candidate.get("phase") or "").lower().replace("-", "_")
     text = _task_text(candidate)
     owner = str(candidate.get("owner_profile") or candidate.get("owner_agent_id") or "").lower()
     if owner == "devops-release" and any(term in text for term in ("deploy", "deployment", "sandbox", "preview", "release")):
         return False
-    return phase.startswith("delivery") or phase in {"release", "final", "final_report"} or "delivery report" in text or "final" in text
+    if phase.startswith("delivery") or phase in {"release", "final", "final_report"}:
+        return True
+    # Documentation/reconciliation recovery prompts routinely cite the final PR
+    # handoff or delivery-report contract as evidence.  Treat prose-only
+    # delivery markers as validation-gated only for actual reporter-owned final
+    # reporting work, not for docs-first recovery tasks that must run while G1 is
+    # red and downstream validation remains unresolved.
+    return owner == "factory-reporter" and phase in {"documentation", "reporting"} and (
+        "delivery report" in text or "final report" in text or "gate closure" in text
+    )
 
 
 def _next_runnable_task(
