@@ -6854,25 +6854,102 @@ _TASK_BOUND_REVIEW_GATE_TYPES = (
     "spec",
     "test",
 )
-_REVIEW_RUNTIME_FAILURE_PATTERNS = (
-    "api call failed after 3 retries",
+_REVIEW_RUNTIME_FAILURE_STRONG_PATTERNS = (
+    "api call failed",
+    "rate limited after 3 retries",
+    "usage limit reached: upgrade your token plan",
+)
+_REVIEW_RUNTIME_FAILURE_ZERO_TOOL_PATTERNS = (
+    "messages:       1 (1 user, 0 tool calls)",
+    "messages: 1 (1 user, 0 tool calls)",
+)
+_REVIEW_RUNTIME_429_PATTERNS = (
     "http 429",
     "http status 429",
-    "ratelimiterror [http 429]",
-    "rate limited after 3 retries",
     "status code 429",
     "too many requests",
-    "usage limit reached: upgrade your token plan",
-    "messages:       1 (1 user, 0 tool calls)",
 )
+_REVIEW_RUNTIME_429_FAILURE_CONTEXT = (
+    "provider response",
+    "api call failed",
+    "ratelimiterror",
+    "rate limited",
+    "usage limit reached",
+    "token plan",
+    "attempt ",
+    "failed after",
+)
+_REVIEW_RUNTIME_DOCUMENTARY_CONTEXT = (
+    "checked",
+    "verified",
+    "prior",
+    "previous",
+    "regression",
+    "must be",
+    "should be",
+    "document",
+    "condition",
+)
+_REVIEW_RUNTIME_ACTUAL_FAILURE_MARKERS = (
+    "provider response",
+    "⚠",
+    "❌",
+)
+_REVIEW_PROMPT_ONLY_LINES = {
+    "final semantic state marker",
+    "semantic state marker",
+    "final state marker",
+    "state marker",
+}
+
+
+def _clean_review_output_line(line: str) -> str:
+    clean = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", line or "").strip()
+    return clean.lstrip(" >│┃┊┆|-•*\t")
+
+
+def _review_line_is_prompt_only(line: str) -> bool:
+    clean = _clean_review_output_line(line)
+    if not clean:
+        return True
+    if _semantic_state_from_line(clean):
+        return True
+    folded = clean.casefold().strip()
+    if folded.rstrip(":") in _REVIEW_PROMPT_ONLY_LINES:
+        return True
+    return "state: done" in folded and "state: blocked" in folded
+
+
+def _review_output_has_substantive_content(text: str) -> bool:
+    return any(not _review_line_is_prompt_only(line) for line in text.splitlines())
+
+
+def _review_line_contains_runtime_failure(line: str) -> bool:
+    folded = _clean_review_output_line(line).casefold()
+    if not folded:
+        return False
+    if any(context in folded for context in _REVIEW_RUNTIME_DOCUMENTARY_CONTEXT) and not any(
+        marker in folded for marker in _REVIEW_RUNTIME_ACTUAL_FAILURE_MARKERS
+    ):
+        return False
+    if any(pattern in folded for pattern in _REVIEW_RUNTIME_FAILURE_ZERO_TOOL_PATTERNS):
+        return True
+    if "ratelimiterror" in folded and "http 429" in folded and folded.startswith("ratelimiterror"):
+        return True
+    if any(pattern in folded for pattern in _REVIEW_RUNTIME_FAILURE_STRONG_PATTERNS):
+        return True
+    if not any(pattern in folded for pattern in _REVIEW_RUNTIME_429_PATTERNS):
+        return False
+    return any(context in folded for context in _REVIEW_RUNTIME_429_FAILURE_CONTEXT)
 
 
 def _review_runtime_failure_reason(output_summary: str) -> str | None:
     text = str(output_summary or "").strip()
     if not text:
         return "empty_reviewer_output"
-    folded = text.casefold()
-    if any(pattern in folded for pattern in _REVIEW_RUNTIME_FAILURE_PATTERNS):
+    if not _review_output_has_substantive_content(text):
+        return "prompt_only_reviewer_output"
+    if any(_review_line_contains_runtime_failure(line) for line in text.splitlines()):
         return "review_output_contains_runtime_failure"
     return None
 
