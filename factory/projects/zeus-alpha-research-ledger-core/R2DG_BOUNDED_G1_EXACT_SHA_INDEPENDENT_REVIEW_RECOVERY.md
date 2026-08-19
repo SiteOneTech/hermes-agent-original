@@ -262,15 +262,40 @@ authority to mutate the primary checkout from this increment.
 
 ## Forced tick evidence (post-recovery)
 
-After the review evidence, gate record, commit, push and PR creation, a
+After the review evidence, gate record, commits, push and PR creation, a
 forced Factory tick was executed with the approved CLI from the assigned
-worktree. The deterministic dispatcher outcome is recorded in the run summary
-(claimed worker vs source-backed remaining technical blocker). Because the
-DB-write allowlist for this run covers only `factory status` and `factory gate
-record`, any residual `unresolved_validation_tasks` / `missing_or_unindexed_docs`
-denial for successor documentation tasks is a source-backed technical blocker
-(events `201773`/`201766`/`201774`/`201767`), not a human question; normal
-product implementation is not dispatched while G1 remains red.
+worktree:
+
+`/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory project tick zeus-alpha-research-ledger-core --json`
+
+Real result saved as `/tmp/r2dg-tick.json` (exit 0):
+
+- `control_plane_skipped=false` — the tick ran under the global control-plane
+  lease; `factory_cli_source_root` and `factory_project_action_source_root`
+  equal the assigned worktree; `factory_orchestrator_script` is the tick
+  script in this worktree; `factory_project_action_delegated=false`.
+- `claimed=null` with `counts.active_runs=1` — the only active run is this
+  R2dg run itself, so the deterministic dispatcher correctly did not claim a
+  second increment (incremental single-active) and did not spawn any worker.
+- `reconciled[0]`: `status=active`, `anomalies=[]`, `pending_gates=0`,
+  `task_counts` = blocked 1 / ready 1 / review_ready 2 / running 1 / todo 10 /
+  done 64 / superseded 10 / cancelled 16.
+- `unblocked[0].reopened` lists R2ai (`zeus-alpha-research-ledger-core-r2ai-current-origin-g1-independent-revie`) and R2ae (`zeus-alpha-research-ledger-core-r2ae-bounded-canonical-g1-validation-and`) with `resolved_anomaly=unvalidated_required_docs`, `source=structured_reconciliation_metadata` — the reconciler re-opened the stale structured-metadata blockers because the current configured-base G1 rows are clean; historical event/task rows remain audit history.
+- `alerts=[]`, `needs_attention=false`, `supervisor=[]`.
+
+Interpretation against the acceptance criterion: the forced tick after the
+recovery yields a **source-backed remaining technical blocker** rather than a
+fresh claim while this run is still active — the docs-first dispatcher denies
+`R2df` (todo, documentation, no dependencies) with `unresolved_validation_tasks`
+naming historical validation refs (R2h/R2l/R2g/ALR-060 superseded, R2ai
+blocked at preflight time, ALR-061/062/063/070 todo) and denies `R2cw` with
+`missing_or_unindexed_docs` (events `201773`/`201766`/`201774`/`201767`).
+Normal product implementation is not dispatched while G1 remains red; the
+next tick after this run finalizes may claim the successor documentation
+worker (R2df) or re-report the same source-backed blocker. Reconciliating
+those DB task rows is outside this run's write allowlist (`factory status` /
+`factory gate record` only) and is recorded as bounded technical rework, not
+a human question.
 
 ## Delivery contract
 
