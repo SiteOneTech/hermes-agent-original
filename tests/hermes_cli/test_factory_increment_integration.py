@@ -649,6 +649,110 @@ def test_claim_next_task_claims_docs_repair_before_preflight_denied_product(fake
     assert "dispatch_preflight_denied" not in joined
 
 
+def test_claim_next_task_claims_docs_recovery_with_incidental_delivery_text_before_product(fake_sql, monkeypatch):
+    product = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "demo-product-r2cw",
+        "status": "todo",
+        "phase": "implementation",
+        "priority": 19,
+        "dependencies": [],
+        "metadata": {},
+    }
+    docs_recovery = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "demo-docs-r2df",
+        "title": "R2df — fresh current-base G1 documentation-index conflict recovery",
+        "description": "Repair documentation readiness. Delivery is a Zeus-signed agent:zeus PR; record the final candidate head for review.",
+        "status": "todo",
+        "phase": "documentation",
+        "owner_profile": "codex-builder",
+        "priority": 19,
+        "dependencies": [],
+        "metadata": {},
+    }
+    validation_task = {
+        "project_id": "demo",
+        "task_id": "demo-alr-062",
+        "title": "ALR-062 Independent quality and TDD review",
+        "status": "todo",
+        "phase": "quality_review",
+        "owner_profile": "quality-reviewer",
+        "dependencies": [],
+        "metadata": {},
+    }
+    tasks = [product, docs_recovery, validation_task]
+    project = {"project_id": "demo", "status": "active", "autonomous_enabled": True, "metadata": {}}
+    fake_sql.rows_results = [[{"project_id": "demo"}], [product, docs_recovery]]
+    fake_sql.statement_one_results = [{**docs_recovery, "status": "claimed"}]
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(
+        factory_pg,
+        "_project_docs_notion_preflight",
+        lambda project_arg, tasks_arg, pending_arg, gates_arg: (False, True, False, False),
+    )
+
+    result = factory_pg.claim_next_task("demo", worker="factory-force-tick")
+
+    assert result is not None
+    assert result["task"]["task_id"] == "demo-docs-r2df"
+    joined = "\n".join(fake_sql.statements)
+    assert "Task demo-docs-r2df claimed" in joined
+    assert "unresolved_validation_tasks" not in joined
+    assert "demo-product-r2cw" not in result["task"]["task_id"]
+
+
+def test_claim_next_task_blocks_genuine_delivery_report_when_validation_unresolved(fake_sql, monkeypatch):
+    delivery_report = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "demo-delivery-report",
+        "title": "Final delivery report and gate closure",
+        "description": "Summarize validation and delivery evidence for final handoff.",
+        "status": "todo",
+        "phase": "delivery",
+        "owner_profile": "factory-reporter",
+        "priority": 30,
+        "dependencies": [],
+        "metadata": {},
+    }
+    validation_task = {
+        "project_id": "demo",
+        "task_id": "demo-alr-063",
+        "title": "ALR-063 Independent security and no-egress review",
+        "status": "todo",
+        "phase": "security_review",
+        "owner_profile": "security-reviewer",
+        "dependencies": [],
+        "metadata": {},
+    }
+    tasks = [delivery_report, validation_task]
+    project = {"project_id": "demo", "status": "active", "autonomous_enabled": True, "metadata": {}}
+    fake_sql.rows_results = [[{"project_id": "demo"}], [delivery_report]]
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(
+        factory_pg,
+        "_project_docs_notion_preflight",
+        lambda project_arg, tasks_arg, pending_arg, gates_arg: (True, True, False, False),
+    )
+
+    result = factory_pg.claim_next_task("demo", worker="factory-force-tick")
+
+    assert result is None
+    joined = "\n".join(fake_sql.statements)
+    assert "unresolved_validation_tasks" in joined
+    assert "demo-alr-063" in joined
+    assert "Task demo-delivery-report claimed" not in joined
+
+
 def test_claimed_null_predicate_ignores_docs_blocked_product_without_repair():
     payload = {
         "projects": [

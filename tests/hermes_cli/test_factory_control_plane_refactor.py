@@ -1144,6 +1144,19 @@ def test_dispatch_validation_readiness_does_not_deadlock_deploy_prerequisite():
     assert factory_pg._candidate_requires_validation_readiness_before_dispatch(final_report) is True
 
 
+def test_dispatch_validation_readiness_exempts_reconciliation_recovery_delivery_prose():
+    reconciliation = {
+        "task_id": "demo-reconcile-unvalidated-required-docs",
+        "phase": "documentation",
+        "title": "R2 — Reconciliation: recover G1 documentation status",
+        "description": "Mentions final delivery report and Zeus-signed PR handoff only as evidence text.",
+        "owner_profile": "factory-reporter",
+        "metadata": {"factory_reconciliation_task": True, "reconciliation_anomaly": "unvalidated_required_docs"},
+    }
+
+    assert factory_pg._candidate_requires_validation_readiness_before_dispatch(reconciliation) is False
+
+
 def test_status_attaches_document_status(fake_sql, monkeypatch):
     fake_sql.rows_results = [
         [{"project_id": "demo", "status": "active", "repo_path": None, "metadata": {}}],
