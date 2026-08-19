@@ -316,6 +316,66 @@ def test_mark_run_finished_review_generic_http_429_requeues_even_with_task_gate(
     assert "HTTP 429 Too Many Requests" in joined
 
 
+def test_mark_run_finished_review_can_document_429_condition_with_task_gate(fake_sql, monkeypatch):
+    calls: list[str] = []
+
+    def integrate(task_id: str, *, actor: str, final_status: str):
+        calls.append(task_id)
+        return {"increment_integration_required": True, "increment_integration_status": "integrated"}
+
+    monkeypatch.setattr(factory_pg, "_integrate_increment_to_base", integrate)
+    fake_sql.one_results = [
+        {"task_id": "task-1", "metadata": {"run_type": "review"}},
+        {"gate_id": 7, "gate_type": "security", "reviewer": "security-reviewer"},
+        {"project_id": "demo"},
+    ]
+    output = (
+        "Independent security review for exact SHA abc1234 passed.\n"
+        "The review explicitly checked the R2dc regression where a prior "
+        "`API call failed after 3 retries: HTTP 429 / Too Many Requests` "
+        "transcript must be requeued instead of accepted as review evidence.\n"
+        "No provider/runtime failure occurred during this review run.\n"
+        "STATE: DONE\n"
+    )
+
+    factory_pg.mark_run_finished("run-1", exit_code=0, output_summary=output)
+
+    assert calls == ["task-1"]
+    joined = "\n".join(fake_sql.statements)
+    assert "SET status='succeeded'" in joined
+    assert "SET status='done'" in joined
+    assert "review_output_contains_runtime_failure" not in joined
+    assert "Review terminal success rejected" not in joined
+
+
+def test_mark_run_finished_review_prompt_only_marker_requeues_even_with_task_gate(fake_sql, monkeypatch):
+    calls: list[str] = []
+
+    def integrate(task_id: str, *, actor: str, final_status: str):
+        calls.append(task_id)
+        return {"increment_integration_required": True, "increment_integration_status": "integrated"}
+
+    monkeypatch.setattr(factory_pg, "_integrate_increment_to_base", integrate)
+    fake_sql.one_results = [
+        {"task_id": "task-1", "metadata": {"run_type": "review"}},
+        {"gate_id": 7, "gate_type": "security", "reviewer": "security-reviewer"},
+        {"project_id": "demo"},
+    ]
+
+    factory_pg.mark_run_finished(
+        "run-1",
+        exit_code=0,
+        output_summary="Final semantic state marker:\nSTATE: DONE\n",
+    )
+
+    assert calls == []
+    joined = "\n".join(fake_sql.statements)
+    assert "SET status='failed'" in joined
+    assert "SET status='review_ready'" in joined
+    assert "SET status='done'" not in joined
+    assert "prompt_only_reviewer_output" in joined
+
+
 def test_reconcile_project_recovers_false_terminalized_review_run(fake_sql, monkeypatch):
     project = {"project_id": "demo", "status": "active", "metadata": {"repo_strategy": {"repo_scope": "zeus_only", "work_intent": "add_functionality", "primary_repo": "demo/repo", "primary_repo_path": "/tmp/demo", "primary_repo_remote": "https://example.test/demo.git", "base_branch": "main", "branch_prefix": "factory/demo", "worktree_policy": "isolated"}}}
     task = {"project_id": "demo", "task_id": "task-1", "status": "done", "title": "Reviewed task", "phase": "documentation", "owner_profile": "codex-builder", "reviewer_profile": "quality-reviewer", "metadata": {}}
@@ -372,7 +432,7 @@ def test_recover_false_terminal_review_skips_prior_recovered_run_but_reopens_lat
             "run_id": "run-new-review",
             "task_status": "done",
             "increment_base_commit_after": _BASE_CURRENT,
-            "output_summary": "STATE: DONE\nHTTP 429 Too Many Requests",
+            "output_summary": "STATE: DONE\nProvider response: HTTP 429 Too Many Requests",
             "has_task_bound_passed_review_gate": True,
             "recovered_run_id": "run-old-review",
         },
