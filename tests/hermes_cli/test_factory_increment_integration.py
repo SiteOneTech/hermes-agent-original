@@ -173,6 +173,99 @@ def test_mark_run_finished_review_success_merges_before_done(fake_sql, monkeypat
     assert "Increment integration completed" in joined
 
 
+def test_mark_run_finished_review_zero_tool_calls_metadata_requeues_even_with_task_gate(fake_sql, monkeypatch):
+    calls: list[str] = []
+
+    def integrate(task_id: str, *, actor: str, final_status: str):
+        calls.append(task_id)
+        return {"increment_integration_required": True, "increment_integration_status": "integrated"}
+
+    monkeypatch.setattr(factory_pg, "_integrate_increment_to_base", integrate)
+    fake_sql.one_results = [
+        {"task_id": "task-1", "metadata": {"run_type": "review", "reviewer_tool_calls": 0}},
+        {"gate_id": 42, "gate_type": "quality", "reviewer": "quality-reviewer"},
+        {"project_id": "demo"},
+    ]
+
+    factory_pg.mark_run_finished(
+        "run-1",
+        exit_code=0,
+        output_summary="Independent review claims candidate SHA abc1234 passed.\nSTATE: DONE",
+    )
+
+    assert calls == []
+    joined = "\n".join(fake_sql.statements)
+    assert "SET status='failed'" in joined
+    assert "SET status='review_ready'" in joined
+    assert "SET status='done'" not in joined
+    assert "review_run_has_zero_reviewer_tool_calls" in joined
+
+
+def test_mark_run_finished_review_no_independent_verdict_requeues_even_with_task_gate(fake_sql, monkeypatch):
+    calls: list[str] = []
+
+    def integrate(task_id: str, *, actor: str, final_status: str):
+        calls.append(task_id)
+        return {"increment_integration_required": True, "increment_integration_status": "integrated"}
+
+    monkeypatch.setattr(factory_pg, "_integrate_increment_to_base", integrate)
+    fake_sql.one_results = [
+        {"task_id": "task-1", "metadata": {"run_type": "review"}},
+        {"gate_id": 42, "gate_type": "quality", "reviewer": "quality-reviewer"},
+        {"project_id": "demo"},
+    ]
+
+    factory_pg.mark_run_finished(
+        "run-1",
+        exit_code=0,
+        output_summary="No independent verdict was produced for candidate SHA abc1234.\nSTATE: DONE",
+    )
+
+    assert calls == []
+    joined = "\n".join(fake_sql.statements)
+    assert "SET status='failed'" in joined
+    assert "SET status='review_ready'" in joined
+    assert "SET status='done'" not in joined
+    assert "review_output_lacks_independent_verdict" in joined
+
+
+def test_mark_run_finished_review_rejects_historical_task_gate_before_run(fake_sql, monkeypatch):
+    calls: list[str] = []
+
+    def integrate(task_id: str, *, actor: str, final_status: str):
+        calls.append(task_id)
+        return {"increment_integration_required": True, "increment_integration_status": "integrated"}
+
+    monkeypatch.setattr(factory_pg, "_integrate_increment_to_base", integrate)
+    fake_sql.one_results = [
+        {
+            "task_id": "task-1",
+            "metadata": {"run_type": "review"},
+            "started_at": "2026-08-19T10:00:00+00:00",
+        },
+        {
+            "gate_id": 41,
+            "gate_type": "quality",
+            "reviewer": "quality-reviewer",
+            "timestamp": "2026-08-19T09:00:00+00:00",
+        },
+        {"project_id": "demo"},
+    ]
+
+    factory_pg.mark_run_finished(
+        "run-1",
+        exit_code=0,
+        output_summary="Reviewed exact candidate SHA abc1234; gate_id 41 passed.\nSTATE: DONE",
+    )
+
+    assert calls == []
+    joined = "\n".join(fake_sql.statements)
+    assert "SET status='failed'" in joined
+    assert "SET status='review_ready'" in joined
+    assert "SET status='done'" not in joined
+    assert "review_success_without_task_bound_passed_gate" in joined
+
+
 def test_mark_run_finished_review_success_requires_task_bound_gate(fake_sql, monkeypatch):
     calls: list[str] = []
 

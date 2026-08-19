@@ -6862,6 +6862,9 @@ _REVIEW_RUNTIME_FAILURE_STRONG_PATTERNS = (
 _REVIEW_RUNTIME_FAILURE_ZERO_TOOL_PATTERNS = (
     "messages:       1 (1 user, 0 tool calls)",
     "messages: 1 (1 user, 0 tool calls)",
+    "no tool calls were made during this run",
+    "0 reviewer tool calls",
+    "zero reviewer tool calls",
 )
 _REVIEW_RUNTIME_429_PATTERNS = (
     "http 429",
@@ -6901,6 +6904,22 @@ _REVIEW_PROMPT_ONLY_LINES = {
     "final state marker",
     "state marker",
 }
+_REVIEW_METADATA_TOOL_CALL_COUNT_KEYS = (
+    "reviewer_tool_calls",
+    "reviewer_tool_call_count",
+    "tool_calls",
+    "tool_call_count",
+    "tool_calls_count",
+    "total_tool_calls",
+)
+_REVIEW_NO_INDEPENDENT_VERDICT_PATTERNS = (
+    "no independent verdict",
+    "independent verdict was not produced",
+    "independent verdict was never produced",
+    "without an independent verdict",
+    "unable to produce an independent verdict",
+    "could not produce an independent verdict",
+)
 
 
 def _clean_review_output_line(line: str) -> str:
@@ -6954,39 +6973,133 @@ def _review_runtime_failure_reason(output_summary: str) -> str | None:
     return None
 
 
-def _review_terminal_success_blocker(output_summary: str, *, has_task_bound_passed_gate: bool) -> str | None:
+def _metadata_value_is_zero_tool_count(value: Any) -> bool:
+    if value is None or isinstance(value, bool):
+        return False
+    if isinstance(value, (int, float)):
+        return int(value) == 0
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped.isdigit() and int(stripped) == 0
+    if isinstance(value, (list, tuple, set)):
+        return len(value) == 0
+    if isinstance(value, dict):
+        for key in ("count", "total", "value"):
+            if key in value and _metadata_value_is_zero_tool_count(value.get(key)):
+                return True
+    return False
+
+
+def _review_metadata_zero_tool_calls(metadata: dict[str, Any] | None) -> bool:
+    if not isinstance(metadata, dict):
+        return False
+    for key in _REVIEW_METADATA_TOOL_CALL_COUNT_KEYS:
+        if key in metadata and _metadata_value_is_zero_tool_count(metadata.get(key)):
+            return True
+    return False
+
+
+def _review_output_lacks_independent_verdict(output_summary: str) -> bool:
+    for line in str(output_summary or "").splitlines():
+        folded = _clean_review_output_line(line).casefold()
+        if not folded:
+            continue
+        if any(context in folded for context in _REVIEW_RUNTIME_DOCUMENTARY_CONTEXT):
+            continue
+        if any(pattern in folded for pattern in _REVIEW_NO_INDEPENDENT_VERDICT_PATTERNS):
+            return True
+    return False
+
+
+def _review_requeue_reason(output_summary: str, *, run_metadata: dict[str, Any] | None = None) -> str | None:
     runtime_reason = _review_runtime_failure_reason(output_summary)
     if runtime_reason:
         return runtime_reason
+    if _review_metadata_zero_tool_calls(run_metadata):
+        return "review_run_has_zero_reviewer_tool_calls"
+    if _review_output_lacks_independent_verdict(output_summary):
+        return "review_output_lacks_independent_verdict"
+    return None
+
+
+def _review_terminal_success_blocker(
+    output_summary: str,
+    *,
+    has_task_bound_passed_gate: bool,
+    run_metadata: dict[str, Any] | None = None,
+) -> str | None:
+    requeue_reason = _review_requeue_reason(output_summary, run_metadata=run_metadata)
+    if requeue_reason:
+        return requeue_reason
     if not has_task_bound_passed_gate:
         return "review_success_without_task_bound_passed_gate"
     return None
 
 
-def _task_bound_passed_review_gate(task_id: str) -> dict[str, Any] | None:
+def _parse_review_timestamp(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str) and value.strip():
+        try:
+            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _gate_is_historical_for_run(gate: dict[str, Any], run_started_at: Any) -> bool:
+    run_started = _parse_review_timestamp(run_started_at)
+    if run_started is None:
+        return False
+    gate_timestamp = _parse_review_timestamp(gate.get("timestamp"))
+    if gate_timestamp is None:
+        return True
+    return gate_timestamp < run_started
+
+
+def _task_bound_passed_review_gate(task_id: str, *, run_started_at: Any = None) -> dict[str, Any] | None:
     tid = str(task_id or "").strip()
     if not tid:
         return None
     gate_types = ",".join(_q(gate_type) for gate_type in _TASK_BOUND_REVIEW_GATE_TYPES)
+    run_started = _parse_review_timestamp(run_started_at)
+    started_at_filter = ""
+    if run_started is not None:
+        started_at_filter = f"AND timestamp >= {_q(run_started.isoformat())}::timestamptz"
     row = sql.one(
         f"""
-        SELECT gate_id, gate_type, reviewer
+        SELECT gate_id, gate_type, reviewer, timestamp
         FROM factory.gates
         WHERE task_id={_q(tid)}
           AND status='passed'
           AND gate_type IN ({gate_types})
+          {started_at_filter}
         ORDER BY timestamp DESC, gate_id DESC
         LIMIT 1
         """,
         user=_user(),
     )
-    return _normalize(row) if row else None
+    gate = _normalize(row) if row else None
+    if gate and _gate_is_historical_for_run(gate, run_started_at):
+        return None
+    return gate
 
 
-def _review_positive_terminal_blocker(task_id: str, output_summary: str) -> str | None:
+def _review_positive_terminal_blocker(
+    task_id: str,
+    output_summary: str,
+    *,
+    run_metadata: dict[str, Any] | None = None,
+    run_started_at: Any = None,
+) -> str | None:
     return _review_terminal_success_blocker(
         output_summary,
-        has_task_bound_passed_gate=bool(_task_bound_passed_review_gate(task_id)),
+        has_task_bound_passed_gate=bool(_task_bound_passed_review_gate(task_id, run_started_at=run_started_at)),
+        run_metadata=run_metadata,
     )
 
 
@@ -7040,12 +7153,14 @@ def _recover_false_terminalized_review_runs(project_id: str, *, project: dict[st
                    t.metadata->>'increment_base_commit_after' AS increment_base_commit_after,
                    t.metadata->>'false_review_terminalization_run_id' AS recovered_run_id,
                    r.output_summary,
+                   r.metadata AS run_metadata,
                    EXISTS (
                        SELECT 1
                        FROM factory.gates g
                        WHERE g.task_id=r.task_id
                          AND g.status='passed'
                          AND g.gate_type IN ({gate_types})
+                         AND (r.started_at IS NULL OR g.timestamp >= r.started_at)
                    ) AS has_task_bound_passed_review_gate
             FROM factory.task_runs r
             JOIN factory.tasks t ON t.task_id=r.task_id AND t.project_id=r.project_id
@@ -7077,7 +7192,13 @@ def _recover_false_terminalized_review_runs(project_id: str, *, project: dict[st
         increment_base_after = str(row.get("increment_base_commit_after") or "").strip()
         if increment_base_after != current_base_commit:
             continue
-        reason = _review_terminal_success_blocker(str(row.get("output_summary") or ""), has_task_bound_passed_gate=has_gate)
+        run_metadata_value = row.get("run_metadata")
+        run_metadata = run_metadata_value if isinstance(run_metadata_value, dict) else None
+        reason = _review_terminal_success_blocker(
+            str(row.get("output_summary") or ""),
+            has_task_bound_passed_gate=has_gate,
+            run_metadata=run_metadata,
+        )
         if not reason:
             continue
         previous_status = str(row.get("task_status") or "").strip() or "unknown"
@@ -7322,14 +7443,19 @@ def _revoke_unscoped_false_review_terminalization_recoveries(project_id: str, *,
 def mark_run_finished(run_id: str, *, exit_code: int, output_summary: str = "") -> None:
     ensure_runtime_schema()
     effective_exit_code = _effective_exit_code(exit_code, output_summary)
-    run_row = _normalize(sql.one(f"SELECT task_id, metadata FROM factory.task_runs WHERE run_id={_q(run_id)}", user=_user()) or {})
+    run_row = _normalize(sql.one(f"SELECT task_id, metadata, started_at FROM factory.task_runs WHERE run_id={_q(run_id)}", user=_user()) or {})
     metadata_value = run_row.get("metadata")
     metadata: dict[str, Any] = metadata_value if isinstance(metadata_value, dict) else {}
     run_type = str(metadata.get("run_type") or "implementation")
-    review_requeue_reason = _review_runtime_failure_reason(output_summary) if run_type == "review" and effective_exit_code != 0 else None
+    review_requeue_reason = _review_requeue_reason(output_summary, run_metadata=metadata) if run_type == "review" and effective_exit_code != 0 else None
     if run_type == "review" and effective_exit_code == 0:
         task_id = str(run_row.get("task_id") or "").strip()
-        terminal_blocker = _review_positive_terminal_blocker(task_id, output_summary)
+        terminal_blocker = _review_positive_terminal_blocker(
+            task_id,
+            output_summary,
+            run_metadata=metadata,
+            run_started_at=run_row.get("started_at"),
+        )
         if terminal_blocker:
             effective_exit_code = 1
             review_requeue_reason = terminal_blocker

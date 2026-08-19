@@ -441,7 +441,7 @@ def test_status_prefers_configured_base_source_when_invoked_from_stale_primary_r
     assert env["HERMES_FACTORY_SOURCE_DELEGATED"] == "1"
 
 
-def test_status_keeps_primary_readback_when_configured_base_source_is_unverified(monkeypatch, tmp_path, capsys):
+def test_status_fails_closed_when_stale_primary_configured_base_source_is_dirty(monkeypatch, tmp_path, capsys):
     primary, current_worktree, _stale_sha, _current_sha = _make_stale_primary_with_configured_base_worktree(tmp_path)
     (current_worktree / "hermes_cli" / "factory_pg.py").write_text("# dirty configured-base source\n", encoding="utf-8")
     monkeypatch.chdir(primary)
@@ -455,37 +455,69 @@ def test_status_keeps_primary_readback_when_configured_base_source_is_unverified
             raise AssertionError("dirty configured-base source must not be used")
         return real_run(argv, **kwargs)
 
-    class FakeBackend:
-        @staticmethod
-        def status(project_id):
-            return {
-                "projects": [
-                    {
-                        "project_id": project_id,
-                        "document_status": [
-                            {
-                                "file_name": "PRD.md",
-                                "category": "g1_required",
-                                "blocking": True,
-                                "reviewed": False,
-                                "readiness_source": "primary",
-                            }
-                        ],
-                    }
-                ]
-            }
-
     monkeypatch.setattr(factory.subprocess, "run", fake_run)
-    monkeypatch.setattr(factory, "_backend", lambda _args: FakeBackend())
+    monkeypatch.setattr(factory, "_backend", lambda _args: (_ for _ in ()).throw(AssertionError("stale backend must not be used")))
 
     rc = factory.cmd_status(argparse.Namespace(project_id="demo", json=True))
 
-    assert rc == 0
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["factory_cli_source_root"] == str(primary)
-    assert payload["factory_status_source_root"] == str(primary)
-    assert payload["factory_status_delegated"] is False
-    assert payload["projects"][0]["document_status"][0]["blocking"] is True
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert captured.out == ""
+    assert "configured-base source is unavailable or unverified" in captured.err
+
+
+def test_status_fails_closed_when_stale_primary_configured_base_worktree_is_unavailable(monkeypatch, tmp_path, capsys):
+    primary, current_worktree, _stale_sha, _current_sha = _make_stale_primary_with_configured_base_worktree(tmp_path)
+    _git(primary, "worktree", "remove", "--force", str(current_worktree))
+    monkeypatch.chdir(primary)
+    monkeypatch.setattr(factory, "__file__", str(primary / "hermes_cli" / "factory.py"))
+
+    real_run = factory.subprocess.run
+
+    def fake_run(argv, **kwargs):
+        argv_text = [str(part) for part in argv]
+        if argv_text[:5] == [sys.executable, "-m", "hermes_cli.main", "factory", "status"]:
+            raise AssertionError("unavailable configured-base source must not fall back to stale primary")
+        return real_run(argv, **kwargs)
+
+    monkeypatch.setattr(factory.subprocess, "run", fake_run)
+    monkeypatch.setattr(factory, "_backend", lambda _args: (_ for _ in ()).throw(AssertionError("stale backend must not be used")))
+
+    rc = factory.cmd_status(argparse.Namespace(project_id="demo", json=True))
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert captured.out == ""
+    assert "configured-base source is unavailable or unverified" in captured.err
+
+
+def test_status_fails_closed_when_stale_primary_configured_base_worktree_is_ahead(monkeypatch, tmp_path, capsys):
+    primary, current_worktree, _stale_sha, _current_sha = _make_stale_primary_with_configured_base_worktree(tmp_path)
+    _git(current_worktree, "config", "user.email", "factory@example.com")
+    _git(current_worktree, "config", "user.name", "Factory Test")
+    (current_worktree / "hermes_cli" / "factory_pg.py").write_text("# ahead configured-base source\n", encoding="utf-8")
+    _git(current_worktree, "add", "hermes_cli/factory_pg.py")
+    _git(current_worktree, "commit", "-m", "ahead configured-base source")
+    monkeypatch.chdir(primary)
+    monkeypatch.setattr(factory, "__file__", str(primary / "hermes_cli" / "factory.py"))
+
+    real_run = factory.subprocess.run
+
+    def fake_run(argv, **kwargs):
+        argv_text = [str(part) for part in argv]
+        if argv_text[:5] == [sys.executable, "-m", "hermes_cli.main", "factory", "status"]:
+            raise AssertionError("ahead configured-base source must not be used")
+        return real_run(argv, **kwargs)
+
+    monkeypatch.setattr(factory.subprocess, "run", fake_run)
+    monkeypatch.setattr(factory, "_backend", lambda _args: (_ for _ in ()).throw(AssertionError("stale backend must not be used")))
+
+    rc = factory.cmd_status(argparse.Namespace(project_id="demo", json=True))
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert captured.out == ""
+    assert "configured-base source is unavailable or unverified" in captured.err
 
 
 def test_status_keeps_running_source_when_it_is_ahead_of_configured_base(monkeypatch, tmp_path, capsys):
@@ -589,7 +621,7 @@ def test_resolve_state_prefers_configured_base_source_when_invoked_from_stale_pr
     assert env["HERMES_FACTORY_SOURCE_DELEGATED"] == "1"
 
 
-def test_resolve_state_keeps_primary_readback_when_configured_base_source_is_dirty(monkeypatch, tmp_path, capsys):
+def test_resolve_state_fails_closed_when_stale_primary_configured_base_source_is_dirty(monkeypatch, tmp_path, capsys):
     primary, current_worktree, _stale_sha, _current_sha = _make_stale_primary_with_configured_base_worktree(tmp_path)
     (current_worktree / "hermes_cli" / "factory_pg.py").write_text("# dirty configured-base source\n", encoding="utf-8")
     monkeypatch.chdir(primary)
@@ -603,24 +635,17 @@ def test_resolve_state_keeps_primary_readback_when_configured_base_source_is_dir
             raise AssertionError("dirty configured-base source must not be used")
         return real_run(argv, **kwargs)
 
-    class FakeBackend:
-        @staticmethod
-        def control_action(project_id, action):
-            return {"action": action, "project_id": project_id, "anomalies": ["unvalidated_required_docs"]}
-
     monkeypatch.setattr(factory.subprocess, "run", fake_run)
-    monkeypatch.setattr(factory, "_backend", lambda _args: FakeBackend())
+    monkeypatch.setattr(factory, "_backend", lambda _args: (_ for _ in ()).throw(AssertionError("stale primary backend must not be used")))
 
     rc = factory.cmd_project_action(
         argparse.Namespace(factory_project_command="resolve-state", project_id="demo", json=True)
     )
 
-    assert rc == 0
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["factory_cli_source_root"] == str(primary)
-    assert payload["factory_project_action_source_root"] == str(primary)
-    assert payload["factory_project_action_delegated"] is False
-    assert payload["anomalies"] == ["unvalidated_required_docs"]
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert captured.out == ""
+    assert "configured-base source is unavailable or unverified" in captured.err
 
 
 def test_resolve_state_keeps_ahead_running_source_local(monkeypatch, tmp_path, capsys):

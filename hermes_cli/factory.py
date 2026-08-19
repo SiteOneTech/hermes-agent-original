@@ -542,6 +542,13 @@ def _running_source_is_stale_behind_configured_base(running_source_root: Path) -
     return _git_check_source_root(running_source_root, "merge-base", "--is-ancestor", running_head, base_commit) is True
 
 
+def _configured_base_source_unavailable_message() -> str:
+    return (
+        "Factory configured-base source is unavailable or unverified; refusing to read Factory state "
+        "from a stale primary checkout"
+    )
+
+
 def _preferred_cwd_source_root(running_source_root: Path) -> Path | None:
     if os.environ.get("HERMES_FACTORY_SOURCE_DELEGATED") == "1":
         return None
@@ -571,6 +578,9 @@ def _delegated_status_from_cwd_source(args: argparse.Namespace) -> int | None:
         running_source_root
     )
     if source_root is None:
+        if _running_source_is_stale_behind_configured_base(running_source_root):
+            print(_configured_base_source_unavailable_message(), file=sys.stderr)
+            return 1
         return None
     argv = [sys.executable, "-m", "hermes_cli.main", "factory", "status"]
     project_id = getattr(args, "project_id", None)
@@ -614,6 +624,9 @@ def _delegated_project_action_from_cwd_source(args: argparse.Namespace) -> int |
     if source_root is None and getattr(args, "factory_project_command", None) in _CONFIGURED_BASE_DELEGATED_PROJECT_ACTIONS:
         source_root = _preferred_configured_base_source_root(running_source_root)
     if source_root is None:
+        if getattr(args, "factory_project_command", None) in _CONFIGURED_BASE_DELEGATED_PROJECT_ACTIONS and _running_source_is_stale_behind_configured_base(running_source_root):
+            print(_configured_base_source_unavailable_message(), file=sys.stderr)
+            return 1
         return None
     argv = [
         sys.executable,
@@ -658,8 +671,8 @@ def _resolve_orchestrator_script() -> tuple[Path, Path]:
     if source_root is None:
         if _running_source_is_stale_behind_configured_base(running_source_root):
             raise RuntimeError(
-                "Factory orchestrator configured-base source is unavailable or unverified; "
-                "refusing to run tick dispatch from a stale primary checkout"
+                _configured_base_source_unavailable_message()
+                + "; refusing to run tick dispatch from a stale primary checkout"
             )
         source_root = running_source_root
     script = source_root / "scripts" / "factory" / "factory_orchestrator_tick.py"
