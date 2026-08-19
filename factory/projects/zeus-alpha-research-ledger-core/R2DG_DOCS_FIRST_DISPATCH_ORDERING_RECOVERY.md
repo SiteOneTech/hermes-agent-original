@@ -102,6 +102,8 @@ credential/secret operation, external runtime/provider operation, messaging,
 Vonash/Magnus/VAOS/RAG/KB/broker/trading/risk/paper/live activity, or ALR product
 implementation was performed.
 
-Delivery remains PR-first: push this assigned branch, open a Zeus-signed
-`agent:zeus` PR against `main`, and require independent exact-SHA quality review
-before Factory treats this recovery as reviewed.
+Delivery is PR-first at
+`https://github.com/SiteOneTech/hermes-agent-original/pull/92` on the assigned
+branch. The PR body records the final candidate SHA after push and carries the
+`agent:zeus` label. Independent exact-SHA quality review is still required before
+Factory treats this recovery as reviewed.
