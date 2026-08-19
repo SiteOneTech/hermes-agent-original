@@ -4503,9 +4503,15 @@ def _candidate_requires_validation_readiness_before_dispatch(candidate: dict[str
     creates a dispatch deadlock.
     """
 
-    if _is_validation_task(candidate):
+    if (
+        _is_validation_task(candidate)
+        or _is_reconciliation_task(candidate)
+        or _is_runtime_bootstrap_repair_task(candidate)
+    ):
         return False
     phase = str(candidate.get("phase") or "").lower().replace("-", "_")
+    if phase.startswith(("g0", "g1")) or phase in {"documentation", "planning"}:
+        return False
     text = _task_text(candidate)
     owner = str(candidate.get("owner_profile") or candidate.get("owner_agent_id") or "").lower()
     if owner == "devops-release" and any(term in text for term in ("deploy", "deployment", "sandbox", "preview", "release")):
