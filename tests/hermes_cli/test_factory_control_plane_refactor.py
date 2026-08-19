@@ -1139,9 +1139,64 @@ def test_dispatch_validation_readiness_does_not_deadlock_deploy_prerequisite():
         "description": "Summarize validation and delivery evidence.",
         "owner_profile": "factory-reporter",
     }
+    release = {
+        "task_id": "demo-release",
+        "phase": "release",
+        "title": "Release readiness and gate closure",
+        "description": "Close release only after validation evidence is complete.",
+        "owner_profile": "factory-reporter",
+    }
 
     assert factory_pg._candidate_requires_validation_readiness_before_dispatch(deploy) is False
     assert factory_pg._candidate_requires_validation_readiness_before_dispatch(final_report) is True
+    assert factory_pg._candidate_requires_validation_readiness_before_dispatch(release) is True
+
+
+def test_validation_readiness_allows_dependency_ready_documentation_recovery_with_historical_finalized_wording(fake_sql, monkeypatch):
+    documentation_recovery = {
+        "project_id": "demo",
+        "lane_id": "lane-docs",
+        "task_id": "demo-r2df-current-base-g1-docs",
+        "status": "todo",
+        "phase": "documentation",
+        "priority": 19,
+        "title": "R2df — fresh current-base G1 documentation-index conflict recovery",
+        "description": (
+            "Bounded technical successor after canonical resolve-state finalized its run as blocked. "
+            "Use current-origin project documentation to recover stale G1 evidence."
+        ),
+        "owner_profile": "codex-builder",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {},
+    }
+    unrelated_security_review = {
+        "project_id": "demo",
+        "lane_id": "lane-review",
+        "task_id": "demo-alr-063-security-review",
+        "status": "todo",
+        "phase": "security_review",
+        "priority": 62,
+        "title": "ALR-063 independent security and no-egress review",
+        "description": "Review implementation after the product increment exists.",
+        "owner_profile": "security-reviewer",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {},
+    }
+    tasks = [documentation_recovery, unrelated_security_review]
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: {"project_id": project_id, "metadata": {}})
+    fake_sql.rows_results = [[documentation_recovery, unrelated_security_review]]
+
+    selected = factory_pg._next_runnable_task(
+        "demo",
+        dispatch_preflight=(False, True, False, False),
+    )
+
+    assert selected is not None
+    assert selected["task_id"] == documentation_recovery["task_id"]
+    assert not any("unresolved_validation_tasks" in statement for statement in fake_sql.statements)
 
 
 def test_status_attaches_document_status(fake_sql, monkeypatch):

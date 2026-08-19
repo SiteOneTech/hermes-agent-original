@@ -4510,7 +4510,20 @@ def _candidate_requires_validation_readiness_before_dispatch(candidate: dict[str
     owner = str(candidate.get("owner_profile") or candidate.get("owner_agent_id") or "").lower()
     if owner == "devops-release" and any(term in text for term in ("deploy", "deployment", "sandbox", "preview", "release")):
         return False
-    return phase.startswith("delivery") or phase in {"release", "final", "final_report"} or "delivery report" in text or "final" in text
+    final_stage_text = any(
+        term in text
+        for term in (
+            "delivery report",
+            "final delivery",
+            "final report",
+            "final gate",
+            "final handoff",
+            "gate closure",
+            "closure report",
+            "release report",
+        )
+    ) or re.search(r"\bfinal\s+(?:delivery|report|gate|closure|handoff)\b", text) is not None
+    return phase.startswith("delivery") or phase in {"release", "final", "final_report"} or final_stage_text
 
 
 def _next_runnable_task(
