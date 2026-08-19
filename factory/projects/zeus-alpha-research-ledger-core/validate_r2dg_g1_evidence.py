@@ -266,11 +266,14 @@ def _validate_r2dg_quality_gate(data: dict[str, Any], args: argparse.Namespace, 
         return
     notes = str(quality_gate.get("notes") or "")
     _require(quality_gate.get("project_id") == PROJECT_ID, f"gate {quality_gate.get('gate_id')} project mismatch", failures)
-    _require(quality_gate.get("task_id") in (None, TASK_ID), f"gate {quality_gate.get('gate_id')} task mismatch", failures)
+    # Task binding is enforced via the gate row's task_id column (canonical
+    # task-bound review gate), not by quoting the task id inside free-text
+    # notes; notes carry the SHA/PR/evidence markers.
+    _require(quality_gate.get("task_id") == TASK_ID, f"gate {quality_gate.get('gate_id')} task mismatch", failures)
     _require(quality_gate.get("gate_type") == "quality", f"gate {quality_gate.get('gate_id')} type mismatch", failures)
     _require(quality_gate.get("status") == "passed", f"gate {quality_gate.get('gate_id')} did not pass", failures)
     _require(quality_gate.get("reviewer") == "quality-reviewer", f"gate {quality_gate.get('gate_id')} reviewer mismatch", failures)
-    for marker in (TASK_ID, args.expected_base, args.expected_evidence_head, args.expected_pr):
+    for marker in (args.expected_base, args.expected_evidence_head, args.expected_pr):
         _require(marker in notes, f"gate {quality_gate.get('gate_id')} notes missing {marker}", failures)
     _require("no direct SQL" in notes and "no merge" in notes, f"gate {quality_gate.get('gate_id')} notes missing safety boundary", failures)
 

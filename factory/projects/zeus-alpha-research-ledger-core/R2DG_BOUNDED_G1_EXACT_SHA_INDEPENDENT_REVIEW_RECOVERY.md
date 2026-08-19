@@ -294,4 +294,5 @@ This run used local Git readback, the approved Factory status/gate-record CLI,
 local file edits, and GitHub PR creation only. It performed no deploy, no
 credential change/access, no direct SQL, no connector/messaging action, no
 production runtime propagation, no merge, no force-push/ref rewrite, no task
-status mutation, and no trading/risk/paper/live action.
+status mutation, no primary-checkout mutation, no external runtime contact,
+no ALR-020/product dispatch, and no trading/risk/paper/live action.
