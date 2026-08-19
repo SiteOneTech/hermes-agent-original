@@ -554,6 +554,53 @@ primary mutation, no force-push/ref rewrite, no task-status mutation, and no
 external runtime/product dispatch. Independent exact-SHA quality review remains
 required before this task can be represented as reviewed.
 
+## Review round 22 — R2dh docs-first current-base G1 review-state dispatch recovery
+
+**Current-base identity captured before edits:** R2dh uses assigned worktree
+`/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-010-r2dh-docs-first-current-base-g1`,
+branch `factory/zeus-alpha-research-ledger-core/inc-010-r2dh-docs-first-current-base-g1`,
+with local `HEAD`, `origin/main`, and merge-base all equal to
+`abc164184d588a7a9e5e4838f5a101d9f4e3a0f2` before documentation edits. PR #91
+readback shows the predecessor R2dg branch merged, non-draft, `agent:zeus`, head
+`5f13f71407a0ff6966666c016d47d281ba02a5af`, merge commit
+`abc164184d588a7a9e5e4838f5a101d9f4e3a0f2`.
+
+**Canonical Factory status read-back:** the approved status command
+`/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory status zeus-alpha-research-ledger-core --json`
+read Agent Core Postgres from the assigned worktree source and wrote
+`/tmp/r2dh-status-before.json` (`3,920,382` bytes) plus pretty readback
+`/tmp/r2dh-status-before.pretty.json` (`4,438,709` bytes). The payload reports
+`factory_cli_source_root` and `factory_status_source_root` equal to the assigned
+worktree, `factory_status_delegated=false`, `reconciliation_anomalies=[]`,
+`reconciliation_projection_source=current_document_status`, and all 14 required
+G1 documents as `exists=true`, `committed=true`, `indexed=true`,
+`validated=true`, `reviewed=true`, `blocking=false` from
+`readiness_source=configured_base_ref`, base
+`abc164184d588a7a9e5e4838f5a101d9f4e3a0f2`. No current configured-base G1 row
+is represented as unreviewed or blocking.
+
+**Exact blocker distinction:** historical critical-readiness/delivery gate
+snapshots such as gate `854` still preserve the exact 11-document blocker set:
+`FACTORY_INTAKE.md`, `REQUIREMENTS_ANALYSIS.md`, `PATTERN_ANALYSIS.md`,
+`ASSUMPTIONS_AND_OPEN_QUESTIONS.md`, `PRD.md`, `ADRS.md`,
+`METHODOLOGY_PLAN.md`, `TECHNICAL_BLUEPRINT.md`, `SPRINT_PLAN.md`,
+`TASK_GRAPH.md`, and `SECURITY_GATES.md`. Gate `838` and related snapshots
+preserve an older ten-document variant, and gate `958` preserves a separate
+historical `DOCUMENTATION_INDEX.md` blocker; none of these override the current
+top-level configured-base rows. R2df dispatch denials (`event 202237` and
+predecessors) are `unresolved_validation_tasks` lifecycle blockers naming stale
+validation tasks, while R2cw denials (`event 202238` and predecessors) are
+fail-closed product-task `missing_or_unindexed_docs` evidence. They are not
+current document-content failures.
+
+**Handoff requirement:** `R2DH_DOCS_FIRST_CURRENT_BASE_G1_REVIEW_STATE_DISPATCH_RECOVERY.md`
+is an implementation evidence candidate and remains `reviewed: pending` until a
+distinct `quality-reviewer` inspects the final PR head SHA and records a
+source-backed PASS or bounded same-project rework. This R2dh worker does not
+self-approve, merge, mutate task status, write direct SQL, change credentials,
+touch primary checkout, perform external runtime/provider/messaging/deploy
+operations, or authorize ALR-020/product dispatch.
+
 ## Local documentary verification — non-approval
 
 At `2026-08-10T04:50:09-04:00`, the implementation-planner worker verified the project-local pack from the assigned worktree only. `git ls-files --error-unmatch` confirmed the 14 required G1 documents plus `G0_REPOSITORY_STRATEGY.md`, `REQUIREMENTS_TRACEABILITY.md`, `DATABASE_AND_RUNTIME_CONTRACT.md`, and `G1_REVIEW.md` are tracked. `DOCUMENTATION_INDEX.md` indexes required documents and records explicit validated/reviewed status. `G0_REPOSITORY_STRATEGY.md` records the Zeus-only source repo, `origin/main` reference, assigned branch/worktree policy, PR-first delivery, and predecessor linkage. This is implementation evidence, not an independent specification/security PASS.
