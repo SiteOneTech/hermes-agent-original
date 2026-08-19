@@ -8,7 +8,7 @@ const pluginSource = readFileSync(new URL('../plugin.js', import.meta.url), 'utf
 /** Load the plugin in a vm with a scripted cli.exec so member turns are
  *  deterministic. `turnScript(profile, prompt)` returns the member's reply
  *  text (or throws to simulate a failed turn). */
-function load(turnScript) {
+function load(turnScript, { busyUntilResumeCall } = {}) {
   const values = new Map()
   const atom = initial => {
     const slot = { get: () => values.get(slot), set: value => values.set(slot, value) }
@@ -20,6 +20,12 @@ function load(turnScript) {
   const runtimeToStored = new Map()
   const titleToStored = new Map()
   let sessionSequence = 0
+  // busyUntilResumeCall[profile] = N: this profile's session.resume reports
+  // inflight/running for its first N calls, then flips to done — simulating
+  // a turn that is genuinely still running when harvested, without an
+  // unbounded real-time wait if a caller polls it (used to exercise the
+  // stranded/busy-responder guard).
+  const resumeCallCounts = new Map()
 
   const resolveSession = (profile, target) => {
     const stored = runtimeToStored.get(target) || (sessions.has(target) ? target : titleToStored.get(`${profile}::${target}`))
@@ -52,13 +58,18 @@ function load(turnScript) {
           if (!session) {
             throw new Error(`session not found: ${params.session_id}`)
           }
+          const profile = params.profile
+          const seen = (resumeCallCounts.get(profile) || 0) + 1
+          resumeCallCounts.set(profile, seen)
+          const limit = busyUntilResumeCall && busyUntilResumeCall[profile]
+          const busy = Boolean(limit && seen <= limit)
           return {
             session_id: session.runtime,
             session_key: session.stored,
             message_count: session.messages.length,
             messages: [...session.messages],
-            inflight: false,
-            running: false
+            inflight: busy,
+            running: busy
           }
         }
         if (method === 'prompt.submit') {
@@ -93,7 +104,7 @@ function load(turnScript) {
     .replace(/^import .* from 'react\/jsx-runtime'\r?\n/m, '')
     .replace('export default {', 'globalThis.plugin = {')
     .concat(
-      '\nglobalThis.__gc = { sendToGroupChat, runGroupChatRounds, harvestStrandedGroupReply, resolveGroupResponders, parseGroupChatMentions, rotateGroupSpeakers, isGroupPassText, formatGroupChatLine, buildGroupChatTurnPrompt, trimGroupChatLog, disbandGroupChat, updateGroupChat, $groupChats, $groupNeedsYou, $groupChatWorkspace, $botMeta, GROUP_CHAT_MAX_ROUNDS, GROUP_CHAT_MAX_MESSAGES };\n'
+      '\nglobalThis.__gc = { sendToGroupChat, runGroupChatRounds, harvestStrandedGroupReply, resolveGroupResponders, parseGroupChatMentions, rotateGroupSpeakers, isGroupPassText, formatGroupChatLine, buildGroupChatTurnPrompt, trimGroupChatLog, disbandGroupChat, updateGroupChat, openGroupChat, closeGroupChatMainTab, $groupChats, $groupNeedsYou, $groupChatWorkspace, $botMeta, GROUP_CHAT_MAX_ROUNDS, GROUP_CHAT_MAX_MESSAGES };\n'
     )
   vm.runInNewContext(source, context, { filename: 'plugin.js' })
   const storageWrites = new Map()
@@ -101,7 +112,7 @@ function load(turnScript) {
     storage: { get: () => null, set: (key, value) => storageWrites.set(key, value) },
     register: () => undefined
   })
-  return { ...context.__gc, calls, sessions, storageWrites }
+  return { ...context.__gc, calls, host: context.host, sessions, storageWrites }
 }
 
 const MEMBERS = [{ name: 'research', title: '' }, { name: 'builder', title: '' }, { name: 'ops', title: 'The Ops' }]
@@ -344,6 +355,39 @@ test('source contract: workspace + main-window door + prompt rules are wired', (
   assert.match(pluginSource, /\[Group chat: "\$\{groupName\}"\]/)
 })
 
+test('group selection follows main-window open and close', () => {
+  const gc = load(() => '(pass)')
+  let onClose
+
+  gc.host.openWorkspace = (_id, options) => {
+    onClose = options.onClose
+    return () => onClose()
+  }
+
+  gc.openGroupChat('Core')
+  assert.equal(gc.$groupChatWorkspace.get(), 'Core')
+
+  onClose()
+  assert.equal(gc.$groupChatWorkspace.get(), null)
+})
+
+test('closing an older selected group does not clear the newer selection', () => {
+  const gc = load(() => '(pass)')
+
+  gc.host.openWorkspace = () => () => undefined
+  gc.openGroupChat('Core')
+  gc.openGroupChat('Ops')
+  gc.closeGroupChatMainTab('Core')
+
+  assert.equal(gc.$groupChatWorkspace.get(), 'Ops')
+})
+
+test('source contract: active group styling suppresses bot styling', () => {
+  assert.match(pluginSource, /const isActive = !activeGroup && !bot\.remoteSource && bot\.name === focusedProfile/)
+  assert.match(pluginSource, /active && 'bg-\(--ui-row-active-background\)'/)
+  assert.match(pluginSource, /active: groupChatName === row\.name/)
+})
+
 test('disband: removes only this membership, room log, workspace, and needs-you state', async () => {
   const gc = load(() => '(pass)')
 
@@ -532,6 +576,62 @@ test('stranded harvest: a timed-out turn whose reply landed late posts into the 
   assert.equal(gc.$groupChats.get().Late.stranded.research, undefined, 'marker consumed')
 })
 
+test('stranded + still busy: the round loop never re-submits into a member whose harvest just confirmed they are still running', async () => {
+  // research is confirmed busy on exactly its first two session.resume
+  // calls — the number of harvest-only touches the FIXED code makes across
+  // two rounds. If the responder guard is missing, research gets re-
+  // selected and picks up two EXTRA resume calls of its own (session
+  // resolution + turn baseline) before its very first post-resubmit poll
+  // — call #4 — which then reports done, so the mutated run still finishes
+  // fast (no real wall-clock wait) while still proving the resubmission
+  // happened.
+  const gc = load(profile => (profile === 'builder' ? 'builder here, all good' : '(pass)'), {
+    busyUntilResumeCall: { research: 2 }
+  })
+
+  // research's session is pre-seeded and resolvable, exactly like the
+  // sibling stranded-harvest test above — its stranded marker is the
+  // pre-thread bare-number shape (still supported: harvestStrandedGroupReply
+  // normalizes both shapes, and presence in `stranded` is what the round-loop
+  // guard checks, not the marker's value shape).
+  gc.sessions.set('sid-research', {
+    stored: 'sid-research',
+    runtime: 'rt-research',
+    profile: 'research',
+    title: 'Group: Grind',
+    messages: []
+  })
+
+  // research is already stranded from an earlier (unmodeled) timeout, and
+  // its session is STILL genuinely running per session.resume. Both members
+  // are mentioned, so without the busy-responder guard both would be
+  // re-selected this round — and resubmitting into research's live session
+  // would trigger the gateway's default busy policy (redirect/hard-
+  // interrupt), destroying the very turn the stranded marker exists to wait
+  // out.
+  gc.updateGroupChat('Grind', r => {
+    r.stranded = { research: 0 }
+    r.sessions = { research: 'sid-research' }
+    r.log = [{ from: { kind: 'user', name: 'You' }, text: '@research @builder status?', at: 1 }]
+    r.watermarks = { 'legacy::research': 0, 'legacy::builder': 0 }
+    return r
+  })
+
+  await gc.runGroupChatRounds('Grind', [{ name: 'research', title: '' }, { name: 'builder', title: '' }], 'legacy')
+
+  assert.equal(
+    gc.calls.filter(c => c.profile === 'research').length,
+    0,
+    'research (still busy) must never receive a new prompt.submit'
+  )
+  assert.equal(
+    gc.$groupChats.get().Grind.stranded.research,
+    0,
+    'marker survives untouched — harvest confirmed research is still running'
+  )
+  assert.equal(gc.calls.filter(c => c.profile === 'builder').length, 1, 'builder (not stranded) still gets its turn')
+})
+
 test('stranded harvest: a late (pass) or no-new-message consumes the marker without posting', async () => {
   const gc = load(() => '(pass)')
 
@@ -597,4 +697,128 @@ test('turn prompt: results are full quality — only chatter is asked to stay sh
   })
   assert.match(prompt, /never thin out real content/i)
   assert.match(prompt, /Keep chatter short/i)
+})
+
+test('threads: room composer mints a new thread; replies land in it', async () => {
+  const gc = load(() => '(pass)')
+
+  const t1 = gc.sendToGroupChat('Rooms', [{ name: 'research', title: '' }], 'first topic')
+  for (let i = 0; i < 200 && (gc.$groupChats.get().Rooms || {}).running; i++) {
+    await new Promise(resolve => setImmediate(resolve))
+  }
+  const t2 = gc.sendToGroupChat('Rooms', [{ name: 'research', title: '' }], 'second topic')
+  for (let i = 0; i < 200 && (gc.$groupChats.get().Rooms || {}).running; i++) {
+    await new Promise(resolve => setImmediate(resolve))
+  }
+
+  assert.ok(t1 && t2 && t1 !== t2, 'each composer send mints a distinct thread')
+  const log = roomLog(gc, 'Rooms')
+  assert.equal(log[0].thread, t1)
+  assert.equal(log[1].thread, t2)
+})
+
+test('threads: replying with an explicit thread id continues that thread and scopes the member delta to it', async () => {
+  const prompts = []
+  const gc = load((profile, prompt) => {
+    prompts.push(prompt)
+    return prompt.includes('billing') ? 'On the billing fix.' : '(pass)'
+  })
+
+  const billing = gc.sendToGroupChat('Scoped', [{ name: 'research', title: '' }], 'fix the billing bug')
+  for (let i = 0; i < 200 && (gc.$groupChats.get().Scoped || {}).running; i++) {
+    await new Promise(resolve => setImmediate(resolve))
+  }
+  gc.sendToGroupChat('Scoped', [{ name: 'research', title: '' }], 'research pricing')
+  for (let i = 0; i < 200 && (gc.$groupChats.get().Scoped || {}).running; i++) {
+    await new Promise(resolve => setImmediate(resolve))
+  }
+
+  // Continue the BILLING thread explicitly.
+  const again = gc.sendToGroupChat('Scoped', [{ name: 'research', title: '' }], 'billing follow-up: ship it', billing)
+  for (let i = 0; i < 200 && (gc.$groupChats.get().Scoped || {}).running; i++) {
+    await new Promise(resolve => setImmediate(resolve))
+  }
+
+  assert.equal(again, billing, 'explicit thread id is reused, not re-minted')
+  const followUpPrompt = prompts.find(p => p.includes('ship it'))
+  assert.ok(followUpPrompt, 'follow-up turn ran')
+  assert.equal(followUpPrompt.includes('research pricing'), false, 'other thread never leaks into the delta')
+
+  // Member replies carry the thread of the turn that produced them.
+  const memberEntries = roomLog(gc, 'Scoped').filter(e => e.from.kind === 'member')
+  assert.ok(memberEntries.length >= 1)
+  assert.ok(memberEntries.every(e => e.thread === billing), 'replies land in the thread that triggered them')
+})
+
+test('threads: hydration assigns legacy thread ids — lull splits, follow-ups stay together', () => {
+  const gc = load(() => '(pass)')
+  assert.match(pluginSource, /function assignLegacyThreads\(log\)/)
+
+  const fn = new Function(
+    `${pluginSource.slice(pluginSource.indexOf('const GROUP_THREAD_GAP_MS'), pluginSource.indexOf('/** Merged room view'))}; return assignLegacyThreads`
+  )()
+  const M = 60000
+  const u = (text, at) => ({ from: { kind: 'user', name: 'You' }, text, at })
+  const m = (name, text, at) => ({ from: { kind: 'member', name }, text, at })
+
+  const log = fn([
+    u('task one', 0),
+    m('a', 'r1', 1 * M),
+    u('quick follow-up', 3 * M), // inside the 15-min window: SAME thread
+    m('a', 'r2', 4 * M),
+    u('new topic much later', 60 * M), // after the lull: new thread
+    m('a', 'r3', 61 * M)
+  ])
+  assert.equal(log[0].thread, log[2].thread, 'follow-up stays in the same thread')
+  assert.equal(log[2].thread, log[3].thread)
+  assert.notEqual(log[0].thread, log[4].thread, 'post-lull message starts a new thread')
+  assert.equal(log[4].thread, log[5].thread)
+  void gc
+})
+
+test('source contract: thread UI — folded rows, per-thread reply box, new-thread composer', () => {
+  assert.match(pluginSource, /Open this thread/)
+  assert.match(pluginSource, /Collapse thread/)
+  assert.match(pluginSource, /Reply in thread…/)
+  assert.match(pluginSource, /children: 'New Thread'/)
+  assert.match(pluginSource, /const markKey = `\$\{thread\}::\$\{memberKey\}`/)
+})
+
+function groupChatWorkspaceSource() {
+  const start = pluginSource.indexOf('function GroupChatWorkspace')
+  const end = pluginSource.indexOf('function closeGroupChatMainTab')
+  assert.ok(start >= 0, 'GroupChatWorkspace is defined')
+  assert.ok(end > start, 'closeGroupChatMainTab follows GroupChatWorkspace')
+  return pluginSource.slice(start, end)
+}
+
+test('source contract: group chat log lines expose CopyButton on the entry body', () => {
+  const src = groupChatWorkspaceSource()
+  assert.match(pluginSource, /CopyButton/)
+  assert.match(src, /CopyButton/)
+  assert.match(src, /text:\s*entry\.text/)
+  assert.match(src, /stopPropagation:\s*true/)
+  assert.match(src, /appearance:\s*['"]icon['"]/)
+  assert.match(src, /buttonSize:\s*['"]icon['"]/)
+  assert.match(src, /['"]group /)
+  assert.doesNotMatch(src, /playSpeechText/)
+  assert.doesNotMatch(src, /RefreshCw/)
+  assert.doesNotMatch(src, /readAloud/)
+  assert.doesNotMatch(src, /ActionBarPrimitive\.Reload/)
+})
+
+test('source contract: group chat message bodies opt back into selectable text', () => {
+  // styles.css sets user-select: none app-wide and re-enables it only for
+  // [data-selectable-text="true"] surfaces. Without this opt-in on the entry
+  // body, drag-select and Cmd/Ctrl+C are dead in group chat logs.
+  const src = groupChatWorkspaceSource()
+  assert.match(src, /'data-selectable-text':\s*'true'/)
+})
+
+test('group room preview renders the bot HANDLE, not the raw profile name', () => {
+  // #89484: the room line read "@default: …" while the bot answers to
+  // @hermes, so users concluded mention routing was broken.
+  assert.match(pluginSource, /const lastHandle = botHandle\(lastFrom \|\| 'bot', members\.find\(/)
+  assert.match(pluginSource, /\? `\$\{last\.from\?\.kind === 'user' \? 'You' : `@\$\{lastHandle\}`\}/)
+  assert.doesNotMatch(pluginSource, /`@\$\{last\.from\?\.name \|\| 'bot'\}`/)
 })
