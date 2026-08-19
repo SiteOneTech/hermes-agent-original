@@ -529,6 +529,19 @@ def _preferred_configured_base_source_root(running_source_root: Path) -> Path | 
     return sorted(candidates, key=lambda path: str(path))[0]
 
 
+def _running_source_is_stale_behind_configured_base(running_source_root: Path) -> bool:
+    """Return whether ``running_source_root`` is behind the configured origin base."""
+
+    base = _origin_default_base_ref(running_source_root)
+    if base is None:
+        return False
+    _base_ref, base_commit = base
+    running_head = _git_probe_source_root(running_source_root, "rev-parse", "HEAD")
+    if not running_head or running_head == base_commit:
+        return False
+    return _git_check_source_root(running_source_root, "merge-base", "--is-ancestor", running_head, base_commit) is True
+
+
 def _preferred_cwd_source_root(running_source_root: Path) -> Path | None:
     if os.environ.get("HERMES_FACTORY_SOURCE_DELEGATED") == "1":
         return None
@@ -639,7 +652,16 @@ def _resolve_orchestrator_script() -> tuple[Path, Path]:
     running_script = running_source_root / "scripts" / "factory" / "factory_orchestrator_tick.py"
     if not running_script.is_file():
         raise RuntimeError(f"Factory orchestrator script not found in running Hermes source: {running_script}")
-    source_root = _preferred_cwd_source_root(running_source_root) or running_source_root
+    source_root = _preferred_cwd_source_root(running_source_root) or _preferred_configured_base_source_root(
+        running_source_root
+    )
+    if source_root is None:
+        if _running_source_is_stale_behind_configured_base(running_source_root):
+            raise RuntimeError(
+                "Factory orchestrator configured-base source is unavailable or unverified; "
+                "refusing to run tick dispatch from a stale primary checkout"
+            )
+        source_root = running_source_root
     script = source_root / "scripts" / "factory" / "factory_orchestrator_tick.py"
     if not script.is_file():
         raise RuntimeError(f"Factory orchestrator script not found in running Hermes source: {script}")
