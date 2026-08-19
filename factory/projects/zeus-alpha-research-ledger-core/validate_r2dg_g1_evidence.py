@@ -191,14 +191,18 @@ def _validate_residual_tasks(data: dict[str, Any], failures: list[str]) -> None:
     for task in data.get("tasks") or []:
         if task.get("status") in TERMINAL_STATUSES:
             continue
-        encoded = json.dumps(task, sort_keys=True, ensure_ascii=False)
-        if "unvalidated_required_docs" not in encoded and "missing_or_unindexed_docs" not in encoded:
+        # Residual anomaly detection scans structured task METADATA only.
+        # Task description/acceptance prose may legitimately quote the
+        # historical strings (e.g. R2df describes the R2ae blocker) without
+        # carrying active anomaly state.
+        task_metadata = task.get("metadata") or {}
+        encoded_metadata = json.dumps(task_metadata, sort_keys=True, ensure_ascii=False)
+        if "unvalidated_required_docs" not in encoded_metadata and "missing_or_unindexed_docs" not in encoded_metadata:
             continue
         task_id = str(task.get("task_id"))
-        task_metadata = task.get("metadata") or {}
         if task_id == TASK_ID:
             _require(
-                "unvalidated_required_docs" not in json.dumps(task_metadata, sort_keys=True),
+                "unvalidated_required_docs" not in encoded_metadata,
                 f"{task_id} carries unvalidated_required_docs metadata",
                 failures,
             )
@@ -219,9 +223,14 @@ def _validate_residual_tasks(data: dict[str, Any], failures: list[str]) -> None:
 
 
 def _validate_repair_docs(project_dir: Path, args: argparse.Namespace, failures: list[str]) -> None:
+    # A commit cannot contain its own SHA (canonical project rule: the exact
+    # final PR head SHA belongs in the PR body and Factory gate records). The
+    # docs therefore cite the base SHA, the PR URL, the evidence commit SHA,
+    # and the gate id; the PR head itself is verified via GitHub readback and
+    # the gate notes.
     expected_markers = [
         args.expected_base,
-        args.expected_head,
+        args.expected_evidence_head,
         args.expected_pr,
         str(args.expected_quality_gate),
     ]
@@ -261,7 +270,7 @@ def _validate_r2dg_quality_gate(data: dict[str, Any], args: argparse.Namespace, 
     _require(quality_gate.get("gate_type") == "quality", f"gate {quality_gate.get('gate_id')} type mismatch", failures)
     _require(quality_gate.get("status") == "passed", f"gate {quality_gate.get('gate_id')} did not pass", failures)
     _require(quality_gate.get("reviewer") == "quality-reviewer", f"gate {quality_gate.get('gate_id')} reviewer mismatch", failures)
-    for marker in (TASK_ID, args.expected_base, args.expected_head, args.expected_pr):
+    for marker in (TASK_ID, args.expected_base, args.expected_evidence_head, args.expected_pr):
         _require(marker in notes, f"gate {quality_gate.get('gate_id')} notes missing {marker}", failures)
     _require("no direct SQL" in notes and "no merge" in notes, f"gate {quality_gate.get('gate_id')} notes missing safety boundary", failures)
 
@@ -283,12 +292,12 @@ def validate(args: argparse.Namespace) -> list[str]:
     _validate_repair_docs(project_dir, args, failures)
     _validate_r2dg_quality_gate(data, args, failures)
 
-    for attr in ("expected_base", "expected_head"):
+    for attr in ("expected_base", "expected_evidence_head"):
         value = getattr(args, attr)
         if not re.fullmatch(r"[0-9a-f]{40}", value):
             failures.append(f"{attr} is not a 40-character SHA")
-    if args.expected_head == args.expected_base:
-        failures.append("expected head equals base; no R2dg commit was validated")
+    if args.expected_evidence_head == args.expected_base:
+        failures.append("expected evidence head equals base; no R2dg commit was validated")
     if not re.fullmatch(r"https://github\.com/SiteOneTech/hermes-agent-original/pull/[0-9]+", args.expected_pr):
         failures.append("expected_pr is not a SiteOneTech PR URL")
 
@@ -300,7 +309,7 @@ def main() -> int:
     parser.add_argument("--project-dir", default=".", help="Repository root for the assigned worktree")
     parser.add_argument("--status-json", required=True, help="Factory status JSON captured with the approved CLI")
     parser.add_argument("--expected-base", required=True, help="Exact current origin/main base SHA for R2dg")
-    parser.add_argument("--expected-head", required=True, help="Exact final pushed R2dg PR head SHA")
+    parser.add_argument("--expected-evidence-head", required=True, help="Exact R2dg evidence commit SHA (PR head as recorded in gate notes)")
     parser.add_argument("--expected-pr", required=True, help="Exact non-draft R2dg GitHub PR URL")
     parser.add_argument("--expected-quality-gate", required=True, type=int, help="Canonical Factory quality gate id for R2dg")
     args = parser.parse_args()
@@ -313,7 +322,7 @@ def main() -> int:
     print("R2DG_G1_EVIDENCE_VALIDATION=PASS")
     print(f"project={PROJECT_ID}")
     print(f"base={args.expected_base}")
-    print(f"head={args.expected_head}")
+    print(f"evidence_head={args.expected_evidence_head}")
     print(f"pr={args.expected_pr}")
     print(f"quality_gate=factory_gate_{args.expected_quality_gate}")
     print("required_g1_rows=14/14 reviewed non-blocking from configured_base_ref")

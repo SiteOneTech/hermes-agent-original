@@ -278,6 +278,8 @@ product implementation is not dispatched while G1 remains red.
 - Base/source SHA reviewed: `9ea2756e6bfbce9d07c7ce32319a8b64bd8cea15`.
 - Deliverable branch:
   `factory/zeus-alpha-research-ledger-core/inc-001-r2dg-bounded-g1-exact-sha-indepe`.
+- Evidence commit (PR head as recorded in gate notes): `9a164a45822b88f98db8b14b9a3b0efe9587a3be` — parent is the base SHA above; the exact final PR head belongs in the PR body and Factory gate records because a commit cannot contain its own SHA.
+- Delivered PR: `https://github.com/SiteOneTech/hermes-agent-original/pull/91` (non-draft, `agent:zeus` label, base `main`, head `factory/zeus-alpha-research-ledger-core/inc-001-r2dg-bounded-g1-exact-sha-indepe`, mergeable state CLEAN at record time).
 - Required PR: Zeus-signed (author `Zeus <zeus@sitiouno.com>`,
   `Signed-off-by: Zeus <zeus@sitiouno.com>`) non-draft GitHub PR with
   `agent:zeus` label against `main`; PR body/evidence must name the exact base
