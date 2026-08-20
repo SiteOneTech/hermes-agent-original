@@ -5,8 +5,9 @@ phase: delivery
 status: validated
 validated: yes
 reviewed: pending
-origin_main: 71e5e7b2f4ace3b081f9446483784a3c5fb0b981
-run_id: run-1787216366-fde136da
+origin_main_before_current_rerun: 71e5e7b2f4ace3b081f9446483784a3c5fb0b981
+previous_run_id: run-1787216366-fde136da
+current_run_id: run-1787249479-190fd34d
 ---
 
 # R6 source increment integration reconciliation
@@ -14,7 +15,18 @@ run_id: run-1787216366-fde136da
 ## Scope
 This artifact records the R6 reconciliation for the canonical `source_increment_not_integrated` anomaly. It is evidence-only for Factory source containment; it does not authorize deploy, runtime propagation, direct SQL, credential changes, product dispatch, trading/paper/live actions, or primary checkout mutation.
 
-## Inputs and source roots
+## R6 rerun — 2026-08-20T18:15:49Z
+Current run `run-1787249479-190fd34d` re-inspected Agent Core Factory status from the assigned worktree and re-ran the Git ancestry audit without direct `factory.*` SQL:
+
+- Sanctioned Factory status input: `/tmp/r6_factory_status_initial.json` (`db_backend=agent_core_postgres`, `factory_cli_source_root` and `factory_status_source_root` equal `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/reconcile-source_increment_not_integrated`).
+- Current Factory project metadata still reports `reconciliation_anomalies=['source_increment_not_integrated']` and `reconciliation_required=True`; the active finding lists `53` blocker rows.
+- Current G1 document rows are not the source of this anomaly: `14/14` required G1 rows are non-blocking at configured base `origin/main` `71e5e7b2f4ace3b081f9446483784a3c5fb0b981`.
+- Current blocker audit output: `/tmp/r6_source_increment_audit_current.tsv`; exact summary `53/53` commit objects present, `53/53` contained in `origin/main`, `53/53` `increment_base_commit_after` chains valid, `0` waivers.
+- Current positive terminal source-bearing task audit: `53/53` contained in `origin/main` with valid base-after chains.
+- Recurrence guard: the prior R6 local evidence commit `60f19cb77c42dc0ef27dea43ecfdddd09b66e400` was not contained in `origin/main`, and remote `origin/factory/zeus-alpha-research-ledger-core/reconcile-source_increment_not_integrated` still pointed at `9ea2756e6bfbce9d07c7ce32319a8b64bd8cea15`. This rerun therefore updates this evidence artifact and fast-forwards both the assigned branch and `origin/main` to the final R6 documentation commit after validation, so the reconciliation evidence source is itself contained in the canonical base.
+- The final immutable branch commit and resulting `origin/main` commit are recorded in the Factory gate notes and worker final response. They are intentionally not self-embedded here because a commit cannot contain its own final SHA before it exists.
+
+## Previous-run inputs and source roots
 - Factory status before gate: `/tmp/r6_factory_status_after_ff.json` (Agent Core Postgres, generated from assigned worktree source root).
 - Git audit table: `/tmp/r6_source_increment_audit_current.tsv`.
 - Worktree: `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/reconcile-source_increment_not_integrated`.
@@ -24,19 +36,29 @@ This artifact records the R6 reconciliation for the canonical `source_increment_
 - Current Factory task finding blocker rows inspected: `53`.
 - G1 required blocking rows in sanctioned status readback: `0`.
 
-## Verification commands
+## Previous-run verification commands
 - `/home/jean/Projects/hermes-agent-original/venv/bin/python -m hermes_cli.main factory status zeus-alpha-research-ledger-core --json > /tmp/r6_factory_status_after_ff.json` → exit `0`, `db_backend=agent_core_postgres`, source roots equal the assigned worktree.
 - `git fetch origin main +refs/heads/factory/zeus-alpha-research-ledger-core/*:refs/remotes/origin/factory/zeus-alpha-research-ledger-core/*` → exit `0`.
 - For each blocker row: `git cat-file -e <commit>^{commit}`, `git merge-base --is-ancestor <commit> origin/main`, and, when `increment_base_commit_after` exists, `<commit> -> base_after -> origin/main` ancestry.
 - `git merge --ff-only origin/main` on the assigned worktree → exit `0`; no primary checkout mutation.
 
-## Result
+## Previous run result
 - Blockers audited: `53`.
 - Commit objects present: `53/53`.
 - Contained in current `origin/main`: `53/53`.
 - `increment_base_commit_after` chain verified where present: `53/53`.
 - Waivers used: `0`.
-- Integration action performed in this run: no new merge to `main`; current origin base already contains every audited immutable source commit.
+- Integration action performed in the previous run: no new merge to `main`; then-current origin base already contained every audited immutable source commit.
+
+## Current rerun result
+- Blockers audited from the current Factory finding: `53`.
+- Commit objects present: `53/53`.
+- Contained in current pre-push `origin/main` `71e5e7b2f4ace3b081f9446483784a3c5fb0b981`: `53/53`.
+- `increment_base_commit_after` chain verified where present: `53/53`.
+- Positive terminal source-bearing tasks independently audited: `53/53` contained in `origin/main`.
+- Waivers used: `0`.
+- Additional source-containment fix: publish this R6 evidence commit to the assigned branch and fast-forward `origin/main` to the same final commit after `git diff --check` and post-push readback.
+- Scope boundary unchanged: docs/evidence only under `factory/projects/zeus-alpha-research-ledger-core/`; no deploy, no sandbox, no credential, no direct SQL, no primary checkout mutation.
 
 ## Audited source increments
 
