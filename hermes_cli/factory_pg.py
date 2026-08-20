@@ -4507,23 +4507,39 @@ def _candidate_requires_validation_readiness_before_dispatch(candidate: dict[str
         return False
     phase = str(candidate.get("phase") or "").lower().replace("-", "_")
     text = _task_text(candidate)
+    visible_text = "\n".join(
+        str(candidate.get(key) or "") for key in ("task_id", "title", "description")
+    ).lower()
+    docs_or_reconciliation_recovery = (
+        _is_reconciliation_task(candidate)
+        or _is_runtime_bootstrap_repair_task(candidate)
+        or (
+            (phase in {"documentation", "planning"} or phase.startswith(("g0", "g1")))
+            and re.search(
+                r"\b(?:docs?|documentation|document(?:ation)?|g[01]|recovery|repair|rework|reconcile|reconciliation|readiness|index|resolver)\b",
+                visible_text,
+            ) is not None
+        )
+    )
+    if docs_or_reconciliation_recovery:
+        return False
     owner = str(candidate.get("owner_profile") or candidate.get("owner_agent_id") or "").lower()
     if owner == "devops-release" and any(term in text for term in ("deploy", "deployment", "sandbox", "preview", "release")):
         return False
     final_stage_text = any(
-        term in text
-        for term in (
-            "delivery report",
-            "final delivery",
-            "final report",
-            "final gate",
-            "final handoff",
-            "gate closure",
-            "closure report",
-            "release report",
+        re.search(pattern, text) is not None
+        for pattern in (
+            r"\bdelivery\s+report\b",
+            r"\bfinal\s+delivery\b",
+            r"\bfinal\s+report\b",
+            r"\bfinal\s+gate\b",
+            r"\bfinal\s+handoff\b",
+            r"\bgate\s+closure\b",
+            r"\bclosure\s+report\b",
+            r"\brelease\s+report\b",
         )
     ) or re.search(r"\bfinal\s+(?:delivery|report|gate|closure|handoff)\b", text) is not None
-    return phase.startswith("delivery") or phase in {"release", "final", "final_report"} or final_stage_text
+    return phase == "delivery" or phase.startswith("delivery_") or phase in {"release", "final", "final_report"} or final_stage_text
 
 
 def _next_runnable_task(
