@@ -1440,8 +1440,36 @@ def _missing_mandatory_phase_categories(project: dict[str, Any], tasks: list[dic
     return [category for category in categories if category not in matched_categories]
 
 
+def _is_docs_first_recovery_task(task: dict[str, Any]) -> bool:
+    """Return True for work allowed to repair G0/G1 docs-first readiness.
+
+    Use stable phase values and explicit Factory metadata first.  Broad task prose
+    such as "quality review" or "security" can appear in documentation recovery
+    descriptions as historical context; it must not reclassify those rows as
+    downstream validation/product candidates while G1 is red.
+    """
+
+    metadata = _metadata(task)
+    explicit_recovery_keys = (
+        "factory_reconciliation_task",
+        "factory_documentation_recovery_task",
+        "documentation_recovery_task",
+        "g1_documentation_recovery",
+        "docs_first_recovery_task",
+        "docs_first_dispatch_recovery",
+    )
+    if any(_metadata_bool(metadata, key) for key in explicit_recovery_keys):
+        return True
+    if metadata.get("reconciliation_anomaly") or metadata.get("resolved_anomaly"):
+        return True
+    phase = str(task.get("phase") or "").strip().lower().replace("-", "_")
+    if phase.startswith(("g0", "g1")) or phase in {"documentation", "docs", "document_recovery", "documentation_recovery"}:
+        return True
+    return _is_reconciliation_task(task)
+
+
 def _is_validation_task(task: dict[str, Any]) -> bool:
-    if _is_reconciliation_task(task) or _is_runtime_bootstrap_repair_task(task):
+    if _is_docs_first_recovery_task(task) or _is_runtime_bootstrap_repair_task(task):
         return False
     phase = str(task.get("phase") or "").lower().replace("-", "_")
     validation_phases = {"qa", "qa_security", "security", "security_review", "quality", "quality_review", "review"}
@@ -4453,9 +4481,14 @@ def _has_in_flight_increment(tasks: list[dict[str, Any]]) -> bool:
     blocking later increments, but it is also runnable: the orchestrator must be
     able to hand it back to the owner. Treating rework as in-flight makes it an
     absorbing state with no autonomous recovery path.
+
+    ``review_ready`` and ``qa_ready`` are likewise dispatchable queues, not live
+    workers.  They should block product work, but must not hide dependency-ready
+    documentation or reconciliation repair rows behind a false claimed=null loop.
     """
 
-    return any(str(t.get("status") or "") in IN_FLIGHT_TASK_STATUSES for t in tasks)
+    live_worker_statuses = IN_FLIGHT_TASK_STATUSES - {"review_ready", "qa_ready"}
+    return any(str(t.get("status") or "") in live_worker_statuses for t in tasks)
 
 
 def _dependency_increment_integrated(dep_task: dict[str, Any], project: dict[str, Any]) -> bool:
@@ -4503,7 +4536,7 @@ def _candidate_requires_validation_readiness_before_dispatch(candidate: dict[str
     creates a dispatch deadlock.
     """
 
-    if _is_validation_task(candidate):
+    if _is_docs_first_recovery_task(candidate) or _is_validation_task(candidate):
         return False
     phase = str(candidate.get("phase") or "").lower().replace("-", "_")
     text = _task_text(candidate)
@@ -4535,6 +4568,7 @@ def _next_runnable_task(
     if _has_in_flight_increment(tasks):
         return None
     active_rework_exists = any(str(task.get("status") or "") == "rework" for task in tasks)
+    deferred_validation_exists = any(str(task.get("status") or "") in {"review_ready", "qa_ready"} for task in tasks)
     terminal = ",".join(_q(s) for s in TERMINAL_TASK_STATUSES)
     candidates = sql.rows(
         f"""
@@ -4580,6 +4614,8 @@ def _next_runnable_task(
     for candidate in normalized_candidates:
         phase = str(candidate.get("phase") or "").lower().replace("-", "_")
         text = _task_text(candidate)
+        if deferred_validation_exists and not _is_docs_first_recovery_task(candidate):
+            continue
         if active_rework_exists and not (_is_reconciliation_task(candidate) or phase in {"documentation", "planning"} or phase.startswith(("g0", "g1"))):
             continue
         if _candidate_requires_validation_readiness_before_dispatch(candidate):
@@ -6529,7 +6565,7 @@ def _is_docs_first_gated_dispatch_task(task: dict[str, Any]) -> bool:
     ship contracts detached from the canonical plan.
     """
 
-    if _is_reconciliation_task(task) or _is_runtime_bootstrap_repair_task(task):
+    if _is_docs_first_recovery_task(task) or _is_runtime_bootstrap_repair_task(task):
         return False
     phase = str(task.get("phase") or "").strip().lower()
     if phase.startswith(("g0", "g1")) or phase in {"documentation", "planning"}:
@@ -6621,7 +6657,7 @@ def claim_next_task(project_id: Optional[str] = None, *, worker: str = "factory-
     for project in projects:
         pid = project["project_id"]
         tasks = _tasks(pid)
-        if _has_active_increment(tasks):
+        if _has_in_flight_increment(tasks):
             continue
         full_project = _project(pid) or {"project_id": pid, "metadata": {}}
         pending_gates = _active_pending_gates(pid)
@@ -7802,12 +7838,13 @@ def force_tick(
                 if prepared_successor.get("prepared"):
                     dispatch_project_id = str(prepared_successor["successor_project_id"])
 
-        claimed = claim_next_review(dispatch_project_id, worker="factory-force-tick")
+        # Documentation/reconciliation repair has priority over downstream
+        # review/product/rework queues when docs-first gates are red.  The task
+        # claim path itself still refuses product work behind review_ready/QA and
+        # falls through to reviewer dispatch when no repair row is eligible.
+        claimed = claim_next_task(dispatch_project_id, worker="factory-force-tick")
         if not claimed:
-            # Documentation/reconciliation repair has priority over product rework
-            # when docs-first gates are red. Otherwise a failed QA/rework loop can
-            # keep executing against invalid methodology context.
-            claimed = claim_next_task(dispatch_project_id, worker="factory-force-tick")
+            claimed = claim_next_review(dispatch_project_id, worker="factory-force-tick")
         if not claimed:
             claimed = claim_next_rework(dispatch_project_id, worker="factory-force-tick")
         if prepared_successor and prepared_successor.get("prepared") and not claimed:
