@@ -35,6 +35,25 @@ def _annotate_status_payload_source(
     return payload
 
 
+def _force_status_payload_source_fail_closed(payload: Any, reason: str) -> Any:
+    if not isinstance(payload, dict):
+        return payload
+    payload["factory_status_source_root_fail_closed"] = True
+    payload["factory_status_source_root_rejected_reason"] = reason
+    for project in payload.get("projects") or []:
+        if not isinstance(project, dict):
+            continue
+        project["g1_readiness_fail_closed"] = True
+        project["g1_readiness_fail_closed_reason"] = reason
+        for row in project.get("document_status") or []:
+            if not isinstance(row, dict) or row.get("category") != "g1_required":
+                continue
+            row["blocking"] = True
+            row["blocking_reason"] = reason
+            row["factory_status_source_root_fail_closed"] = True
+    return payload
+
+
 def _annotate_project_action_payload_source(
     payload: Any,
     source_root: Path,
@@ -58,9 +77,16 @@ def _status_payload(args: argparse.Namespace) -> dict[str, Any]:
     payload = backend.status(getattr(args, "project_id", None))
     try:
         source_root = _running_factory_source_root()
-    except RuntimeError:
-        return payload
-    return _annotate_status_payload_source(payload, source_root)
+    except RuntimeError as exc:
+        if isinstance(payload, dict):
+            payload["factory_status_source_root"] = None
+            payload["factory_status_delegated"] = False
+        return _force_status_payload_source_fail_closed(payload, f"source_provenance_malformed: {exc}")
+    payload = _annotate_status_payload_source(payload, source_root)
+    fail_closed_reason = _configured_base_source_fail_closed_reason(source_root)
+    if fail_closed_reason:
+        payload = _force_status_payload_source_fail_closed(payload, fail_closed_reason)
+    return payload
 
 
 def _print_status_subprocess_output(
@@ -455,6 +481,43 @@ def _origin_default_base_ref(source_root: Path) -> tuple[str, str] | None:
     return None
 
 
+def _running_source_configured_base_state(source_root: Path) -> dict[str, str] | None:
+    """Return running source identity relative to the configured origin base."""
+
+    base = _origin_default_base_ref(source_root)
+    if base is None:
+        return None
+    base_ref, base_commit = base
+    running_head = _git_probe_source_root(source_root, "rev-parse", "HEAD")
+    state = "running_head_unreadable"
+    if running_head:
+        if running_head == base_commit:
+            state = "configured_base"
+        elif _git_check_source_root(source_root, "merge-base", "--is-ancestor", base_commit, running_head) is True:
+            state = "ahead_of_configured_base"
+        elif _git_check_source_root(source_root, "merge-base", "--is-ancestor", running_head, base_commit) is True:
+            state = "behind_configured_base"
+        else:
+            state = "diverged_from_configured_base"
+    return {
+        "state": state,
+        "base_ref": base_ref,
+        "base_commit": base_commit,
+        "running_head": running_head or "",
+    }
+
+
+def _running_source_requires_configured_base_source(source_root: Path) -> bool:
+    identity = _running_source_configured_base_state(source_root)
+    return bool(identity and identity.get("state") in {"behind_configured_base", "diverged_from_configured_base"})
+
+
+def _configured_base_source_fail_closed_reason(source_root: Path) -> str | None:
+    if _running_source_requires_configured_base_source(source_root):
+        return "configured_base_source_unavailable_or_unverified"
+    return None
+
+
 def _git_worktree_entries(source_root: Path) -> list[dict[str, str]]:
     output = _git_probe_source_root(source_root, "worktree", "list", "--porcelain", timeout=15)
     if not output:
@@ -497,15 +560,12 @@ def _preferred_configured_base_source_root(running_source_root: Path) -> Path | 
         running_source_root = running_source_root.resolve()
     except Exception:
         return None
-    base = _origin_default_base_ref(running_source_root)
-    if base is None:
+    identity = _running_source_configured_base_state(running_source_root)
+    if identity is None:
         return None
-    _base_ref, base_commit = base
-    running_head = _git_probe_source_root(running_source_root, "rev-parse", "HEAD")
-    if not running_head or running_head == base_commit:
+    if identity.get("state") not in {"behind_configured_base", "diverged_from_configured_base"}:
         return None
-    if _git_check_source_root(running_source_root, "merge-base", "--is-ancestor", running_head, base_commit) is not True:
-        return None
+    base_commit = str(identity.get("base_commit") or "")
     candidates: list[Path] = []
     for entry in _git_worktree_entries(running_source_root):
         if entry.get("head") != base_commit:
@@ -530,16 +590,9 @@ def _preferred_configured_base_source_root(running_source_root: Path) -> Path | 
 
 
 def _running_source_is_stale_behind_configured_base(running_source_root: Path) -> bool:
-    """Return whether ``running_source_root`` is behind the configured origin base."""
+    """Return whether ``running_source_root`` must not drive Factory control actions."""
 
-    base = _origin_default_base_ref(running_source_root)
-    if base is None:
-        return False
-    _base_ref, base_commit = base
-    running_head = _git_probe_source_root(running_source_root, "rev-parse", "HEAD")
-    if not running_head or running_head == base_commit:
-        return False
-    return _git_check_source_root(running_source_root, "merge-base", "--is-ancestor", running_head, base_commit) is True
+    return _running_source_requires_configured_base_source(running_source_root)
 
 
 def _preferred_cwd_source_root(running_source_root: Path) -> Path | None:
@@ -608,12 +661,22 @@ def _delegated_project_action_from_cwd_source(args: argparse.Namespace) -> int |
         return None
     try:
         running_source_root = _running_factory_source_root()
-    except RuntimeError:
+    except RuntimeError as exc:
+        if getattr(args, "factory_project_command", None) in _CONFIGURED_BASE_DELEGATED_PROJECT_ACTIONS:
+            raise RuntimeError(
+                "Factory project action source provenance malformed; refusing to run configured-base action"
+            ) from exc
         return None
     source_root = _preferred_cwd_source_root(running_source_root)
     if source_root is None and getattr(args, "factory_project_command", None) in _CONFIGURED_BASE_DELEGATED_PROJECT_ACTIONS:
         source_root = _preferred_configured_base_source_root(running_source_root)
     if source_root is None:
+        fail_closed_reason = _configured_base_source_fail_closed_reason(running_source_root)
+        if fail_closed_reason and getattr(args, "factory_project_command", None) in _CONFIGURED_BASE_DELEGATED_PROJECT_ACTIONS:
+            raise RuntimeError(
+                "Factory project action configured-base source is unavailable or unverified; "
+                "refusing to run resolve/reconcile from stale primary source"
+            )
         return None
     argv = [
         sys.executable,

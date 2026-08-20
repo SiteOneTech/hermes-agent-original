@@ -751,6 +751,82 @@ def test_claim_next_task_claims_docs_repair_before_preflight_denied_product(fake
     assert "dispatch_preflight_denied" not in joined
 
 
+def test_claim_next_task_claims_docs_repair_before_validation_and_product_when_g1_is_red(fake_sql, monkeypatch):
+    validation = {
+        "project_id": "demo",
+        "lane_id": "lane-validation",
+        "task_id": "demo-validation",
+        "status": "todo",
+        "phase": "validation",
+        "priority": 5,
+        "title": "Validation smoke gate",
+        "description": "Validate only after G1 docs are current.",
+        "owner_profile": "qa-verifier",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {},
+    }
+    product = {
+        "project_id": "demo",
+        "lane_id": "lane-product",
+        "task_id": "demo-product",
+        "status": "todo",
+        "phase": "implementation",
+        "priority": 10,
+        "title": "Build product runtime",
+        "description": "Product work must wait for canonical G1 readiness.",
+        "owner_profile": "claude-builder",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "claude_code",
+        "dependencies": [],
+        "metadata": {},
+    }
+    doc_repair = {
+        "project_id": "demo",
+        "lane_id": "lane-docs",
+        "task_id": "demo-r2cz-g1-docs-recovery",
+        "status": "todo",
+        "phase": "documentation",
+        "priority": 20,
+        "title": "R2cz — current-source G1 documentation recovery",
+        "description": "Repair current-source docs-first Factory G1 dispatch.",
+        "owner_profile": "claude-builder",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "claude_code",
+        "dependencies": [],
+        "metadata": {"factory_reconciliation_task": True, "reconciliation_anomaly": "unvalidated_required_docs"},
+    }
+    project = {"project_id": "demo", "status": "active", "autonomous_enabled": True, "metadata": {}}
+    fake_sql.rows_results = [[{"project_id": "demo"}], [validation, product, doc_repair]]
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: [validation, product, doc_repair])
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(
+        factory_pg,
+        "_project_docs_notion_preflight",
+        lambda project_arg, tasks_arg, pending_arg, gates_arg: (False, True, False, False),
+    )
+    monkeypatch.setattr(factory_pg, "_candidate_dependencies_integrated", lambda *_, **__: True)
+
+    def statement_one(sql, *, user=None, **_):
+        fake_sql.statements.append(sql)
+        assert "demo-r2cz-g1-docs-recovery" in sql
+        return {**doc_repair, "status": "claimed"}
+
+    monkeypatch.setattr(fake_sql, "statement_one", statement_one)
+
+    result = factory_pg.claim_next_task("demo", worker="factory-force-tick")
+
+    assert result is not None
+    assert result["task"]["task_id"] == "demo-r2cz-g1-docs-recovery"
+    joined = "\n".join(fake_sql.statements)
+    assert "Task demo-r2cz-g1-docs-recovery claimed" in joined
+    assert "Task demo-validation claimed" not in joined
+    assert "Task demo-product claimed" not in joined
+
+
 def test_force_tick_routes_dependency_free_g1_doc_recovery_before_docs_blocked_quality_review(fake_sql, monkeypatch):
     quality_review = {
         "project_id": "demo",

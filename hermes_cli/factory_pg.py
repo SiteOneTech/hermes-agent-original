@@ -6623,7 +6623,7 @@ def _is_docs_first_gated_dispatch_task(task: dict[str, Any]) -> bool:
     if phase.startswith(("g0", "g1")) or phase in {"documentation", "planning"}:
         return False
     text = "\n".join(str(task.get(key) or "") for key in ("task_id", "title", "description", "engine", "owner_profile")).lower()
-    gated_phase = phase.startswith(("implementation", "qa", "security", "delivery", "deploy", "release"))
+    gated_phase = phase.startswith(("implementation", "validation", "test", "qa", "security", "delivery", "deploy", "release"))
     gated_text = any(
         term in text
         for term in (
@@ -6634,6 +6634,11 @@ def _is_docs_first_gated_dispatch_task(task: dict[str, Any]) -> bool:
             "codex",
             "qa",
             "quality",
+            "validation",
+            "validate",
+            "verification",
+            "verifier",
+            "test",
             "security review",
             "playwright",
             "browser qa",
