@@ -6558,6 +6558,95 @@ def _is_docs_first_gated_dispatch_task(task: dict[str, Any]) -> bool:
     return gated_phase or gated_text
 
 
+def _is_docs_first_repair_dispatch_task(task: dict[str, Any]) -> bool:
+    """Return True for G0/G1/documentation work that may run while docs are red."""
+
+    if _is_reconciliation_task(task):
+        return True
+    phase = str(task.get("phase") or "").strip().lower().replace("-", "_")
+    if phase in {"documentation", "docs"} or phase.startswith(("g0", "g1")):
+        return True
+    if phase == "planning":
+        text = _task_text(task)
+        return any(
+            term in text
+            for term in (
+                "g0",
+                "g1",
+                "repository strategy",
+                "required docs",
+                "required documentation",
+                "document_status",
+                "documentation index",
+            )
+        )
+    return False
+
+
+def _docs_first_repair_candidate_exists(project_id: Optional[str] = None) -> bool:
+    """Return True when docs-first-red dispatch has dependency-ready repair work.
+
+    A ready quality/security/product validation row must not consume the tick when
+    the same project still has dependency-ready G0/G1/documentation repair that
+    exists specifically to make the docs-first gate green.  This predicate is
+    observational; the actual claim path still performs the normal SQL status
+    update and dependency-integration checks.
+    """
+
+    if project_id:
+        project_rows = [{"project_id": project_id}]
+    else:
+        manual_takeover_filter = _manual_takeover_dispatch_filter("p")
+        project_rows = sql.rows(
+            f"""
+            SELECT p.project_id
+            FROM factory.projects p
+            WHERE p.autonomous_enabled IS TRUE
+              AND p.status IN ('active','planned','intake','blocked')
+              AND {manual_takeover_filter}
+            ORDER BY p.updated_at, p.started_at
+            """,
+            user=_user(),
+        )
+    for row in project_rows:
+        pid = str(row.get("project_id") or "")
+        if not pid:
+            continue
+        full_project = _project(pid) or {"project_id": pid, "metadata": {}}
+        if not full_project.get("autonomous_enabled"):
+            continue
+        if str(full_project.get("status") or "") not in DISPATCHABLE_PROJECT_STATUSES:
+            continue
+        tasks = _tasks(pid)
+        pending_gates = _active_pending_gates(pid)
+        latest_gates = _latest_gate_rows(pid)
+        docs_ready, notion_ready, notion_required, docs_first_waived = _project_docs_notion_preflight(
+            full_project,
+            tasks,
+            pending_gates,
+            latest_gates,
+        )
+        product_probe = {"task_id": "__docs_first_product_probe__", "phase": "implementation", "title": "product implementation"}
+        if not _dispatch_preflight_blockers(
+            product_probe,
+            docs_ready=docs_ready,
+            notion_ready=notion_ready,
+            notion_required=notion_required,
+            docs_first_waived=docs_first_waived,
+        ):
+            continue
+        by_id = {str(task.get("task_id") or ""): task for task in tasks}
+        for task in tasks:
+            if str(task.get("status") or "") not in {"todo", "ready"}:
+                continue
+            if not _is_docs_first_repair_dispatch_task(task):
+                continue
+            if not _task_dependencies_are_terminal(task, by_id):
+                continue
+            return True
+    return False
+
+
 def _dispatch_preflight_blockers(
     task: dict[str, Any],
     *,
@@ -7802,7 +7891,16 @@ def force_tick(
                 if prepared_successor.get("prepared"):
                     dispatch_project_id = str(prepared_successor["successor_project_id"])
 
-        claimed = claim_next_review(dispatch_project_id, worker="factory-force-tick")
+        claimed = None
+        if _docs_first_repair_candidate_exists(dispatch_project_id):
+            # A dependency-ready G0/G1/documentation repair is the only work that
+            # can make a red docs-first gate green.  Do not let a lower-priority
+            # product/quality validation row consume the tick first; the normal
+            # claim path below still fail-closes product, QA, security, delivery,
+            # and release work through the same preflight predicates.
+            claimed = claim_next_task(dispatch_project_id, worker="factory-force-tick")
+        if not claimed:
+            claimed = claim_next_review(dispatch_project_id, worker="factory-force-tick")
         if not claimed:
             # Documentation/reconciliation repair has priority over product rework
             # when docs-first gates are red. Otherwise a failed QA/rework loop can

@@ -649,6 +649,70 @@ def test_claim_next_task_claims_docs_repair_before_preflight_denied_product(fake
     assert "dispatch_preflight_denied" not in joined
 
 
+def test_force_tick_prioritizes_docs_repair_over_ready_quality_review(monkeypatch):
+    calls: list[str] = []
+
+    monkeypatch.setattr(factory_pg, "ensure_runtime_schema", lambda: None)
+    monkeypatch.setattr(factory_pg, "acquire_global_control_plane_lease", lambda holder, ttl_seconds: {"acquired": True, "holder": holder})
+    monkeypatch.setattr(factory_pg, "release_global_control_plane_lease", lambda holder: None)
+    monkeypatch.setattr(factory_pg, "monitor_runs", lambda: {})
+    monkeypatch.setattr(factory_pg, "supervisor_health_check", lambda project_id, repair=True: {"violations": [], "repairs": []})
+    monkeypatch.setattr(factory_pg, "clear_resolved_blockers", lambda project_id: {"reopened": []})
+    monkeypatch.setattr(factory_pg, "reconcile_project", lambda project_id: {"project_id": project_id, "status": "active"})
+    monkeypatch.setattr(factory_pg, "status", lambda project_id=None: {"projects": [], "tasks": [], "task_runs": []})
+    monkeypatch.setattr(factory_pg, "classify_factory_blockers", lambda payload, project_id=None: [])
+    monkeypatch.setattr(factory_pg, "record_factory_blocker_actions", lambda *args, **kwargs: {"classified": 0})
+    monkeypatch.setattr(factory_pg, "evaluate_project_successions", lambda: [])
+    monkeypatch.setattr(factory_pg, "_docs_first_repair_candidate_exists", lambda project_id: True, raising=False)
+
+    def claim_review(project_id=None, *, worker="factory-force-tick"):
+        calls.append("review")
+        return {"run_id": "run-review", "task": {"task_id": "quality-review"}, "worker_profile": "quality-reviewer", "run_type": "review"}
+
+    def claim_task(project_id=None, *, worker="factory-force-tick"):
+        calls.append("task")
+        return {"run_id": "run-docs", "task": {"task_id": "g1-docs-repair"}, "worker_profile": "codex-builder"}
+
+    monkeypatch.setattr(factory_pg, "claim_next_review", claim_review)
+    monkeypatch.setattr(factory_pg, "claim_next_task", claim_task)
+    monkeypatch.setattr(factory_pg, "claim_next_rework", lambda project_id=None, *, worker="factory-force-tick": None)
+
+    result = factory_pg.force_tick("demo")
+
+    assert calls == ["task"]
+    assert result["claimed"]["task"]["task_id"] == "g1-docs-repair"
+
+
+def test_docs_first_repair_candidate_exists_only_for_dependency_ready_g1_work(monkeypatch):
+    quality_review = {
+        "project_id": "demo",
+        "task_id": "quality-review",
+        "status": "ready",
+        "phase": "quality_review",
+        "dependencies": [],
+    }
+    doc_repair = {
+        "project_id": "demo",
+        "task_id": "g1-docs-repair",
+        "status": "todo",
+        "phase": "documentation",
+        "dependencies": [],
+        "metadata": {"factory_reconciliation_task": True, "reconciliation_anomaly": "unvalidated_required_docs"},
+    }
+    project = {"project_id": "demo", "status": "active", "autonomous_enabled": True, "metadata": {}}
+
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: [quality_review, doc_repair])
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_project_docs_notion_preflight", lambda *args: (False, True, False, False))
+
+    assert factory_pg._docs_first_repair_candidate_exists("demo") is True
+
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: [quality_review])
+    assert factory_pg._docs_first_repair_candidate_exists("demo") is False
+
+
 def test_claimed_null_predicate_ignores_docs_blocked_product_without_repair():
     payload = {
         "projects": [
