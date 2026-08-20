@@ -800,7 +800,6 @@ def test_force_tick_routes_dependency_free_g1_doc_recovery_before_docs_blocked_q
 
     fake_sql.rows_results = [
         [{"project_id": "demo"}],  # review dispatch projects
-        [quality_review],  # review_ready candidate that must wait for G1 readiness
         [{"project_id": "demo"}],  # implementation dispatch projects
         [doc_recovery],  # dependency-free documentation recovery candidate
     ]
@@ -822,6 +821,30 @@ def test_force_tick_routes_dependency_free_g1_doc_recovery_before_docs_blocked_q
     joined = "\n".join(fake_sql.statements)
     assert "Task demo-r2ea-g1-docs-recovery claimed" in joined
     assert "Task demo-quality-review claimed for review" not in joined
+    assert "dispatch_preflight_denied" not in joined
+
+
+def test_docs_first_recovery_is_not_downstream_validation_gated():
+    doc_recovery = {
+        "project_id": "demo",
+        "task_id": "demo-r2df-g1-documentation-conflict-recovery",
+        "status": "todo",
+        "phase": "documentation",
+        "title": "R2df — fresh current-base G1 documentation-index conflict recovery",
+        "description": (
+            "Dependency-free G1 documentation recovery that must produce a final delivery "
+            "handoff and gate closure after exact-SHA quality review, while required G1 "
+            "documents are still red."
+        ),
+        "owner_profile": "codex-builder",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {},
+    }
+
+    assert factory_pg._is_docs_first_repair_dispatch_task(doc_recovery) is True
+    assert factory_pg._candidate_requires_validation_readiness_before_dispatch(doc_recovery) is False
 
 
 def test_claimed_null_predicate_ignores_docs_blocked_product_without_repair():
