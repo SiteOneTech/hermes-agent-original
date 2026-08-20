@@ -1199,6 +1199,76 @@ def test_validation_readiness_allows_dependency_ready_documentation_recovery_wit
     assert not any("unresolved_validation_tasks" in statement for statement in fake_sql.statements)
 
 
+def test_validation_readiness_allows_g1_documentation_or_reconciliation_recovery_with_final_delivery_history(fake_sql, monkeypatch):
+    documentation_recovery = {
+        "project_id": "demo",
+        "lane_id": "lane-docs",
+        "task_id": "demo-r2df-g1-documentation-recovery",
+        "status": "todo",
+        "phase": "documentation",
+        "priority": 19,
+        "title": "R2df — G1 documentation-index conflict recovery",
+        "description": (
+            "Dependency-free G1 documentation recovery. Preserve the historical final delivery "
+            "report and release report blocker evidence, but claim this docs-first-exempt "
+            "documentation repair before pending validation work."
+        ),
+        "owner_profile": "codex-builder",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {},
+    }
+    reconciliation_recovery = {
+        "project_id": "demo",
+        "lane_id": "lane-docs",
+        "task_id": "demo-r2dz-reconciliation-unblock-g1-documentation",
+        "status": "todo",
+        "phase": "documentation",
+        "priority": 19,
+        "title": "R2dz — Reconciliation: unblock G1 documentation dispatch predicate",
+        "description": (
+            "Dependency-free G1 documentation recovery. Preserve the historical final delivery "
+            "report and release report blocker evidence, but claim this docs-first-exempt "
+            "reconciliation before pending validation work."
+        ),
+        "owner_profile": "codex-builder",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {"factory_reconciliation_task": True, "reconciliation_anomaly": "unresolved_validation_tasks"},
+    }
+    older_ready_review = {
+        "project_id": "demo",
+        "lane_id": "lane-review",
+        "task_id": "demo-older-ready-quality-review",
+        "status": "ready",
+        "phase": "quality_review",
+        "priority": 17,
+        "title": "Older independent quality review still pending",
+        "description": "Review the product candidate after implementation evidence exists.",
+        "owner_profile": "quality-reviewer",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {},
+    }
+    task_rows: list[dict] = []
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: task_rows)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: {"project_id": project_id, "metadata": {}})
+
+    for recovery_task in (documentation_recovery, reconciliation_recovery):
+        task_rows[:] = [recovery_task, older_ready_review]
+        fake_sql.rows_results = [[recovery_task, older_ready_review]]
+        fake_sql.statements.clear()
+
+        selected = factory_pg._next_runnable_task(
+            "demo",
+            dispatch_preflight=(False, True, False, False),
+        )
+
+        assert selected is not None
+        assert selected["task_id"] == recovery_task["task_id"]
+        assert not any("unresolved_validation_tasks" in statement for statement in fake_sql.statements)
+
+
 def test_status_attaches_document_status(fake_sql, monkeypatch):
     fake_sql.rows_results = [
         [{"project_id": "demo", "status": "active", "repo_path": None, "metadata": {}}],
