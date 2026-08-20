@@ -1199,6 +1199,64 @@ def test_validation_readiness_allows_dependency_ready_documentation_recovery_wit
     assert not any("unresolved_validation_tasks" in statement for statement in fake_sql.statements)
 
 
+def test_docs_first_dispatch_selects_documentation_recovery_before_review_ready_and_product_work(fake_sql, monkeypatch):
+    documentation_recovery = {
+        "project_id": "demo",
+        "lane_id": "lane-docs",
+        "task_id": "demo-r2dz-g1-documentation-recovery",
+        "status": "todo",
+        "phase": "documentation",
+        "priority": 20,
+        "title": "R2dz — G1 documentation recovery",
+        "description": "Recover current G1 documentation readback while implementation remains docs-first blocked.",
+        "owner_profile": "codex-builder",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {},
+    }
+    gated_product = {
+        "project_id": "demo",
+        "lane_id": "lane-product",
+        "task_id": "demo-alr-020-product-implementation",
+        "status": "ready",
+        "phase": "implementation",
+        "priority": 10,
+        "title": "ALR-020 product implementation",
+        "description": "Implement product schema after G1 is green.",
+        "owner_profile": "claude-builder",
+        "engine": "claude-code",
+        "dependencies": [],
+        "metadata": {},
+    }
+    downstream_review = {
+        "project_id": "demo",
+        "lane_id": "lane-review",
+        "task_id": "demo-pr-quality-review",
+        "status": "review_ready",
+        "phase": "quality_review",
+        "priority": 5,
+        "title": "Independent quality review of product PR",
+        "description": "Review the product candidate after documentation recovery is complete.",
+        "owner_profile": "quality-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {},
+    }
+    tasks = [downstream_review, gated_product, documentation_recovery]
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: {"project_id": project_id, "metadata": {}})
+    fake_sql.rows_results = [[gated_product, documentation_recovery]]
+
+    selected = factory_pg._next_runnable_task(
+        "demo",
+        dispatch_preflight=(False, True, False, False),
+    )
+
+    assert selected is not None
+    assert selected["task_id"] == documentation_recovery["task_id"]
+    assert not any("dispatch_preflight_denied" in statement for statement in fake_sql.statements)
+
+
 def test_status_attaches_document_status(fake_sql, monkeypatch):
     fake_sql.rows_results = [
         [{"project_id": "demo", "status": "active", "repo_path": None, "metadata": {}}],
