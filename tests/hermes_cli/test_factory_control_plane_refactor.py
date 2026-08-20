@@ -1199,6 +1199,99 @@ def test_validation_readiness_allows_dependency_ready_documentation_recovery_wit
     assert not any("unresolved_validation_tasks" in statement for statement in fake_sql.statements)
 
 
+def test_validation_readiness_allows_r2df_reconciliation_docs_with_incidental_delivery_prose(fake_sql, monkeypatch):
+    documentation_reconciliation = {
+        "project_id": "demo",
+        "lane_id": "lane-docs",
+        "task_id": "demo-r2df-r1-reconciliation-documentation-dis",
+        "status": "todo",
+        "phase": "documentation",
+        "priority": 16,
+        "title": "R2df-R1 — reconciliation: documentation dispatch classifier recovery",
+        "description": (
+            "Repair the Factory validation-readiness classifier so this documentation/"
+            "reconciliation candidate is not mistaken for terminal delivery work. "
+            "This is not a final delivery report; it only records why final delivery "
+            "remains independently gated."
+        ),
+        "owner_profile": "codex-builder",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {},
+    }
+    unresolved_security_review = {
+        "project_id": "demo",
+        "lane_id": "lane-review",
+        "task_id": "demo-alr-063-security-review",
+        "status": "todo",
+        "phase": "security_review",
+        "priority": 63,
+        "title": "ALR-063 independent security and no-egress review",
+        "description": "Review the later product implementation after it exists.",
+        "owner_profile": "security-reviewer",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {},
+    }
+    tasks = [documentation_reconciliation, unresolved_security_review]
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: {"project_id": project_id, "metadata": {}})
+    fake_sql.rows_results = [[documentation_reconciliation, unresolved_security_review]]
+
+    selected = factory_pg._next_runnable_task(
+        "demo",
+        dispatch_preflight=(False, True, False, False),
+    )
+
+    assert selected is not None
+    assert selected["task_id"] == documentation_reconciliation["task_id"]
+    assert not any("unresolved_validation_tasks" in statement for statement in fake_sql.statements)
+
+
+def test_validation_readiness_blocks_terminal_delivery_when_validation_work_is_unresolved(fake_sql, monkeypatch):
+    final_delivery = {
+        "project_id": "demo",
+        "lane_id": "lane-delivery",
+        "task_id": "demo-final-delivery",
+        "status": "todo",
+        "phase": "delivery",
+        "priority": 90,
+        "title": "Final delivery report and gate closure",
+        "description": "Publish the final delivery report after validation evidence is complete.",
+        "owner_profile": "factory-reporter",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {},
+    }
+    unresolved_security_review = {
+        "project_id": "demo",
+        "lane_id": "lane-review",
+        "task_id": "demo-alr-063-security-review",
+        "status": "todo",
+        "phase": "security_review",
+        "priority": 63,
+        "title": "ALR-063 independent security and no-egress review",
+        "description": "Security review is not complete yet.",
+        "owner_profile": "security-reviewer",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {},
+    }
+    tasks = [final_delivery, unresolved_security_review]
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: {"project_id": project_id, "metadata": {}})
+    fake_sql.rows_results = [[final_delivery]]
+
+    selected = factory_pg._next_runnable_task(
+        "demo",
+        dispatch_preflight=(True, True, False, False),
+    )
+
+    assert selected is None
+    assert any("unresolved_validation_tasks" in statement for statement in fake_sql.statements)
+    assert any("demo-alr-063-security-review" in statement for statement in fake_sql.statements)
+
+
 def test_status_attaches_document_status(fake_sql, monkeypatch):
     fake_sql.rows_results = [
         [{"project_id": "demo", "status": "active", "repo_path": None, "metadata": {}}],
