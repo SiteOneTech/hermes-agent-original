@@ -4513,6 +4513,8 @@ def _candidate_requires_validation_readiness_before_dispatch(candidate: dict[str
     creates a dispatch deadlock.
     """
 
+    if _is_docs_first_repair_dispatch_task(candidate):
+        return False
     if _is_validation_task(candidate):
         return False
     phase = str(candidate.get("phase") or "").lower().replace("-", "_")
@@ -4566,6 +4568,28 @@ def _has_dependency_ready_docs_first_repair_task(tasks: list[dict[str, Any]]) ->
         and _is_docs_first_repair_dispatch_task(task)
         and _task_dependencies_are_terminal(task, by_id)
         for task in tasks
+    )
+
+
+def _docs_first_repair_preempts_downstream_dispatch(
+    tasks: list[dict[str, Any]],
+    *,
+    docs_ready: bool,
+    docs_first_waived: bool,
+) -> bool:
+    """Return True when G1/documentation repair must run before downstream work.
+
+    Reviews and product/final delivery tasks can be correctly preflight-denied
+    when G1 is red and no repair is ready.  But once a dependency-free
+    G0/G1/documentation/reconciliation recovery is itself runnable, the control
+    plane must not spend the tick recording downstream denials first: the repair
+    is the canonical way out of the red-G1 state.
+    """
+
+    return (
+        not docs_ready
+        and not docs_first_waived
+        and _has_dependency_ready_docs_first_repair_task(tasks)
     )
 
 
@@ -6444,6 +6468,12 @@ def claim_next_review(project_id: Optional[str] = None, *, worker: str = "factor
             pending_gates,
             latest_gates,
         )
+        if _docs_first_repair_preempts_downstream_dispatch(
+            tasks,
+            docs_ready=docs_ready,
+            docs_first_waived=docs_first_waived,
+        ):
+            continue
         candidates = _normalize_rows(sql.rows(
             f"""
             SELECT t.*
@@ -6718,10 +6748,10 @@ def claim_next_task(project_id: Optional[str] = None, *, worker: str = "factory-
             pending_gates,
             latest_gates,
         )
-        docs_repair_preempts_review = (
-            not docs_ready
-            and not docs_first_waived
-            and _has_dependency_ready_docs_first_repair_task(tasks)
+        docs_repair_preempts_review = _docs_first_repair_preempts_downstream_dispatch(
+            tasks,
+            docs_ready=docs_ready,
+            docs_first_waived=docs_first_waived,
         )
         if _has_active_increment(tasks, ignore_review_ready=docs_repair_preempts_review):
             continue
