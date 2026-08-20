@@ -4494,6 +4494,46 @@ def _candidate_dependencies_integrated(project_id: str, candidate: dict[str, Any
     return False
 
 
+def _is_documentation_or_reconciliation_recovery_task(task: dict[str, Any]) -> bool:
+    """Return True for docs/G1 recovery work that must stay claimable.
+
+    These tasks often cite historical final delivery/release blocker evidence in
+    their narrative.  That provenance text must not make the validation-readiness
+    gate treat the recovery itself as final delivery work.
+    """
+
+    if _is_reconciliation_task(task):
+        return True
+    phase = str(task.get("phase") or "").lower().replace("-", "_")
+    if not (phase.startswith(("g0", "g1")) or phase in {"documentation", "docs", "planning"}):
+        return False
+    owner = str(task.get("owner_profile") or task.get("owner_agent_id") or "").lower()
+    if owner in {"factory-reporter", "qa-verifier", "quality-reviewer", "security-reviewer", "devops-release"}:
+        return False
+    text = _task_text(task)
+    return any(
+        term in text
+        for term in (
+            "documentation recovery",
+            "documentation repair",
+            "documentation-index",
+            "document-status",
+            "document status",
+            "docs-first",
+            "docs first",
+            "g1 documentation",
+            "g1 docs",
+            "g1 document",
+            "review-state",
+            "review state",
+            "dispatch recovery",
+            "validator recovery",
+            "recovery",
+            "repair",
+        )
+    )
+
+
 def _candidate_requires_validation_readiness_before_dispatch(candidate: dict[str, Any]) -> bool:
     """Return True when a candidate must wait for QA/security validation tasks.
 
@@ -4504,6 +4544,8 @@ def _candidate_requires_validation_readiness_before_dispatch(candidate: dict[str
     """
 
     if _is_validation_task(candidate):
+        return False
+    if _is_documentation_or_reconciliation_recovery_task(candidate):
         return False
     phase = str(candidate.get("phase") or "").lower().replace("-", "_")
     text = _task_text(candidate)
