@@ -242,9 +242,10 @@ def _validate_r2ai_quality_gate(data: dict[str, Any], args: argparse.Namespace, 
     _require(quality_gate.get("gate_type") == "quality", f"gate {quality_gate.get('gate_id')} type mismatch", failures)
     _require(quality_gate.get("status") == "passed", f"gate {quality_gate.get('gate_id')} did not pass", failures)
     _require(quality_gate.get("reviewer") == "quality-reviewer", f"gate {quality_gate.get('gate_id')} reviewer mismatch", failures)
+    normalized_notes = _normalized_text(notes).lower()
     for marker in (args.expected_base, args.expected_pr):
-        _require(marker in notes, f"gate {quality_gate.get('gate_id')} notes missing {marker}", failures)
-    _require("no direct SQL" in notes and "no merge" in notes, f"gate {quality_gate.get('gate_id')} notes missing safety boundary", failures)
+        _require(marker.lower() in normalized_notes, f"gate {quality_gate.get('gate_id')} notes missing {marker}", failures)
+    _require("no direct sql" in normalized_notes and "no merge" in normalized_notes, f"gate {quality_gate.get('gate_id')} notes missing safety boundary", failures)
 
 
 def validate(args: argparse.Namespace) -> list[str]:
