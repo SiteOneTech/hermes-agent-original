@@ -202,6 +202,42 @@ def test_mark_run_finished_review_success_requires_task_bound_gate(fake_sql, mon
     assert "review_run_failed" in joined
 
 
+def test_mark_run_finished_review_success_does_not_accept_qa_test_gate(fake_sql, monkeypatch):
+    calls: list[str] = []
+
+    def integrate(task_id: str, *, actor: str, final_status: str):
+        calls.append(task_id)
+        return {"increment_integration_required": True, "increment_integration_status": "integrated"}
+
+    def one_for_only_qa_test_gate(sql_text, *, user=None, **_):
+        fake_sql.statements.append(sql_text)
+        if "SELECT task_id, metadata FROM factory.task_runs" in sql_text:
+            return {"task_id": "task-1", "metadata": {"run_type": "review"}}
+        if "FROM factory.gates" in sql_text:
+            if "'test'" in sql_text:
+                return {"gate_id": 1008, "gate_type": "test", "reviewer": "qa-verifier"}
+            return None
+        if "SELECT project_id FROM factory.task_runs" in sql_text:
+            return {"project_id": "demo"}
+        return None
+
+    monkeypatch.setattr(factory_pg, "_integrate_increment_to_base", integrate)
+    monkeypatch.setattr(fake_sql, "one", one_for_only_qa_test_gate)
+
+    factory_pg.mark_run_finished(
+        "run-1",
+        exit_code=0,
+        output_summary="QA verifier test evidence exists, but no independent quality review gate was recorded.\nSTATE: DONE",
+    )
+
+    assert calls == []
+    joined = "\n".join(fake_sql.statements)
+    assert "SET status='failed'" in joined
+    assert "SET status='review_ready'" in joined
+    assert "SET status='done'" not in joined
+    assert "review_success_without_task_bound_passed_gate" in joined
+
+
 def test_mark_run_finished_review_success_reworks_when_merge_fails(fake_sql, monkeypatch):
     def integrate(*_, **__):
         raise factory_pg.IncrementIntegrationError("push rejected")
@@ -316,6 +352,36 @@ def test_mark_run_finished_review_generic_http_429_requeues_even_with_task_gate(
     assert "HTTP 429 Too Many Requests" in joined
 
 
+def test_mark_run_finished_review_minimax_429_requeues_even_with_quality_gate(fake_sql, monkeypatch):
+    calls: list[str] = []
+
+    def integrate(task_id: str, *, actor: str, final_status: str):
+        calls.append(task_id)
+        return {"increment_integration_required": True, "increment_integration_status": "integrated"}
+
+    monkeypatch.setattr(factory_pg, "_integrate_increment_to_base", integrate)
+    fake_sql.one_results = [
+        {"task_id": "task-1", "metadata": {"run_type": "review"}},
+        {"gate_id": 42, "gate_type": "quality", "reviewer": "quality-reviewer"},
+        {"project_id": "demo"},
+    ]
+    output = (
+        "Independent review transcript\n"
+        "STATE: DONE\n"
+        "MiniMax HTTP 429 rate-limit failure after three provider retries."
+    )
+
+    factory_pg.mark_run_finished("run-1", exit_code=0, output_summary=output)
+
+    assert calls == []
+    joined = "\n".join(fake_sql.statements)
+    assert "SET status='failed'" in joined
+    assert "SET status='review_ready'" in joined
+    assert "SET status='done'" not in joined
+    assert "review_output_contains_runtime_failure" in joined
+    assert "MiniMax HTTP 429" in joined
+
+
 def test_mark_run_finished_review_can_document_429_condition_with_task_gate(fake_sql, monkeypatch):
     calls: list[str] = []
 
@@ -408,6 +474,42 @@ def test_reconcile_project_recovers_false_terminalized_review_run(fake_sql, monk
     assert "SET status='review_ready'" in joined
     assert "false_review_terminalization_recovered" in joined
     assert "review_output_contains_runtime_failure" in joined
+    assert "SET status='done'" not in joined
+
+
+def test_reconcile_project_recovers_minimax_429_false_terminal_review(fake_sql, monkeypatch):
+    project = {"project_id": "demo", "status": "active", "metadata": {"repo_strategy": {"repo_scope": "zeus_only", "work_intent": "add_functionality", "primary_repo": "demo/repo", "primary_repo_path": "/tmp/demo", "primary_repo_remote": "https://example.test/demo.git", "base_branch": "main", "branch_prefix": "factory/demo", "worktree_policy": "isolated"}}}
+    task = {"project_id": "demo", "task_id": "task-1", "status": "done", "title": "Reviewed task", "phase": "documentation", "owner_profile": "codex-builder", "reviewer_profile": "quality-reviewer", "metadata": {}}
+    fake_sql.json_query_results = [[
+        {
+            "project_id": "demo",
+            "lane_id": "lane",
+            "task_id": "task-1",
+            "run_id": "run-review",
+            "task_status": "done",
+            "increment_base_commit_after": _BASE_CURRENT,
+            "output_summary": "STATE: DONE\nMiniMax HTTP 429 rate-limit failure after three provider retries.",
+            "has_task_bound_passed_review_gate": True,
+        }
+    ]]
+    monkeypatch.setattr(factory_pg, "_configured_base_ref_readback", lambda project: {"accepted": True, "base_commit": _BASE_CURRENT})
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: [task])
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "reconciliation_findings", lambda *args, **kwargs: [])
+    monkeypatch.setattr(factory_pg, "ensure_reconciliation_tasks", lambda *args, **kwargs: [])
+    monkeypatch.setattr(factory_pg, "cancel_resolved_reconciliation_tasks", lambda *args, **kwargs: [])
+    monkeypatch.setattr(factory_pg, "_stale_g1_projection_metadata_keys", lambda *args, **kwargs: [])
+
+    result = _ORIGINAL_RECONCILE_PROJECT("demo")
+
+    assert result["false_review_terminalization_recoveries"] == 1
+    joined = "\n".join(fake_sql.statements)
+    assert "SET status='review_ready'" in joined
+    assert "false_review_terminalization_recovered" in joined
+    assert "review_output_contains_runtime_failure" in joined
+    assert "MiniMax HTTP 429" in joined
     assert "SET status='done'" not in joined
 
 
