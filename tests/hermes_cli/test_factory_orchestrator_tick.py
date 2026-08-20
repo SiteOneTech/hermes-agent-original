@@ -250,6 +250,50 @@ def test_project_tick_prefers_configured_base_source_when_invoked_from_stale_pri
     assert env["PYTHONPATH"].split(os.pathsep)[0] == str(current_worktree)
 
 
+def test_project_tick_prefers_configured_base_source_when_primary_root_diverged(monkeypatch, tmp_path):
+    primary, current_worktree, _stale_sha, current_sha = _make_stale_primary_with_configured_base_worktree(tmp_path)
+    (primary / "hermes_cli" / "factory.py").write_text("# diverged primary factory cli\n", encoding="utf-8")
+    _git(primary, "add", "hermes_cli/factory.py")
+    _git(primary, "commit", "-m", "primary-only factory change")
+    primary_head = _git(primary, "rev-parse", "HEAD")
+    assert primary_head != current_sha
+    assert _git(primary, "merge-base", "HEAD", "origin/main") not in {primary_head, current_sha}
+    monkeypatch.chdir(primary)
+    monkeypatch.setattr(factory, "__file__", str(primary / "hermes_cli" / "factory.py"))
+
+    current_tick = current_worktree / "scripts" / "factory" / "factory_orchestrator_tick.py"
+    captured: dict[str, Any] = {}
+    real_run = factory.subprocess.run
+
+    def fake_run(argv, **kwargs):
+        argv_text = [str(part) for part in argv]
+        if argv_text[:2] == [sys.executable, str(current_tick)]:
+            captured["argv"] = argv_text
+            captured["kwargs"] = kwargs
+            return factory.subprocess.CompletedProcess(
+                argv,
+                0,
+                stdout=json.dumps({"job": "factory_orchestrator_tick", "source": "configured-base-diverged"}),
+                stderr="",
+            )
+        if argv_text[:2] == [sys.executable, str(primary / "scripts" / "factory" / "factory_orchestrator_tick.py")]:
+            raise AssertionError("diverged primary orchestrator must not be used for tick dispatch")
+        return real_run(argv, **kwargs)
+
+    monkeypatch.setattr(factory.subprocess, "run", fake_run)
+
+    result = factory._run_orchestrator_script("demo-project")
+
+    assert result["source"] == "configured-base-diverged"
+    assert result["factory_cli_source_root"] == str(current_worktree)
+    assert result["factory_orchestrator_script"] == str(current_tick)
+    assert captured["argv"] == [sys.executable, str(current_tick)]
+    assert captured["kwargs"]["cwd"] == str(current_worktree)
+    env = captured["kwargs"]["env"]
+    assert env["FACTORY_TICK_PROJECT_ID"] == "demo-project"
+    assert env["PYTHONPATH"].split(os.pathsep)[0] == str(current_worktree)
+
+
 def test_project_tick_fails_closed_when_configured_base_source_is_dirty(monkeypatch, tmp_path):
     primary, current_worktree, stale_sha, current_sha = _make_stale_primary_with_configured_base_worktree(tmp_path)
     (current_worktree / "hermes_cli" / "factory_pg.py").write_text("# dirty configured-base source\n", encoding="utf-8")
@@ -662,7 +706,7 @@ def test_resolve_state_keeps_ahead_running_source_local(monkeypatch, tmp_path, c
     assert payload["anomalies"] == ["local_ahead_source"]
 
 
-def test_resolve_state_keeps_diverged_running_source_local(monkeypatch, tmp_path, capsys):
+def test_resolve_state_prefers_configured_base_when_primary_root_diverged(monkeypatch, tmp_path, capsys):
     primary, current_worktree, _stale_sha, current_sha = _make_stale_primary_with_configured_base_worktree(tmp_path)
     (primary / "hermes_cli" / "factory.py").write_text("# diverged feature source\n", encoding="utf-8")
     _git(primary, "add", "hermes_cli/factory.py")
@@ -679,21 +723,35 @@ def test_resolve_state_keeps_diverged_running_source_local(monkeypatch, tmp_path
     monkeypatch.chdir(primary)
     monkeypatch.setattr(factory, "__file__", str(primary / "hermes_cli" / "factory.py"))
 
+    captured: dict[str, Any] = {}
     real_run = factory.subprocess.run
 
     def fake_run(argv, **kwargs):
         argv_text = [str(part) for part in argv]
         if argv_text[:6] == [sys.executable, "-m", "hermes_cli.main", "factory", "project", "resolve-state"]:
-            raise AssertionError("diverged running source must not delegate to the configured-base worktree")
+            captured["argv"] = argv_text
+            captured["kwargs"] = kwargs
+            return factory.subprocess.CompletedProcess(
+                argv,
+                0,
+                stdout=json.dumps(
+                    {
+                        "action": "resolve-state",
+                        "project_id": "demo",
+                        "anomalies": [],
+                        "unblocked": {"anomalies": []},
+                    }
+                ),
+                stderr="",
+            )
         return real_run(argv, **kwargs)
 
-    class FakeBackend:
-        @staticmethod
-        def control_action(project_id, action):
-            return {"action": action, "project_id": project_id, "anomalies": ["local_diverged_source"]}
-
     monkeypatch.setattr(factory.subprocess, "run", fake_run)
-    monkeypatch.setattr(factory, "_backend", lambda _args: FakeBackend())
+    monkeypatch.setattr(
+        factory,
+        "_backend",
+        lambda _args: (_ for _ in ()).throw(AssertionError("diverged primary backend must not be used")),
+    )
 
     rc = factory.cmd_project_action(
         argparse.Namespace(factory_project_command="resolve-state", project_id="demo", json=True)
@@ -701,10 +759,24 @@ def test_resolve_state_keeps_diverged_running_source_local(monkeypatch, tmp_path
 
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["factory_cli_source_root"] == str(primary)
-    assert payload["factory_project_action_source_root"] == str(primary)
-    assert payload["factory_project_action_delegated"] is False
-    assert payload["anomalies"] == ["local_diverged_source"]
+    assert payload["factory_cli_source_root"] == str(current_worktree)
+    assert payload["factory_project_action_source_root"] == str(current_worktree)
+    assert payload["factory_project_action_delegated"] is True
+    assert payload["factory_project_action_delegated_from_source_root"] == str(primary)
+    assert captured["argv"] == [
+        sys.executable,
+        "-m",
+        "hermes_cli.main",
+        "factory",
+        "project",
+        "resolve-state",
+        "demo",
+        "--json",
+    ]
+    assert captured["kwargs"]["cwd"] == str(current_worktree)
+    env = captured["kwargs"]["env"]
+    assert env["PYTHONPATH"].split(os.pathsep)[0] == str(current_worktree)
+    assert env["HERMES_FACTORY_SOURCE_DELEGATED"] == "1"
 
 
 def test_resolve_state_prefers_isolated_cwd_source_over_stale_running_module(monkeypatch, tmp_path, capsys):
