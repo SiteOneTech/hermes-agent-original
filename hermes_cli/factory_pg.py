@@ -6859,13 +6859,14 @@ def _effective_exit_code(exit_code: int, output_summary: str) -> int:
 
 
 _TASK_BOUND_REVIEW_GATE_TYPES = (
+    # Only independent review gates can satisfy review-run terminalization.
+    # QA/test, delivery, and critical-readiness gates remain legitimate Factory
+    # evidence, but they do not prove a reviewer analyzed and approved the
+    # exact task/SHA under review.
     "architecture",
-    "critical_readiness",
-    "delivery",
     "quality",
     "security",
     "spec",
-    "test",
 )
 _REVIEW_RUNTIME_FAILURE_STRONG_PATTERNS = (
     "api call failed",
@@ -6884,11 +6885,16 @@ _REVIEW_RUNTIME_429_PATTERNS = (
 )
 _REVIEW_RUNTIME_429_FAILURE_CONTEXT = (
     "provider response",
+    "provider retries",
+    "provider retry",
     "api call failed",
     "ratelimiterror",
+    "rate limit",
+    "rate-limit",
     "rate limited",
     "usage limit reached",
     "token plan",
+    "minimax",
     "attempt ",
     "failed after",
 )
