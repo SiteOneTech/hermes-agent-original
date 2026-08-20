@@ -751,6 +751,79 @@ def test_claim_next_task_claims_docs_repair_before_preflight_denied_product(fake
     assert "dispatch_preflight_denied" not in joined
 
 
+def test_force_tick_routes_dependency_free_g1_doc_recovery_before_docs_blocked_quality_review(fake_sql, monkeypatch):
+    quality_review = {
+        "project_id": "demo",
+        "lane_id": "lane-review",
+        "task_id": "demo-quality-review",
+        "status": "review_ready",
+        "phase": "quality_review",
+        "priority": 10,
+        "title": "Independent exact-SHA quality review",
+        "description": "Validate product implementation only after G1 docs are canonical.",
+        "owner_profile": "quality-reviewer",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {},
+    }
+    doc_recovery = {
+        "project_id": "demo",
+        "lane_id": "lane-docs",
+        "task_id": "demo-r2ea-g1-docs-recovery",
+        "status": "todo",
+        "phase": "documentation",
+        "priority": 20,
+        "title": "R2ea — docs-first stale-runtime dispatch provenance repair",
+        "description": "Dependency-free G1 documentation recovery before validation work.",
+        "owner_profile": "codex-builder",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {},
+    }
+    project = {"project_id": "demo", "status": "active", "autonomous_enabled": True, "metadata": {}}
+
+    monkeypatch.setattr(factory_pg, "acquire_global_control_plane_lease", lambda *_, **__: {"acquired": True})
+    monkeypatch.setattr(factory_pg, "release_global_control_plane_lease", lambda *_: None)
+    monkeypatch.setattr(factory_pg, "monitor_runs", lambda: {})
+    monkeypatch.setattr(factory_pg, "supervisor_health_check", lambda *_, **__: {"violations": [], "repairs": []})
+    monkeypatch.setattr(factory_pg, "clear_resolved_blockers", lambda project_id: {"project_id": project_id, "reopened": []})
+    monkeypatch.setattr(factory_pg, "status", lambda project_id=None: {"projects": [project], "tasks": [quality_review, doc_recovery], "task_runs": []})
+    monkeypatch.setattr(factory_pg, "classify_factory_blockers", lambda *_, **__: [])
+    monkeypatch.setattr(factory_pg, "record_factory_blocker_actions", lambda *_, **__: [])
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: [quality_review, doc_recovery])
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_project_docs_notion_preflight", lambda *_, **__: (False, True, False, False))
+
+    fake_sql.rows_results = [
+        [{"project_id": "demo"}],  # review dispatch projects
+        [quality_review],  # review_ready candidate that must wait for G1 readiness
+        [{"project_id": "demo"}],  # implementation dispatch projects
+        [doc_recovery],  # dependency-free documentation recovery candidate
+    ]
+
+    def statement_one(sql, *, user=None, **_):
+        fake_sql.statements.append(sql)
+        if "SET status='review_running'" in sql:
+            return {**quality_review, "status": "review_running"}
+        if "SET status='claimed'" in sql:
+            return {**doc_recovery, "status": "claimed"}
+        return None
+
+    monkeypatch.setattr(fake_sql, "statement_one", statement_one)
+
+    tick = factory_pg.force_tick("demo")
+
+    assert tick["claimed"] is not None
+    assert tick["claimed"]["task"]["task_id"] == "demo-r2ea-g1-docs-recovery"
+    joined = "\n".join(fake_sql.statements)
+    assert "Task demo-r2ea-g1-docs-recovery claimed" in joined
+    assert "Task demo-quality-review claimed for review" not in joined
+
+
 def test_claimed_null_predicate_ignores_docs_blocked_product_without_repair():
     payload = {
         "projects": [
