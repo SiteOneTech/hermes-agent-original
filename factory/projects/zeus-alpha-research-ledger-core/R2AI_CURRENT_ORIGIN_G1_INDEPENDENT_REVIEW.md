@@ -28,7 +28,7 @@ independent G1 specification/quality assessment against the **current**
 directly against GitHub via `gh api` and `git ls-remote`, plus local fetch — all
 three agree), records exact-SHA evidence, and delivers it PR-first with the
 `agent:zeus` label. It does not modify runtime/product code, does not merge, does
-not deploy, does not change credentials, does not write direct SQL, does not
+not deploy, does not change credentials, makes no direct SQL write, does not
 touch Vonash/Magnus/VAOS/RAG/KB/brokers/trading/risk, and does not call any
 external runtime. The primary checkout at `/home/jean/Projects/hermes-agent-original`
 is not mutated (its HEAD `ac1fdb1605…` remains untouched; see readback below).
@@ -140,7 +140,8 @@ description is reproduced only by the stale primary-checkout resolver (code at
 
 ## Candidate selection
 
-- **Selected immutable candidate SHA**: `96f0ecd0a5f17d88a513cf986e5e92edadcbbd40`
+- **Candidate readiness is bound to one immutable SHA.** Selected immutable
+  candidate SHA: `96f0ecd0a5f17d88a513cf986e5e92edadcbbd40`
   (current `origin/main` verified three independent ways — `gh api`, `git
   ls-remote`, local fetch — all agree; all 14 required G1 documents exist, are
   committed, indexed, validated and reviewed at this exact SHA per canonical
@@ -286,9 +287,10 @@ worker.
 - Changed paths: only `factory/projects/zeus-alpha-research-ledger-core/`
   project-local documentation/evidence.
 - No runtime/product code change, no primary-checkout mutation, no merge, no
-  deploy, no credential change, no direct Factory DB write (only sanctioned
-  `factory status` readback and `factory gate record`), no external
-  runtime/connector/messaging action, no trading/risk/paper/live action.
+  deploy, no credential change, no direct SQL (only sanctioned
+  `factory status` readback and `factory gate record`), no ALR-020/product
+  dispatch, no external runtime/connector/messaging action, no
+  trading/risk/paper/live action.
 - Persisted Factory metadata
   (`reconciliation_anomalies=[]`, `reconciliation_required=false`,
   `technical_hold=true`) remains untouched by this documentation increment; the
