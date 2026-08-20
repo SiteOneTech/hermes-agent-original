@@ -649,6 +649,50 @@ def test_claim_next_task_claims_docs_repair_before_preflight_denied_product(fake
     assert "dispatch_preflight_denied" not in joined
 
 
+def test_claim_next_task_claims_docs_first_recovery_before_docs_blocked_product(fake_sql, monkeypatch):
+    product = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "demo-product-ready",
+        "status": "ready",
+        "phase": "implementation",
+        "priority": 19,
+        "dependencies": [],
+        "metadata": {},
+    }
+    docs_recovery = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "demo-fresh-current-base-g1-documentation",
+        "status": "todo",
+        "phase": "documentation",
+        "priority": 19,
+        "dependencies": [],
+        "metadata": {"source": "factory_task_create"},
+    }
+    tasks = [product, docs_recovery]
+    project = {"project_id": "demo", "status": "active", "autonomous_enabled": True, "metadata": {}}
+    fake_sql.rows_results = [[{"project_id": "demo"}], [product, docs_recovery]]
+    fake_sql.statement_one_results = [{**docs_recovery, "status": "claimed"}]
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(
+        factory_pg,
+        "_project_docs_notion_preflight",
+        lambda project_arg, tasks_arg, pending_arg, gates_arg: (False, True, False, False),
+    )
+
+    result = factory_pg.claim_next_task("demo", worker="factory-force-tick")
+
+    assert result is not None
+    assert result["task"]["task_id"] == "demo-fresh-current-base-g1-documentation"
+    joined = "\n".join(fake_sql.statements)
+    assert "Task demo-fresh-current-base-g1-documentation claimed" in joined
+    assert "dispatch_preflight_denied" not in joined
+
+
 def test_claimed_null_predicate_ignores_docs_blocked_product_without_repair():
     payload = {
         "projects": [

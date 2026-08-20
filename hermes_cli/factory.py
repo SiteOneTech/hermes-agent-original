@@ -480,15 +480,45 @@ def _source_root_is_clean(source_root: Path) -> bool:
     return status == ""
 
 
+def _running_source_needs_configured_base(running_source_root: Path, base_commit: str, running_head: str) -> bool:
+    """Return whether runtime must avoid the running root in favour of base.
+
+    A pure ahead checkout is treated as intentional local/source development and
+    remains local.  A stale-behind checkout and a diverged checkout both lack the
+    canonical configured-base commit as their runtime source, so Factory status,
+    resolve-state and tick dispatch should use an independently verified clean
+    worktree at that configured base instead.
+    """
+
+    running_is_ancestor = _git_check_source_root(
+        running_source_root,
+        "merge-base",
+        "--is-ancestor",
+        running_head,
+        base_commit,
+    )
+    if running_is_ancestor is True:
+        return True
+    base_is_ancestor = _git_check_source_root(
+        running_source_root,
+        "merge-base",
+        "--is-ancestor",
+        base_commit,
+        running_head,
+    )
+    return base_is_ancestor is False
+
+
 def _preferred_configured_base_source_root(running_source_root: Path) -> Path | None:
-    """Return an exact configured-base worktree when the running root is stale.
+    """Return an exact configured-base worktree when the running root is stale/diverged.
 
     ``hermes`` console scripts installed from a primary checkout can be invoked
-    from that same checkout even when its HEAD is behind ``origin/main``.  In
-    that shape there is no distinct cwd source root to prefer, so status must
-    use a verified worktree at the configured base instead of reusing stale
-    primary Factory code.  If the base ref or worktree cannot be proven exactly,
-    return ``None`` and let the normal status path remain fail-closed.
+    from that same checkout even when its HEAD is behind or diverged from
+    ``origin/main``.  In that shape there is no distinct cwd source root to
+    prefer, so status/resolve/tick must use a verified worktree at the
+    configured base instead of reusing non-canonical primary Factory code.  If
+    the base ref or worktree cannot be proven exactly, return ``None`` and let
+    the normal status path remain fail-closed.
     """
 
     if os.environ.get("HERMES_FACTORY_SOURCE_DELEGATED") == "1":
@@ -504,7 +534,7 @@ def _preferred_configured_base_source_root(running_source_root: Path) -> Path | 
     running_head = _git_probe_source_root(running_source_root, "rev-parse", "HEAD")
     if not running_head or running_head == base_commit:
         return None
-    if _git_check_source_root(running_source_root, "merge-base", "--is-ancestor", running_head, base_commit) is not True:
+    if not _running_source_needs_configured_base(running_source_root, base_commit, running_head):
         return None
     candidates: list[Path] = []
     for entry in _git_worktree_entries(running_source_root):
@@ -530,7 +560,7 @@ def _preferred_configured_base_source_root(running_source_root: Path) -> Path | 
 
 
 def _running_source_is_stale_behind_configured_base(running_source_root: Path) -> bool:
-    """Return whether ``running_source_root`` is behind the configured origin base."""
+    """Return whether ``running_source_root`` lacks the configured base commit."""
 
     base = _origin_default_base_ref(running_source_root)
     if base is None:
@@ -539,7 +569,7 @@ def _running_source_is_stale_behind_configured_base(running_source_root: Path) -
     running_head = _git_probe_source_root(running_source_root, "rev-parse", "HEAD")
     if not running_head or running_head == base_commit:
         return False
-    return _git_check_source_root(running_source_root, "merge-base", "--is-ancestor", running_head, base_commit) is True
+    return _running_source_needs_configured_base(running_source_root, base_commit, running_head)
 
 
 def _preferred_cwd_source_root(running_source_root: Path) -> Path | None:
