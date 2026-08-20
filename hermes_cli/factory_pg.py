@@ -4510,6 +4510,17 @@ def _candidate_requires_validation_readiness_before_dispatch(candidate: dict[str
     owner = str(candidate.get("owner_profile") or candidate.get("owner_agent_id") or "").lower()
     if owner == "devops-release" and any(term in text for term in ("deploy", "deployment", "sandbox", "preview", "release")):
         return False
+    # Documentation/planning reconciliation work often explains why delivery
+    # remains gated.  That incidental prose is not itself terminal delivery.
+    documentation_reconciliation_phase = phase in {"documentation", "planning"} or phase.startswith(
+        ("g0", "g1")
+    )
+    if (
+        documentation_reconciliation_phase
+        and _is_reconciliation_task(candidate)
+        and owner not in {"factory-reporter", "devops-release"}
+    ):
+        return False
     final_stage_text = any(
         term in text
         for term in (
