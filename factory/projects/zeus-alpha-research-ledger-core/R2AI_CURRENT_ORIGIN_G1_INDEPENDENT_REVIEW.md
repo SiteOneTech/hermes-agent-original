@@ -270,14 +270,15 @@ worker.
   documentation/evidence changes (this file + `DOCUMENTATION_INDEX.md` +
   `QA_GATES.md` + `SECURITY_GATES.md` + `TRACKER.md` + validator), pushed to
   origin (normal push, no force).
-- PR: `docs(factory): renew R2ai current-origin G1 independent review evidence @96f0ecd0 (rework)`
-  on that fresh branch, label `agent:zeus`, base `main` (current `96f0ecd0…`).
+- PR #110 (`docs(factory): renew R2ai current-origin G1 independent review evidence @96f0ecd0 (rework)`)
+  on that fresh branch, label `agent:zeus`, base `main` (current `96f0ecd0…`),
+  `https://github.com/SiteOneTech/hermes-agent-original/pull/110`.
   Exact final head SHA is recorded in the PR body and Factory quality gate notes
   after push (a commit cannot contain its own SHA). PR #85 remains stale/superseded;
   PR #104 is predecessor evidence; no existing remote ref rewritten.
 - Independent exact-SHA quality gate recorded via canonical Factory CLI
-  (gate id in gate notes/validator output) on this candidate; security review
-  remains independently owned by `security-reviewer` (pending).
+  (Factory gate `1015`, passed, reviewer `quality-reviewer`) on this candidate;
+  security review remains independently owned by `security-reviewer` (pending).
 - No merge by Zeus; `factory_auto_integration_forbidden=true` remains honored.
 
 ## Boundary confirmation
