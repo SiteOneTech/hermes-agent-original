@@ -136,9 +136,18 @@ reproduced only by the stale primary-checkout resolver (code at
   base `b68ec8ad5cf986e5bf4900506820ca978ef0b0c0`, label `agent:zeus`. Its
   branch base `b68ec8ad…` predates the current origin/main `71e5e7b2…`; the PR
   records R2ae task evidence and is not the current-origin G1 candidate.
-- **Open PR #85 is the delivery PR for this increment** (same assigned branch,
-  label `agent:zeus`); this renewal updates it to a head based on the current
-  `origin/main` `71e5e7b2…` (see Delivery).
+- **Open PR #85 is superseded delivery evidence for this increment.** Exact
+  source-backed reason: PR #85 (same assigned branch, label `agent:zeus`) was
+  open at stale head `70c4bbfe0c66e60bab69bd6b2a3841050ca7a023` / base
+  `18ef28e6845d2d15dd0ec3cd7d8bb9b7630b71cc` (`mergeable=CONFLICTING`), and
+  Hermes' security guard blocks force-push of that stale remote ref (same guard
+  class documented for R2ai-R1/R2ai-R2). This renewal therefore delivers
+  non-destructively on a fresh branch that did not exist on origin:
+  `factory/zeus-alpha-research-ledger-core/inc-018-r2ai-r3-current-origin-g1-rework`,
+  opened as PR #104 with the `agent:zeus` label, base `main`
+  `71e5e7b2…`; PR #85 was marked superseded via comment
+  https://github.com/SiteOneTech/hermes-agent-original/pull/85#issuecomment-5357839664
+  and left untouched (no force-push, no rewrite of any existing remote ref).
 
 ## Independent G1 specification/quality assessment — exact-SHA verdicts
 
@@ -217,16 +226,23 @@ performed by this worker.
 
 ## Delivery
 
-- Branch: `factory/zeus-alpha-research-ledger-core/inc-018-r2ai-current-origin-g1-independe`
-  rebuilt on current `origin/main` `71e5e7b2…` with only project-local
+- Branch: `factory/zeus-alpha-research-ledger-core/inc-018-r2ai-r3-current-origin-g1-rework`
+  (fresh, non-destructive — the assigned stale ref
+  `factory/zeus-alpha-research-ledger-core/inc-018-r2ai-current-origin-g1-independe`
+  @ `70c4bbfe…` could not be force-updated because Hermes' security guard blocks
+  force-push of it, the same guard class documented for R2ai-R1/R2ai-R2),
+  based on current `origin/main` `71e5e7b2…` with only project-local
   documentation/evidence changes (this file + `DOCUMENTATION_INDEX.md`),
-  pushed to origin.
-- PR #85 (`docs(factory): renew R2ai current-origin G1 independent review
-  evidence`) updated on the same branch, label `agent:zeus`, base `main`
-  (current `71e5e7b2…`). Exact pushed head SHA recorded in the PR body and
-  Factory quality gate notes after push (a commit cannot contain its own SHA).
-- Independent exact-SHA quality gate recorded via canonical Factory CLI on this
-  candidate; security review remains independently owned by `security-reviewer`.
+  pushed to origin (normal push, no force).
+- PR #104 (`docs(factory): renew R2ai current-origin G1 independent review
+  evidence @71e5e7b2 (rework)`) on that fresh branch, label `agent:zeus`, base
+  `main` (current `71e5e7b2…`), `mergeable=MERGEABLE`; exact final head SHA is
+  recorded in the PR body and Factory quality gate notes after push (a commit
+  cannot contain its own SHA). PR #85 (stale head `70c4bbfe…`) marked
+  superseded via comment; no existing remote ref rewritten.
+- Independent exact-SHA quality gate recorded via canonical Factory CLI
+  (gate `1001`, passed) on this candidate; security review remains
+  independently owned by `security-reviewer`.
 - No merge by Zeus; `factory_auto_integration_forbidden=true` remains honored.
 
 ## Boundary confirmation
