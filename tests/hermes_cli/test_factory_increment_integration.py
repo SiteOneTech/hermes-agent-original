@@ -751,6 +751,78 @@ def test_claim_next_task_claims_docs_repair_before_preflight_denied_product(fake
     assert "dispatch_preflight_denied" not in joined
 
 
+def test_claim_next_task_claims_g1_recovery_with_final_gate_wording_before_product_and_validation(fake_sql, monkeypatch):
+    quality_review = {
+        "project_id": "demo",
+        "lane_id": "lane-review",
+        "task_id": "demo-r2cy-quality-review",
+        "status": "review_ready",
+        "phase": "quality_review",
+        "priority": 10,
+        "title": "R2cy-R1 — independent exact-SHA quality review",
+        "description": "Validate product implementation only after G1 docs are canonical.",
+        "owner_profile": "quality-reviewer",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {},
+    }
+    product = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "demo-alr-020-r2-product",
+        "status": "ready",
+        "phase": "implementation",
+        "priority": 19,
+        "title": "ALR-020-R2 product implementation",
+        "description": "Normal product implementation must remain fail-closed while G1 docs are red.",
+        "owner_profile": "claude-builder",
+        "engine": "claude_code",
+        "dependencies": [],
+        "metadata": {},
+    }
+    g1_recovery = {
+        "project_id": "demo",
+        "lane_id": "lane-docs",
+        "task_id": "demo-r2df-fresh-current-base-g1-documentation",
+        "status": "todo",
+        "phase": "documentation",
+        "priority": 19,
+        "title": "R2df — fresh current-base G1 documentation-index conflict recovery",
+        "description": (
+            "Bounded technical successor after canonical resolve-state finalized its run as blocked. "
+            "Recover fresh current-base G1 documentation and final gate closure evidence before product work."
+        ),
+        "owner_profile": "codex-builder",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {},
+    }
+    tasks = [quality_review, product, g1_recovery]
+    project = {"project_id": "demo", "status": "active", "autonomous_enabled": True, "metadata": {}}
+    fake_sql.rows_results = [[{"project_id": "demo"}], [product, g1_recovery]]
+    fake_sql.statement_one_results = [{**g1_recovery, "status": "claimed"}]
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(
+        factory_pg,
+        "_project_docs_notion_preflight",
+        lambda project_arg, tasks_arg, pending_arg, gates_arg: (False, True, False, False),
+    )
+
+    result = factory_pg.claim_next_task("demo", worker="factory-force-tick")
+
+    assert result is not None
+    assert result["task"]["task_id"] == g1_recovery["task_id"]
+    joined = "\n".join(fake_sql.statements)
+    assert "Task demo-r2df-fresh-current-base-g1-documentation claimed" in joined
+    assert "unresolved_validation_tasks" not in joined
+    assert "Task demo-alr-020-r2-product claimed" not in joined
+
+
 def test_force_tick_routes_dependency_free_g1_doc_recovery_before_docs_blocked_quality_review(fake_sql, monkeypatch):
     quality_review = {
         "project_id": "demo",
