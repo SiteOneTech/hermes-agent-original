@@ -751,6 +751,73 @@ def test_claim_next_task_claims_docs_repair_before_preflight_denied_product(fake
     assert "dispatch_preflight_denied" not in joined
 
 
+def test_claim_next_task_routes_explicit_g1_recovery_not_generic_docs_when_docs_red(fake_sql, monkeypatch):
+    product = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "demo-impl",
+        "status": "todo",
+        "phase": "implementation",
+        "priority": 10,
+        "dependencies": [],
+        "metadata": {},
+    }
+    generic_docs = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "demo-generic-docs",
+        "status": "todo",
+        "phase": "documentation",
+        "priority": 20,
+        "title": "Refresh docs",
+        "dependencies": [],
+        "metadata": {},
+    }
+    explicit_recovery = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "demo-g1-recovery",
+        "status": "todo",
+        "phase": "g1_recovery",
+        "priority": 30,
+        "title": "R2d0 — repair red-G1 docs-first recovery dispatch routing",
+        "dependencies": [],
+        "metadata": {"g1_recovery_task": True},
+    }
+    tasks = [product, generic_docs, explicit_recovery]
+    project = {"project_id": "demo", "status": "active", "autonomous_enabled": True, "metadata": {}}
+    fake_sql.rows_results = [[{"project_id": "demo"}], [product, generic_docs, explicit_recovery]]
+
+    def statement_one(sql, *, user=None, **_):
+        fake_sql.statements.append(sql)
+        if "demo-generic-docs" in sql:
+            return {**generic_docs, "status": "claimed"}
+        if "demo-g1-recovery" in sql:
+            return {**explicit_recovery, "status": "claimed"}
+        if "demo-impl" in sql:
+            return {**product, "status": "claimed"}
+        return None
+
+    monkeypatch.setattr(fake_sql, "statement_one", statement_one)
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(
+        factory_pg,
+        "_project_docs_notion_preflight",
+        lambda project_arg, tasks_arg, pending_arg, gates_arg: (False, True, False, False),
+    )
+
+    result = factory_pg.claim_next_task("demo", worker="factory-force-tick")
+
+    assert result is not None
+    assert result["task"]["task_id"] == "demo-g1-recovery"
+    joined = "\n".join(fake_sql.statements)
+    assert "Task demo-g1-recovery claimed" in joined
+    assert "Task demo-generic-docs claimed" not in joined
+
+
 def test_force_tick_routes_dependency_free_g1_doc_recovery_before_docs_blocked_quality_review(fake_sql, monkeypatch):
     quality_review = {
         "project_id": "demo",
@@ -780,7 +847,7 @@ def test_force_tick_routes_dependency_free_g1_doc_recovery_before_docs_blocked_q
         "reviewer_profile": "quality-reviewer",
         "engine": "codex",
         "dependencies": [],
-        "metadata": {},
+        "metadata": {"g1_recovery_task": True},
     }
     project = {"project_id": "demo", "status": "active", "autonomous_enabled": True, "metadata": {}}
 
