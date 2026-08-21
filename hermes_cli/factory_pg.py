@@ -4557,7 +4557,26 @@ def _candidate_requires_validation_readiness_before_dispatch(candidate: dict[str
         # evidence from the broken run.  Gating the repair on those same
         # validation rows creates a claimed=null docs-first deadlock.
         return False
-    final_stage_text = any(
+    return _is_validation_readiness_terminal_dispatch_task(candidate)
+
+
+def _is_validation_readiness_terminal_dispatch_task(task: dict[str, Any]) -> bool:
+    """Classify final delivery/reporting work that must wait for validation.
+
+    Use task role/phase as the primary signal.  Documentation/control-plane
+    repair tasks often quote historical "final gate closure" or handoff failure
+    evidence; treating those terminal words alone as final delivery creates a
+    circular validation dependency while G1 is still red.
+    """
+
+    phase = str(task.get("phase") or "").strip().lower().replace("-", "_")
+    if phase.startswith("delivery") or phase in {"release", "final", "final_report"}:
+        return True
+    owner = str(task.get("owner_profile") or task.get("owner_agent_id") or "").strip().lower()
+    if owner not in {"factory-reporter", "devops-release"}:
+        return False
+    text = _task_text(task)
+    return any(
         term in text
         for term in (
             "delivery report",
@@ -4570,7 +4589,6 @@ def _candidate_requires_validation_readiness_before_dispatch(candidate: dict[str
             "release report",
         )
     ) or re.search(r"\bfinal\s+(?:delivery|report|gate|closure|handoff)\b", text) is not None
-    return phase.startswith("delivery") or phase in {"release", "final", "final_report"} or final_stage_text
 
 
 def _is_docs_first_repair_dispatch_task(task: dict[str, Any]) -> bool:
@@ -4582,7 +4600,7 @@ def _is_docs_first_repair_dispatch_task(task: dict[str, Any]) -> bool:
     if phase.startswith(("g0", "g1")) or phase in {"documentation", "docs", "planning"}:
         return True
     text = _task_text(task)
-    return any(
+    docs_signal = any(
         term in text
         for term in (
             "documentation recovery",
@@ -4595,7 +4613,22 @@ def _is_docs_first_repair_dispatch_task(task: dict[str, Any]) -> bool:
             "documentation_index",
             "documentation index",
         )
-    ) and not _is_docs_first_gated_dispatch_task(task)
+    )
+    repair_signal = any(
+        term in text
+        for term in (
+            "repair",
+            "recovery",
+            "reconciliation",
+            "routing",
+            "source-root",
+            "source root",
+            "control-plane",
+            "control plane",
+            "provenance",
+        )
+    )
+    return docs_signal and repair_signal and phase not in {"delivery", "release", "deploy", "deployment"}
 
 
 def _has_dependency_ready_docs_first_repair_task(tasks: list[dict[str, Any]]) -> bool:
@@ -6694,7 +6727,7 @@ def _is_docs_first_gated_dispatch_task(task: dict[str, Any]) -> bool:
 
     if _is_reconciliation_task(task) or _is_runtime_bootstrap_repair_task(task):
         return False
-    if _is_docs_first_validation_repair_task(task):
+    if _is_docs_first_repair_dispatch_task(task):
         return False
     phase = str(task.get("phase") or "").strip().lower()
     if phase.startswith(("g0", "g1")) or phase in {"documentation", "planning"}:
