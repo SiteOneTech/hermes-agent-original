@@ -18,7 +18,6 @@ There is no new primitive to learn: a Bot **is** a Hermes profile — isolated c
 The roster shows one row per agent profile: avatar, latest-message preview, and timestamp.
 
 - **Click a Bot** to land in its chat — every Bot has a canonical, persistent **Bot Chat** conversation that is created (and pinned) the moment the Bot is born.
-- **Sessions** (from a Bot's context menu) browses and filters that profile's 200 most recent stored conversations, without changing the primary click-to-chat flow.
 - **Active now** — a presence strip above the roster shows every Bot currently working: the gateway-busy profile plus any Bot that wrote within the last 90 seconds. Each chip opens that Bot's chat. The strip never reorders the roster and disappears when the fleet is idle.
 - **Search** filters the roster as you type.
 - **Hide a Bot** — right-click a row → **Hide Bot** to take a Bot you don't use out of the roster and the Active-now strip. Hiding is display-only: @mentions still resolve, group-chat memberships are untouched, and routines keep running. Once at least one Bot is hidden, an **eye toggle** appears in the pane header — click it to reveal hidden Bots dimmed in place, then right-click → **Unhide Bot** to bring one back. Hidden Bots never toast, but they accumulate unread activity silently and the eye badges a dot so you know something happened. Hidden state is saved in the Bot's profile metadata, so it follows the Bot to every desktop connected to that backend.
@@ -76,7 +75,9 @@ Routines are plain [Hermes cron jobs](./features/cron.md) namespaced `[bot:<name
 
 ## Groups and group chats
 
-Right-click a local Bot → **Manage groups** to add or remove it from any number of group chats. Pick existing groups independently or create one inline. Local membership is stored in the Bot's backend-synced profile metadata, so it follows that profile across desktops; older profiles with one legacy group continue to work. Connections Bots join through the New Group Chat picker and remain source-qualified in that room's local Desktop state.
+Right-click a local Bot → **Manage groups** to add or remove it from any number of group chats. Pick existing groups independently or create one inline. Local membership is stored in the Bot's backend-synced profile metadata, so it follows that profile across desktops; older profiles with one legacy group continue to work. Connections Bots join through the New Group Chat picker and remain source-qualified in the room's shared state.
+
+**Rooms follow your gateways, not one Desktop.** Each room's recent transcript, members, picture, and name are mirrored into the shared profile metadata of **every** gateway your Desktop is connected to, with per-gateway versioning so two Desktops writing at once merge instead of overwriting each other. Open Hermes Desktop on another machine against the same gateway (local network, Tailscale, anywhere) and the room appears with its history; gateway-only clients see it too. Rooms carry a durable internal identity, so renaming one changes just its display name everywhere, disbanding one removes it permanently on every client — even ones that were offline at the time — and recreating a same-name group starts a genuinely fresh room. If a gateway dies or is removed, nothing is lost: every connected Desktop keeps the full room locally and re-seeds any gateway it reconnects to. (The full orchestration log stays in each Desktop's local storage; the shared mirror is a bounded recent-history projection.)
 
 Groups are standalone rows in the same activity-ordered roster as Bot DMs. A Bot keeps one DM row even when it belongs to several groups, while every group gets its own room row with member count, latest-message preview, timestamp, and needs-you state.
 
@@ -94,8 +95,9 @@ Groups are standalone rows in the same activity-ordered roster as Bot DMs. A Bot
 Bots message each other with attribution, and you can hand work off from any chat:
 
 - **@mentions** — type `@researcher have a look at this` in any chat and the active Bot hands the message off, waits for the reply, and reports back. Mention names are validated against the live roster, so an email address or an unknown `@` passes through untouched.
+- **Renamed Bots keep their tags in sync** — give a Bot a friendly name (the pencil in its chat header, or `hermes profile rename`) and it becomes taggable by that name: a Bot titled *Research Buddy* answers to `@research-buddy` (and `@researchbuddy`), in regular chats and in group rooms alike. The composer's `@` autocomplete offers the renamed tag and also matches when you type the old profile name, which keeps resolving too.
 - **@mentions across machines** — mentioning a Bot that lives on another registered connection (use its `@name-device` handle when names collide) delivers over the Connections registry in the background: the active Bot stays on this device, the desktop routes the message to the recipient's machine, and the reply is relayed back attributed to that agent. Your window's gateway never switches.
-- **Direct messages** — a Bot reaches a teammate's Bot Chat through the standard CLI: `hermes -p <bot> chat --in ~ -c "Bot Chat" --create-if-missing -Q -q "Message from 🤖 <sender> (@<sender>): ..."`. The receiving Bot sees the message the next time it runs and knows how to reply, because the messaging protocol is part of its Bot Chat system prompt.
+- **Direct messages** — a Bot reaches a teammate's Bot Chat through the standard CLI: it writes the message to a temp file (opening with the `Message from 🤖 <sender> (@<sender>):` prefix), then runs `hermes -p <bot> chat --in ~ -c "Bot Chat" --create-if-missing -Q --query-file <file>`. The file transport means nothing is shell-interpreted — quotes, `$(...)`, and backticks in the message arrive verbatim. The receiving Bot sees the message the next time it runs and knows how to reply, because the messaging protocol is part of its Bot Chat system prompt.
 
 The backend teaches each Bot's canonical Bot Chat session the messaging protocol automatically at prompt-build time — including when a teammate opens it headlessly from the CLI. Only the canonical Bot Chat gets the protocol section; your regular sessions and your SOUL.md stay untouched. This is controlled by `agent.bot_mode_protocol` in `config.yaml` (default: on):
 
@@ -115,8 +117,8 @@ Bots on one machine can message Bots on **another machine's gateway** without an
 ```bash
 hermes peer add spark --url http://spark.lan:8377 --key <API_SERVER_KEY>
 hermes peer list
-hermes peer dm spark "Message from 🤖 dixie (@dixie): disk status?"
-hermes peer dm spark/researcher "..."   # named profile on a multiplexed peer
+hermes peer dm spark < /tmp/dm.txt        # message body from a file (nothing shell-interpreted)
+hermes peer dm spark/researcher < /tmp/dm.txt   # named profile on a multiplexed peer
 ```
 
 `hermes peer dm` delivers into the remote agent's canonical Bot Chat over the peer's existing API server, runs one agent turn there, and prints the reply on stdout — the exact cross-machine twin of the local `hermes -p <bot> chat` command.

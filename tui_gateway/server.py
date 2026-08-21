@@ -153,6 +153,10 @@ _db = None
 _db_error: str | None = None
 _stdout_lock = threading.Lock()
 _cfg_lock = threading.Lock()
+# Shared profile UI metadata can be updated concurrently by Desktop, mobile,
+# and multiple worker-pool RPCs.  Its compare/check/write transaction needs a
+# dedicated lock rather than the unrelated process-config cache lock.
+_profile_ui_meta_lock = threading.Lock()
 _sessions_lock = threading.RLock()  # reentrant: _close_session_by_id may run under callers that already hold it
 _prompt_lock = threading.Lock()
 _cfg_cache: dict | None = None
@@ -1534,13 +1538,12 @@ def _profile_home(profile: str | None) -> Path | None:
 
 
 def _profile_scoped(handler):
-    """Bind ``params['profile']``'s HERMES_HOME around a pet RPC handler.
+    """Bind ``params['profile']``'s HERMES_HOME around a handler.
 
-    Pets are per-profile: ``display.pet.*`` lives in the profile's config.yaml and
-    sprites install under its ``pets/`` dir (both resolve via ``get_hermes_home``).
-    The desktop sends ``profile`` on pet calls so config + pets dir resolve to the
-    focused profile even in app-global remote mode, where one backend serves every
-    profile. No-op for the launch profile (own-profile backends already resolve it).
+    Pets (config + sprites) and projects (projects.db, discovery policy) both
+    resolve via ``get_hermes_home``. The desktop sends ``profile`` so a single
+    backend serving every profile in app-global remote mode still hits the
+    focused profile's home. No-op for the launch profile.
     """
 
     def wrapper(rid, params):
@@ -3549,8 +3552,10 @@ def _block(
         "clarify.request",
         "terminal.read.request",
         "preview.read.request",
+        "preview.act.request",
         "window.read.request",
         "mcp.setup.request",
+        "tour.request",
     }:
         _emit(
             f"{event.removesuffix('.request')}.expire",
@@ -3615,6 +3620,74 @@ def _clarify_block(sid: str, q, c, multi_select=False, questions=None) -> str:
         ),
         timeout=_clarify_timeout_seconds(),
     )
+
+
+# A tour action is a DOM operation the renderer performs and answers straight
+# back, so a client that implements the bridge replies in milliseconds. The
+# generous deadline exists for one case only: a preview tour's first action
+# injects the engine into a live page.
+_TOUR_TIMEOUT_S = 45
+# Until a session's client has proven it answers at all, hold it to a deadline
+# a working renderer cannot miss. See _tour_request.
+_TOUR_PROBE_TIMEOUT_S = 10
+
+_TOUR_BRIDGE_UNAVAILABLE = json.dumps(
+    {
+        "success": False,
+        "error": (
+            "No Hermes Desktop window answered the tour request. The tour is "
+            "driven by the desktop app's renderer, which updates separately "
+            "from this backend, so an app build older than the tour tool has "
+            "nothing listening. Update the Hermes Desktop app and start a new "
+            "session. Do not retry tour in this session."
+        ),
+    }
+)
+
+
+def _tour_request(sid: str, payload: dict) -> str:
+    """Bridge the tour tool callback onto _block, without paying for a client
+    that cannot answer it.
+
+    The renderer's ``tour.request`` handler ships in the desktop bundle, but
+    the tool is offered by this backend — and the two update on different
+    clocks. Against an app older than the tool the event lands in a renderer
+    with no branch for it, nobody ever calls ``tour.respond``, and the agent
+    blocks for the full deadline. The model then does what the schema tells it
+    to and tries the next action, so a single "give me a tour" turn stacks
+    those waits (the timeouts reported against #89620).
+
+    A session's first action therefore gets the probe deadline, and an
+    unanswered probe marks the bridge unavailable for that session: every later
+    call returns immediately, telling the user what to actually fix instead of
+    stalling again. Once a client has answered, real actions get the full
+    deadline back and a single slow one no longer condemns it. The verdict
+    lives on the session record, so it dies with the session and a new one
+    re-probes.
+    """
+    # A detached caller has no session record; the throwaway keeps it on the
+    # plain bridge, unprobed.
+    session = _sessions.get(sid)
+    if session is None:
+        session = {}
+    state = session.get("tour_bridge")
+
+    if state == "unanswered":
+        return _TOUR_BRIDGE_UNAVAILABLE
+
+    answer = _block(
+        "tour.request",
+        sid,
+        dict(payload),
+        timeout=_TOUR_TIMEOUT_S if state == "answered" else _TOUR_PROBE_TIMEOUT_S,
+    )
+
+    if answer:
+        session["tour_bridge"] = "answered"
+    elif state != "answered":
+        session["tour_bridge"] = "unanswered"
+
+    return answer or _TOUR_BRIDGE_UNAVAILABLE
 
 
 def _clear_pending(sid: str | None = None) -> None:
@@ -5775,6 +5848,20 @@ def _emit_session_info_for_session(sid: str, session: dict) -> None:
         pass
 
 
+def broadcast_session_info() -> None:
+    """Re-emit ``session.info`` to every live session.
+
+    For approvals-config writers that bypass the ``config.set`` RPC (which
+    re-emits itself): the REST config saves and the ``/approvals`` slash
+    mirror. Only reaches sessions in THIS process; a spawned
+    ``tui_gateway.entry`` child gateway has its own ``_sessions``.
+    """
+    with _sessions_lock:
+        sessions = list(_sessions.items())
+    for sid, sess in sessions:
+        _emit_session_info_for_session(sid, sess)
+
+
 # Tool Args/Result text shipped to the TUI for the verbose trail line. The TUI
 # renders only a small persisted preview (ui-tui VERBOSE_TRAIL_MAX_CHARS), kept
 # all session and expanded by default — so shipping more than that is pure pipe
@@ -6285,6 +6372,20 @@ def _agent_cbs(sid: str) -> dict:
             {k: v for k, v in (("start", start), ("count", count)) if v is not None},
             timeout=45,
         ),
+        # drive_preview tool (desktop GUI): the renderer injects the interaction
+        # engine into the preview pane's webview (or drives the pane's history)
+        # and answers preview.act.respond with the outcome plus a refreshed
+        # element inventory. Same budget as the preview read, which it ends
+        # with — a click on a slow page pays for the settle and the re-scan.
+        # annotate_preview rides this same callback: it resolves a target
+        # through the same engine and differs only in the verb it sends, so it
+        # needs a tool of its own but not a channel of its own.
+        "drive_preview_callback": lambda payload: _block(
+            "preview.act.request",
+            sid,
+            dict(payload),
+            timeout=45,
+        ),
         # read_window_below tool (desktop GUI): the renderer asks its main
         # process (which owns native window enumeration) which OS window sits
         # directly underneath the Hermes window, and answers
@@ -6307,6 +6408,11 @@ def _agent_cbs(sid: str) -> dict:
             {"server": server, "action": action, "reason": reason},
             timeout=600,
         ),
+        # tour tool (desktop GUI): the renderer drives driver.js — highlighting
+        # elements in the app's own DOM or injecting the engine into the
+        # preview pane's webview — and answers tour.respond with the outcome
+        # (did the selector match, which step is active).
+        "tour_callback": lambda payload: _tour_request(sid, payload),
     }
 
     # Interim assistant commentary (text alongside tool calls, or the attempted
@@ -6516,14 +6622,20 @@ def _apply_personality_to_session(
 
 
 def _cfg_max_turns(cfg: dict, default: int) -> int:
-    try:
-        env_max = int(os.environ.get("HERMES_TUI_MAX_TURNS", "") or 0)
-        if env_max > 0:
-            return env_max
-    except (TypeError, ValueError):
-        pass
+    from hermes_cli.config import resolve_turn_limit as _resolve_turn_limit
+    # Env var override (highest priority)
+    env_val = os.environ.get("HERMES_TUI_MAX_TURNS")
+    if env_val:
+        return _resolve_turn_limit(env_val, default=default)
+    # Config file value — route through resolve_turn_limit so that
+    # "none"/"unlimited"/0 are first-class spellings, not int() crashes.
     agent_cfg = cfg.get("agent") or {}
-    return int(agent_cfg.get("max_turns") or cfg.get("max_turns") or default)
+    raw = agent_cfg.get("max_turns")
+    if raw is None:
+        raw = cfg.get("max_turns")
+    if raw is not None:
+        return _resolve_turn_limit(raw, default=default)
+    return default
 
 
 def _parse_tui_skills_env() -> list[str]:
@@ -10311,7 +10423,7 @@ _desktop_ui_wired = False
 
 
 def _wire_desktop_ui() -> None:
-    """Bridge desktop-only tools (open_preview, focus_pane) to renderer events.
+    """Bridge desktop-only tools (open_preview, close_preview, focus_pane) to renderer events.
 
     Idempotent. The tool hands back the turn's ``HERMES_UI_SESSION_ID`` as
     ``sid`` so the event routes to the window that asked (``_emit`` /
@@ -12546,13 +12658,14 @@ def _projects_payload(conn) -> dict:
 def _projects_method(name: str):
     """Register a projects RPC, injecting (pdb, conn) and unifying error mapping.
 
-    Every project CRUD handler opened the per-profile DB, mapped a missing id to
-    5062, bad args to 5063, and everything else to 5061. This collapses that
-    boilerplate so each handler is just its one meaningful operation.
+    Binds ``params['profile']`` (via ``@_profile_scoped``) so app-global remote
+    mode reads that profile's ``projects.db``. Missing id maps to 5062, bad args
+    to 5063, everything else to 5061.
     """
 
     def decorator(fn):
         @method(name)
+        @_profile_scoped
         def handler(rid, params: dict) -> dict:
             try:
                 from hermes_cli import projects_db as pdb
@@ -12789,6 +12902,89 @@ def _repo_discovery_policy_is_default(policy: dict) -> bool:
     return _repo_discovery_policy_key(policy) == _repo_discovery_policy_key(
         _repo_discovery_policy(DEFAULT_CONFIG["desktop"])
     )
+
+
+def _scan_discovered_repos_remote(conn, policy: dict) -> bool:
+    """Backend-side disk scan of the discovery policy roots.
+
+    The desktop's native repo scan only runs on the local filesystem. On a
+    remote gateway connection the host must scan its own disk so repos with
+    zero Hermes sessions still appear in the sidebar (#81723). Mirrors the
+    desktop's behavior: walk each root (bounded depth), find `.git`
+    directories, record (root, label) pairs into the discovery cache.
+
+    Best-effort: any failure logs and leaves the cache untouched — the
+    session-derived repos from `_discover_repos_payload` still surface.
+
+    Returns True when the scan is authoritative (every root was walked to
+    completion without error and the per-scan cap was not hit). Only then may
+    the caller treat the result as a full replacement and pass ``replace=True``
+    to the cache write — a partial or errored scan must merge, never wipe, so
+    a failed remote refresh can't blank the previously cached repos into the
+    silent, unpopulated sidebar of #81723.
+    """
+    from hermes_cli import projects_db as pdb
+
+    roots = policy.get("roots") or []
+    excludes = policy.get("exclude_paths") or []
+    pairs: list[tuple[str, str | None]] = []
+    seen: set[str] = set()
+    authoritative = True
+
+    def _is_excluded(path: str) -> bool:
+        return any(path == ex or path.startswith(ex.rstrip("/\\") + os.sep) for ex in excludes if ex)
+
+    for root in roots:
+        if not os.path.isdir(root):
+            # `os.walk` on a missing root silently yields nothing instead of
+            # raising, so a temporarily unavailable root (unmounted volume,
+            # moved path) would otherwise look like a genuinely empty scan and
+            # let `authoritative` stay True — letting the replace wipe every
+            # cached repo that lived under the missing root. A missing root
+            # contributes nothing and must not be treated as authoritative.
+            authoritative = False
+            logger.debug("discover_repos scan root missing, skipping: %s", root)
+            continue
+        try:
+            for dirpath, dirnames, _filenames in os.walk(root):
+                if _is_excluded(dirpath):
+                    dirnames[:] = []
+                    continue
+                # A `.git` directory marks this directory as a repo root. Check
+                # BEFORE pruning hidden dirs — `.git` is itself hidden, so a
+                # prune-first order would drop it and never detect any repo.
+                if ".git" in dirnames:
+                    repo_root = dirpath
+                    if repo_root not in seen:
+                        seen.add(repo_root)
+                        pairs.append((repo_root, os.path.basename(repo_root)))
+                    # Don't descend into the repo's own .git to hunt nested repos.
+                    dirnames[:] = []
+                else:
+                    # Not a repo: skip hidden dirs (e.g. .hermes) and node_modules.
+                    dirnames[:] = [d for d in dirnames if not d.startswith(".") and d not in ("node_modules",)]
+                if len(pairs) >= 500:
+                    break
+        except Exception:
+            # A root that can't be walked yields no authoritative set — fall back
+            # to merging, never replacing, so the prior cache survives.
+            authoritative = False
+            logger.debug("discover_repos scan failed for root %s", root, exc_info=True)
+        if len(pairs) >= 500:
+            # Cap hit means the walk didn't cover the full roots; the collected
+            # set must not be treated as the complete authoritative universe.
+            authoritative = False
+            break
+
+    if pairs:
+        try:
+            pdb.record_discovered_repos(
+                conn, pairs, replace=authoritative, policy_key=_repo_discovery_policy_key(policy)
+            )
+        except Exception:
+            logger.debug("discover_repos cache write failed", exc_info=True)
+            authoritative = False
+    return authoritative
 
 
 def _discover_repos_payload(
@@ -13927,6 +14123,10 @@ def _mirror_slash_side_effects(sid: str, session: dict, command: str) -> str:
         if name == "model" and arg and agent:
             result = _apply_model_switch(sid, session, arg)
             return result.get("warning", "")
+        elif name == "approvals" and arg:
+            # The slash worker already persisted the new approvals.mode; the
+            # bare (read-only) form has no arg and needs no repaint.
+            broadcast_session_info()
         elif name == "personality" and arg and agent:
             pname, new_prompt = _validate_personality(arg, _load_cfg())
             # Persist through the single owner so this surface can never
