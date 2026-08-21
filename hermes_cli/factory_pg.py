@@ -1481,6 +1481,8 @@ def _validation_task_readiness_findings(project_id: str) -> list[str]:
         title = str(task.get("title") or task_id)
         metadata = _metadata(task)
         superseded_by = str(metadata.get("superseded_by_task") or metadata.get("replacement_task_id") or "").strip()
+        if status == "superseded":
+            continue
         if status == "cancelled":
             replacement = by_id.get(superseded_by)
             if replacement and str(replacement.get("status") or "").lower() in positive and _is_validation_task(replacement):
@@ -4545,6 +4547,8 @@ def _candidate_requires_validation_readiness_before_dispatch(candidate: dict[str
 def _is_docs_first_repair_dispatch_task(task: dict[str, Any]) -> bool:
     if _is_reconciliation_task(task) or _is_runtime_bootstrap_repair_task(task):
         return True
+    if _is_docs_first_validation_repair_task(task):
+        return True
     phase = str(task.get("phase") or "").strip().lower().replace("-", "_")
     if phase.startswith(("g0", "g1")) or phase in {"documentation", "docs", "planning"}:
         return True
@@ -6613,6 +6617,47 @@ def _is_implementation_dispatch_task(task: dict[str, Any]) -> bool:
     return phase == "implementation" or any(term in text for term in ("implementation", "implement", "builder", "claude-code"))
 
 
+def _is_docs_first_validation_repair_task(task: dict[str, Any]) -> bool:
+    """Return True for review tasks that repair or verify docs-first G1 provenance.
+
+    Ordinary product quality/security/QA tasks remain docs-first gated. A
+    bounded exact-SHA review of the control-plane/doc-status repair path is the
+    work that makes G1 provenance independently reviewable, so blocking it on
+    the same stale docs-first projection creates a deadlock.
+    """
+
+    if not _is_validation_task(task):
+        return False
+    text = _task_text(task)
+    docs_terms = (
+        "docs-first",
+        "g1",
+        "document status",
+        "document-status",
+        "documentation",
+        "documentation_index",
+        "documentation index",
+        "required docs",
+    )
+    repair_terms = (
+        "reconciliation",
+        "repair",
+        "recovery",
+        "provenance",
+        "source-root",
+        "source root",
+        "runtime-source",
+        "runtime source",
+        "primary divergence",
+        "diverged-primary",
+        "dispatch behavior",
+        "dispatch preflight",
+        "control-plane",
+        "control plane",
+    )
+    return any(term in text for term in docs_terms) and any(term in text for term in repair_terms)
+
+
 def _is_docs_first_gated_dispatch_task(task: dict[str, Any]) -> bool:
     """Return True for product execution work that must wait for G1 readiness.
 
@@ -6624,6 +6669,8 @@ def _is_docs_first_gated_dispatch_task(task: dict[str, Any]) -> bool:
     """
 
     if _is_reconciliation_task(task) or _is_runtime_bootstrap_repair_task(task):
+        return False
+    if _is_docs_first_validation_repair_task(task):
         return False
     phase = str(task.get("phase") or "").strip().lower()
     if phase.startswith(("g0", "g1")) or phase in {"documentation", "planning"}:
