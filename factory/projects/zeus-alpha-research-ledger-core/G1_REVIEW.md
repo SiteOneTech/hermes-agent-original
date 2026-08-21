@@ -601,6 +601,54 @@ self-approve, merge, mutate task status, write direct SQL, change credentials,
 touch primary checkout, perform external runtime/provider/messaging/deploy
 operations, or authorize ALR-020/product dispatch.
 
+## Review round 23 — R2cz-R4 bounded current-base docs-first G1 stale-worktree recovery
+
+**Current-base identity captured before edits:** R2cz-R4 uses assigned worktree
+`/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-001-r2cz-r4-bounded-current-base-doc`,
+branch `factory/zeus-alpha-research-ledger-core/inc-001-r2cz-r4-bounded-current-base-doc`,
+with local `HEAD`, `origin/main`, and merge-base all equal to
+`bd76d2ac360a447b02cdfaa04ddd5501301a2780` after a fresh
+`git fetch origin main --prune` and before documentation edits.
+
+**Current Factory implementation readback:** the current-origin worktree exposes
+`def _document_frontmatter_flag(file_text: str, flag: str) -> bool | None` in
+`hermes_cli/factory_pg.py` and routes `_document_flag_from_text()` through that
+frontmatter-only parser before fallback body/index-line heuristics. Therefore
+top-of-file frontmatter remains the machine-readable `validated`/`reviewed`
+authority, and historical body prose that quotes stale `reviewed` states cannot
+override current reviewed markers.
+
+**Canonical Factory status read-back:** the approved status command
+`/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory status --json zeus-alpha-research-ledger-core`
+read Agent Core Postgres (`db_backend=agent_core_postgres`, `database=zeus_agent`)
+from the assigned worktree source and wrote `/tmp/r2cz-r4-status-before.json`
+(`4,302,552` bytes). The payload reports `factory_cli_source_root` and
+`factory_status_source_root` equal to the assigned worktree,
+`factory_status_delegated=false`, active `reconciliation_anomalies=[]`,
+`reconciliation_projection_source=current_document_status`,
+`reconciliation_required=false`, and 14/14 required G1 documents as
+`exists=true`, `committed=true`, `indexed=true`, `validated=true`,
+`reviewed=true`, `blocking=false` from `readiness_source=configured_base_ref`,
+base `bd76d2ac360a447b02cdfaa04ddd5501301a2780`, with stale primary checkout
+rejected as `primary_checkout_not_configured_base`.
+
+**Stale-worker distinction:** the assignment prompt's ten `missing=reviewed`
+rows (`FACTORY_INTAKE.md`, `REQUIREMENTS_ANALYSIS.md`, `PATTERN_ANALYSIS.md`,
+`ASSUMPTIONS_AND_OPEN_QUESTIONS.md`, `PRD.md`, `ADRS.md`,
+`METHODOLOGY_PLAN.md`, `TECHNICAL_BLUEPRINT.md`, `TASK_GRAPH.md`, and
+`SECURITY_GATES.md`) are stale worker/control-plane context unless sanctioned
+current status reproduces them. R2cz-R4 preserves all required G1 frontmatter
+markers and the PR #36 / gate `794` reviewed source chain unchanged.
+
+**Handoff requirement:** `R2CZ_R4_BOUNDED_CURRENT_BASE_DOCS_FIRST_G1_STALE_WORKTREE_RECOVERY.md`
+and `validate_r2cz_r4_g1_evidence.py` are implementation evidence candidates
+and remain `reviewed: pending_independent_exact_sha_quality_review` until a
+distinct `quality-reviewer` inspects the final PR head SHA and records a
+source-backed PASS or bounded same-project rework. This R2cz-R4 worker does not
+self-approve, merge, mutate task status, write direct SQL, change credentials,
+touch primary checkout, perform external runtime/provider/messaging/deploy
+operations, force-push/rewrite refs, or authorize ALR-020/product dispatch.
+
 ## Local documentary verification — non-approval
 
 At `2026-08-10T04:50:09-04:00`, the implementation-planner worker verified the project-local pack from the assigned worktree only. `git ls-files --error-unmatch` confirmed the 14 required G1 documents plus `G0_REPOSITORY_STRATEGY.md`, `REQUIREMENTS_TRACEABILITY.md`, `DATABASE_AND_RUNTIME_CONTRACT.md`, and `G1_REVIEW.md` are tracked. `DOCUMENTATION_INDEX.md` indexes required documents and records explicit validated/reviewed status. `G0_REPOSITORY_STRATEGY.md` records the Zeus-only source repo, `origin/main` reference, assigned branch/worktree policy, PR-first delivery, and predecessor linkage. This is implementation evidence, not an independent specification/security PASS.
