@@ -4520,6 +4520,12 @@ def _candidate_requires_validation_readiness_before_dispatch(candidate: dict[str
     owner = str(candidate.get("owner_profile") or candidate.get("owner_agent_id") or "").lower()
     if owner == "devops-release" and any(term in text for term in ("deploy", "deployment", "sandbox", "preview", "release")):
         return False
+    if _is_docs_first_repair_dispatch_task(candidate):
+        # G1/documentation recovery is a prerequisite for downstream validation,
+        # even when its task text quotes final-stage failure or gate-closure
+        # evidence from the broken run.  Gating the repair on those same
+        # validation rows creates a claimed=null docs-first deadlock.
+        return False
     final_stage_text = any(
         term in text
         for term in (
