@@ -352,6 +352,40 @@ def test_mark_run_finished_review_generic_http_429_requeues_even_with_task_gate(
     assert "HTTP 429 Too Many Requests" in joined
 
 
+def test_mark_run_finished_review_success_rejects_wrapped_token_plan_terminal_failure(fake_sql, monkeypatch):
+    calls: list[str] = []
+
+    def integrate(task_id: str, *, actor: str, final_status: str):
+        calls.append(task_id)
+        return {"increment_integration_required": True, "increment_integration_status": "integrated"}
+
+    monkeypatch.setattr(factory_pg, "_integrate_increment_to_base", integrate)
+    fake_sql.one_results = [
+        {"task_id": "task-1", "metadata": {"run_type": "review"}},
+        {"gate_id": 42, "gate_type": "quality", "reviewer": "quality-reviewer"},
+        {"project_id": "demo"},
+    ]
+
+    factory_pg.mark_run_finished(
+        "run-1",
+        exit_code=0,
+        output_summary=(
+            "Plan usage limit reached:\n"
+            "Upgrade your Token Plan or purchase Credits for more usage. (2056)\n"
+            "Session:        20260821_075946_39b589\n"
+            "Duration:       15s\n"
+        ),
+    )
+
+    assert calls == []
+    joined = "\n".join(fake_sql.statements)
+    assert "SET status='failed'" in joined
+    assert "SET status='review_ready'" in joined
+    assert "review_output_contains_runtime_failure" in joined
+    assert "increment_integration" not in joined
+    assert "SET status='done'" not in joined
+
+
 def test_mark_run_finished_review_minimax_429_requeues_even_with_quality_gate(fake_sql, monkeypatch):
     calls: list[str] = []
 
@@ -821,6 +855,85 @@ def test_claim_next_task_claims_g1_recovery_with_final_gate_wording_before_produ
     assert "Task demo-r2df-fresh-current-base-g1-documentation claimed" in joined
     assert "unresolved_validation_tasks" not in joined
     assert "Task demo-alr-020-r2-product claimed" not in joined
+
+
+def test_claim_next_task_primary_runtime_rejection_routes_g1_recovery_before_product(fake_sql, monkeypatch):
+    product = {
+        "project_id": "demo",
+        "lane_id": "lane-product",
+        "task_id": "demo-alr-020-product",
+        "status": "ready",
+        "phase": "implementation",
+        "priority": 10,
+        "title": "ALR-020 product implementation",
+        "description": "Product work must not start from a stale primary runtime.",
+        "owner_profile": "claude-builder",
+        "engine": "claude_code",
+        "dependencies": [],
+        "metadata": {},
+    }
+    g1_recovery = {
+        "project_id": "demo",
+        "lane_id": "lane-docs",
+        "task_id": "demo-r2cy-r5-primary-runtime-g1-recovery",
+        "status": "todo",
+        "phase": "g1_recovery",
+        "priority": 20,
+        "title": "R2cy-R5 — fail-closed primary-runtime and false-terminalization recovery",
+        "description": "Bounded G1 recovery while the primary checkout is not at the configured base.",
+        "owner_profile": "devops-release",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "claude_code",
+        "dependencies": [],
+        "metadata": {},
+    }
+    project = {
+        "project_id": "demo",
+        "status": "active",
+        "autonomous_enabled": True,
+        "metadata": {},
+    }
+    fake_sql.rows_results = [[{"project_id": "demo"}], [product, g1_recovery]]
+
+    def claim_statement(sql_text, *, user=None, **_):
+        fake_sql.statements.append(sql_text)
+        if "demo-r2cy-r5-primary-runtime-g1-recovery" in sql_text:
+            return {**g1_recovery, "status": "claimed"}
+        if "demo-alr-020-product" in sql_text:
+            return {**product, "status": "claimed"}
+        return None
+
+    monkeypatch.setattr(fake_sql, "statement_one", claim_statement)
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: [product, g1_recovery])
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "reconciliation_findings", lambda *_, **__: [])
+    monkeypatch.setattr(
+        factory_pg,
+        "project_document_status",
+        lambda project_arg: [
+            {
+                "path": "FACTORY_INTAKE.md",
+                "category": "g1_required",
+                "blocking": False,
+                "readiness_source": "configured_base_ref",
+                "configured_base_ref_accepted": True,
+                "base_commit": _BASE_CURRENT,
+                "primary_checkout_accepted": False,
+                "primary_checkout_rejected_reason": "primary_checkout_not_configured_base",
+                "primary_head": _BASE_OLD,
+            }
+        ],
+    )
+
+    result = factory_pg.claim_next_task("demo", worker="factory-force-tick")
+
+    assert result is not None
+    assert result["task"]["task_id"] == g1_recovery["task_id"]
+    joined = "\n".join(fake_sql.statements)
+    assert "Task demo-r2cy-r5-primary-runtime-g1-recovery claimed" in joined
+    assert "Task demo-alr-020-product claimed" not in joined
 
 
 def test_force_tick_routes_dependency_free_g1_doc_recovery_before_docs_blocked_quality_review(fake_sql, monkeypatch):
