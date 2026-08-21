@@ -514,8 +514,14 @@ def test_dispatch_preflight_blocks_product_execution_without_docs():
         assert "missing_notion_tracker" not in blockers
 
 
-def test_dispatch_preflight_allows_g1_document_tasks_to_repair_docs():
-    task = {"task_id": "demo-g1-prd", "phase": "G1-product", "title": "Product requirements", "status": "todo", "metadata": {}}
+def test_dispatch_preflight_allows_explicit_g1_document_tasks_to_repair_docs():
+    task = {
+        "task_id": "demo-g1-prd",
+        "phase": "G1-recovery",
+        "title": "Product requirements",
+        "status": "todo",
+        "metadata": {"g1_recovery_task": True},
+    }
     assert factory_pg._dispatch_preflight_blockers(task, docs_ready=False, notion_ready=False) == []
 
 
@@ -1039,6 +1045,25 @@ def test_reconciler_does_not_cancel_product_validation_task_with_reconciliation_
     assert "demo-qa-security" not in joined.split("demo-reconcile-unvalidated-required-docs")[0]
 
 
+def test_reconciler_does_not_cancel_running_g1_recovery_task(fake_sql):
+    project = {"project_id": "demo", "metadata": {}}
+    findings = []
+    running_recovery = {
+        "project_id": "demo",
+        "task_id": "demo-r2d0-g1-recovery",
+        "status": "running",
+        "phase": "g1_recovery",
+        "title": "R2d0 — repair red-G1 docs-first recovery dispatch routing",
+        "description": "Running documentation/reconciliation recovery for unvalidated_required_docs.",
+        "metadata": {"g1_recovery_task": True},
+    }
+
+    resolved = factory_pg.cancel_resolved_reconciliation_tasks(project, findings, [running_recovery])
+
+    assert resolved == []
+    assert "demo-r2d0-g1-recovery" not in "\n".join(fake_sql.statements)
+
+
 def test_unvalidated_required_docs_reconciliation_resolves_from_current_document_status(monkeypatch):
     project = {
         "project_id": "demo",
@@ -1524,6 +1549,33 @@ def test_dispatch_preflight_exempts_reconciliation_tasks():
     task = {"task_id": "demo-reconcile-missing-notion-project", "phase": "documentation", "status": "todo",
             "metadata": {"factory_reconciliation_task": True, "reconciliation_anomaly": "missing_notion_project"}}
     assert factory_pg._dispatch_preflight_blockers(task, docs_ready=False, notion_ready=False) == []
+
+
+def test_dispatch_preflight_allows_only_explicit_g1_recovery_when_docs_are_red():
+    generic_docs_task = {
+        "task_id": "demo-generic-docs-task",
+        "phase": "documentation",
+        "status": "todo",
+        "title": "Refresh docs",
+        "metadata": {},
+    }
+    explicit_g1_recovery = {
+        **generic_docs_task,
+        "task_id": "demo-g1-recovery",
+        "phase": "g1_recovery",
+        "metadata": {"g1_recovery_task": True},
+    }
+
+    assert factory_pg._dispatch_preflight_blockers(
+        generic_docs_task,
+        docs_ready=False,
+        notion_ready=True,
+    ) == ["missing_or_unindexed_docs"]
+    assert factory_pg._dispatch_preflight_blockers(
+        explicit_g1_recovery,
+        docs_ready=False,
+        notion_ready=True,
+    ) == []
 
 
 def test_dispatch_preflight_exempts_only_jean_authorized_control_plane_bootstrap_repair():

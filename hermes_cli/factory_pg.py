@@ -2719,6 +2719,44 @@ def _is_reconciliation_task(task: dict[str, Any]) -> bool:
     return "reconciliation" in text or "reconciliación" in text
 
 
+def _is_explicit_factory_reconciliation_task(task: dict[str, Any]) -> bool:
+    """Return True only for structured Factory reconciliation metadata.
+
+    Legacy title/description text still feeds historical reconciliation reports,
+    but red-G1 dispatch must not infer execution authority from prose.  The
+    docs-first dispatcher may bypass G1 blockers only when the task row carries
+    an explicit structured reconciliation marker.
+    """
+
+    metadata = _metadata(task)
+    return _metadata_bool(metadata, "factory_reconciliation_task") or bool(
+        str(metadata.get("reconciliation_anomaly") or "").strip()
+    )
+
+
+def _is_explicit_g1_recovery_task(task: dict[str, Any]) -> bool:
+    """Return True for an explicit G1 recovery dispatch classification.
+
+    A generic ``documentation`` task can still be product-adjacent work.  While
+    G1 is red, only a task deliberately classified as G1 recovery may bypass the
+    docs-first preflight and repair the control-plane/documentation state.
+    """
+
+    metadata = _metadata(task)
+    if any(
+        _metadata_bool(metadata, key)
+        for key in (
+            "g1_recovery_task",
+            "factory_g1_recovery_task",
+            "docs_first_recovery_task",
+            "documentation_recovery_task",
+        )
+    ):
+        return True
+    phase = str(task.get("phase") or "").strip().lower().replace("-", "_")
+    return phase == "g1_recovery" or (phase.startswith("g1_") and "recovery" in phase)
+
+
 def _task_covers_reconciliation_anomaly(task: dict[str, Any], code: str) -> bool:
     if str(task.get("status") or "") in TERMINAL_TASK_STATUSES:
         return False
@@ -3074,9 +3112,10 @@ def cancel_resolved_reconciliation_tasks(project: dict[str, Any], findings: list
     ensure_runtime_schema()
     project_id = str(project.get("project_id") or "")
     active_codes = {str(finding.get("code") or "") for finding in findings if finding.get("code")}
+    non_cancelable_statuses = TERMINAL_TASK_STATUSES | IN_FLIGHT_TASK_STATUSES
     resolved: list[dict[str, Any]] = []
     for task in tasks:
-        if str(task.get("status") or "") in TERMINAL_TASK_STATUSES:
+        if str(task.get("status") or "") in non_cancelable_statuses:
             continue
         if not _is_reconciliation_task(task):
             continue
@@ -3091,7 +3130,7 @@ def cancel_resolved_reconciliation_tasks(project: dict[str, Any], findings: list
     if not resolved:
         return []
 
-    terminal = ",".join(_q(status) for status in TERMINAL_TASK_STATUSES)
+    non_cancelable = ",".join(_q(status) for status in non_cancelable_statuses)
     task_ids = ",".join(_q(item["task_id"]) for item in resolved)
     note = "\n\n[factory-reconciler] Reconciliation anomaly resolved; task auto-cancelled."
     sql.psql(
@@ -3105,7 +3144,7 @@ def cancel_resolved_reconciliation_tasks(project: dict[str, Any], findings: list
               updated_at=now()
           WHERE project_id={_q(project_id)}
             AND task_id IN ({task_ids})
-            AND status NOT IN ({terminal})
+            AND status NOT IN ({non_cancelable})
           RETURNING project_id, lane_id, task_id, metadata
         )
         INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
@@ -4513,7 +4552,11 @@ def _candidate_requires_validation_readiness_before_dispatch(candidate: dict[str
     creates a dispatch deadlock.
     """
 
-    if _is_validation_task(candidate):
+    if (
+        _is_validation_task(candidate)
+        or _is_explicit_factory_reconciliation_task(candidate)
+        or _is_explicit_g1_recovery_task(candidate)
+    ):
         return False
     phase = str(candidate.get("phase") or "").lower().replace("-", "_")
     text = _task_text(candidate)
@@ -4537,26 +4580,11 @@ def _candidate_requires_validation_readiness_before_dispatch(candidate: dict[str
 
 
 def _is_docs_first_repair_dispatch_task(task: dict[str, Any]) -> bool:
-    if _is_reconciliation_task(task) or _is_runtime_bootstrap_repair_task(task):
-        return True
-    phase = str(task.get("phase") or "").strip().lower().replace("-", "_")
-    if phase.startswith(("g0", "g1")) or phase in {"documentation", "docs", "planning"}:
-        return True
-    text = _task_text(task)
-    return any(
-        term in text
-        for term in (
-            "documentation recovery",
-            "document status",
-            "document-status",
-            "docs-first",
-            "g1 docs",
-            "g1 documentation",
-            "required docs",
-            "documentation_index",
-            "documentation index",
-        )
-    ) and not _is_docs_first_gated_dispatch_task(task)
+    return (
+        _is_explicit_factory_reconciliation_task(task)
+        or _is_explicit_g1_recovery_task(task)
+        or _is_runtime_bootstrap_repair_task(task)
+    )
 
 
 def _has_dependency_ready_docs_first_repair_task(tasks: list[dict[str, Any]]) -> bool:
@@ -6608,42 +6636,27 @@ def _is_implementation_dispatch_task(task: dict[str, Any]) -> bool:
 
 
 def _is_docs_first_gated_dispatch_task(task: dict[str, Any]) -> bool:
-    """Return True for product execution work that must wait for G1 readiness.
+    """Return True for work that must wait for G1 readiness.
 
-    G0/G1/documentation/reconciliation tasks are allowed to run precisely to
-    create or repair the docs. Product execution, QA/security, sandbox delivery,
-    and final delivery reporting must not start while required docs are missing
-    or unvalidated, otherwise agents either guess from incomplete context or
-    ship contracts detached from the canonical plan.
+    Product execution, QA/security, sandbox delivery, and final delivery
+    reporting must not start while required docs are missing or unvalidated.
+    Documentation-looking rows are not automatically safe: when G1 is red, the
+    only bypass is an explicit structured reconciliation/G1-recovery/control-plane
+    bootstrap classification.  This prevents prose-only recovery tasks from
+    being misrouted as product execution while preserving a fail-closed repair
+    lane for the dispatcher itself.
     """
 
-    if _is_reconciliation_task(task) or _is_runtime_bootstrap_repair_task(task):
+    if (
+        _is_explicit_factory_reconciliation_task(task)
+        or _is_explicit_g1_recovery_task(task)
+        or _is_runtime_bootstrap_repair_task(task)
+    ):
         return False
     phase = str(task.get("phase") or "").strip().lower()
-    if phase.startswith(("g0", "g1")) or phase in {"documentation", "planning"}:
+    if phase.startswith("g0") or phase in {"planning"}:
         return False
-    text = "\n".join(str(task.get(key) or "") for key in ("task_id", "title", "description", "engine", "owner_profile")).lower()
-    gated_phase = phase.startswith(("implementation", "qa", "security", "delivery", "deploy", "release"))
-    gated_text = any(
-        term in text
-        for term in (
-            "implementation",
-            "implement",
-            "builder",
-            "claude-code",
-            "codex",
-            "qa",
-            "quality",
-            "security review",
-            "playwright",
-            "browser qa",
-            "sandbox",
-            "deploy",
-            "delivery report",
-            "release",
-        )
-    )
-    return gated_phase or gated_text
+    return True
 
 
 def _dispatch_preflight_blockers(
