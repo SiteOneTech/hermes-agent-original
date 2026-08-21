@@ -824,6 +824,80 @@ def test_force_tick_routes_dependency_free_g1_doc_recovery_before_docs_blocked_q
     assert "Task demo-quality-review claimed for review" not in joined
 
 
+def test_claim_next_task_allows_docs_first_pr_review_repair_when_docs_red(fake_sql, monkeypatch):
+    review_repair = {
+        "project_id": "demo",
+        "lane_id": "lane-review",
+        "task_id": "demo-r2cy-r1-quality-review",
+        "status": "ready",
+        "phase": "quality_review",
+        "priority": 17,
+        "title": "R2cy-R1 — independent exact-SHA quality review of PR #99",
+        "description": (
+            "Bounded independent review of the stale/diverged-primary runtime-source path. "
+            "Verify fail-closed G1/docs-first dispatch behavior and Factory control-plane provenance."
+        ),
+        "owner_profile": "quality-reviewer",
+        "reviewer_profile": "security-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {},
+    }
+    product = {
+        "project_id": "demo",
+        "lane_id": "lane-product",
+        "task_id": "demo-product-implementation",
+        "status": "ready",
+        "phase": "implementation",
+        "priority": 20,
+        "title": "Product implementation",
+        "description": "Normal product work must stay docs-first gated.",
+        "owner_profile": "codex-builder",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {},
+    }
+    tasks = [review_repair, product]
+    project = {"project_id": "demo", "status": "active", "autonomous_enabled": True, "metadata": {}}
+    fake_sql.rows_results = [[{"project_id": "demo"}], [review_repair, product]]
+    fake_sql.statement_one_results = [{**review_repair, "status": "claimed"}]
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(
+        factory_pg,
+        "_project_docs_notion_preflight",
+        lambda project_arg, tasks_arg, pending_arg, gates_arg: (False, True, False, False),
+    )
+
+    result = factory_pg.claim_next_task("demo", worker="factory-force-tick")
+
+    assert result is not None
+    assert result["task"]["task_id"] == "demo-r2cy-r1-quality-review"
+    joined = "\n".join(fake_sql.statements)
+    assert "Task demo-r2cy-r1-quality-review claimed" in joined
+    assert "dispatch_preflight_denied" not in joined
+    assert "Task demo-product-implementation claimed" not in joined
+
+
+def test_validation_readiness_ignores_superseded_historical_validation_task(fake_sql):
+    fake_sql.rows_results = [[
+        {
+            "project_id": "demo",
+            "task_id": "demo-r2h-stale-quality-review",
+            "status": "superseded",
+            "phase": "quality_review",
+            "title": "R2h — stale independent G1 exact-SHA review",
+            "description": "Historical review path replaced by current-base PR-first evidence.",
+            "owner_profile": "quality-reviewer",
+            "metadata": {"task_close_status": "superseded"},
+        }
+    ]]
+
+    assert factory_pg._validation_task_readiness_findings("demo") == []
+
+
 def test_claimed_null_predicate_ignores_docs_blocked_product_without_repair():
     payload = {
         "projects": [
