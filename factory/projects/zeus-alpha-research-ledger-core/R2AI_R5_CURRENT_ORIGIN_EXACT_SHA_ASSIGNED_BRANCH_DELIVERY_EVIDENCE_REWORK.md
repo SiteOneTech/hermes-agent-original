@@ -143,23 +143,28 @@ Historical gate snapshots inside the status payload still preserve older blockin
 document-status snapshots. Those snapshots are audit evidence only; the current
 project-level readback above is the current configured-base status for this run.
 
-## Assigned-branch PR delivery contract
+## Assigned-branch PR delivery readback
 
-This branch must be pushed normally to `origin` and opened as a non-draft GitHub
-PR against `main` from the assigned branch:
+Initial assigned-branch PR was opened after the first pushed documentation
+commit:
 
 ```text
-branch = factory/zeus-alpha-research-ledger-core/inc-015-r2ai-r5-current-origin-exact-sha
-base   = main / origin/main @ 96f0ecd0a5f17d88a513cf986e5e92edadcbbd40
-label  = agent:zeus
+PR URL              = https://github.com/SiteOneTech/hermes-agent-original/pull/113
+PR number           = 113
+state               = OPEN
+draft               = false
+label               = agent:zeus
+base                = main / origin/main @ 96f0ecd0a5f17d88a513cf986e5e92edadcbbd40
+head branch         = factory/zeus-alpha-research-ledger-core/inc-015-r2ai-r5-current-origin-exact-sha
+initial PR head     = 5176ad5c1766b433d8e6f43004e6f9e5f281a327
 ```
 
 A commit cannot contain its own final SHA. Therefore the immutable final pushed
-head SHA, PR URL, PR base/head readback, and Factory gate-note ID must be recorded
-after the final push in the PR body, the final worker evidence, and the
-sanctioned Factory `gate record` notes. Any creation-time PR head or intermediate
-head is not the final security-review target unless it matches the latest remote
-branch head read back from GitHub.
+head SHA, PR base/head readback, and Factory gate-note ID must be recorded after
+the final push in the PR body, the final worker evidence, and the sanctioned
+Factory `gate record` notes. Any creation-time PR head or intermediate head is
+not the final security-review target unless it matches the latest remote branch
+head read back from GitHub.
 
 ## Review state and acceptance mapping
 
