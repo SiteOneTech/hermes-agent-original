@@ -2571,14 +2571,43 @@ def project_document_status(project: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _g1_document_blockers(project: dict[str, Any]) -> list[dict[str, Any]]:
-    return [row for row in project_document_status(project) if row.get("category") == "g1_required" and row.get("blocking")]
+    return _g1_document_blockers_from_rows(project_document_status(project))
+
+
+def _g1_document_blockers_from_rows(rows: list[Any]) -> list[dict[str, Any]]:
+    return [
+        row
+        for row in rows
+        if isinstance(row, dict) and row.get("category") == "g1_required" and row.get("blocking")
+    ]
+
+
+def _g1_document_primary_runtime_blockers_from_rows(rows: list[Any]) -> list[dict[str, Any]]:
+    """Return G1 rows whose configured-base evidence is not runnable by primary checkout.
+
+    Current-origin document evidence can prove which G1 files are reviewed, but
+    product dispatch still runs through the primary Factory runtime.  If that
+    primary checkout is not exactly the configured base, product work must fail
+    closed and only bounded G1/control-plane recovery may route.
+    """
+
+    return [
+        row
+        for row in rows
+        if isinstance(row, dict)
+        and row.get("category") == "g1_required"
+        and row.get("primary_checkout_accepted") is False
+    ]
 
 
 def _current_g1_required_documents_ready(project: dict[str, Any], metadata: dict[str, Any] | None = None) -> bool:
     """Return whether the canonical current document-status projection is clean."""
 
     project_metadata = metadata if isinstance(metadata, dict) else _metadata(project)
-    return _required_docs_explicitly_waived(project_metadata) or not bool(_g1_document_blockers(project))
+    if _required_docs_explicitly_waived(project_metadata):
+        return True
+    rows = project_document_status(project)
+    return not bool(_g1_document_blockers_from_rows(rows) or _g1_document_primary_runtime_blockers_from_rows(rows))
 
 
 def _metadata_contains_stale_g1_projection(metadata: dict[str, Any]) -> bool:
@@ -2613,7 +2642,7 @@ def _g1_required_status_rows_ready(project: dict[str, Any], statuses: list[Any])
     if _required_docs_explicitly_waived(metadata):
         return True
     g1_rows = [row for row in statuses if isinstance(row, dict) and row.get("category") == "g1_required"]
-    return bool(g1_rows) and not any(bool(row.get("blocking")) for row in g1_rows)
+    return bool(g1_rows) and not _g1_document_blockers_from_rows(g1_rows) and not _g1_document_primary_runtime_blockers_from_rows(g1_rows)
 
 
 def _project_status_effective_reconciliation_projection(project: dict[str, Any]) -> None:
@@ -6170,12 +6199,7 @@ def factory_watchdog_alerts(payload: Optional[dict[str, Any]] = None, *, blocked
 def _payload_project_docs_ready(project: dict[str, Any]) -> bool:
     statuses = project.get("document_status")
     if isinstance(statuses, list):
-        return not any(
-            isinstance(row, dict)
-            and row.get("category") == "g1_required"
-            and bool(row.get("blocking"))
-            for row in statuses
-        )
+        return not _g1_document_blockers_from_rows(statuses) and not _g1_document_primary_runtime_blockers_from_rows(statuses)
     if "document_status" not in project and not str(project.get("repo_path") or "").strip():
         # Minimal test/watchdog payloads from older callers do not always carry
         # document_status. Treat absence as unknown/ready so generic non-product
@@ -6725,7 +6749,12 @@ def _project_docs_notion_preflight(project: dict[str, Any], tasks: list[dict[str
     metadata = _metadata(project)
     findings = reconciliation_findings(project, tasks, pending_gates, gates)
     codes = {str(finding.get("code") or "") for finding in findings}
-    docs_ready = not bool(_g1_document_blockers(project)) and "missing_project_artifact_dir" not in codes
+    document_rows = project_document_status(project)
+    docs_ready = (
+        not bool(_g1_document_blockers_from_rows(document_rows))
+        and not bool(_g1_document_primary_runtime_blockers_from_rows(document_rows))
+        and "missing_project_artifact_dir" not in codes
+    )
     notion_ready = _notion_projection_issue(metadata) is None
     return docs_ready, notion_ready, _metadata_bool(metadata, "notion_required"), _dispatch_docs_first_waived(metadata)
 
@@ -7017,7 +7046,9 @@ _TASK_BOUND_REVIEW_GATE_TYPES = (
 )
 _REVIEW_RUNTIME_FAILURE_STRONG_PATTERNS = (
     "api call failed",
+    "plan usage limit reached",
     "rate limited after 3 retries",
+    "token plan usage limit reached",
     "usage limit reached: upgrade your token plan",
 )
 _REVIEW_RUNTIME_FAILURE_ZERO_TOOL_PATTERNS = (
