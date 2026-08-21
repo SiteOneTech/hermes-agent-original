@@ -4442,11 +4442,16 @@ def _has_claimable_autonomous_work(tasks: list[dict[str, Any]]) -> bool:
     return False
 
 
-def _has_active_increment(tasks: list[dict[str, Any]]) -> bool:
-    return any(str(t.get("status") or "") in ACTIVE_TASK_STATUSES for t in tasks)
+def _has_active_increment(tasks: list[dict[str, Any]], *, ignore_review_ready: bool = False) -> bool:
+    ignored = {"review_ready", "qa_ready"} if ignore_review_ready else set()
+    return any(
+        str(t.get("status") or "") in ACTIVE_TASK_STATUSES
+        and str(t.get("status") or "") not in ignored
+        for t in tasks
+    )
 
 
-def _has_in_flight_increment(tasks: list[dict[str, Any]]) -> bool:
+def _has_in_flight_increment(tasks: list[dict[str, Any]], *, ignore_review_ready: bool = False) -> bool:
     """Return True when a task has a worker/reviewer currently in flight.
 
     A task in ``rework`` is an active increment for project status and for
@@ -4455,7 +4460,12 @@ def _has_in_flight_increment(tasks: list[dict[str, Any]]) -> bool:
     absorbing state with no autonomous recovery path.
     """
 
-    return any(str(t.get("status") or "") in IN_FLIGHT_TASK_STATUSES for t in tasks)
+    ignored = {"review_ready", "qa_ready"} if ignore_review_ready else set()
+    return any(
+        str(t.get("status") or "") in IN_FLIGHT_TASK_STATUSES
+        and str(t.get("status") or "") not in ignored
+        for t in tasks
+    )
 
 
 def _dependency_increment_integrated(dep_task: dict[str, Any], project: dict[str, Any]) -> bool:
@@ -4510,16 +4520,69 @@ def _candidate_requires_validation_readiness_before_dispatch(candidate: dict[str
     owner = str(candidate.get("owner_profile") or candidate.get("owner_agent_id") or "").lower()
     if owner == "devops-release" and any(term in text for term in ("deploy", "deployment", "sandbox", "preview", "release")):
         return False
-    return phase.startswith("delivery") or phase in {"release", "final", "final_report"} or "delivery report" in text or "final" in text
+    if _is_docs_first_repair_dispatch_task(candidate):
+        # G1/documentation recovery is a prerequisite for downstream validation,
+        # even when its task text quotes final-stage failure or gate-closure
+        # evidence from the broken run.  Gating the repair on those same
+        # validation rows creates a claimed=null docs-first deadlock.
+        return False
+    final_stage_text = any(
+        term in text
+        for term in (
+            "delivery report",
+            "final delivery",
+            "final report",
+            "final gate",
+            "final handoff",
+            "gate closure",
+            "closure report",
+            "release report",
+        )
+    ) or re.search(r"\bfinal\s+(?:delivery|report|gate|closure|handoff)\b", text) is not None
+    return phase.startswith("delivery") or phase in {"release", "final", "final_report"} or final_stage_text
+
+
+def _is_docs_first_repair_dispatch_task(task: dict[str, Any]) -> bool:
+    if _is_reconciliation_task(task) or _is_runtime_bootstrap_repair_task(task):
+        return True
+    phase = str(task.get("phase") or "").strip().lower().replace("-", "_")
+    if phase.startswith(("g0", "g1")) or phase in {"documentation", "docs", "planning"}:
+        return True
+    text = _task_text(task)
+    return any(
+        term in text
+        for term in (
+            "documentation recovery",
+            "document status",
+            "document-status",
+            "docs-first",
+            "g1 docs",
+            "g1 documentation",
+            "required docs",
+            "documentation_index",
+            "documentation index",
+        )
+    ) and not _is_docs_first_gated_dispatch_task(task)
+
+
+def _has_dependency_ready_docs_first_repair_task(tasks: list[dict[str, Any]]) -> bool:
+    by_id = {str(task.get("task_id") or ""): task for task in tasks}
+    return any(
+        str(task.get("status") or "") in {"todo", "ready"}
+        and _is_docs_first_repair_dispatch_task(task)
+        and _task_dependencies_are_terminal(task, by_id)
+        for task in tasks
+    )
 
 
 def _next_runnable_task(
     project_id: str,
     *,
     dispatch_preflight: tuple[bool, bool, bool, bool] | None = None,
+    ignore_review_ready_inflight: bool = False,
 ) -> dict[str, Any] | None:
     tasks = _tasks(project_id)
-    if _has_in_flight_increment(tasks):
+    if _has_in_flight_increment(tasks, ignore_review_ready=ignore_review_ready_inflight):
         return None
     active_rework_exists = any(str(task.get("status") or "") == "rework" for task in tasks)
     terminal = ",".join(_q(s) for s in TERMINAL_TASK_STATUSES)
@@ -6363,47 +6426,91 @@ def claim_next_review(project_id: Optional[str] = None, *, worker: str = "factor
     cleanup_stale_manual_takeover_leases(project_id)
     project_filter = f"AND p.project_id={_q(project_id)}" if project_id else ""
     manual_takeover_filter = _manual_takeover_dispatch_filter("p")
-    row = sql.statement_one(
+    projects = sql.rows(
         f"""
-        UPDATE factory.tasks t
-        SET status='review_running', claimed_by={_q(worker)}, claimed_at=now(), lease_until=now() + interval '30 minutes', updated_at=now()
+        SELECT p.project_id
         FROM factory.projects p
-        WHERE t.project_id=p.project_id
-          AND p.autonomous_enabled IS TRUE
+        WHERE p.autonomous_enabled IS TRUE
           AND p.status IN ('active','planned','intake','blocked')
           AND {manual_takeover_filter}
-          AND t.status='review_ready'
           {project_filter}
-          AND NOT EXISTS (
-            SELECT 1 FROM factory.task_runs r
-            WHERE r.project_id=t.project_id AND r.status IN ('queued','running')
-          )
-          AND t.task_id = (
-            SELECT t2.task_id
-            FROM factory.tasks t2
-            WHERE t2.project_id=t.project_id AND t2.status='review_ready'
-            ORDER BY t2.priority, t2.created_at
-            LIMIT 1
-          )
-        RETURNING t.*
+        ORDER BY p.updated_at, p.started_at
         """,
         user=_user(),
     )
-    if not row:
-        return None
-    normalized = _normalize(row)
-    run_id = f"run-{int(time.time())}-{uuid.uuid4().hex[:8]}"
-    reviewer_profile = normalized.get("reviewer_profile") or normalized.get("reviewer_agent_id") or "quality-reviewer"
-    sql.psql(
-        f"""
-        INSERT INTO factory.task_runs(run_id, task_id, project_id, lane_id, worker_profile, reviewer_profile, engine, status, started_at, heartbeat_at, metadata)
-        VALUES ({_q(run_id)}, {_q(normalized['task_id'])}, {_q(normalized['project_id'])}, {_q(normalized.get('lane_id'))}, {_q(reviewer_profile)}, {_q(reviewer_profile)}, {_q(normalized.get('engine'))}, 'queued', now(), now(), {_j({'claimed_by': worker, 'run_type': 'review'})});
-        INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
-        VALUES ({_q(normalized['project_id'])}, {_q(normalized.get('lane_id'))}, {_q(normalized['task_id'])}, {_q(worker)}, 'review_claimed', {_q(f"Task {normalized['task_id']} claimed for review by {reviewer_profile}")}, {_j({'run_id': run_id, 'worker_profile': reviewer_profile, 'run_type': 'review'})});
-        """,
-        user=_user(),
-    )
-    return {"run_id": run_id, "task": normalized, "worker_profile": reviewer_profile, "run_type": "review"}
+    for project in projects:
+        pid = str(project.get("project_id") or "")
+        tasks = _tasks(pid)
+        full_project = _project(pid) or {"project_id": pid, "metadata": {}}
+        pending_gates = _active_pending_gates(pid)
+        latest_gates = _latest_gate_rows(pid)
+        docs_ready, notion_ready, notion_required, docs_first_waived = _project_docs_notion_preflight(
+            full_project,
+            tasks,
+            pending_gates,
+            latest_gates,
+        )
+        candidates = _normalize_rows(sql.rows(
+            f"""
+            SELECT t.*
+            FROM factory.tasks t
+            WHERE t.project_id={_q(pid)}
+              AND t.status='review_ready'
+              AND NOT EXISTS (
+                SELECT 1 FROM factory.task_runs r
+                WHERE r.project_id=t.project_id AND r.status IN ('queued','running')
+              )
+            ORDER BY t.priority, t.created_at
+            """,
+            user=_user(),
+        ))
+        for candidate in candidates:
+            preflight_blockers = _dispatch_preflight_blockers(
+                candidate,
+                docs_ready=docs_ready,
+                notion_ready=notion_ready,
+                notion_required=notion_required,
+                docs_first_waived=docs_first_waived,
+            )
+            if preflight_blockers:
+                _record_dispatch_preflight_denied(pid, candidate, preflight_blockers, worker=worker)
+                continue
+            row = sql.statement_one(
+                f"""
+                UPDATE factory.tasks t
+                SET status='review_running', claimed_by={_q(worker)}, claimed_at=now(), lease_until=now() + interval '30 minutes', updated_at=now()
+                FROM factory.projects p
+                WHERE t.project_id=p.project_id
+                  AND t.project_id={_q(pid)}
+                  AND t.task_id={_q(candidate.get('task_id'))}
+                  AND p.autonomous_enabled IS TRUE
+                  AND p.status IN ('active','planned','intake','blocked')
+                  AND {manual_takeover_filter}
+                  AND t.status='review_ready'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM factory.task_runs r
+                    WHERE r.project_id=t.project_id AND r.status IN ('queued','running')
+                  )
+                RETURNING t.*
+                """,
+                user=_user(),
+            )
+            if not row:
+                continue
+            normalized = _normalize(row)
+            run_id = f"run-{int(time.time())}-{uuid.uuid4().hex[:8]}"
+            reviewer_profile = normalized.get("reviewer_profile") or normalized.get("reviewer_agent_id") or "quality-reviewer"
+            sql.psql(
+                f"""
+                INSERT INTO factory.task_runs(run_id, task_id, project_id, lane_id, worker_profile, reviewer_profile, engine, status, started_at, heartbeat_at, metadata)
+                VALUES ({_q(run_id)}, {_q(normalized['task_id'])}, {_q(normalized['project_id'])}, {_q(normalized.get('lane_id'))}, {_q(reviewer_profile)}, {_q(reviewer_profile)}, {_q(normalized.get('engine'))}, 'queued', now(), now(), {_j({'claimed_by': worker, 'run_type': 'review'})});
+                INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
+                VALUES ({_q(normalized['project_id'])}, {_q(normalized.get('lane_id'))}, {_q(normalized['task_id'])}, {_q(worker)}, 'review_claimed', {_q(f"Task {normalized['task_id']} claimed for review by {reviewer_profile}")}, {_j({'run_id': run_id, 'worker_profile': reviewer_profile, 'run_type': 'review'})});
+                """,
+                user=_user(),
+            )
+            return {"run_id": run_id, "task": normalized, "worker_profile": reviewer_profile, "run_type": "review"}
+    return None
 
 
 def claim_next_rework(project_id: Optional[str] = None, *, worker: str = "factory-dispatcher") -> dict[str, Any] | None:
@@ -6608,8 +6715,6 @@ def claim_next_task(project_id: Optional[str] = None, *, worker: str = "factory-
     for project in projects:
         pid = project["project_id"]
         tasks = _tasks(pid)
-        if _has_active_increment(tasks):
-            continue
         full_project = _project(pid) or {"project_id": pid, "metadata": {}}
         pending_gates = _active_pending_gates(pid)
         latest_gates = _latest_gate_rows(pid)
@@ -6619,9 +6724,17 @@ def claim_next_task(project_id: Optional[str] = None, *, worker: str = "factory-
             pending_gates,
             latest_gates,
         )
+        docs_repair_preempts_review = (
+            not docs_ready
+            and not docs_first_waived
+            and _has_dependency_ready_docs_first_repair_task(tasks)
+        )
+        if _has_active_increment(tasks, ignore_review_ready=docs_repair_preempts_review):
+            continue
         task = _next_runnable_task(
             pid,
             dispatch_preflight=(docs_ready, notion_ready, notion_required, docs_first_waived),
+            ignore_review_ready_inflight=docs_repair_preempts_review,
         )
         if not task:
             reconcile_project(pid)
@@ -6846,33 +6959,116 @@ def _effective_exit_code(exit_code: int, output_summary: str) -> int:
 
 
 _TASK_BOUND_REVIEW_GATE_TYPES = (
+    # Only independent review gates can satisfy review-run terminalization.
+    # QA/test, delivery, and critical-readiness gates remain legitimate Factory
+    # evidence, but they do not prove a reviewer analyzed and approved the
+    # exact task/SHA under review.
     "architecture",
-    "critical_readiness",
-    "delivery",
     "quality",
     "security",
     "spec",
-    "test",
 )
-_REVIEW_RUNTIME_FAILURE_PATTERNS = (
-    "api call failed after 3 retries",
+_REVIEW_RUNTIME_FAILURE_STRONG_PATTERNS = (
+    "api call failed",
+    "rate limited after 3 retries",
+    "usage limit reached: upgrade your token plan",
+)
+_REVIEW_RUNTIME_FAILURE_ZERO_TOOL_PATTERNS = (
+    "messages:       1 (1 user, 0 tool calls)",
+    "messages: 1 (1 user, 0 tool calls)",
+)
+_REVIEW_RUNTIME_429_PATTERNS = (
     "http 429",
     "http status 429",
-    "ratelimiterror [http 429]",
-    "rate limited after 3 retries",
     "status code 429",
     "too many requests",
-    "usage limit reached: upgrade your token plan",
-    "messages:       1 (1 user, 0 tool calls)",
 )
+_REVIEW_RUNTIME_429_FAILURE_CONTEXT = (
+    "provider response",
+    "provider retries",
+    "provider retry",
+    "api call failed",
+    "ratelimiterror",
+    "rate limit",
+    "rate-limit",
+    "rate limited",
+    "usage limit reached",
+    "token plan",
+    "minimax",
+    "attempt ",
+    "failed after",
+)
+_REVIEW_RUNTIME_DOCUMENTARY_CONTEXT = (
+    "checked",
+    "verified",
+    "prior",
+    "previous",
+    "regression",
+    "must be",
+    "should be",
+    "document",
+    "condition",
+)
+_REVIEW_RUNTIME_ACTUAL_FAILURE_MARKERS = (
+    "provider response",
+    "⚠",
+    "❌",
+)
+_REVIEW_PROMPT_ONLY_LINES = {
+    "final semantic state marker",
+    "semantic state marker",
+    "final state marker",
+    "state marker",
+}
+
+
+def _clean_review_output_line(line: str) -> str:
+    clean = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", line or "").strip()
+    return clean.lstrip(" >│┃┊┆|-•*\t")
+
+
+def _review_line_is_prompt_only(line: str) -> bool:
+    clean = _clean_review_output_line(line)
+    if not clean:
+        return True
+    if _semantic_state_from_line(clean):
+        return True
+    folded = clean.casefold().strip()
+    if folded.rstrip(":") in _REVIEW_PROMPT_ONLY_LINES:
+        return True
+    return "state: done" in folded and "state: blocked" in folded
+
+
+def _review_output_has_substantive_content(text: str) -> bool:
+    return any(not _review_line_is_prompt_only(line) for line in text.splitlines())
+
+
+def _review_line_contains_runtime_failure(line: str) -> bool:
+    folded = _clean_review_output_line(line).casefold()
+    if not folded:
+        return False
+    if any(context in folded for context in _REVIEW_RUNTIME_DOCUMENTARY_CONTEXT) and not any(
+        marker in folded for marker in _REVIEW_RUNTIME_ACTUAL_FAILURE_MARKERS
+    ):
+        return False
+    if any(pattern in folded for pattern in _REVIEW_RUNTIME_FAILURE_ZERO_TOOL_PATTERNS):
+        return True
+    if "ratelimiterror" in folded and "http 429" in folded and folded.startswith("ratelimiterror"):
+        return True
+    if any(pattern in folded for pattern in _REVIEW_RUNTIME_FAILURE_STRONG_PATTERNS):
+        return True
+    if not any(pattern in folded for pattern in _REVIEW_RUNTIME_429_PATTERNS):
+        return False
+    return any(context in folded for context in _REVIEW_RUNTIME_429_FAILURE_CONTEXT)
 
 
 def _review_runtime_failure_reason(output_summary: str) -> str | None:
     text = str(output_summary or "").strip()
     if not text:
         return "empty_reviewer_output"
-    folded = text.casefold()
-    if any(pattern in folded for pattern in _REVIEW_RUNTIME_FAILURE_PATTERNS):
+    if not _review_output_has_substantive_content(text):
+        return "prompt_only_reviewer_output"
+    if any(_review_line_contains_runtime_failure(line) for line in text.splitlines()):
         return "review_output_contains_runtime_failure"
     return None
 

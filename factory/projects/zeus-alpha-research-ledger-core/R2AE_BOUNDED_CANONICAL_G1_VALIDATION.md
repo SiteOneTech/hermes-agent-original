@@ -3,12 +3,12 @@ document_type: bounded_canonical_g1_validation_evidence
 project_id: zeus-alpha-research-ledger-core
 task_id: zeus-alpha-research-ledger-core-r2ae-bounded-canonical-g1-validation-and
 phase: documentation
-status: current_base_candidate
+status: implemented_pending_independent_review
 validated: yes
 reviewed: pending_independent_quality_review
 owner: codex-builder
 base_ref: origin/main
-base_sha: b68ec8ad5cf986e5bf4900506820ca978ef0b0c0
+base_sha: eb3e3ff48905285812eca4c222fa2155a9282546
 branch: factory/zeus-alpha-research-ledger-core/inc-019-r2ae-bounded-canonical-g1-valida
 worktree: /home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-019-r2ae-bounded-canonical-g1-valida
 ---
@@ -17,83 +17,74 @@ worktree: /home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-019
 
 ## Scope
 
-This is the current-base R2ae rework for the active Factory anomaly label `unvalidated_required_docs`. It is documentation/provenance only. It uses the assigned Factory worktree for readback, avoids the primary checkout, and records the exact Agent Core Factory status observed through the approved Hermes Factory CLI.
+This is the bounded documentation/provenance rework for the active `unvalidated_required_docs` anomaly on `zeus-alpha-research-ledger-core`. It uses Agent Core Factory status as the operational source of truth, keeps Notion out of the decision path, and repairs only project-local documentation/provenance.
 
-No runtime/source implementation, merge, deploy, credential change, direct SQL, external runtime, connector/messaging action, or trading/risk/paper/live operation is authorized by this artifact. Downstream ALR implementation remains blocked behind its own task-specific TDD, security, QA, PR-first, and QA Guardian evidence.
+No runtime/source implementation, merge, primary-checkout mutation, deployment, direct SQL, credential change, external-runtime operation, connector/messaging action, or trading/risk/paper/live action is authorized by this record.
 
-## Current-base identity and source commands
+## Current-base source readback
 
-Read-back timestamp: `2026-08-19T00:17:08Z`.
+Readback sources used by this run:
 
-Sources used:
-
-- Assigned worktree: `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-019-r2ae-bounded-canonical-g1-valida`.
+- Assigned worktree path: `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-019-r2ae-bounded-canonical-g1-valida`.
 - Assigned branch: `factory/zeus-alpha-research-ledger-core/inc-019-r2ae-bounded-canonical-g1-valida`.
-- Canonical base ref: `origin/main` at `b68ec8ad5cf986e5bf4900506820ca978ef0b0c0`.
-- Approved Factory status command: `/home/jean/Projects/hermes-agent-original/venv/bin/python -m hermes_cli.main factory status --json zeus-alpha-research-ledger-core`.
-- Factory status output saved by Hermes: `/home/jean/.hermes/profiles/codex-builder/cache/terminal-output/out-1787098065-2341027-63d0.log`.
-- Factory status row evidence: lines `21838`–`22104` contain the required G1 `document_status` rows for the current configured base.
-- PR provenance readback: `GH_REPO=SiteOneTech/hermes-agent-original gh pr view 44 --json ...` returned PR #44 open, non-draft, label `agent:zeus`, old head `768444e33ac64bf238e64c1df4c49fe2020b51a8`, and `mergeStateStatus=DIRTY` before this repair.
+- Current configured base: `origin/main` / `eb3e3ff48905285812eca4c222fa2155a9282546`.
+- Sanctioned Factory CLI status command: `/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory status --json zeus-alpha-research-ledger-core`.
+- Full Factory CLI output cache: `/home/jean/.hermes/profiles/codex-builder/cache/terminal-output/out-1787304514-2795776-8ad0.log`.
+- Project `document_status` rows in that cache: lines `24009`–`24275`.
 
 ## Source-backed required G1 inventory
 
-The current configured-base `document_status` block reports `readiness_source=configured_base_ref`, `base_ref=origin/main`, `base_commit=b68ec8ad5cf986e5bf4900506820ca978ef0b0c0`, and `configured_base_ref_accepted=true` for every required G1 row.
+The current configured-base Factory `document_status` block reports `readiness_source=configured_base_ref`, `base_ref=origin/main`, `base_commit=eb3e3ff48905285812eca4c222fa2155a9282546`, and `configured_base_ref_accepted=true` for the required G1 rows.
 
-The current source-backed unvalidated/blocking required G1 inventory is therefore exactly one document: `DOCUMENTATION_INDEX.md`. The ten-document blocker list in the worker prompt is stale relative to this current-base row-level readback.
+Inventory before this candidate repair:
 
-| Required G1 document | Current-base Factory `document_status` |
+| Required G1 document | Current configured-base status |
 |---|---|
-| `FACTORY_INTAKE.md` | exists=true, committed=true, validated=true, indexed=true, reviewed=true, blocking=false |
-| `REQUIREMENTS_ANALYSIS.md` | exists=true, committed=true, validated=true, indexed=true, reviewed=true, blocking=false |
-| `PATTERN_ANALYSIS.md` | exists=true, committed=true, validated=true, indexed=true, reviewed=true, blocking=false |
-| `ASSUMPTIONS_AND_OPEN_QUESTIONS.md` | exists=true, committed=true, validated=true, indexed=true, reviewed=true, blocking=false |
-| `PRD.md` | exists=true, committed=true, validated=true, indexed=true, reviewed=true, blocking=false |
-| `ADRS.md` | exists=true, committed=true, validated=true, indexed=true, reviewed=true, blocking=false |
-| `METHODOLOGY_PLAN.md` | exists=true, committed=true, validated=true, indexed=true, reviewed=true, blocking=false |
-| `TECHNICAL_BLUEPRINT.md` | exists=true, committed=true, validated=true, indexed=true, reviewed=true, blocking=false |
-| `SPRINT_PLAN.md` | exists=true, committed=true, validated=true, indexed=true, reviewed=true, blocking=false |
-| `TASK_GRAPH.md` | exists=true, committed=true, validated=true, indexed=true, reviewed=true, blocking=false |
-| `TRACKER.md` | exists=true, committed=true, validated=true, indexed=true, reviewed=true, blocking=false |
-| `DOCUMENTATION_INDEX.md` | exists=true, committed=true, validated=true, indexed=true, reviewed=false, blocking=true |
-| `QA_GATES.md` | exists=true, committed=true, validated=true, indexed=true, reviewed=true, blocking=false |
-| `SECURITY_GATES.md` | exists=true, committed=true, validated=true, indexed=true, reviewed=true, blocking=false |
+| `FACTORY_INTAKE.md` | exists=true, committed=true, indexed=true, validated=true, reviewed=true, blocking=false |
+| `REQUIREMENTS_ANALYSIS.md` | exists=true, committed=true, indexed=true, validated=true, reviewed=true, blocking=false |
+| `PATTERN_ANALYSIS.md` | exists=true, committed=true, indexed=true, validated=true, reviewed=true, blocking=false |
+| `ASSUMPTIONS_AND_OPEN_QUESTIONS.md` | exists=true, committed=true, indexed=true, validated=true, reviewed=true, blocking=false |
+| `PRD.md` | exists=true, committed=true, indexed=true, validated=true, reviewed=true, blocking=false |
+| `ADRS.md` | exists=true, committed=true, indexed=true, validated=true, reviewed=true, blocking=false |
+| `METHODOLOGY_PLAN.md` | exists=true, committed=true, indexed=true, validated=true, reviewed=true, blocking=false |
+| `TECHNICAL_BLUEPRINT.md` | exists=true, committed=true, indexed=true, validated=true, reviewed=true, blocking=false |
+| `SPRINT_PLAN.md` | exists=true, committed=true, indexed=true, validated=true, reviewed=true, blocking=false |
+| `TASK_GRAPH.md` | exists=true, committed=true, indexed=true, validated=true, reviewed=true, blocking=false |
+| `TRACKER.md` | exists=true, committed=true, indexed=true, validated=true, reviewed=true, blocking=false |
+| `DOCUMENTATION_INDEX.md` | exists=true, committed=true, indexed=true, validated=true, reviewed=false, blocking=true |
+| `QA_GATES.md` | exists=true, committed=true, indexed=true, validated=true, reviewed=true, blocking=false |
+| `SECURITY_GATES.md` | exists=true, committed=true, indexed=true, validated=true, reviewed=true, blocking=false |
 
-## Canonical state versus stale PR artifacts
+Therefore the currently unvalidated/review-blocking G1 document set is exactly: `DOCUMENTATION_INDEX.md` only. The ten-document blocker list from older prompts and gate snapshots is stale historical/runtime projection and is not the current configured-base inventory.
 
-Canonical current-base state:
+## Repair performed
 
-- Current configured base is `origin/main` / `b68ec8ad5cf986e5bf4900506820ca978ef0b0c0`.
-- The current base already contains the later R2dc review-state recovery evidence and many successor artifacts that did not exist in the stale PR #44 candidate.
-- Current Factory status still projects `reconciliation_anomalies=["unvalidated_required_docs"]` and `reconciliation_required=true` because `DOCUMENTATION_INDEX.md` is the only required G1 row still blocking in the current readback.
+`DOCUMENTATION_INDEX.md` already carried `reviewed: yes` frontmatter and a reviewed table row, but the current Factory status parser still returned `reviewed=false` for the `DOCUMENTATION_INDEX.md` row. This candidate makes the `DOCUMENTATION_INDEX.md reviewed: yes` marker explicit before any long historical provenance text, indexes this R2ae evidence artifact, and records the precise source/status split.
 
-Stale, merged, or conflicting artifacts:
+The repair is intentionally not a Factory metadata mutation. Because the active status reader validates configured `origin/main`, the status cannot turn green until a reviewer accepts this PR and the branch is merged by the authorized PR/QA path. Until then, the expected status remains fail-closed with `DOCUMENTATION_INDEX.md` as the only current configured-base G1 blocker.
 
-- The old PR #44 head `768444e33ac64bf238e64c1df4c49fe2020b51a8` is non-canonical: GitHub reports `mergeStateStatus=DIRTY`, and its diff against current `origin/main` would delete later project-local R2 evidence files. It must not be approved as the active candidate.
-- Earlier PR #44 commit `bb8495a61611cfd9501c00f7a48fda42cfaee61f` is historical R2ae evidence only. It started from `1b6bc0f65d3ad49845d20e056203e3b3702ac2a7`, not current `b68ec8ad5cf986e5bf4900506820ca978ef0b0c0`.
-- Prompt-time blockers naming ten required docs are stale source-root/projection artifacts for this run. The current row-level readback names only `DOCUMENTATION_INDEX.md` as blocking.
-- Later merged artifacts through R2dc are preserved on current `origin/main`; this repair does not delete or supersede them.
+## PR provenance reconciliation
 
-## Repair performed in this candidate
+Current canonical base:
 
-This candidate replaces the stale/conflicting PR #44 provenance with a current-base, PR-first documentation repair:
+- `origin/main` / `eb3e3ff48905285812eca4c222fa2155a9282546` is the current base used by this repair.
+- Recent merged Factory documentation/control-plane artifacts on `origin/main` include PR #115 (`MERGED`, merge commit `268d3c8ee7bab61304c7ab05cad22d693c70ba7d`) and the R2cy-R3 merge commit `eb3e3ff48905285812eca4c222fa2155a9282546`.
 
-1. Adds this R2ae evidence artifact from current base `b68ec8ad5cf986e5bf4900506820ca978ef0b0c0`.
-2. Updates `DOCUMENTATION_INDEX.md` to index the current R2ae rework and reassert the index's own machine-readable reviewed status for the fresh candidate.
-3. Leaves all later R2 evidence artifacts from `origin/main` intact.
-4. Delivers through the existing R2ae task branch/PR only; no merge, primary-checkout mutation, direct SQL, or external runtime action is performed.
+Stale or conflicting PR artifacts:
 
-The final candidate SHA is intentionally recorded in the PR body and Factory gate evidence after commit/push; embedding it here would alter the SHA.
+- PR #44 is the old R2ae PR for this same branch. GitHub readback before this rework: `OPEN`, non-draft, `agent:zeus`, base `main` at `b68ec8ad5cf986e5bf4900506820ca978ef0b0c0`, head `b2e643cc2aab681e682ecc7a8f1569bc79d1dd03`, `mergeStateStatus=DIRTY`. It is stale/conflicting against current `origin/main` and must be updated to the fresh candidate SHA from this run.
+- PR #99 is `OPEN`, non-draft, `agent:zeus`, base `71e5e7b2f4ace3b081f9446483784a3c5fb0b981`, head `ead1aec54288123ff12c049bc4eb0f29d55d288b`; it is stale/conflicting review-route provenance, not current G1 document readiness.
+- PR #114 is `OPEN`, non-draft, `agent:zeus`, base `5fe25cd7cb78d47afa156f8fde0c6a2c65f00a96`, head `fe0b6f80bfad296f78d3ab9a6ac79a31298bb243`, `mergeStateStatus=DIRTY`; it is a separate docs-first validator/control-plane candidate, not this current-base document repair.
+- PR #36 remains the historical independent reviewed-G1 source evidence at head `c81547062c5362a7be6f5a1bb2ef9612b29bac9c` with Factory gate `794`; it supports the reviewed markers but is not the current active candidate.
 
-## Validation contract
+## Validation contract for this candidate
 
-Required checks for this repair:
+Required evidence after creating the final candidate commit:
 
-1. `git diff --check origin/main..HEAD` succeeds.
-2. `git diff --name-only origin/main..HEAD` is limited to `factory/projects/zeus-alpha-research-ledger-core/`.
-3. `git ls-files --error-unmatch` succeeds for the 14 required G1 documents plus this R2ae evidence artifact.
-4. GitHub PR #44 readback shows an open, non-draft, Zeus-authored/Zeus-signed `agent:zeus` PR against `main` with the refreshed head SHA and clean ancestry from current `origin/main`.
-5. Factory status/gate evidence records the current exact state: one current-base required-doc blocker before merge (`DOCUMENTATION_INDEX.md`), and this PR as the bounded candidate repair. If current configured-base validation remains blocked without a prohibited merge, the canonical cause is this unmerged current-base required-doc row, not the stale ten-document prompt list.
+1. `git diff --check origin/main..<candidate>` succeeds.
+2. `git diff --name-only origin/main..<candidate>` is limited to `factory/projects/zeus-alpha-research-ledger-core/DOCUMENTATION_INDEX.md` and `factory/projects/zeus-alpha-research-ledger-core/R2AE_BOUNDED_CANONICAL_G1_VALIDATION.md`.
+3. `git ls-tree -r --name-only <candidate>` contains all 14 required G1 documents and this R2ae evidence artifact.
+4. GitHub PR #44 is updated to the fresh candidate SHA, remains non-draft, targets `main`, and has label `agent:zeus` plus a Zeus signature.
+5. Factory status readback remains source-backed: before merge it is expected to show `DOCUMENTATION_INDEX.md` as the only current configured-base blocker; after authorized PR merge it should re-read the explicit `DOCUMENTATION_INDEX.md reviewed: yes` marker from `origin/main` and clear that row.
 
-## Dispatch boundary
-
-R2ae repairs provenance and documentation only. It does not clear manual pause, bypass `factory_auto_integration_forbidden=true`, close/supersede historical Factory task rows, merge PR #44, deploy, change credentials, write direct SQL, touch messaging/connectors, or dispatch ALR-020+. If the active status remains blocked before QA Guardian merge, the bounded technical cause is the current configured-base `DOCUMENTATION_INDEX.md` required-doc row plus unmerged PR-first candidate state.
+Signed-off-by: Zeus <zeus@sitiouno.com>

@@ -202,6 +202,42 @@ def test_mark_run_finished_review_success_requires_task_bound_gate(fake_sql, mon
     assert "review_run_failed" in joined
 
 
+def test_mark_run_finished_review_success_does_not_accept_qa_test_gate(fake_sql, monkeypatch):
+    calls: list[str] = []
+
+    def integrate(task_id: str, *, actor: str, final_status: str):
+        calls.append(task_id)
+        return {"increment_integration_required": True, "increment_integration_status": "integrated"}
+
+    def one_for_only_qa_test_gate(sql_text, *, user=None, **_):
+        fake_sql.statements.append(sql_text)
+        if "SELECT task_id, metadata FROM factory.task_runs" in sql_text:
+            return {"task_id": "task-1", "metadata": {"run_type": "review"}}
+        if "FROM factory.gates" in sql_text:
+            if "'test'" in sql_text:
+                return {"gate_id": 1008, "gate_type": "test", "reviewer": "qa-verifier"}
+            return None
+        if "SELECT project_id FROM factory.task_runs" in sql_text:
+            return {"project_id": "demo"}
+        return None
+
+    monkeypatch.setattr(factory_pg, "_integrate_increment_to_base", integrate)
+    monkeypatch.setattr(fake_sql, "one", one_for_only_qa_test_gate)
+
+    factory_pg.mark_run_finished(
+        "run-1",
+        exit_code=0,
+        output_summary="QA verifier test evidence exists, but no independent quality review gate was recorded.\nSTATE: DONE",
+    )
+
+    assert calls == []
+    joined = "\n".join(fake_sql.statements)
+    assert "SET status='failed'" in joined
+    assert "SET status='review_ready'" in joined
+    assert "SET status='done'" not in joined
+    assert "review_success_without_task_bound_passed_gate" in joined
+
+
 def test_mark_run_finished_review_success_reworks_when_merge_fails(fake_sql, monkeypatch):
     def integrate(*_, **__):
         raise factory_pg.IncrementIntegrationError("push rejected")
@@ -316,6 +352,96 @@ def test_mark_run_finished_review_generic_http_429_requeues_even_with_task_gate(
     assert "HTTP 429 Too Many Requests" in joined
 
 
+def test_mark_run_finished_review_minimax_429_requeues_even_with_quality_gate(fake_sql, monkeypatch):
+    calls: list[str] = []
+
+    def integrate(task_id: str, *, actor: str, final_status: str):
+        calls.append(task_id)
+        return {"increment_integration_required": True, "increment_integration_status": "integrated"}
+
+    monkeypatch.setattr(factory_pg, "_integrate_increment_to_base", integrate)
+    fake_sql.one_results = [
+        {"task_id": "task-1", "metadata": {"run_type": "review"}},
+        {"gate_id": 42, "gate_type": "quality", "reviewer": "quality-reviewer"},
+        {"project_id": "demo"},
+    ]
+    output = (
+        "Independent review transcript\n"
+        "STATE: DONE\n"
+        "MiniMax HTTP 429 rate-limit failure after three provider retries."
+    )
+
+    factory_pg.mark_run_finished("run-1", exit_code=0, output_summary=output)
+
+    assert calls == []
+    joined = "\n".join(fake_sql.statements)
+    assert "SET status='failed'" in joined
+    assert "SET status='review_ready'" in joined
+    assert "SET status='done'" not in joined
+    assert "review_output_contains_runtime_failure" in joined
+    assert "MiniMax HTTP 429" in joined
+
+
+def test_mark_run_finished_review_can_document_429_condition_with_task_gate(fake_sql, monkeypatch):
+    calls: list[str] = []
+
+    def integrate(task_id: str, *, actor: str, final_status: str):
+        calls.append(task_id)
+        return {"increment_integration_required": True, "increment_integration_status": "integrated"}
+
+    monkeypatch.setattr(factory_pg, "_integrate_increment_to_base", integrate)
+    fake_sql.one_results = [
+        {"task_id": "task-1", "metadata": {"run_type": "review"}},
+        {"gate_id": 7, "gate_type": "security", "reviewer": "security-reviewer"},
+        {"project_id": "demo"},
+    ]
+    output = (
+        "Independent security review for exact SHA abc1234 passed.\n"
+        "The review explicitly checked the R2dc regression where a prior "
+        "`API call failed after 3 retries: HTTP 429 / Too Many Requests` "
+        "transcript must be requeued instead of accepted as review evidence.\n"
+        "No provider/runtime failure occurred during this review run.\n"
+        "STATE: DONE\n"
+    )
+
+    factory_pg.mark_run_finished("run-1", exit_code=0, output_summary=output)
+
+    assert calls == ["task-1"]
+    joined = "\n".join(fake_sql.statements)
+    assert "SET status='succeeded'" in joined
+    assert "SET status='done'" in joined
+    assert "review_output_contains_runtime_failure" not in joined
+    assert "Review terminal success rejected" not in joined
+
+
+def test_mark_run_finished_review_prompt_only_marker_requeues_even_with_task_gate(fake_sql, monkeypatch):
+    calls: list[str] = []
+
+    def integrate(task_id: str, *, actor: str, final_status: str):
+        calls.append(task_id)
+        return {"increment_integration_required": True, "increment_integration_status": "integrated"}
+
+    monkeypatch.setattr(factory_pg, "_integrate_increment_to_base", integrate)
+    fake_sql.one_results = [
+        {"task_id": "task-1", "metadata": {"run_type": "review"}},
+        {"gate_id": 7, "gate_type": "security", "reviewer": "security-reviewer"},
+        {"project_id": "demo"},
+    ]
+
+    factory_pg.mark_run_finished(
+        "run-1",
+        exit_code=0,
+        output_summary="Final semantic state marker:\nSTATE: DONE\n",
+    )
+
+    assert calls == []
+    joined = "\n".join(fake_sql.statements)
+    assert "SET status='failed'" in joined
+    assert "SET status='review_ready'" in joined
+    assert "SET status='done'" not in joined
+    assert "prompt_only_reviewer_output" in joined
+
+
 def test_reconcile_project_recovers_false_terminalized_review_run(fake_sql, monkeypatch):
     project = {"project_id": "demo", "status": "active", "metadata": {"repo_strategy": {"repo_scope": "zeus_only", "work_intent": "add_functionality", "primary_repo": "demo/repo", "primary_repo_path": "/tmp/demo", "primary_repo_remote": "https://example.test/demo.git", "base_branch": "main", "branch_prefix": "factory/demo", "worktree_policy": "isolated"}}}
     task = {"project_id": "demo", "task_id": "task-1", "status": "done", "title": "Reviewed task", "phase": "documentation", "owner_profile": "codex-builder", "reviewer_profile": "quality-reviewer", "metadata": {}}
@@ -351,6 +477,42 @@ def test_reconcile_project_recovers_false_terminalized_review_run(fake_sql, monk
     assert "SET status='done'" not in joined
 
 
+def test_reconcile_project_recovers_minimax_429_false_terminal_review(fake_sql, monkeypatch):
+    project = {"project_id": "demo", "status": "active", "metadata": {"repo_strategy": {"repo_scope": "zeus_only", "work_intent": "add_functionality", "primary_repo": "demo/repo", "primary_repo_path": "/tmp/demo", "primary_repo_remote": "https://example.test/demo.git", "base_branch": "main", "branch_prefix": "factory/demo", "worktree_policy": "isolated"}}}
+    task = {"project_id": "demo", "task_id": "task-1", "status": "done", "title": "Reviewed task", "phase": "documentation", "owner_profile": "codex-builder", "reviewer_profile": "quality-reviewer", "metadata": {}}
+    fake_sql.json_query_results = [[
+        {
+            "project_id": "demo",
+            "lane_id": "lane",
+            "task_id": "task-1",
+            "run_id": "run-review",
+            "task_status": "done",
+            "increment_base_commit_after": _BASE_CURRENT,
+            "output_summary": "STATE: DONE\nMiniMax HTTP 429 rate-limit failure after three provider retries.",
+            "has_task_bound_passed_review_gate": True,
+        }
+    ]]
+    monkeypatch.setattr(factory_pg, "_configured_base_ref_readback", lambda project: {"accepted": True, "base_commit": _BASE_CURRENT})
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: [task])
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "reconciliation_findings", lambda *args, **kwargs: [])
+    monkeypatch.setattr(factory_pg, "ensure_reconciliation_tasks", lambda *args, **kwargs: [])
+    monkeypatch.setattr(factory_pg, "cancel_resolved_reconciliation_tasks", lambda *args, **kwargs: [])
+    monkeypatch.setattr(factory_pg, "_stale_g1_projection_metadata_keys", lambda *args, **kwargs: [])
+
+    result = _ORIGINAL_RECONCILE_PROJECT("demo")
+
+    assert result["false_review_terminalization_recoveries"] == 1
+    joined = "\n".join(fake_sql.statements)
+    assert "SET status='review_ready'" in joined
+    assert "false_review_terminalization_recovered" in joined
+    assert "review_output_contains_runtime_failure" in joined
+    assert "MiniMax HTTP 429" in joined
+    assert "SET status='done'" not in joined
+
+
 def test_recover_false_terminal_review_skips_prior_recovered_run_but_reopens_later_run(fake_sql, monkeypatch):
     project = {"project_id": "demo", "metadata": {}}
     fake_sql.json_query_results = [[
@@ -372,7 +534,7 @@ def test_recover_false_terminal_review_skips_prior_recovered_run_but_reopens_lat
             "run_id": "run-new-review",
             "task_status": "done",
             "increment_base_commit_after": _BASE_CURRENT,
-            "output_summary": "STATE: DONE\nHTTP 429 Too Many Requests",
+            "output_summary": "STATE: DONE\nProvider response: HTTP 429 Too Many Requests",
             "has_task_bound_passed_review_gate": True,
             "recovered_run_id": "run-old-review",
         },
@@ -587,6 +749,151 @@ def test_claim_next_task_claims_docs_repair_before_preflight_denied_product(fake
     joined = "\n".join(fake_sql.statements)
     assert "Task demo-reconcile-unvalidated-required-docs claimed" in joined
     assert "dispatch_preflight_denied" not in joined
+
+
+def test_claim_next_task_claims_g1_recovery_with_final_gate_wording_before_product_and_validation(fake_sql, monkeypatch):
+    quality_review = {
+        "project_id": "demo",
+        "lane_id": "lane-review",
+        "task_id": "demo-r2cy-quality-review",
+        "status": "review_ready",
+        "phase": "quality_review",
+        "priority": 10,
+        "title": "R2cy-R1 — independent exact-SHA quality review",
+        "description": "Validate product implementation only after G1 docs are canonical.",
+        "owner_profile": "quality-reviewer",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {},
+    }
+    product = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "demo-alr-020-r2-product",
+        "status": "ready",
+        "phase": "implementation",
+        "priority": 19,
+        "title": "ALR-020-R2 product implementation",
+        "description": "Normal product implementation must remain fail-closed while G1 docs are red.",
+        "owner_profile": "claude-builder",
+        "engine": "claude_code",
+        "dependencies": [],
+        "metadata": {},
+    }
+    g1_recovery = {
+        "project_id": "demo",
+        "lane_id": "lane-docs",
+        "task_id": "demo-r2df-fresh-current-base-g1-documentation",
+        "status": "todo",
+        "phase": "documentation",
+        "priority": 19,
+        "title": "R2df — fresh current-base G1 documentation-index conflict recovery",
+        "description": (
+            "Bounded technical successor after canonical resolve-state finalized its run as blocked. "
+            "Recover fresh current-base G1 documentation and final gate closure evidence before product work."
+        ),
+        "owner_profile": "codex-builder",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {},
+    }
+    tasks = [quality_review, product, g1_recovery]
+    project = {"project_id": "demo", "status": "active", "autonomous_enabled": True, "metadata": {}}
+    fake_sql.rows_results = [[{"project_id": "demo"}], [product, g1_recovery]]
+    fake_sql.statement_one_results = [{**g1_recovery, "status": "claimed"}]
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(
+        factory_pg,
+        "_project_docs_notion_preflight",
+        lambda project_arg, tasks_arg, pending_arg, gates_arg: (False, True, False, False),
+    )
+
+    result = factory_pg.claim_next_task("demo", worker="factory-force-tick")
+
+    assert result is not None
+    assert result["task"]["task_id"] == g1_recovery["task_id"]
+    joined = "\n".join(fake_sql.statements)
+    assert "Task demo-r2df-fresh-current-base-g1-documentation claimed" in joined
+    assert "unresolved_validation_tasks" not in joined
+    assert "Task demo-alr-020-r2-product claimed" not in joined
+
+
+def test_force_tick_routes_dependency_free_g1_doc_recovery_before_docs_blocked_quality_review(fake_sql, monkeypatch):
+    quality_review = {
+        "project_id": "demo",
+        "lane_id": "lane-review",
+        "task_id": "demo-quality-review",
+        "status": "review_ready",
+        "phase": "quality_review",
+        "priority": 10,
+        "title": "Independent exact-SHA quality review",
+        "description": "Validate product implementation only after G1 docs are canonical.",
+        "owner_profile": "quality-reviewer",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {},
+    }
+    doc_recovery = {
+        "project_id": "demo",
+        "lane_id": "lane-docs",
+        "task_id": "demo-r2ea-g1-docs-recovery",
+        "status": "todo",
+        "phase": "documentation",
+        "priority": 20,
+        "title": "R2ea — docs-first stale-runtime dispatch provenance repair",
+        "description": "Dependency-free G1 documentation recovery before validation work.",
+        "owner_profile": "codex-builder",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {},
+    }
+    project = {"project_id": "demo", "status": "active", "autonomous_enabled": True, "metadata": {}}
+
+    monkeypatch.setattr(factory_pg, "acquire_global_control_plane_lease", lambda *_, **__: {"acquired": True})
+    monkeypatch.setattr(factory_pg, "release_global_control_plane_lease", lambda *_: None)
+    monkeypatch.setattr(factory_pg, "monitor_runs", lambda: {})
+    monkeypatch.setattr(factory_pg, "supervisor_health_check", lambda *_, **__: {"violations": [], "repairs": []})
+    monkeypatch.setattr(factory_pg, "clear_resolved_blockers", lambda project_id: {"project_id": project_id, "reopened": []})
+    monkeypatch.setattr(factory_pg, "status", lambda project_id=None: {"projects": [project], "tasks": [quality_review, doc_recovery], "task_runs": []})
+    monkeypatch.setattr(factory_pg, "classify_factory_blockers", lambda *_, **__: [])
+    monkeypatch.setattr(factory_pg, "record_factory_blocker_actions", lambda *_, **__: [])
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: [quality_review, doc_recovery])
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_project_docs_notion_preflight", lambda *_, **__: (False, True, False, False))
+
+    fake_sql.rows_results = [
+        [{"project_id": "demo"}],  # review dispatch projects
+        [quality_review],  # review_ready candidate that must wait for G1 readiness
+        [{"project_id": "demo"}],  # implementation dispatch projects
+        [doc_recovery],  # dependency-free documentation recovery candidate
+    ]
+
+    def statement_one(sql, *, user=None, **_):
+        fake_sql.statements.append(sql)
+        if "SET status='review_running'" in sql:
+            return {**quality_review, "status": "review_running"}
+        if "SET status='claimed'" in sql:
+            return {**doc_recovery, "status": "claimed"}
+        return None
+
+    monkeypatch.setattr(fake_sql, "statement_one", statement_one)
+
+    tick = factory_pg.force_tick("demo")
+
+    assert tick["claimed"] is not None
+    assert tick["claimed"]["task"]["task_id"] == "demo-r2ea-g1-docs-recovery"
+    joined = "\n".join(fake_sql.statements)
+    assert "Task demo-r2ea-g1-docs-recovery claimed" in joined
+    assert "Task demo-quality-review claimed for review" not in joined
 
 
 def test_claimed_null_predicate_ignores_docs_blocked_product_without_repair():
