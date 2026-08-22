@@ -5,15 +5,26 @@ phase: delivery
 status: validated
 validated: yes
 reviewed: pending
-origin_main_before_current_rerun: 71e5e7b2f4ace3b081f9446483784a3c5fb0b981
-previous_run_id: run-1787216366-fde136da
-current_run_id: run-1787249479-190fd34d
+origin_main_before_current_rerun: e0fee97133f2fc67ed764785bbe5aae86d86d38a
+previous_run_id: run-1787249479-190fd34d
+current_run_id: run-1787442400-3b168ecf
 ---
 
 # R6 source increment integration reconciliation
 
 ## Scope
 This artifact records the R6 reconciliation for the canonical `source_increment_not_integrated` anomaly. It is evidence-only for Factory source containment; it does not authorize deploy, runtime propagation, direct SQL, credential changes, product dispatch, trading/paper/live actions, or primary checkout mutation.
+
+## R6 rerun — 2026-08-22T23:51:05Z
+Current run `run-1787442400-3b168ecf` re-inspected Agent Core Factory status from the assigned worktree and re-ran the Git ancestry audit without direct `factory.*` SQL:
+
+- Assigned worktree was fast-forwarded from previous R6 evidence commit `71a68478c3be0e28e65b730406c080b42a6b2115` to current `origin/main` `e0fee97133f2fc67ed764785bbe5aae86d86d38a`; `HEAD`, `origin/main`, and merge-base were equal before this evidence edit.
+- Sanctioned Factory status input: `/tmp/r6_factory_status_current_run_1787442400.json` (`4401282` bytes, `db_backend=agent_core_postgres`, `factory_cli_source_root` and `factory_status_source_root` equal `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/reconcile-source_increment_not_integrated`, `factory_status_delegated=false`).
+- Current Factory project metadata still reports `reconciliation_anomalies=['source_increment_not_integrated', 'unvalidated_required_docs']` and `reconciliation_required=True`; current G1 rows are not the source of this R6 anomaly because `14/14` `g1_required` rows are non-blocking from `readiness_source=configured_base_ref` at base commit `e0fee97133f2fc67ed764785bbe5aae86d86d38a`.
+- Current R6 finding lists `63` blocker rows. Full audit output is `/tmp/r6_source_increment_audit_run_1787442400.tsv`; exact summary: `63/63` commit objects present, `63/63` contained in `origin/main`, `63/63` `increment_base_commit_after` chains valid, `0` waivers, and `0` failure rows.
+- Positive terminal source-bearing task audit independently matches the finding: `63` `done` tasks with `metadata.increment_branch_commit`, `63/63` contained in `origin/main`, and `63/63` valid base-after ancestry chains.
+- Recurrence guard: the prior R6 evidence commit `71a68478c3be0e28e65b730406c080b42a6b2115` is already contained in current `origin/main`; the current recurrence is therefore control-plane metadata/projection drift, not missing Git containment. This rerun publishes the refreshed evidence commit to the assigned branch and fast-forwards `origin/main` to the same final commit after validation so the refreshed R6 evidence source is itself contained in the canonical base.
+- The final immutable branch commit and resulting `origin/main` commit are recorded in the Factory gate notes and worker final response. They are intentionally not self-embedded here because a commit cannot contain its own final SHA before it exists.
 
 ## R6 rerun — 2026-08-20T18:15:49Z
 Current run `run-1787249479-190fd34d` re-inspected Agent Core Factory status from the assigned worktree and re-ran the Git ancestry audit without direct `factory.*` SQL:
@@ -50,7 +61,7 @@ Current run `run-1787249479-190fd34d` re-inspected Agent Core Factory status fro
 - Waivers used: `0`.
 - Integration action performed in the previous run: no new merge to `main`; then-current origin base already contained every audited immutable source commit.
 
-## Current rerun result
+## 2026-08-20 rerun result
 - Blockers audited from the current Factory finding: `53`.
 - Commit objects present: `53/53`.
 - Contained in current pre-push `origin/main` `71e5e7b2f4ace3b081f9446483784a3c5fb0b981`: `53/53`.
@@ -60,7 +71,7 @@ Current run `run-1787249479-190fd34d` re-inspected Agent Core Factory status fro
 - Additional source-containment fix: publish this R6 evidence commit to the assigned branch and fast-forward `origin/main` to the same final commit after `git diff --check` and post-push readback.
 - Scope boundary unchanged: docs/evidence only under `factory/projects/zeus-alpha-research-ledger-core/`; no deploy, no sandbox, no credential, no direct SQL, no primary checkout mutation.
 
-## Audited source increments
+## 2026-08-20 audited source increments
 
 | Task | Branch | Immutable source commit | Commit source | Recorded/resulting base commit | Present | Contained in origin/main | Base-after chain | Waiver |
 |---|---|---|---|---|---|---|---|---|
