@@ -857,6 +857,78 @@ def test_claim_next_task_claims_g1_recovery_with_final_gate_wording_before_produ
     assert "Task demo-alr-020-r2-product claimed" not in joined
 
 
+def test_claim_next_task_claims_docs_first_validation_gate_repair_before_downstream_validation(fake_sql, monkeypatch):
+    quality_review = {
+        "project_id": "demo",
+        "lane_id": "lane-review",
+        "task_id": "demo-alr-062-quality-review",
+        "status": "todo",
+        "phase": "quality_review",
+        "priority": 10,
+        "title": "ALR-062 Independent quality and TDD review",
+        "description": "Downstream ALR validation waits for G1/documentation recovery.",
+        "owner_profile": "quality-reviewer",
+        "reviewer_profile": "qa-verifier",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {},
+    }
+    product = {
+        "project_id": "demo",
+        "lane_id": "lane-product",
+        "task_id": "demo-alr-020-product",
+        "status": "ready",
+        "phase": "implementation",
+        "priority": 18,
+        "title": "ALR-020 product implementation",
+        "description": "Product work must remain fail-closed while G1 docs are red.",
+        "owner_profile": "claude-builder",
+        "engine": "claude_code",
+        "dependencies": [],
+        "metadata": {},
+    }
+    docs_repair = {
+        "project_id": "demo",
+        "lane_id": "lane-docs",
+        "task_id": "demo-r2dg-docs-first-validation-gate-routing-repair",
+        "status": "todo",
+        "phase": "implementation",
+        "priority": 19,
+        "title": "R2dg — docs-first validation-gate routing repair",
+        "description": (
+            "Bounded same-project Factory control-plane rework. Repair documentation recovery "
+            "and final gate closure routing before downstream ALR validation rows are complete."
+        ),
+        "owner_profile": "codex-builder",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {"factory_control_plane_repair": True},
+    }
+    tasks = [quality_review, product, docs_repair]
+    project = {"project_id": "demo", "status": "active", "autonomous_enabled": True, "metadata": {}}
+    fake_sql.rows_results = [[{"project_id": "demo"}], [product, docs_repair]]
+    fake_sql.statement_one_results = [{**docs_repair, "status": "claimed"}]
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(
+        factory_pg,
+        "_project_docs_notion_preflight",
+        lambda project_arg, tasks_arg, pending_arg, gates_arg: (False, True, False, False),
+    )
+
+    result = factory_pg.claim_next_task("demo", worker="factory-force-tick")
+    joined = "\n".join(fake_sql.statements)
+
+    assert result is not None, joined
+    assert result["task"]["task_id"] == docs_repair["task_id"]
+    assert "Task demo-r2dg-docs-first-validation-gate-routing-repair claimed" in joined
+    assert "unresolved_validation_tasks" not in joined
+    assert "Task demo-alr-020-product claimed" not in joined
+
+
 def test_claim_next_task_primary_runtime_rejection_routes_g1_recovery_before_product(fake_sql, monkeypatch):
     product = {
         "project_id": "demo",
