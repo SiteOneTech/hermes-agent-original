@@ -857,6 +857,88 @@ def test_claim_next_task_claims_g1_recovery_with_final_gate_wording_before_produ
     assert "Task demo-alr-020-r2-product claimed" not in joined
 
 
+def test_claim_next_task_routes_only_g1_docs_recovery_before_direct_runtime_scope(fake_sql, monkeypatch):
+    r2cw_direct_runtime = {
+        "project_id": "demo",
+        "lane_id": "lane-runtime",
+        "task_id": "demo-r2cw-premature-live-run-direct-integration",
+        "status": "ready",
+        "phase": "g1_recovery",
+        "priority": 18,
+        "title": "R2cw — fail-closed recovery for premature live-run/direct-integration behavior",
+        "description": (
+            "Recover base-branch integration, external runtime, deployment, messaging, "
+            "direct SQL, trading, risk, and paper/live behavior after validation."
+        ),
+        "owner_profile": "claude-builder",
+        "engine": "claude_code",
+        "dependencies": [],
+        "metadata": {},
+    }
+    r2df_docs_recovery = {
+        "project_id": "demo",
+        "lane_id": "lane-docs",
+        "task_id": "demo-r2df-current-base-g1-documentation",
+        "status": "todo",
+        "phase": "documentation",
+        "priority": 19,
+        "title": "R2df — fresh current-base G1 documentation-index conflict recovery",
+        "description": "Repair reviewed G1 documentation readiness before validation or product work.",
+        "owner_profile": "codex-builder",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {},
+    }
+    open_security_review = {
+        "project_id": "demo",
+        "lane_id": "lane-security",
+        "task_id": "demo-alr-063-security-review",
+        "status": "todo",
+        "phase": "security_review",
+        "priority": 62,
+        "title": "ALR-063 independent security and no-egress review",
+        "description": "Review implementation after G1/documentation recovery and product increments.",
+        "owner_profile": "security-reviewer",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {},
+    }
+    tasks = [r2cw_direct_runtime, r2df_docs_recovery, open_security_review]
+    project = {"project_id": "demo", "status": "active", "autonomous_enabled": True, "metadata": {}}
+    fake_sql.rows_results = [[{"project_id": "demo"}], [r2cw_direct_runtime, r2df_docs_recovery]]
+
+    def claim_statement(sql_text, *, user=None, **_):
+        fake_sql.statements.append(sql_text)
+        if "demo-r2cw-premature-live-run-direct-integration" in sql_text:
+            return {**r2cw_direct_runtime, "status": "claimed"}
+        if "demo-r2df-current-base-g1-documentation" in sql_text:
+            return {**r2df_docs_recovery, "status": "claimed"}
+        return None
+
+    monkeypatch.setattr(fake_sql, "statement_one", claim_statement)
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(
+        factory_pg,
+        "_project_docs_notion_preflight",
+        lambda project_arg, tasks_arg, pending_arg, gates_arg: (False, True, False, False),
+    )
+
+    result = factory_pg.claim_next_task("demo", worker="factory-force-tick")
+
+    assert result is not None
+    assert result["task"]["task_id"] == r2df_docs_recovery["task_id"]
+    joined = "\n".join(fake_sql.statements)
+    assert "Task demo-r2df-current-base-g1-documentation claimed" in joined
+    assert "Task demo-r2cw-premature-live-run-direct-integration claimed" not in joined
+    assert factory_pg._dispatch_preflight_blockers(r2cw_direct_runtime, docs_ready=False, notion_ready=True) == [
+        "missing_or_unindexed_docs"
+    ]
+
+
 def test_claim_next_task_primary_runtime_rejection_routes_g1_recovery_before_product(fake_sql, monkeypatch):
     product = {
         "project_id": "demo",
