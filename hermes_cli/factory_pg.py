@@ -6556,6 +6556,11 @@ def claim_next_review(project_id: Optional[str] = None, *, worker: str = "factor
             pending_gates,
             latest_gates,
         )
+        docs_repair_preempts_review = (
+            not docs_ready
+            and not docs_first_waived
+            and _has_dependency_ready_docs_first_repair_task(tasks)
+        )
         candidates = _normalize_rows(sql.rows(
             f"""
             SELECT t.*
@@ -6579,6 +6584,15 @@ def claim_next_review(project_id: Optional[str] = None, *, worker: str = "factor
                 docs_first_waived=docs_first_waived,
             )
             if preflight_blockers:
+                if docs_repair_preempts_review:
+                    # A dependency-ready G1/documentation recovery must be the
+                    # next claim while docs-first is red.  Recording a product
+                    # review denial first recreates the live claimed=null loop:
+                    # the tick burns its selection on gated quality/product
+                    # rows even though the repair that would unblock them is
+                    # runnable.  Skip the gated review row silently so the same
+                    # force_tick can fall through to claim_next_task().
+                    continue
                 _record_dispatch_preflight_denied(pid, candidate, preflight_blockers, worker=worker)
                 continue
             row = sql.statement_one(
