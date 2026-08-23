@@ -1091,6 +1091,102 @@ def test_force_tick_routes_dependency_free_g1_doc_recovery_before_docs_blocked_q
     assert "Task demo-quality-review claimed for review" not in joined
 
 
+def test_force_tick_claims_g1_recovery_before_product_preflight_denials(fake_sql, monkeypatch):
+    product_quality = {
+        "project_id": "demo",
+        "lane_id": "lane-review",
+        "task_id": "demo-product-quality-review",
+        "status": "review_ready",
+        "phase": "quality_review",
+        "priority": 10,
+        "title": "Product quality review",
+        "description": "Review ALR-020 product implementation only after G1 docs are green.",
+        "owner_profile": "quality-reviewer",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {},
+    }
+    product_implementation = {
+        "project_id": "demo",
+        "lane_id": "lane-product",
+        "task_id": "demo-alr-020-product-implementation",
+        "status": "ready",
+        "phase": "implementation",
+        "priority": 11,
+        "title": "ALR-020 product implementation",
+        "description": "Normal product work must stay docs-first gated while G1 is red.",
+        "owner_profile": "claude-builder",
+        "engine": "claude_code",
+        "dependencies": [],
+        "metadata": {},
+    }
+    g1_recovery = {
+        "project_id": "demo",
+        "lane_id": "lane-docs",
+        "task_id": "demo-r2df-g1-documentation-recovery",
+        "status": "todo",
+        "phase": "documentation",
+        "priority": 30,
+        "title": "R2df — fresh current-base G1 documentation-index conflict recovery",
+        "description": "Dependency-free documentation/G1 recovery before product quality or implementation work.",
+        "owner_profile": "codex-builder",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {},
+    }
+    tasks = [product_quality, product_implementation, g1_recovery]
+    project = {"project_id": "demo", "status": "active", "autonomous_enabled": True, "metadata": {}}
+
+    monkeypatch.setattr(factory_pg, "acquire_global_control_plane_lease", lambda *_, **__: {"acquired": True})
+    monkeypatch.setattr(factory_pg, "release_global_control_plane_lease", lambda *_: None)
+    monkeypatch.setattr(factory_pg, "monitor_runs", lambda: {})
+    monkeypatch.setattr(factory_pg, "supervisor_health_check", lambda *_, **__: {"violations": [], "repairs": []})
+    monkeypatch.setattr(factory_pg, "clear_resolved_blockers", lambda project_id: {"project_id": project_id, "reopened": []})
+    monkeypatch.setattr(factory_pg, "status", lambda project_id=None: {"projects": [project], "tasks": tasks, "task_runs": []})
+    monkeypatch.setattr(factory_pg, "classify_factory_blockers", lambda *_, **__: [])
+    monkeypatch.setattr(factory_pg, "record_factory_blocker_actions", lambda *_, **__: [])
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_project_docs_notion_preflight", lambda *_, **__: (False, True, False, False))
+
+    def rows(sql_text, *, user=None, **_):
+        fake_sql.statements.append(sql_text)
+        if "FROM factory.projects p" in sql_text:
+            return [{"project_id": "demo"}]
+        if "t.status='review_ready'" in sql_text:
+            return [product_quality]
+        if "SELECT * FROM factory.tasks" in sql_text:
+            return [product_implementation, g1_recovery]
+        return []
+
+    def statement_one(sql_text, *, user=None, **_):
+        fake_sql.statements.append(sql_text)
+        if "SET status='claimed'" in sql_text and "demo-r2df-g1-documentation-recovery" in sql_text:
+            return {**g1_recovery, "status": "claimed"}
+        if "SET status='review_running'" in sql_text:
+            return {**product_quality, "status": "review_running"}
+        if "SET status='claimed'" in sql_text and "demo-alr-020-product-implementation" in sql_text:
+            return {**product_implementation, "status": "claimed"}
+        return None
+
+    monkeypatch.setattr(fake_sql, "rows", rows)
+    monkeypatch.setattr(fake_sql, "statement_one", statement_one)
+
+    tick = factory_pg.force_tick("demo")
+
+    assert tick["claimed"] is not None
+    assert tick["claimed"]["task"]["task_id"] == "demo-r2df-g1-documentation-recovery"
+    joined = "\n".join(fake_sql.statements)
+    assert "dispatch_preflight_denied" not in joined
+    assert "Task demo-r2df-g1-documentation-recovery claimed" in joined
+    assert "Task demo-product-quality-review claimed for review" not in joined
+    assert "Task demo-alr-020-product-implementation claimed" not in joined
+
+
 def test_claim_next_task_allows_docs_first_pr_review_repair_when_docs_red(fake_sql, monkeypatch):
     review_repair = {
         "project_id": "demo",
