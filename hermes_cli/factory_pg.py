@@ -2606,8 +2606,12 @@ def _current_g1_required_documents_ready(project: dict[str, Any], metadata: dict
     project_metadata = metadata if isinstance(metadata, dict) else _metadata(project)
     if _required_docs_explicitly_waived(project_metadata):
         return True
-    rows = project_document_status(project)
-    return not bool(_g1_document_blockers_from_rows(rows) or _g1_document_primary_runtime_blockers_from_rows(rows))
+    # Stale-primary/runtime identity is a separate fail-closed dispatch blocker
+    # (R2cw/R2di class), not proof that current configured-base G1 document
+    # content is still unvalidated.  Keep the document reconciliation projection
+    # sourced only from current G1 rows so stale metadata can be cleared without
+    # authorizing product/runtime dispatch.
+    return not bool(_g1_document_blockers(project))
 
 
 def _metadata_contains_stale_g1_projection(metadata: dict[str, Any]) -> bool:
@@ -2642,7 +2646,7 @@ def _g1_required_status_rows_ready(project: dict[str, Any], statuses: list[Any])
     if _required_docs_explicitly_waived(metadata):
         return True
     g1_rows = [row for row in statuses if isinstance(row, dict) and row.get("category") == "g1_required"]
-    return bool(g1_rows) and not _g1_document_blockers_from_rows(g1_rows) and not _g1_document_primary_runtime_blockers_from_rows(g1_rows)
+    return bool(g1_rows) and not _g1_document_blockers_from_rows(g1_rows)
 
 
 def _project_status_effective_reconciliation_projection(project: dict[str, Any]) -> None:
@@ -4557,6 +4561,13 @@ def _candidate_requires_validation_readiness_before_dispatch(candidate: dict[str
         # evidence from the broken run.  Gating the repair on those same
         # validation rows creates a claimed=null docs-first deadlock.
         return False
+    if _has_product_or_runtime_dispatch_scope(candidate):
+        # A task can use a G1/recovery phase while still being about the ALR
+        # product, external runtime, deployment, messaging, direct SQL, trading,
+        # risk, paper/live, or base-branch integration.  Those scopes are not the
+        # documentation-readiness repair itself and must remain fail-closed until
+        # validation rows are resolved.
+        return True
     final_stage_text = any(
         term in text
         for term in (
@@ -4573,29 +4584,96 @@ def _candidate_requires_validation_readiness_before_dispatch(candidate: dict[str
     return phase.startswith("delivery") or phase in {"release", "final", "final_report"} or final_stage_text
 
 
+def _has_docs_first_repair_terms(task: dict[str, Any]) -> bool:
+    text = _task_text(task)
+    docs_terms = (
+        "documentation recovery",
+        "document status",
+        "document-status",
+        "docs-first",
+        "g1 docs",
+        "g1 documentation",
+        "required docs",
+        "documentation_index",
+        "documentation index",
+    )
+    repair_terms = (
+        "reconciliation",
+        "repair",
+        "recovery",
+        "provenance",
+        "source-root",
+        "source root",
+        "runtime-source",
+        "runtime source",
+        "primary divergence",
+        "diverged-primary",
+        "dispatch behavior",
+        "dispatch preflight",
+        "control-plane",
+        "control plane",
+        "conflict",
+    )
+    return any(term in text for term in docs_terms) and any(term in text for term in repair_terms)
+
+
+def _has_product_or_runtime_dispatch_scope(task: dict[str, Any]) -> bool:
+    text = _task_text(task)
+    return any(
+        term in text
+        for term in (
+            "alr-020",
+            "alr-030",
+            "alr-040",
+            "alr-050",
+            "alr-060",
+            "alr-061",
+            "alr-062",
+            "alr-063",
+            "alr-070",
+            "alr-080",
+            "product implementation",
+            "ledger implementation",
+            "external runtime",
+            "runtime propagation",
+            "external connector",
+            "trading",
+            "market execution",
+            "risk mutation",
+            "paper/live",
+            "paper live",
+            "paper-run",
+            "paper run",
+            "live-run",
+            "live run",
+            "deployment",
+            "deploy",
+            "messaging",
+            "message connector",
+            "direct sql",
+            "psql",
+            "psycopg2",
+            "base-branch integration",
+            "base branch integration",
+            "direct-integration",
+            "direct integration",
+            "origin/main integration",
+            "base branch merge",
+        )
+    )
+
+
 def _is_docs_first_repair_dispatch_task(task: dict[str, Any]) -> bool:
     if _is_reconciliation_task(task) or _is_runtime_bootstrap_repair_task(task):
         return True
     if _is_docs_first_validation_repair_task(task):
         return True
     phase = str(task.get("phase") or "").strip().lower().replace("-", "_")
-    if phase.startswith(("g0", "g1")) or phase in {"documentation", "docs", "planning"}:
-        return True
-    text = _task_text(task)
-    return any(
-        term in text
-        for term in (
-            "documentation recovery",
-            "document status",
-            "document-status",
-            "docs-first",
-            "g1 docs",
-            "g1 documentation",
-            "required docs",
-            "documentation_index",
-            "documentation index",
-        )
-    ) and not _is_docs_first_gated_dispatch_task(task)
+    return _has_docs_first_repair_terms(task) and (
+        phase.startswith(("g0", "g1"))
+        or phase in {"documentation", "docs", "planning"}
+        or not _has_product_or_runtime_dispatch_scope(task)
+    )
 
 
 def _has_dependency_ready_docs_first_repair_task(tasks: list[dict[str, Any]]) -> bool:
@@ -6696,6 +6774,10 @@ def _is_docs_first_gated_dispatch_task(task: dict[str, Any]) -> bool:
         return False
     if _is_docs_first_validation_repair_task(task):
         return False
+    if _is_docs_first_repair_dispatch_task(task):
+        return False
+    if _has_product_or_runtime_dispatch_scope(task):
+        return True
     phase = str(task.get("phase") or "").strip().lower()
     if phase.startswith(("g0", "g1")) or phase in {"documentation", "planning"}:
         return False
