@@ -1160,7 +1160,7 @@ def test_force_tick_claims_g1_recovery_before_product_preflight_denials(fake_sql
         if "t.status='review_ready'" in sql_text:
             return [product_quality]
         if "SELECT * FROM factory.tasks" in sql_text:
-            return [product_quality, product_implementation, g1_recovery]
+            return [product_implementation, g1_recovery]
         return []
 
     def statement_one(sql_text, *, user=None, **_):
