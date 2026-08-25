@@ -4623,45 +4623,30 @@ def _has_structural_product_or_runtime_dispatch_scope(task: dict[str, Any]) -> b
         .lower()
         .replace("_", " ")
     )
-    return any(
-        term in text
-        for term in (
-            "alr-020",
-            "alr-030",
-            "alr-040",
-            "alr-050",
-            "alr-060",
-            "alr-061",
-            "alr-062",
-            "alr-063",
-            "alr-070",
-            "alr-080",
-            "product implementation",
-            "ledger implementation",
-            "external runtime",
-            "runtime propagation",
-            "direct-integration",
-            "direct integration",
-            "origin/main integration",
-            "base branch merge",
-            "connector",
-            "deploy",
-            "deployment",
-            "direct sql",
-            "final delivery",
-            "ledger",
-            "live action",
-            "live run",
-            "messaging",
-            "paper",
-            "product",
-            "release",
-            "reporting",
-            "risk",
-            "runtime",
-            "trading",
-        )
+    product_or_runtime_scope_patterns = (
+        r"\balr-\d+\b",
+        r"\bproduct[\s-]+implementation\b",
+        r"\bledger[\s-]+implementation\b",
+        r"\bruntime[\s-]+propagation\b",
+        r"\bexternal[\s-]+runtime\b",
+        r"\bdirect[\s-]+integration\b",
+        r"\borigin/main[\s-]+integration\b",
+        r"\bbase[\s-]+branch[\s-]+integration\b",
+        r"\bbase[\s-]+branch[\s-]+merge\b",
+        r"\bdeployment\b",
+        r"\bdirect[\s-]+sql\b",
+        r"\bfinal[\s-]+delivery\b",
+        r"\blive[\s-]+action\b",
+        r"\blive[\s-]+run\b",
+        r"\bmarket[\s-]+execution\b",
+        r"\brisk[\s-]+mutation\b",
+        r"\bpaper/live\b",
+        r"\bpaper[\s-]+live\b",
+        r"\bpaper[\s-]+run\b",
+        r"\bmessage[\s-]+connector\b",
+        r"\bexternal[\s-]+connector\b",
     )
+    return any(re.search(pattern, text) is not None for pattern in product_or_runtime_scope_patterns)
 
 
 def _has_g0_g1_recovery_terms(task: dict[str, Any]) -> bool:

@@ -1176,6 +1176,112 @@ def test_force_tick_routes_lexical_g1_scheduler_recovery_before_docs_blocked_pro
     assert "Task demo-alr-063-product-review claimed for review" not in joined
 
 
+def test_force_tick_routes_real_project_prefixed_lexical_g1_recovery_before_product_review(fake_sql, monkeypatch):
+    project_id = "zeus-alpha-research-ledger-core"
+    product_review = {
+        "project_id": project_id,
+        "lane_id": "lane-review",
+        "task_id": f"{project_id}-alr-063-product-review",
+        "status": "review_ready",
+        "phase": "quality_review",
+        "priority": 10,
+        "title": "ALR-063 independent product quality review",
+        "description": "Validate product implementation only after required G1 rows are reviewed.",
+        "owner_profile": "quality-reviewer",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {},
+    }
+    g1_scheduler_recovery = {
+        "project_id": project_id,
+        "lane_id": "lane-g1",
+        "task_id": f"{project_id}-r2df-r25-current-base-lexical-g1-schedul",
+        "status": "todo",
+        "phase": "g1_recovery",
+        "priority": 20,
+        "title": "R2df-R25 — current-base lexical G1 scheduler recovery delivery",
+        "description": (
+            "Bounded same-project technical rework. Scheduler selection recovery should deliver "
+            "current-base lexical G1 work before blocked product review while the G1 gate remains red."
+        ),
+        "owner_profile": "codex-builder",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {},
+    }
+    project = {
+        "project_id": project_id,
+        "status": "active",
+        "autonomous_enabled": True,
+        "metadata": {},
+        "document_status": [{"category": "g1_required", "file_name": "PRD.md", "blocking": True}],
+    }
+
+    monkeypatch.setattr(factory_pg, "acquire_global_control_plane_lease", lambda *_, **__: {"acquired": True})
+    monkeypatch.setattr(factory_pg, "release_global_control_plane_lease", lambda *_: None)
+    monkeypatch.setattr(factory_pg, "monitor_runs", lambda: {})
+    monkeypatch.setattr(factory_pg, "supervisor_health_check", lambda *_, **__: {"violations": [], "repairs": []})
+    monkeypatch.setattr(factory_pg, "clear_resolved_blockers", lambda project_id: {"project_id": project_id, "reopened": []})
+    monkeypatch.setattr(factory_pg, "status", lambda project_id=None: {"projects": [project], "tasks": [product_review, g1_scheduler_recovery], "task_runs": []})
+    monkeypatch.setattr(factory_pg, "classify_factory_blockers", lambda *_, **__: [])
+    monkeypatch.setattr(factory_pg, "record_factory_blocker_actions", lambda *_, **__: [])
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: [product_review, g1_scheduler_recovery])
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_project_docs_notion_preflight", lambda *_, **__: (False, True, False, False))
+
+    fake_sql.rows_results = [
+        [{"project_id": project_id}],  # review dispatch projects
+        [product_review],  # docs-blocked product review candidate
+        [{"project_id": project_id}],  # implementation dispatch projects
+        [g1_scheduler_recovery],  # dependency-ready lexical G1 recovery candidate
+    ]
+
+    def statement_one(sql, *, user=None, **_):
+        fake_sql.statements.append(sql)
+        if "SET status='review_running'" in sql:
+            return {**product_review, "status": "review_running"}
+        if "SET status='claimed'" in sql and g1_scheduler_recovery["task_id"] in sql:
+            return {**g1_scheduler_recovery, "status": "claimed"}
+        return None
+
+    monkeypatch.setattr(fake_sql, "statement_one", statement_one)
+
+    tick = factory_pg.force_tick(project_id)
+
+    assert tick["claimed"] is not None
+    assert tick["claimed"]["task"]["task_id"] == g1_scheduler_recovery["task_id"]
+    joined = "\n".join(fake_sql.statements)
+    assert "dispatch_preflight_denied" in joined
+    assert f"Task {g1_scheduler_recovery['task_id']} claimed" in joined
+    assert f"Task {product_review['task_id']} claimed for review" not in joined
+
+
+def test_structural_product_scope_uses_alr_and_scope_phrases_not_project_prefix_lexemes():
+    project_prefixed_recovery = {
+        "task_id": "zeus-alpha-research-ledger-core-r2df-r25-current-base-lexical-g1-schedul",
+        "phase": "g1_recovery",
+        "title": "R2df-R25 — current-base lexical G1 scheduler recovery delivery",
+    }
+    alr_product = {
+        "task_id": "zeus-alpha-research-ledger-core-alr-020-agent-core-schema-and-dedicated-",
+        "phase": "implementation",
+        "title": "ALR-020 product implementation",
+    }
+
+    assert factory_pg._has_structural_product_or_runtime_dispatch_scope(project_prefixed_recovery) is False
+    assert factory_pg._has_structural_product_or_runtime_dispatch_scope(alr_product) is True
+    assert factory_pg._has_structural_product_or_runtime_dispatch_scope({"title": "ledger implementation"}) is True
+    assert factory_pg._has_structural_product_or_runtime_dispatch_scope({"title": "runtime propagation"}) is True
+    assert factory_pg._has_structural_product_or_runtime_dispatch_scope({"title": "external runtime"}) is True
+    assert factory_pg._has_structural_product_or_runtime_dispatch_scope({"title": "direct integration"}) is True
+    assert factory_pg._has_structural_product_or_runtime_dispatch_scope({"title": "base branch merge"}) is True
+    assert factory_pg._has_structural_product_or_runtime_dispatch_scope({"title": "deployment"}) is True
+
+
 def test_claim_next_task_allows_docs_first_pr_review_repair_when_docs_red(fake_sql, monkeypatch):
     review_repair = {
         "project_id": "demo",

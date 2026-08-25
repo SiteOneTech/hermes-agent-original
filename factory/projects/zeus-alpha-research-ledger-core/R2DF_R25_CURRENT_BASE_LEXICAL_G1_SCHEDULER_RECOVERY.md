@@ -6,14 +6,15 @@ status: implemented_pending_pr_review
 validated: yes
 reviewed: pending
 owner: codex-builder
-run_id: run-1787695150-26f0eda3
+run_id: run-1787697422-26be708c
+prior_failed_gate: factory_gate_1101
 ---
 
 # R2df-R25 — current-base lexical G1 scheduler recovery
 
 ## Scope and boundary
 
-This increment is a bounded Factory control-plane scheduler/dispatch repair. It changes only:
+This rework is a bounded Factory control-plane scheduler/dispatch repair. It changes only:
 
 - `hermes_cli/factory_pg.py`
 - `tests/hermes_cli/test_factory_increment_integration.py`
@@ -23,7 +24,8 @@ Assigned branch/worktree:
 
 - branch: `factory/zeus-alpha-research-ledger-core/inc-05-r2df-r25-current-base-lexical-g1`
 - worktree: `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-05-r2df-r25-current-base-lexical-g1`
-- source/base before edits: `HEAD` = `origin/main` = merge-base = `50a5d59530ae49997a4968e029d8da639bf9a946`
+- exact base before this increment: `origin/main` / merge-base = `50a5d59530ae49997a4968e029d8da639bf9a946`
+- rework starting candidate: `5cca8d6f3a763ff05426ab4cab9568e4e44b62f5`
 - predecessor local-only evidence: R2df-R24 local commit `37970150a5548328cc9b9dbea542c1826c2230a7`, inspected but not cherry-picked wholesale
 
 No product ledger implementation, QA/security/delivery task closure, deploy, credential change, external runtime action, messaging connector, direct SQL, primary checkout mutation, base-branch integration, trading, risk, paper/live run, force-push, stale PR mutation, self-approval, or merge is authorized by this increment.
@@ -37,52 +39,63 @@ No product ledger implementation, QA/security/delivery task closure, deploy, cre
 - `factory/projects/zeus-alpha-research-ledger-core/QA_GATES.md`
 - `factory/projects/zeus-alpha-research-ledger-core/SECURITY_GATES.md`
 
+## Rework finding addressed
+
+Quality gate `1101` blocked the first R2df-R25 candidate because the focused RED test was too synthetic: it used a `demo-*` task ID and did not prove the real Factory row shape whose task ID starts with `zeus-alpha-research-ledger-core-*`. The prior predicate also treated standalone substrings such as `ledger`, `runtime`, `product`, `release`, `reporting`, `risk`, `paper`, `trading`, `messaging`, `deploy`, and `connector` as structural product/runtime signals. That accidentally swallowed the project prefix `zeus-alpha-research-ledger-core` and recreated `claimed=null` even when the task was a dependency-ready lexical `phase=g1_recovery` scheduler recovery.
+
+This rework adds a real-project-shaped regression and narrows `_has_structural_product_or_runtime_dispatch_scope()` so it matches only explicit structural scope markers with word boundaries:
+
+- `alr-\d+`
+- `product implementation`
+- `ledger implementation`
+- `runtime propagation`
+- `external runtime`
+- `direct integration`
+- `origin/main integration`
+- `base branch integration`
+- `base branch merge`
+- `deployment`
+- explicit direct-SQL/live/action/market/risk/paper-run/connector phrases
+
+It no longer matches standalone project-prefix words like `ledger`, `runtime`, `product`, `release`, `reporting`, `risk`, `paper`, `trading`, `messaging`, `deploy`, or `connector` by substring alone.
+
 ## Current-source readback
 
 Sanctioned Factory readback command from the assigned worktree:
 
 ```text
-/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory status zeus-alpha-research-ledger-core --json > /tmp/r2df-r25-status-after-code.json
+/home/jean/Projects/hermes-agent-original/venv/bin/python -m hermes_cli.main factory status zeus-alpha-research-ledger-core --json > /tmp/r2df-r25-status-after-rework.json
 ```
 
-Summary from `/tmp/r2df-r25-status-after-code.json`:
+Summary from `/tmp/r2df-r25-status-after-rework.json`:
 
 ```text
 db_backend=agent_core_postgres
 project_status=active
+factory_cli_source_root=/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-05-r2df-r25-current-base-lexical-g1
+factory_status_source_root=/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-05-r2df-r25-current-base-lexical-g1
 tasks=161
 gates=300
 runs=300
-active task/run observed=zeus-alpha-research-ledger-core-r2df-r25-current-base-lexical-g1-schedul running
 g1_required=14
 g1_blocking=0
-readiness_sources=[configured_base_ref]
 reconciliation_anomalies=[]
 ```
 
-This live readback is status evidence only. The focused RED regression below intentionally sets required G1 docs red in the fixture to prove scheduler behavior while docs-first product work remains denied.
-
-## Code repair
-
-The prior R2df-R24 repair added a broad lexical G0/G1 recovery classifier on a stale branch. This current-base increment carries forward only the minimal applicable predicate:
-
-1. `_has_g0_g1_recovery_terms()` recognizes a task whose phase is structurally `g0_*` or `g1_*` and whose text contains bounded recovery terms such as `scheduler`, `repair`, `recover`, `dispatch`, `bootstrap`, or `source-root`.
-2. `_has_structural_product_or_runtime_dispatch_scope()` inspects only structural fields (`task_id`, `title`, `phase`) for ALR/product/runtime/base-integration scopes, so a G1 recovery description may quote prohibited operations as negative boundary evidence without being reclassified as product work.
-3. `_is_docs_first_repair_dispatch_task()` uses that lexical G0/G1 recovery predicate before validation/docs-first gates, allowing dependency-ready G1 scheduler recovery to preempt docs-blocked product review rows.
-4. Existing full-text product/runtime gating remains unchanged for normal implementation, direct integration, release/reporting, deploy, messaging, direct SQL, external runtime, trading/risk/paper/live, and ALR product work.
+This live readback is status evidence only. The focused RED regression below intentionally sets required G1 rows red in the fixture to prove scheduler behavior while docs-first product work remains denied.
 
 ## RED / GREEN evidence
 
-Focused RED before production-code repair:
+Focused RED before the rework repair:
 
 ```text
-HERMES_PYTHON=/home/jean/Projects/hermes-agent-original/venv/bin/python3 scripts/run_tests.sh tests/hermes_cli/test_factory_increment_integration.py -k lexical_g1_scheduler -v --tb=short
+HERMES_PYTHON=/home/jean/Projects/hermes-agent-original/venv/bin/python3 scripts/run_tests.sh tests/hermes_cli/test_factory_increment_integration.py -k real_project_prefixed_lexical_g1_recovery -v --tb=short
 ```
 
 Observed failure:
 
 ```text
-FAILED tests/hermes_cli/test_factory_increment_integration.py::test_force_tick_routes_lexical_g1_scheduler_recovery_before_docs_blocked_product_review
+FAILED tests/hermes_cli/test_factory_increment_integration.py::test_force_tick_routes_real_project_prefixed_lexical_g1_recovery_before_product_review
 assert tick["claimed"] is not None
 E   assert None is not None
 ```
@@ -90,31 +103,7 @@ E   assert None is not None
 Focused GREEN after repair:
 
 ```text
-HERMES_PYTHON=/home/jean/Projects/hermes-agent-original/venv/bin/python3 scripts/run_tests.sh tests/hermes_cli/test_factory_increment_integration.py -k lexical_g1_scheduler -v --tb=short
-```
-
-Result:
-
-```text
-1 tests passed, 0 failed
-```
-
-Preservation-focused GREEN:
-
-```text
-HERMES_PYTHON=/home/jean/Projects/hermes-agent-original/venv/bin/python3 scripts/run_tests.sh tests/hermes_cli/test_factory_increment_integration.py -k 'lexical_g1_scheduler or routes_only_g1_docs_recovery_before_direct_runtime_scope or claim_next_task_keeps_priority_order_when_docs_ready or claimed_null_predicate' -v --tb=short
-```
-
-Result:
-
-```text
-5 tests passed, 0 failed
-```
-
-Validation-readiness preservation GREEN:
-
-```text
-HERMES_PYTHON=/home/jean/Projects/hermes-agent-original/venv/bin/python3 scripts/run_tests.sh tests/hermes_cli/test_factory_control_plane_refactor.py -k 'dispatch_validation_readiness_does_not_deadlock_deploy_prerequisite or validation_readiness_allows_dependency_ready_documentation_recovery_with_historical_finalized_wording' -v --tb=short
+HERMES_PYTHON=/home/jean/Projects/hermes-agent-original/venv/bin/python3 scripts/run_tests.sh tests/hermes_cli/test_factory_increment_integration.py -k 'real_project_prefixed_lexical_g1_recovery or structural_product_scope' -v --tb=short
 ```
 
 Result:
@@ -132,7 +121,7 @@ HERMES_PYTHON=/home/jean/Projects/hermes-agent-original/venv/bin/python3 scripts
 Result:
 
 ```text
-291 tests passed, 0 failed
+293 tests passed, 0 failed
 ```
 
 Diff hygiene:
@@ -141,8 +130,15 @@ Diff hygiene:
 git diff --check
 ```
 
-Result: exit `0`.
+Result: exit `0` after final validation.
+
+## Preserved gates
+
+- Product/review work remains docs-first denied while required G1 rows are red. The real-prefix RED/GREEN fixture proves the product review row records `dispatch_preflight_denied` and is not claimed for review.
+- ALR/product/runtime/base-integration scopes remain fail-closed because explicit `alr-\d+` and scope phrases in `task_id`, `title`, or `phase` still classify as structural product/runtime scope.
+- Genuine release/reporting/final delivery paths remain validation-readiness gated by `_candidate_requires_validation_readiness_before_dispatch()` and the existing validation-readiness test file.
+- The current primary-runtime stale/catch-up condition remains a separate operational dependency when live runtime still executes stale primary code; this rework delivers only the current-base source candidate and does not mutate `/home/jean/Projects/hermes-agent-original`.
 
 ## Handoff
 
-This artifact remains `reviewed: pending`. Delivery must be a non-draft Zeus-signed `agent:zeus` PR from the assigned branch against `main`, with final head/base SHA, no-external-execution boundary, and independent exact-SHA quality review. This worker must not merge or self-approve.
+This artifact remains `reviewed: pending`. Delivery must stay PR-first through a non-draft Zeus-signed `agent:zeus` PR from the assigned branch against `main`, with final pushed head/base SHA and independent exact-SHA quality review. This worker must not merge or self-approve.
