@@ -1091,6 +1091,91 @@ def test_force_tick_routes_dependency_free_g1_doc_recovery_before_docs_blocked_q
     assert "Task demo-quality-review claimed for review" not in joined
 
 
+def test_force_tick_routes_lexical_g1_scheduler_recovery_before_docs_blocked_product_review(fake_sql, monkeypatch):
+    product_review = {
+        "project_id": "demo",
+        "lane_id": "lane-review",
+        "task_id": "demo-alr-063-product-review",
+        "status": "review_ready",
+        "phase": "quality_review",
+        "priority": 10,
+        "title": "ALR-063 independent product quality review",
+        "description": "Validate product implementation only after required G1 docs are reviewed.",
+        "owner_profile": "quality-reviewer",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {},
+    }
+    g1_scheduler_recovery = {
+        "project_id": "demo",
+        "lane_id": "lane-g1",
+        "task_id": "demo-r2df-r25-current-base-lexical-g1-scheduler",
+        "status": "todo",
+        "phase": "g1_recovery",
+        "priority": 20,
+        "title": "R2df-R25 — current-base lexical G1 scheduler recovery delivery",
+        "description": (
+            "Bounded same-project technical rework. Recover the scheduler so a dependency-ready "
+            "current-base repair is delivered before product work while unvalidated_required_docs "
+            "blockers are still present. No merge, deploy, direct SQL, external runtime, messaging, "
+            "trading, risk, paper, or live action is authorized."
+        ),
+        "owner_profile": "codex-builder",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {},
+    }
+    project = {
+        "project_id": "demo",
+        "status": "active",
+        "autonomous_enabled": True,
+        "metadata": {},
+        "document_status": [{"category": "g1_required", "file_name": "PRD.md", "blocking": True}],
+    }
+
+    monkeypatch.setattr(factory_pg, "acquire_global_control_plane_lease", lambda *_, **__: {"acquired": True})
+    monkeypatch.setattr(factory_pg, "release_global_control_plane_lease", lambda *_: None)
+    monkeypatch.setattr(factory_pg, "monitor_runs", lambda: {})
+    monkeypatch.setattr(factory_pg, "supervisor_health_check", lambda *_, **__: {"violations": [], "repairs": []})
+    monkeypatch.setattr(factory_pg, "clear_resolved_blockers", lambda project_id: {"project_id": project_id, "reopened": []})
+    monkeypatch.setattr(factory_pg, "status", lambda project_id=None: {"projects": [project], "tasks": [product_review, g1_scheduler_recovery], "task_runs": []})
+    monkeypatch.setattr(factory_pg, "classify_factory_blockers", lambda *_, **__: [])
+    monkeypatch.setattr(factory_pg, "record_factory_blocker_actions", lambda *_, **__: [])
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: [product_review, g1_scheduler_recovery])
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_project_docs_notion_preflight", lambda *_, **__: (False, True, False, False))
+
+    fake_sql.rows_results = [
+        [{"project_id": "demo"}],  # review dispatch projects
+        [product_review],  # docs-blocked product review candidate
+        [{"project_id": "demo"}],  # implementation dispatch projects
+        [g1_scheduler_recovery],  # dependency-ready lexical G1 recovery candidate
+    ]
+
+    def statement_one(sql, *, user=None, **_):
+        fake_sql.statements.append(sql)
+        if "SET status='review_running'" in sql:
+            return {**product_review, "status": "review_running"}
+        if "SET status='claimed'" in sql and g1_scheduler_recovery["task_id"] in sql:
+            return {**g1_scheduler_recovery, "status": "claimed"}
+        return None
+
+    monkeypatch.setattr(fake_sql, "statement_one", statement_one)
+
+    tick = factory_pg.force_tick("demo")
+
+    assert tick["claimed"] is not None
+    assert tick["claimed"]["task"]["task_id"] == g1_scheduler_recovery["task_id"]
+    joined = "\n".join(fake_sql.statements)
+    assert "dispatch_preflight_denied" in joined
+    assert "Task demo-r2df-r25-current-base-lexical-g1-scheduler claimed" in joined
+    assert "Task demo-alr-063-product-review claimed for review" not in joined
+
+
 def test_claim_next_task_allows_docs_first_pr_review_repair_when_docs_red(fake_sql, monkeypatch):
     review_repair = {
         "project_id": "demo",
