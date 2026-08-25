@@ -6,14 +6,26 @@ status: validated
 validated: yes
 reviewed: pending
 origin_main_before_current_rerun: c8ff95b0daf84ffb5e931d1c9be7593ab406e275
-previous_run_id: run-1787442400-3b168ecf
-current_run_id: run-1787458981-c83322e8
+previous_run_id: run-1787458981-c83322e8
+current_run_id: run-1787691705-a3783e43
 ---
 
 # R6 source increment integration reconciliation
 
 ## Scope
 This artifact records the R6 reconciliation for the canonical `source_increment_not_integrated` anomaly. It is evidence-only for Factory source containment; it does not authorize deploy, runtime propagation, direct SQL, credential changes, product dispatch, trading/paper/live actions, or primary checkout mutation.
+
+## R6 rerun — 2026-08-25T21:10:28Z
+Current run `run-1787691705-a3783e43` re-inspected Agent Core Factory status from the assigned worktree after the task was reopened by a recurring `source_increment_not_integrated` projection:
+
+- Assigned worktree: `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/reconcile-source_increment_not_integrated`, branch `factory/zeus-alpha-research-ledger-core/reconcile-source_increment_not_integrated`.
+- Pre-push immutable state: `HEAD=a4bf78d50a7425c497cef16de6a1844aa8bdcd2d`, `origin/main=c8ff95b0daf84ffb5e931d1c9be7593ab406e275`, `HEAD...origin/main` ahead/behind `1 0`; remote `SiteOneTech/hermes-agent-original`.
+- Sanctioned Factory status input: `/tmp/r6_factory_status_run_1787691705.json` (`4850864` bytes, `db_backend=agent_core_postgres`, `factory_cli_source_root` and `factory_status_source_root` equal the assigned worktree, `factory_status_delegated=false`).
+- Current Agent Core project metadata reports `reconciliation_anomalies=['source_increment_not_integrated']`, `reconciliation_required=True`, `reconciliation_projection_source=current_document_status`, and `factory_auto_integration_forbidden=True`; the reopened R6 task is `running` and carries `65` finding blocker rows.
+- Current required documentation rows are not the source of the R6 recurrence: sanctioned status readback shows all indexed project document rows under the configured base ref as `blocking=false`, including the 14 G1-required rows, at base commit `c8ff95b0daf84ffb5e931d1c9be7593ab406e275`.
+- Positive terminal source-bearing task audit output is `/tmp/r6_source_increment_audit_run_1787691705.tsv`; exact summary: `65` positive terminal source-bearing tasks, `65/65` commit objects present, `65/65` contained in `origin/main`, `65/65` `increment_base_commit_after` commits present, `65/65` base-after ancestry chains valid, `65/65` integration metadata valid, `0` failures, and `0` accepted source-containment waivers used.
+- Source-containment verdict: the current recurrence is not caused by a missing Git integration for any positive terminal source-bearing increment; every audited immutable source commit is already an ancestor of current `origin/main` `c8ff95b0daf84ffb5e931d1c9be7593ab406e275`.
+- The final immutable branch commit and resulting `origin/main` commit must be recorded in Factory gate notes and the worker final response after the refreshed evidence commit is pushed. A commit cannot self-embed its own final SHA before it exists.
 
 ## R6 rerun — 2026-08-23T04:31:29Z
 Current run `run-1787458981-c83322e8` re-inspected Agent Core Factory status from the assigned worktree after the task was reopened by a recurring `source_increment_not_integrated` projection:
