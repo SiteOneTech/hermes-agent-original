@@ -4617,6 +4617,62 @@ def _has_docs_first_repair_terms(task: dict[str, Any]) -> bool:
     return any(term in text for term in docs_terms) and any(term in text for term in repair_terms)
 
 
+def _has_structural_product_or_runtime_dispatch_scope(task: dict[str, Any]) -> bool:
+    text = (
+        " ".join(str(task.get(field) or "") for field in ("task_id", "title", "phase"))
+        .lower()
+        .replace("_", " ")
+    )
+    product_or_runtime_scope_patterns = (
+        r"\balr-\d+\b",
+        r"\bproduct[\s-]+implementation\b",
+        r"\bledger[\s-]+implementation\b",
+        r"\bruntime[\s-]+propagation\b",
+        r"\bexternal[\s-]+runtime\b",
+        r"\bdirect[\s-]+integration\b",
+        r"\borigin/main[\s-]+integration\b",
+        r"\bbase[\s-]+branch[\s-]+integration\b",
+        r"\bbase[\s-]+branch[\s-]+merge\b",
+        r"\bdeployment\b",
+        r"\bdirect[\s-]+sql\b",
+        r"\bfinal[\s-]+delivery\b",
+        r"\blive[\s-]+action\b",
+        r"\blive[\s-]+run\b",
+        r"\bmarket[\s-]+execution\b",
+        r"\brisk[\s-]+mutation\b",
+        r"\bpaper/live\b",
+        r"\bpaper[\s-]+live\b",
+        r"\bpaper[\s-]+run\b",
+        r"\bmessage[\s-]+connector\b",
+        r"\bexternal[\s-]+connector\b",
+    )
+    return any(re.search(pattern, text) is not None for pattern in product_or_runtime_scope_patterns)
+
+
+def _has_g0_g1_recovery_terms(task: dict[str, Any]) -> bool:
+    phase = str(task.get("phase") or "").strip().lower().replace("-", "_")
+    if re.match(r"^g[01](?:$|_)", phase) is None:
+        return False
+    if _has_structural_product_or_runtime_dispatch_scope(task):
+        return False
+    text = _task_text(task)
+    recovery_terms = (
+        "bootstrap",
+        "control-plane",
+        "control plane",
+        "dispatch",
+        "reconciliation",
+        "reconcile",
+        "repair",
+        "recover",
+        "recovery",
+        "scheduler",
+        "source-root",
+        "source root",
+    )
+    return any(term in text for term in recovery_terms)
+
+
 def _has_product_or_runtime_dispatch_scope(task: dict[str, Any]) -> bool:
     text = _task_text(task)
     return any(
@@ -4667,6 +4723,8 @@ def _is_docs_first_repair_dispatch_task(task: dict[str, Any]) -> bool:
     if _is_reconciliation_task(task) or _is_runtime_bootstrap_repair_task(task):
         return True
     if _is_docs_first_validation_repair_task(task):
+        return True
+    if _has_g0_g1_recovery_terms(task):
         return True
     phase = str(task.get("phase") or "").strip().lower().replace("-", "_")
     return _has_docs_first_repair_terms(task) and (
