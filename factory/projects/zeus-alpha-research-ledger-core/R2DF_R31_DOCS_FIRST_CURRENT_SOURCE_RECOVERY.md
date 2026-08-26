@@ -114,7 +114,7 @@ Pre-repair H-path snapshot saved to `/tmp/r2df-r31-h-status-before.json` showed:
 }
 ```
 
-Post-candidate allowed Factory CLI status saved to `/tmp/r2df-r31-status-after.json` showed:
+Post-candidate allowed Factory CLI status saved to `/tmp/r2df-r31-status-after.json` before recording the implementation gate showed:
 
 ```json
 {
@@ -138,6 +138,31 @@ Post-candidate allowed Factory CLI status saved to `/tmp/r2df-r31-status-after.j
 ```
 
 The active run is this assigned R2df-R31 run; no new increment was opened.
+
+After recording the allowed Factory implementation gate (`factory gate record`) the readback saved to `/tmp/r2df-r31-status-after-gate.json` showed:
+
+```json
+{
+  "db_backend": "agent_core_postgres",
+  "factory_cli_source_root": "/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-07-r2df-r31-docs-first-current-sour",
+  "factory_status_source_root": "/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-07-r2df-r31-docs-first-current-sour",
+  "factory_status_delegated": false,
+  "active_runs": 0,
+  "g1_required": 14,
+  "g1_blockers": 0,
+  "reconciliation_anomalies": [],
+  "current_task": {"status": "cancelled", "phase": "g1_recovery", "priority": -7},
+  "implementation_gate": {
+    "gate_id": 1109,
+    "status": "passed",
+    "reviewer": "codex-builder",
+    "candidate_sha": "346ee7dc171c8fa9e58b384ddda848dd643e081c",
+    "pr": "https://github.com/SiteOneTech/hermes-agent-original/pull/132"
+  }
+}
+```
+
+The final task status is preserved as Factory DB readback, not rewritten directly by this worker. The implementation gate is evidence only; it is not the independent exact-SHA quality review required for final approval.
 
 ## Delivery contract
 
