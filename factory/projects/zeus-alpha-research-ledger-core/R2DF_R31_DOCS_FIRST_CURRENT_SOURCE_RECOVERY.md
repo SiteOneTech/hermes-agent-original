@@ -155,14 +155,12 @@ After recording the allowed Factory implementation gate (`factory gate record`) 
   "implementation_gate": {
     "gate_id": 1109,
     "status": "passed",
-    "reviewer": "codex-builder",
-    "candidate_sha": "346ee7dc171c8fa9e58b384ddda848dd643e081c",
-    "pr": "https://github.com/SiteOneTech/hermes-agent-original/pull/132"
+    "reviewer": "codex-builder"
   }
 }
 ```
 
-The final task status is preserved as Factory DB readback, not rewritten directly by this worker. The implementation gate is evidence only; it is not the independent exact-SHA quality review required for final approval.
+The final task status is preserved as Factory DB readback, not rewritten directly by this worker. Gate `1109` was the initial implementation-evidence gate recorded before the final documentation-evidence push; the final PR head SHA must be recorded in the PR body and post-push Factory gate notes because a commit cannot embed its own final SHA. Implementation gates are evidence only; they are not the independent exact-SHA quality review required for final approval.
 
 ## Delivery contract
 
