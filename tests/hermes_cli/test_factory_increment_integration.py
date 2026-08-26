@@ -1067,7 +1067,6 @@ def test_force_tick_routes_dependency_free_g1_doc_recovery_before_docs_blocked_q
 
     fake_sql.rows_results = [
         [{"project_id": "demo"}],  # review dispatch projects
-        [quality_review],  # review_ready candidate that must wait for G1 readiness
         [{"project_id": "demo"}],  # implementation dispatch projects
         [doc_recovery],  # dependency-free documentation recovery candidate
     ]
@@ -1089,6 +1088,137 @@ def test_force_tick_routes_dependency_free_g1_doc_recovery_before_docs_blocked_q
     joined = "\n".join(fake_sql.statements)
     assert "Task demo-r2ea-g1-docs-recovery claimed" in joined
     assert "Task demo-quality-review claimed for review" not in joined
+
+
+def test_force_tick_claims_docs_recovery_before_review_when_g1_docs_unreviewed(fake_sql, monkeypatch):
+    docs_review = {
+        "project_id": "demo",
+        "lane_id": "lane-review",
+        "task_id": "demo-r2df-independent-docs-first-review",
+        "status": "review_ready",
+        "phase": "quality_review",
+        "priority": 5,
+        "title": "R2df — independent docs-first G1 source-root review",
+        "description": (
+            "Review control-plane provenance for unvalidated required G1 documents "
+            "after documentation recovery."
+        ),
+        "owner_profile": "quality-reviewer",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {},
+    }
+    product = {
+        "project_id": "demo",
+        "lane_id": "lane-product",
+        "task_id": "demo-alr-020-product-work",
+        "status": "ready",
+        "phase": "implementation",
+        "priority": 10,
+        "title": "ALR-020 product implementation",
+        "description": "Product work must stay fail-closed while required G1 docs are unreviewed.",
+        "owner_profile": "claude-builder",
+        "engine": "claude_code",
+        "dependencies": [],
+        "metadata": {},
+    }
+    docs_recovery = {
+        "project_id": "demo",
+        "lane_id": "lane-docs",
+        "task_id": "demo-r2df-r27-unreviewed-g1-docs-recovery",
+        "status": "todo",
+        "phase": "documentation",
+        "priority": 20,
+        "title": "R2df-R27 — docs-first dispatcher routing repair for unvalidated G1 documents",
+        "description": (
+            "Repair G1 documentation reviewed-state reconciliation before any product, "
+            "review, QA, delivery, deployment, messaging, or runtime task."
+        ),
+        "owner_profile": "codex-builder",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {},
+    }
+    project = {
+        "project_id": "demo",
+        "status": "active",
+        "autonomous_enabled": True,
+        "metadata": {},
+    }
+    document_status = [
+        {
+            "path": name,
+            "file_name": name,
+            "category": "g1_required",
+            "exists": True,
+            "indexed": True,
+            "committed": True,
+            "validated": True,
+            "reviewed": False,
+            "blocking": True,
+            "missing": ["reviewed"],
+            "readiness_source": "configured_base_ref",
+            "base_commit": _BASE_CURRENT,
+        }
+        for name in factory_pg.G1_BLOCKING_DOCUMENTS
+    ]
+    tasks = [docs_review, product, docs_recovery]
+
+    monkeypatch.setattr(factory_pg, "acquire_global_control_plane_lease", lambda *_, **__: {"acquired": True})
+    monkeypatch.setattr(factory_pg, "release_global_control_plane_lease", lambda *_: None)
+    monkeypatch.setattr(factory_pg, "monitor_runs", lambda: {"active_runs": 0})
+    monkeypatch.setattr(factory_pg, "supervisor_health_check", lambda *_, **__: {"violations": [], "repairs": []})
+    monkeypatch.setattr(factory_pg, "clear_resolved_blockers", lambda project_id: {"project_id": project_id, "reopened": []})
+    monkeypatch.setattr(
+        factory_pg,
+        "status",
+        lambda project_id=None: {"projects": [{**project, "document_status": document_status}], "tasks": tasks, "task_runs": []},
+    )
+    monkeypatch.setattr(factory_pg, "classify_factory_blockers", lambda *_, **__: [])
+    monkeypatch.setattr(factory_pg, "record_factory_blocker_actions", lambda *_, **__: [])
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: {**project, "document_status": document_status})
+    monkeypatch.setattr(factory_pg, "project_document_status", lambda project_arg: document_status)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+
+    def rows(sql, *, user=None, **_):
+        fake_sql.statements.append(sql)
+        if "FROM factory.projects p" in sql and "SELECT p.project_id" in sql:
+            return [{"project_id": "demo"}]
+        if "t.status='review_ready'" in sql:
+            return [docs_review]
+        if "status IN ('todo', 'ready')" in sql or "t.status IN ('todo','ready')" in sql:
+            return [product, docs_recovery]
+        return []
+
+    monkeypatch.setattr(fake_sql, "rows", rows)
+
+    def statement_one(sql, *, user=None, **_):
+        fake_sql.statements.append(sql)
+        if "SET status='review_running'" in sql:
+            return {**docs_review, "status": "review_running"}
+        if "demo-r2df-r27-unreviewed-g1-docs-recovery" in sql:
+            return {**docs_recovery, "status": "claimed"}
+        if "demo-alr-020-product-work" in sql:
+            return {**product, "status": "claimed"}
+        return None
+
+    monkeypatch.setattr(fake_sql, "statement_one", statement_one)
+
+    tick = factory_pg.force_tick("demo")
+
+    assert tick["claimed"] is not None
+    assert tick["claimed"]["task"]["task_id"] == docs_recovery["task_id"]
+    joined = "\n".join(fake_sql.statements)
+    assert "Task demo-r2df-r27-unreviewed-g1-docs-recovery claimed" in joined
+    assert "Task demo-r2df-independent-docs-first-review claimed for review" not in joined
+    assert "Task demo-alr-020-product-work claimed" not in joined
+    assert factory_pg._dispatch_preflight_blockers(product, docs_ready=False, notion_ready=True) == [
+        "missing_or_unindexed_docs"
+    ]
 
 
 def test_claim_next_task_allows_docs_first_pr_review_repair_when_docs_red(fake_sql, monkeypatch):

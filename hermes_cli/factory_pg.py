@@ -6556,6 +6556,13 @@ def claim_next_review(project_id: Optional[str] = None, *, worker: str = "factor
             pending_gates,
             latest_gates,
         )
+        if not docs_ready and not docs_first_waived and _has_dependency_ready_docs_first_repair_task(tasks):
+            # A review-ready docs/control-plane candidate may itself be useful,
+            # but while required G1 document rows are still unreviewed the first
+            # runnable worker must repair/reconcile the docs.  Otherwise the
+            # force tick can spend the only dispatch slot on review (or later
+            # return claimed=null) while the docs recovery task remains runnable.
+            continue
         candidates = _normalize_rows(sql.rows(
             f"""
             SELECT t.*
