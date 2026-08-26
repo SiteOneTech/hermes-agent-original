@@ -61,6 +61,7 @@ import {
   verifyHermesCli
 } from './backend-probes'
 import { waitForDashboardPortAnnouncement } from './backend-ready'
+import { isPidAliveWindows, waitForBackendRelease } from './backend-release-gate'
 import {
   isHostKeyChangedBootFailure,
   isRetryableRemoteBootFailure,
@@ -144,6 +145,7 @@ import {
   updateEligibility,
   upsertConnection
 } from './connection-registry'
+import type { RosterProfileMetadata } from './connection-registry'
 import { describeCrashReason, installCrashForensics } from './crash-forensics'
 import { adoptServedDashboardToken } from './dashboard-token'
 import { loadOrCreateInstallationId, sshOwnershipId } from './desktop-installation'
@@ -243,6 +245,7 @@ import { createParentStartMarkerResolver, parentWatchdogEnv } from './parent-pro
 import { registerPetOverlayIpc } from './pet-overlay-ipc'
 import {
   buildRegistryProfileRoutes,
+  isLocalEnumerationFailure,
   localRouteFallbackProfiles,
   registryGatewayWsUrl,
   undialedSshRouteSeeds
@@ -276,12 +279,14 @@ import {
   findRemoteOwnerProfileForSession,
   mergeProfileSessionWindow,
   type RegistrySessionSource,
-  spliceRegistrySessionRows
+  spliceRegistrySessionRows,
+  tagRegistrySessionResponse
 } from './profile-session-routing'
 import { createQuickEntryShortcut, quickEntryWindowBounds, sanitizeQuickEntrySettings } from './quick-entry'
 import { type ActiveWork, mergeActiveWork, normalizeActiveWork, quitPromptFor } from './quit-guard'
 import * as remoteLifecycle from './remote-lifecycle'
 import {
+  ensureHealthyPooledRemoteBackendForDispatch,
   RemoteLivenessTracker,
   RemoteRevalidationCoordinator,
   revalidatePooledRemoteBackends,
@@ -355,6 +360,7 @@ import {
 import { fetchMarketplaceThemes, searchMarketplaceThemes } from './vscode-marketplace'
 import { createWakeIndicatorWindowController } from './wake-indicator-window'
 import { enumerateWindowsFrontToBack, enumerationFailed, readWindowBelow } from './window-below'
+import { registrySshScopeForWindowRoute, WindowConnectionRouteRegistry } from './window-connection-route'
 import { installWindowRendererLifecycle } from './window-renderer-lifecycle'
 import { createWindowRevealController } from './window-reveal'
 import {
@@ -1328,6 +1334,7 @@ let mainWindow = null
 const backendConnectionState = createBackendConnectionState<ReturnType<typeof spawn>, any>()
 const remoteLiveness = new RemoteLivenessTracker()
 const remoteRevalidation = new RemoteRevalidationCoordinator()
+const registryDispatchRevalidation = new RemoteRevalidationCoordinator()
 // True while connection-config:apply soft-rehomes the primary — suppresses the
 // backend-exit toast so an intentional kill doesn't look like a crash.
 let softRehomeInProgress = false
@@ -3467,43 +3474,63 @@ async function releaseBackendLock(updateRoot, tag) {
 
   const hermesProcess = backendConnectionState.getProcess()
 
+  // Seed the release gate with every PID we are about to signal: the
+  // supervised primary backend and all pool backends. The gate waits for
+  // these to actually LEAVE the process table, not just for the shim to
+  // unlock — the shim probe only covers venv\Scripts\hermes.exe, but the
+  // backend is `python.exe -m hermes_cli.main serve`, which need not hold
+  // the shim at all (#74805 first-attempt race).
+  const initialPids = []
+
+  if (hermesProcess && Number.isInteger(hermesProcess.pid)) {
+    initialPids.push(hermesProcess.pid)
+  }
+
+  for (const entry of backendPool.values()) {
+    if (entry.process && Number.isInteger(entry.process.pid)) {
+      initialPids.push(entry.process.pid)
+    }
+  }
+
   stopBackendTreesForUpdate(hermesProcess, {
     forceKillProcessTree,
     stopAllPoolBackends
   })
 
   const shim = venvHermesShimPath(updateRoot)
-  const deadlineMs = Date.now() + 15000
 
-  while (Date.now() < deadlineMs) {
-    if (!isShimLocked(shim)) {
-      rememberLog(`[${tag}] venv shim unlocked; safe to proceed`)
+  const gate = await waitForBackendRelease(
+    initialPids,
+    {
+      isShimLocked: () => Boolean(isShimLocked(shim)),
+      isPidAlive: isPidAliveWindows,
+      collectStragglerPids: () => {
+        const stragglers = []
 
-      return { unlocked: true }
-    }
+        const currentHermesProcess = backendConnectionState.getProcess()
 
-    // A supervised backend can respawn between kill and check (grandchildren,
-    // pool entries registered mid-teardown). Re-collect and re-kill each pass
-    // instead of trusting the initial sweep.
-    const stragglers = []
+        if (currentHermesProcess && Number.isInteger(currentHermesProcess.pid)) {
+          stragglers.push(currentHermesProcess.pid)
+        }
 
-    const currentHermesProcess = backendConnectionState.getProcess()
+        for (const entry of backendPool.values()) {
+          if (entry.process && Number.isInteger(entry.process.pid)) {
+            stragglers.push(entry.process.pid)
+          }
+        }
 
-    if (currentHermesProcess && Number.isInteger(currentHermesProcess.pid)) {
-      stragglers.push(currentHermesProcess.pid)
-    }
+        return stragglers
+      },
+      killProcessTree: forceKillProcessTree,
+      sleep: (ms: number) => new Promise(r => setTimeout(r, ms)),
+      now: () => Date.now(),
+      log: rememberLog
+    },
+    tag
+  )
 
-    for (const entry of backendPool.values()) {
-      if (entry.process && Number.isInteger(entry.process.pid)) {
-        stragglers.push(entry.process.pid)
-      }
-    }
-
-    for (const pid of stragglers) {
-      forceKillProcessTree(pid)
-    }
-
-    await new Promise(r => setTimeout(r, 300))
+  if (gate.unlocked) {
+    return { unlocked: true }
   }
 
   // Do NOT proceed past a held lock: handing off to the updater while another
@@ -3677,6 +3704,23 @@ async function applyUpdates(opts: { stopSafeBlockers?: boolean } = {}) {
         // Let verified process-tree termination finish unwinding wrapper shells,
         // then make the scanner — not the stale renderer payload — authoritative.
         await new Promise(resolve => setTimeout(resolve, 300))
+        scanOutcome = await scanVenvBlockers(updateRoot)
+      }
+
+      // Re-scan before aborting on 'blocked' (#74805). Process-table teardown
+      // is asynchronous on Windows: even after releaseBackendLock's PID-exit
+      // wait, a grandchild the desktop never tracked (or a process an AV /
+      // NTFS filter driver is holding in teardown) can stay enumerable for a
+      // few more seconds and read as a holder. Each scan already costs
+      // seconds (spawns a venv python + psutil sweep), so two retries with a
+      // short dwell give the table time to settle without meaningfully
+      // delaying the abort path when a REAL holder (a user terminal, second
+      // window) is present — that holder is still there on the third scan.
+      for (let attempt = 0; scanOutcome.kind === 'blocked' && attempt < 2; attempt++) {
+        rememberLog(
+          `[updates] venv-blocker scan reported ${scanOutcome.result.processes.length} holder(s); re-scanning after settle (attempt ${attempt + 2}/3)`
+        )
+        await new Promise(resolve => setTimeout(resolve, 1500))
         scanOutcome = await scanVenvBlockers(updateRoot)
       }
 
@@ -9516,43 +9560,79 @@ async function teardownSshConnection(profile) {
 // any cached SSH state. A per-profile token/OAuth override wins over a global
 // SSH connection — so if the active profile resolves to a NON-SSH backend, the
 // terminal must NOT fall through to a global SSH host.
-function activeSshTerminalTarget() {
-  const profile = primaryProfileKey()
-  const config = readDesktopConnectionConfig()
+function activeSshTerminalTarget(webContentsId?: number) {
+  const windowRoute = typeof webContentsId === 'number' ? windowConnectionRoutes.get(webContentsId) : null
 
-  if (profileSshOverride(config, profile)) {
-    const scope = sshScopeKey(profile)
+  if (windowRoute?.registryScoped && windowRoute.connectionId) {
+    const scope = registrySshScopeForWindowRoute(windowRoute, readDesktopConnectionsRegistry())
+
+    if (!scope) {
+      return null
+    }
+
     const state = sshConnections.get(scope)
 
     return state && state.ssh ? { ssh: state.ssh, scope } : 'pending'
   }
 
-  if (profileRemoteOverride(config, profile)) {
+  const profile = windowRoute?.profile ?? primaryProfileKey()
+  const config = readDesktopConnectionConfig()
+
+  const route = resolveDesktopRemoteRoute({
+    config,
+    env: {
+      token: process.env.HERMES_DESKTOP_REMOTE_TOKEN,
+      url: process.env.HERMES_DESKTOP_REMOTE_URL
+    },
+    profile,
+    registry: readDesktopConnectionsRegistry()
+  })
+
+  if (!route || route.kind !== 'ssh') {
     return null
   }
 
-  if (process.env.HERMES_DESKTOP_REMOTE_URL) {
-    return null
+  const scope = route.connectionId
+    ? backendScopeKey(route.connectionId, profile)
+    : sshScopeKey(route.source === 'profile' ? profile : null)
+
+  const state = sshConnections.get(scope)
+
+  return state && state.ssh ? { ssh: state.ssh, scope } : 'pending'
+}
+
+async function ensureTerminalBackend(webContentsId: number) {
+  const windowRoute = windowConnectionRoutes.get(webContentsId)
+
+  if (windowRoute?.registryScoped && windowRoute.connectionId) {
+    return ensureRegistryBackend(windowRoute.connectionId, windowRoute.profile)
   }
 
-  if (config.mode === 'ssh') {
-    const state = sshConnections.get('')
-
-    return state && state.ssh ? { ssh: state.ssh, scope: '' } : 'pending'
-  }
-
-  return null
+  return ensureBackend(windowRoute?.profile ?? primaryProfileKey())
 }
 
 // Loopback reach for the browser pane. Scoped to the SSH connection that
 // authorized it: a different host (or none) must never inherit live forwards
 // into somebody else's machine.
-const previewReach = new PreviewReachRegistry()
-let previewReachScope: null | string = null
+const previewReachByWebContents = new Map<number, { registry: PreviewReachRegistry; scope: string }>()
 
-async function resetPreviewReach() {
-  previewReachScope = null
-  await previewReach.closeAll()
+async function resetPreviewReach(webContentsId?: number) {
+  if (typeof webContentsId === 'number') {
+    const current = previewReachByWebContents.get(webContentsId)
+
+    previewReachByWebContents.delete(webContentsId)
+
+    if (current) {
+      await current.registry.closeAll()
+    }
+
+    return
+  }
+
+  const open = [...previewReachByWebContents.values()]
+
+  previewReachByWebContents.clear()
+  await Promise.allSettled(open.map(entry => entry.registry.closeAll()))
 }
 
 /**
@@ -9563,25 +9643,33 @@ async function resetPreviewReach() {
  * remote with no tunnel to borrow. Callers must not treat an unchanged URL as
  * failure; the pane explains an unreachable one on its own.
  */
-async function reachablePreviewUrl(rawUrl: string): Promise<string> {
-  const target = activeSshTerminalTarget()
+async function reachablePreviewUrl(webContentsId: number, rawUrl: string): Promise<string> {
+  let target = activeSshTerminalTarget(webContentsId)
+
+  if (target === 'pending') {
+    await ensureTerminalBackend(webContentsId).catch(() => undefined)
+    target = activeSshTerminalTarget(webContentsId)
+  }
 
   if (!target || target === 'pending') {
-    // No SSH transport behind this gateway; nothing to forward through.
-    await resetPreviewReach()
+    // No SSH transport behind this renderer's gateway. Another window's
+    // forward must never be reused for this preview.
+    await resetPreviewReach(webContentsId)
 
     return rawUrl
   }
 
   const { scope, ssh } = target as { scope: string; ssh: any }
+  let reach = previewReachByWebContents.get(webContentsId)
 
-  if (previewReachScope !== scope) {
-    await resetPreviewReach()
-    previewReachScope = scope
+  if (!reach || reach.scope !== scope) {
+    await resetPreviewReach(webContentsId)
+    reach = { registry: new PreviewReachRegistry(), scope }
+    previewReachByWebContents.set(webContentsId, reach)
   }
 
   try {
-    const rewritten = await previewReach.resolve(rawUrl, {
+    const rewritten = await reach.registry.resolve(rawUrl, {
       cancel: (localPort, remotePort) => ssh.cancelForward(localPort, remotePort),
       forward: (localPort, remotePort, remoteHost) => ssh.forward(localPort, remotePort, remoteHost),
       isCurrent: () => sshConnections.get(scope)?.ssh === ssh,
@@ -9591,8 +9679,6 @@ async function reachablePreviewUrl(rawUrl: string): Promise<string> {
 
     return rewritten || rawUrl
   } catch (error: any) {
-    // A failed forward is a preview problem, not a session problem: log it and
-    // let the original URL through so the pane shows its own explanation.
     sshRememberLog(`preview reach failed for ${rawUrl}: ${error?.message || error}`)
 
     return rawUrl
@@ -10499,8 +10585,37 @@ async function ensureRegistryBackend(connectionId, profile) {
 
   if (existing) {
     existing.lastActiveAt = Date.now()
+    const connectionPromise = existing.connectionPromise
 
-    return existing.connectionPromise
+    // A remote process can die while its local SSH forward stays LISTENing.
+    // Validate the exact cached descriptor at dispatch time; background
+    // revalidation is renderer-driven and may never run while the Bots pane is
+    // closed. Concurrent clicks share one retire/reconnect sequence.
+    return registryDispatchRevalidation.run(connectionPromise, () =>
+      ensureHealthyPooledRemoteBackendForDispatch({
+        connectionPromise,
+        currentConnectionPromise: () => backendPool.get(key)?.connectionPromise || null,
+        probe: (connection, requestPath, options) => fetchJsonForBackend(connection, requestPath, options),
+        reconnect: () => ensureRegistryBackend(id, profile),
+        retire: async (error: any) => {
+          // A late failure from an old descriptor must never tear down a newer
+          // entry that another caller has already installed.
+          if (backendPool.get(key) !== existing) {
+            return
+          }
+
+          rememberLog(
+            `Pooled remote backend "${key}" failed its dispatch probe (${error?.message || error}); reconnecting on demand.`
+          )
+          await stopPoolBackend(key)
+
+          if (source.kind === 'ssh') {
+            await sshBootstrapCoordinator.cancelAndWait(key)
+            await teardownSshConnection(key)
+          }
+        }
+      })
+    )
   }
 
   evictLruPoolBackends(POOL_MAX_BACKENDS - 1)
@@ -12886,6 +13001,32 @@ ipcMain.handle('hermes:connection:for', async (_event, payload) => {
 
   return { ...connection, connectionId: id, registryScoped: true }
 })
+
+const windowConnectionRoutes = new WindowConnectionRouteRegistry()
+const windowConnectionRouteOwners = new Set<number>()
+
+ipcMain.on('hermes:connection:active-route', (event, route) => {
+  const id = event.sender.id
+  const previous = windowConnectionRoutes.get(id)
+  const next = windowConnectionRoutes.set(id, route)
+
+  if (
+    previous?.connectionId !== next?.connectionId ||
+    previous?.profile !== next?.profile ||
+    previous?.registryScoped !== next?.registryScoped
+  ) {
+    void resetPreviewReach(id)
+  }
+
+  if (!windowConnectionRouteOwners.has(id)) {
+    windowConnectionRouteOwners.add(id)
+    event.sender.once('destroyed', () => {
+      windowConnectionRoutes.delete(id)
+      windowConnectionRouteOwners.delete(id)
+      void resetPreviewReach(id)
+    })
+  }
+})
 // Reconnect-after-wake recovery. A REMOTE primary backend has no child process,
 // so the 'exit'/'error' handlers that would clear a dead connection promise never
 // fire — once the remote becomes unreachable across a sleep/wake the renderer
@@ -13228,7 +13369,12 @@ ipcMain.handle('hermes:plugin-profile-routes', async (_event, rawProfileNames) =
     : undefined
 
   const localFallbackProfiles = localSource
-    ? localRouteFallbackProfiles(agents, localSource.id, fallbackProfileNames, Boolean(localEnumeration?.error))
+    ? localRouteFallbackProfiles(
+        agents,
+        localSource.id,
+        fallbackProfileNames,
+        isLocalEnumerationFailure(localEnumeration?.error)
+      )
     : []
 
   if (localSource && localFallbackProfiles.length > 0) {
@@ -13561,7 +13707,13 @@ async function enumerateRegistryAgentSources(registry = readDesktopConnectionsRe
 
   return Promise.all(
     registry.connections.map(async connection => {
-      let raw: { connection: typeof connection; error?: string; installId?: string; profiles: null | string[] }
+      let raw: {
+        connection: typeof connection
+        error?: string
+        installId?: string
+        profiles: null | string[]
+        profileMetadata?: Record<string, RosterProfileMetadata>
+      }
 
       try {
         // SSH roster listing must never spawn a dashboard. A stale
@@ -13606,13 +13758,52 @@ async function enumerateRegistryAgentSources(registry = readDesktopConnectionsRe
             ? body.profiles.map(p => String(p?.name || '').trim()).filter(Boolean)
             : []
 
+          const profileMetadata = Array.isArray(body?.profiles)
+            ? Object.fromEntries(
+                body.profiles
+                  .map(profile => {
+                    const name = String(profile?.name || '').trim()
+
+                    if (!name) {
+                      return null
+                    }
+
+                    const metadata: RosterProfileMetadata = {}
+
+                    if (typeof profile?.display_name === 'string' && profile.display_name.trim()) {
+                      metadata.display_name = profile.display_name.trim()
+                    }
+
+                    if (typeof profile?.title === 'string' && profile.title.trim()) {
+                      metadata.title = profile.title.trim()
+                    }
+
+                    if (profile?.ui_meta && typeof profile.ui_meta === 'object') {
+                      metadata.ui_meta = profile.ui_meta
+                    }
+
+                    if (typeof profile?.has_avatar === 'boolean') {
+                      metadata.has_avatar = profile.has_avatar
+                    }
+
+                    return [name, metadata] as const
+                  })
+                  .filter((entry): entry is readonly [string, RosterProfileMetadata] => Boolean(entry))
+              )
+            : undefined
+
           // The root HERMES_HOME is an agent too; enumerations that omit it
           // (older backends list only named profiles) still get a default row.
           if (!profiles.includes('default')) {
             profiles.unshift('default')
           }
 
-          raw = { connection, profiles, ...(installId ? { installId } : {}) }
+          raw = {
+            connection,
+            profiles,
+            ...(installId ? { installId } : {}),
+            ...(profileMetadata ? { profileMetadata } : {})
+          }
         }
       } catch (error: any) {
         raw = { connection, profiles: null, error: String(error?.message || error) }
@@ -13624,7 +13815,12 @@ async function enumerateRegistryAgentSources(registry = readDesktopConnectionsRe
 
       const remembered = rememberSshEnumeration(raw, sshRosterCache.get(connection.id), connection.kind)
 
-      return { connection, ...remembered, ...(raw.installId ? { installId: raw.installId } : {}) }
+      return {
+        connection,
+        ...remembered,
+        ...(raw.installId ? { installId: raw.installId } : {}),
+        ...(raw.profileMetadata ? { profileMetadata: raw.profileMetadata } : {})
+      }
     })
   )
 }
@@ -13960,6 +14156,13 @@ ipcMain.handle('hermes:connection-config:apply', async (_event, payload) => {
 })
 
 ipcMain.handle('hermes:profile:get', async () => ({ profile: readActiveDesktopProfile() }))
+// Persistence-only sibling of hermes:profile:set: records the profile the
+// Desktop should boot into next launch WITHOUT tearing down the backend or
+// reloading the window — the rail's live workspace switch already re-homed
+// the gateway (#79886).
+ipcMain.handle('hermes:profile:remember', async (_event, name) => ({
+  profile: writeActiveDesktopProfile(name)
+}))
 ipcMain.handle('hermes:profile:set', async (_event, name) => {
   const next = writeActiveDesktopProfile(name)
 
@@ -14347,12 +14550,16 @@ async function dispatchRegistryApiRequest(
 
   const requestPath = pathForRegistryBackendRequest(request.path, requestProfile, connection)
 
-  return fetchJsonForBackend(connection, requestPath, {
+  const response = await fetchJsonForBackend(connection, requestPath, {
     method: request?.method,
     body: request?.body,
     upload: request?.upload,
     timeoutMs: resolveTimeoutMs(request?.timeoutMs, DEFAULT_FETCH_TIMEOUT_MS)
   })
+
+  return (request?.method || 'GET').toUpperCase() === 'GET'
+    ? tagRegistrySessionResponse(requestPath, response, registryConnectionId)
+    : response
 }
 
 function registryConnectionKind(connectionId) {
@@ -15216,7 +15423,7 @@ ipcMain.handle('hermes:stop-find-in-page', event => {
 
 // The renderer can't know whether a loopback URL is reachable — only main
 // knows which transport backs this gateway. Ask before loading one.
-ipcMain.handle('hermes:preview:reach', async (_event, url) => reachablePreviewUrl(String(url || '')))
+ipcMain.handle('hermes:preview:reach', async (event, url) => reachablePreviewUrl(event.sender.id, String(url || '')))
 
 ipcMain.handle('hermes:openPreviewInBrowser', async (_event, url) => {
   if (!(await openPreviewInBrowser(url))) {
@@ -15318,7 +15525,7 @@ const terminalIpc = registerTerminalIpc({
   findOnPath,
   rememberLog,
   activeSshTerminalTarget,
-  ensureBackend: () => ensureBackend(primaryProfileKey()),
+  ensureBackend: webContentsId => ensureTerminalBackend(webContentsId),
   getSshConnectionState: scope => sshConnections.get(scope)
 })
 

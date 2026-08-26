@@ -214,6 +214,7 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
   },
   profile: {
     get: () => ipcRenderer.invoke('hermes:profile:get'),
+    remember: name => ipcRenderer.invoke('hermes:profile:remember', name),
     set: name => ipcRenderer.invoke('hermes:profile:set', name)
   },
   api: request => ipcRenderer.invoke('hermes:api', request),
@@ -267,6 +268,7 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
   openExternal: url => ipcRenderer.invoke('hermes:openExternal', url),
   openPreviewInBrowser: url => ipcRenderer.invoke('hermes:openPreviewInBrowser', url),
   reachPreviewUrl: url => ipcRenderer.invoke('hermes:preview:reach', url),
+  setActiveConnectionRoute: route => ipcRenderer.send('hermes:connection:active-route', route),
   fetchLinkTitle: url => ipcRenderer.invoke('hermes:fetchLinkTitle', url),
   resolveFavicon: url => ipcRenderer.invoke('hermes:resolveFavicon', url),
   sanitizeWorkspaceCwd: cwd => ipcRenderer.invoke('hermes:workspace:sanitize', cwd),

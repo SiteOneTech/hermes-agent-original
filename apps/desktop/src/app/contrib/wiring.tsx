@@ -46,7 +46,7 @@ import { requestVoiceConversationStart } from '@/store/composer'
 import { $activeConnectionId } from '@/store/connections'
 import { $cronReviewRequest, setCronFocusJobId } from '@/store/cron'
 import { $pinnedSessionIds, pinSession, restoreWorktree, unpinSession } from '@/store/layout'
-import { notify } from '@/store/notifications'
+import { notify, notifyError } from '@/store/notifications'
 import { $previewTarget } from '@/store/preview'
 import {
   $activeGatewayProfile,
@@ -72,7 +72,7 @@ import {
   $selectedStoredSessionId,
   $sessionResumeRequest,
   $sessions,
-  knownSessionProfile,
+  knownSessionOwner,
   sessionMatchesStoredId,
   sessionPinId,
   setAwaitingResponse,
@@ -320,7 +320,7 @@ export function ContribWiring({ children }: { children: ReactNode }) {
   // profile's own local gateway — never to whatever is "active" (active is
   // presentation only). Resolve the owner from, in order: the tile's persisted
   // route (bot chats carry an exact connectionId+profile), the known session
-  // profile (row or open-time hint), then a cross-profile REST probe that
+  // owner (row or open-time hint), then a cross-profile REST probe that
   // stamps ownership for a hidden/unlisted session. Only a request with NO
   // session at all (a fresh draft, global chrome) falls to the ambient socket.
   // The probe result is cached as an owner hint so the next call is sync.
@@ -358,7 +358,7 @@ export function ContribWiring({ children }: { children: ReactNode }) {
 
       let owner: SessionOwnerScope =
         (routingSessionId ? sessionTileOwnerRoute(routingSessionId) : undefined) ??
-        knownSessionProfile($sessions.get(), routingSessionId)
+        knownSessionOwner($sessions.get(), routingSessionId)
 
       if (!owner && routingSessionId) {
         // Unknown owner for a REAL session: probe across profiles (REST, not the
@@ -829,7 +829,10 @@ export function ContribWiring({ children }: { children: ReactNode }) {
           if (payload?.start_new_session !== false) {
             newSessionInProfile(targetProfile)
           } else {
-            void ensureGatewayProfile(normalizeProfileKey(targetProfile))
+            void ensureGatewayProfile(normalizeProfileKey(targetProfile)).catch((error: unknown) => {
+              // #81094: the voice-path switch must surface its failure too.
+              notifyError(error, `Failed to switch to profile "${normalizeProfileKey(targetProfile)}"`)
+            })
           }
         } else if (payload?.start_new_session !== false) {
           startFreshSessionDraft()
