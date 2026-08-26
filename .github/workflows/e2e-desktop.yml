@@ -17,6 +17,9 @@ concurrency:
 jobs:
   e2e:
     name: Playwright E2E (Linux)
+    # This job builds the renderer and the electron bundle, then drives a real
+    # Electron app under xvfb. Vite, tsc and Playwright workers use the hosted
+    # runner's available CPU capacity.
     runs-on: ubuntu-latest
     timeout-minutes: 20
     outputs:

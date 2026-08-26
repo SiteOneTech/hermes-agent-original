@@ -2091,18 +2091,18 @@ def test_viking_client_delete_uses_identity_headers(monkeypatch):
         return SimpleNamespace(
             status_code=200,
             text="",
-            json=lambda: {"status": "ok", "result": {"uri": "viking://user/memories/x.md"}},
+            json=lambda: {"status": "ok", "result": {"uri": "viking://~/memories/x.md"}},
             raise_for_status=lambda: None,
         )
 
     monkeypatch.setattr(client._httpx, "delete", capture_delete)
 
-    assert client.delete("/api/v1/fs", params={"uri": "viking://user/memories/x.md"}) == {
+    assert client.delete("/api/v1/fs", params={"uri": "viking://~/memories/x.md"}) == {
         "status": "ok",
-        "result": {"uri": "viking://user/memories/x.md"},
+        "result": {"uri": "viking://~/memories/x.md"},
     }
     assert captured["url"] == "https://example.com/api/v1/fs"
-    assert captured["kwargs"]["params"] == {"uri": "viking://user/memories/x.md"}
+    assert captured["kwargs"]["params"] == {"uri": "viking://~/memories/x.md"}
     assert captured["kwargs"]["headers"]["Authorization"] == "Bearer test-key"
     assert captured["kwargs"]["headers"]["X-OpenViking-Actor-Peer"] == "hermes"
 
@@ -4189,7 +4189,7 @@ def test_on_memory_write_uses_content_write_independent_of_session_rotation():
     assert captured_payloads[0]["content"] == "remember this"
     assert captured_payloads[0]["mode"] == "create"
     assert captured_payloads[0]["uri"].startswith(
-        "viking://user/peers/hermes/memories/preferences/mem_"
+        "viking://user/usr/peers/hermes/memories/preferences/mem_"
     )
 
 
@@ -4281,6 +4281,60 @@ def test_on_memory_write_ignores_non_add_actions(action, content, monkeypatch):
     assert spawned == []
 
 
+def test_memory_write_uses_one_connection_for_identity_uri_and_post(monkeypatch):
+    import threading
+
+    provider = OpenVikingMemoryProvider()
+    provider._agent = "alice-agent"
+    provider._ensure_client = lambda: True
+
+    identity_started = threading.Event()
+    release_identity = threading.Event()
+    write_finished = threading.Event()
+    writes = []
+
+    class StubClient:
+        def __init__(self, user, agent):
+            self._user = user
+            self._agent = agent
+
+        def get(self, path, **kwargs):
+            assert path == "/api/v1/system/status"
+            identity_started.set()
+            assert release_identity.wait(timeout=2.0)
+            return {"status": "ok", "result": {"user": self._user}}
+
+        def post(self, path, payload=None, **kwargs):
+            writes.append((self._user, self._agent, path, payload))
+            write_finished.set()
+            return {"status": "ok"}
+
+    alice = StubClient("alice", "alice-agent")
+    bob = StubClient("bob", "bob-agent")
+    provider._client = alice
+    monkeypatch.setattr(provider, "_new_client", lambda: alice)
+
+    provider.on_memory_write("add", "user", "remember this")
+    assert identity_started.wait(timeout=2.0), "identity probe did not start"
+
+    # Simulate a profile reload while the write worker is resolving identity.
+    provider._client = bob
+    provider._agent = "bob-agent"
+    release_identity.set()
+
+    assert write_finished.wait(timeout=2.0), "memory write did not finish"
+    for worker in list(provider._memory_write_threads):
+        worker.join(timeout=2.0)
+
+    assert len(writes) == 1
+    user, agent, path, payload = writes[0]
+    assert (user, agent, path) == ("alice", "alice-agent", "/api/v1/content/write")
+    assert payload["uri"].startswith(
+        "viking://user/alice/peers/alice-agent/memories/preferences/mem_"
+    )
+    assert provider._memory_write_threads == set()
+
+
 def _make_prefetch_provider() -> OpenVikingMemoryProvider:
     provider = OpenVikingMemoryProvider()
     provider._client = MagicMock()
@@ -4314,6 +4368,8 @@ def _mock_session_start_reads(
         request_params = dict(params or {})
         uri = request_params.get("uri", "")
         calls.append((path, request_params, kwargs.get("timeout")))
+        if path == "/api/v1/system/status":
+            return {"status": "ok", "result": {"user": "default"}}
         response = responses.get((path, uri), "")
         if isinstance(response, Exception):
             raise response
@@ -4337,10 +4393,10 @@ def test_prefetch_prepends_session_start_memory_context_once_per_session():
     calls = _mock_session_start_reads(
         provider,
         {
-            ("/api/v1/content/read", "viking://user/memories/profile.md"): (
+            ("/api/v1/content/read", "viking://user/default/memories/profile.md"): (
                 "User prefers concise answers."
             ),
-            ("/api/v1/fs/ls", "viking://user/memories/preferences"): _memory_listing(
+            ("/api/v1/fs/ls", "viking://user/default/memories/preferences"): _memory_listing(
                 {"isDir": True, "rel_path": "owner"},
                 {
                     "isDir": False,
@@ -4354,7 +4410,7 @@ def test_prefetch_prepends_session_start_memory_context_once_per_session():
                 },
                 {"isDir": False, "rel_path": "owner/ignored.txt", "abstract": "ignore"},
             ),
-            ("/api/v1/fs/ls", "viking://user/memories/entities"): _memory_listing(
+            ("/api/v1/fs/ls", "viking://user/default/memories/entities"): _memory_listing(
                 {
                     "isDir": False,
                     "rel_path": "people/ada.md",
@@ -4368,13 +4424,13 @@ def test_prefetch_prepends_session_start_memory_context_once_per_session():
     first = provider.prefetch("What should we recall?", session_id="sid-123")
     second = provider.prefetch("What should we recall?", session_id="sid-123")
 
-    assert '<user-profile uri="viking://user/memories/profile.md">' in first
+    assert '<user-profile uri="viking://user/default/memories/profile.md">' in first
     assert "User prefers concise answers." in first
     assert "<available-memories>" in first
-    assert "viking://user/memories/preferences/" in first
+    assert "viking://user/default/memories/preferences/" in first
     assert "owner/z-last.md — Keep replies compact." in first
     assert first.index("owner/a-first.md") < first.index("owner/z-last.md")
-    assert "viking://user/memories/entities/" in first
+    assert "viking://user/default/memories/entities/" in first
     assert "people/ada.md — Ada Lovelace is a collaborator." in first
     assert "owner/ignored.txt" not in first
     assert "<preferences" not in first
@@ -4383,14 +4439,16 @@ def test_prefetch_prepends_session_start_memory_context_once_per_session():
     assert "<user-profile" not in second
     assert "recalled context" in second
     assert [(path, params) for path, params, _timeout in calls] == [
-        ("/api/v1/content/read", {"uri": "viking://user/memories/profile.md"}),
+        # The user-space probe runs once, before the first URI is built.
+        ("/api/v1/system/status", {}),
+        ("/api/v1/content/read", {"uri": "viking://user/default/memories/profile.md"}),
         (
             "/api/v1/fs/ls",
-            {"uri": "viking://user/memories/preferences", **_SESSION_START_LIST_PARAMS},
+            {"uri": "viking://user/default/memories/preferences", **_SESSION_START_LIST_PARAMS},
         ),
         (
             "/api/v1/fs/ls",
-            {"uri": "viking://user/memories/entities", **_SESSION_START_LIST_PARAMS},
+            {"uri": "viking://user/default/memories/entities", **_SESSION_START_LIST_PARAMS},
         ),
     ]
     assert provider._search_prefetch_context.call_count == 2
@@ -4401,11 +4459,11 @@ def test_prefetch_can_return_session_start_memory_for_short_query():
     _mock_session_start_reads(
         provider,
         {
-            ("/api/v1/content/read", "viking://user/memories/profile.md"): (
+            ("/api/v1/content/read", "viking://user/default/memories/profile.md"): (
                 "User profile is Ada."
             ),
-            ("/api/v1/fs/ls", "viking://user/memories/preferences"): [],
-            ("/api/v1/fs/ls", "viking://user/memories/entities"): [],
+            ("/api/v1/fs/ls", "viking://user/default/memories/preferences"): [],
+            ("/api/v1/fs/ls", "viking://user/default/memories/entities"): [],
         },
     )
     provider._search_prefetch_context = MagicMock(return_value="should not run")
@@ -4428,7 +4486,9 @@ def test_prefetch_session_start_reads_share_one_total_deadline(monkeypatch):
     def fake_get(path, params=None, **kwargs):
         calls.append((path, (params or {}).get("uri", ""), kwargs.get("timeout")))
         clock[0] += 0.75
-        if (params or {}).get("uri") == "viking://user/memories/profile.md":
+        if path == "/api/v1/system/status":
+            return {"status": "ok", "result": {"user": "default"}}
+        if (params or {}).get("uri") == "viking://user/default/memories/profile.md":
             return {"result": "User profile is Ada."}
         return {"result": []}
 
@@ -4439,9 +4499,9 @@ def test_prefetch_session_start_reads_share_one_total_deadline(monkeypatch):
 
     assert "User profile is Ada." in context
     assert [(path, uri) for path, uri, _timeout in calls] == [
-        ("/api/v1/content/read", "viking://user/memories/profile.md"),
-        ("/api/v1/fs/ls", "viking://user/memories/preferences"),
-        ("/api/v1/fs/ls", "viking://user/memories/entities"),
+        ("/api/v1/system/status", ""),
+        ("/api/v1/content/read", "viking://user/default/memories/profile.md"),
+        ("/api/v1/fs/ls", "viking://user/default/memories/preferences"),
     ]
     assert [timeout for _path, _uri, timeout in calls] == pytest.approx([2.0, 1.25, 0.5])
 
@@ -4453,7 +4513,9 @@ def test_prefetch_retries_session_start_memory_after_empty_failed_attempt():
     def fake_get(path, params=None, **kwargs):
         nonlocal profile_attempts
         uri = (params or {}).get("uri", "")
-        if uri == "viking://user/memories/profile.md":
+        if path == "/api/v1/system/status":
+            return {"status": "ok", "result": {"user": "default"}}
+        if uri == "viking://user/default/memories/profile.md":
             profile_attempts += 1
             if profile_attempts == 1:
                 raise RuntimeError("transient profile read failure")
@@ -4464,7 +4526,7 @@ def test_prefetch_retries_session_start_memory_after_empty_failed_attempt():
     provider._search_prefetch_context = MagicMock(return_value="should not run")
 
     first = provider.prefetch("hi", session_id="sid-123")
-    assert provider._client.get.call_count == 1
+    assert provider._client.get.call_count == 2
     provider._turn_count = 1
     second = provider.prefetch("hi", session_id="sid-123")
 
@@ -4478,9 +4540,9 @@ def test_prefetch_marks_successful_empty_session_start_memory_as_checked():
     calls = _mock_session_start_reads(
         provider,
         {
-            ("/api/v1/content/read", "viking://user/memories/profile.md"): "",
-            ("/api/v1/fs/ls", "viking://user/memories/preferences"): [],
-            ("/api/v1/fs/ls", "viking://user/memories/entities"): [],
+            ("/api/v1/content/read", "viking://user/default/memories/profile.md"): "",
+            ("/api/v1/fs/ls", "viking://user/default/memories/preferences"): [],
+            ("/api/v1/fs/ls", "viking://user/default/memories/entities"): [],
         },
     )
     provider._search_prefetch_context = MagicMock(return_value="should not run")
@@ -4490,10 +4552,11 @@ def test_prefetch_marks_successful_empty_session_start_memory_as_checked():
 
     assert first == ""
     assert second == ""
-    assert [(path, params["uri"]) for path, params, _timeout in calls] == [
-        ("/api/v1/content/read", "viking://user/memories/profile.md"),
-        ("/api/v1/fs/ls", "viking://user/memories/preferences"),
-        ("/api/v1/fs/ls", "viking://user/memories/entities"),
+    assert [(path, params.get("uri", "")) for path, params, _timeout in calls] == [
+        ("/api/v1/system/status", ""),
+        ("/api/v1/content/read", "viking://user/default/memories/profile.md"),
+        ("/api/v1/fs/ls", "viking://user/default/memories/preferences"),
+        ("/api/v1/fs/ls", "viking://user/default/memories/entities"),
     ]
     provider._search_prefetch_context.assert_not_called()
 
@@ -4505,9 +4568,11 @@ def test_prefetch_marks_checked_when_secondary_session_memory_read_fails():
     def fake_get(path, params=None, **kwargs):
         uri = (params or {}).get("uri", "")
         calls.append((path, uri))
-        if uri == "viking://user/memories/profile.md":
+        if path == "/api/v1/system/status":
+            return {"status": "ok", "result": {"user": "default"}}
+        if uri == "viking://user/default/memories/profile.md":
             return {"result": "User profile is Ada."}
-        if uri == "viking://user/memories/entities":
+        if uri == "viking://user/default/memories/entities":
             raise RuntimeError("transient entities listing failure")
         return {"result": []}
 
@@ -4521,11 +4586,54 @@ def test_prefetch_marks_checked_when_secondary_session_memory_read_fails():
     assert "User profile is Ada." in first
     assert second == ""
     assert calls == [
-        ("/api/v1/content/read", "viking://user/memories/profile.md"),
-        ("/api/v1/fs/ls", "viking://user/memories/preferences"),
-        ("/api/v1/fs/ls", "viking://user/memories/entities"),
+        ("/api/v1/system/status", ""),
+        ("/api/v1/content/read", "viking://user/default/memories/profile.md"),
+        ("/api/v1/fs/ls", "viking://user/default/memories/preferences"),
+        ("/api/v1/fs/ls", "viking://user/default/memories/entities"),
     ]
     provider._search_prefetch_context.assert_not_called()
+
+
+def test_session_start_reuses_one_fallback_user_after_status_probe_failure():
+    provider = _make_prefetch_provider()
+    provider._user = "configured-user"
+    provider._client._user = "configured-user"
+    provider._search_prefetch_context = MagicMock(return_value="")
+    status_calls = 0
+    status_timeouts = []
+    read_uris = []
+
+    def fake_get(path, params=None, **kwargs):
+        nonlocal status_calls
+        if path == "/api/v1/system/status":
+            status_calls += 1
+            status_timeouts.append(kwargs.get("timeout"))
+            if status_calls == 1:
+                raise RuntimeError("temporary status failure")
+            return {"status": "ok", "result": {"user": "alice"}}
+
+        uri = (params or {}).get("uri", "")
+        read_uris.append(uri)
+        if path == "/api/v1/content/read":
+            return {"result": "Configured-user profile."}
+        return {"result": []}
+
+    provider._client.get.side_effect = fake_get
+
+    block = provider.prefetch("What should we recall?", session_id="sid-fallback")
+
+    assert status_calls == 1
+    assert len(status_timeouts) == 1
+    assert 0 < status_timeouts[0] <= 3.0
+    assert read_uris == [
+        "viking://user/configured-user/memories/profile.md",
+        "viking://user/configured-user/memories/preferences",
+        "viking://user/configured-user/memories/entities",
+    ]
+    assert (
+        '<user-profile uri="viking://user/configured-user/memories/profile.md">'
+        in block
+    )
 
 
 def test_prefetch_reinjects_after_in_place_compression_same_session():
@@ -4535,7 +4643,9 @@ def test_prefetch_reinjects_after_in_place_compression_same_session():
 
     def fake_get(path, params=None, **kwargs):
         uri = (params or {}).get("uri", "")
-        if uri == "viking://user/memories/profile.md":
+        if path == "/api/v1/system/status":
+            return {"status": "ok", "result": {"user": "default"}}
+        if uri == "viking://user/default/memories/profile.md":
             return {"result": next(profiles)}
         return {"result": []}
 
@@ -4557,7 +4667,9 @@ def test_prefetch_reinjects_for_new_session_id():
 
     def fake_get(path, params=None, **kwargs):
         uri = (params or {}).get("uri", "")
-        if uri == "viking://user/memories/profile.md":
+        if path == "/api/v1/system/status":
+            return {"status": "ok", "result": {"user": "default"}}
+        if uri == "viking://user/default/memories/profile.md":
             return {"result": next(profiles)}
         return {"result": []}
 
@@ -4576,17 +4688,17 @@ def test_prefetch_degrades_cleanly_when_profile_is_definitively_missing():
     _mock_session_start_reads(
         provider,
         {
-            ("/api/v1/content/read", "viking://user/memories/profile.md"): (
+            ("/api/v1/content/read", "viking://user/default/memories/profile.md"): (
                 openviking_module._OpenVikingHTTPError("not found", 404)
             ),
-            ("/api/v1/fs/ls", "viking://user/memories/preferences"): _memory_listing(
+            ("/api/v1/fs/ls", "viking://user/default/memories/preferences"): _memory_listing(
                 {
                     "isDir": False,
                     "rel_path": "owner/review.md",
                     "abstract": "Likes source-backed answers.",
                 },
             ),
-            ("/api/v1/fs/ls", "viking://user/memories/entities"): [],
+            ("/api/v1/fs/ls", "viking://user/default/memories/entities"): [],
         },
     )
     provider._search_prefetch_context = MagicMock(return_value="should not run")
@@ -4595,7 +4707,7 @@ def test_prefetch_degrades_cleanly_when_profile_is_definitively_missing():
 
     assert "Likes source-backed answers." in context
     assert "<user-profile" not in context
-    assert "viking://user/memories/preferences/" in context
+    assert "viking://user/default/memories/preferences/" in context
 
 
 def test_session_start_memory_context_respects_total_budget_and_preserves_profile_tail(monkeypatch):
@@ -4617,9 +4729,9 @@ def test_session_start_memory_context_respects_total_budget_and_preserves_profil
     _mock_session_start_reads(
         provider,
         {
-            ("/api/v1/content/read", "viking://user/memories/profile.md"): long_profile,
-            ("/api/v1/fs/ls", "viking://user/memories/preferences"): listing,
-            ("/api/v1/fs/ls", "viking://user/memories/entities"): listing,
+            ("/api/v1/content/read", "viking://user/default/memories/profile.md"): long_profile,
+            ("/api/v1/fs/ls", "viking://user/default/memories/preferences"): listing,
+            ("/api/v1/fs/ls", "viking://user/default/memories/entities"): listing,
         },
     )
     provider._search_prefetch_context = MagicMock(return_value="should not run")
@@ -4640,7 +4752,7 @@ def test_prefetch_does_not_auto_inject_memory_overview_when_profile_missing():
     calls = _mock_session_start_reads(
         provider,
         {
-            ("/api/v1/content/read", "viking://user/memories/profile.md"): RuntimeError(
+            ("/api/v1/content/read", "viking://user/default/memories/profile.md"): RuntimeError(
                 "transient profile failure"
             ),
         },
@@ -4651,8 +4763,9 @@ def test_prefetch_does_not_auto_inject_memory_overview_when_profile_missing():
 
     assert "<user-profile" not in context
     assert "recalled context" in context
-    assert [(path, params["uri"]) for path, params, _timeout in calls] == [
-        ("/api/v1/content/read", "viking://user/memories/profile.md"),
+    assert [(path, params.get("uri", "")) for path, params, _timeout in calls] == [
+        ("/api/v1/system/status", ""),
+        ("/api/v1/content/read", "viking://user/default/memories/profile.md"),
     ]
     provider._search_prefetch_context.assert_called_once_with(
         "What should we recall?",

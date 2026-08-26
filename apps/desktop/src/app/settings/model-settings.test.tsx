@@ -32,11 +32,12 @@ let profileSwitchHandler: (() => void) | null = null
 
 vi.mock('@/hermes', async importOriginal => ({
   ...(await importOriginal<typeof HermesApi>()),
-  getGlobalModelInfo: () => getGlobalModelInfo(),
-  getGlobalModelOptions: () => getGlobalModelOptions(),
-  getAuxiliaryModels: () => getAuxiliaryModels(),
+  getGlobalModelInfo: (profile?: null | string) => getGlobalModelInfo(profile),
+  getGlobalModelOptions: (opts?: unknown, profile?: null | string) => getGlobalModelOptions(opts, profile),
+  getAuxiliaryModels: (profile?: null | string) => getAuxiliaryModels(profile),
   getApiRequestProfile: () => 'default',
-  getMoaModels: () => getMoaModels(),
+  getMoaModels: (profile?: null | string) => getMoaModels(profile),
+  profileScopeKey: (scope?: null | string) => (scope ?? '').trim() || 'default',
   saveMoaModels: (body: unknown) => saveMoaModels(body),
   setModelAssignment: (body: unknown) => setModelAssignment(body),
   getRecommendedDefaultModel: (slug: string) => getRecommendedDefaultModel(slug),
@@ -119,7 +120,7 @@ afterEach(() => {
   profileSwitchHandler = null
 })
 
-async function renderModelSettings() {
+async function renderModelSettings(scopeProfile?: string) {
   const { ModelSettings } = await import('./model-settings')
 
   return render(
@@ -127,11 +128,35 @@ async function renderModelSettings() {
     // needs a router context in tests (the app provides HashRouter at root).
     <MemoryRouter>
       <QueryClientProvider client={queryClient}>
-        <ModelSettings />
+        <ModelSettings scopeProfile={scopeProfile} />
       </QueryClientProvider>
     </MemoryRouter>
   )
 }
+
+describe('ModelSettings profile scope', () => {
+  // #90549: the API helpers treat `null` as "deliberately target the
+  // primary/default profile". A page following the active profile must pass
+  // `undefined`, or every read repaints the primary's model and the user's
+  // change looks reverted.
+  it('follows the active profile (undefined, never null) when unscoped', async () => {
+    await renderModelSettings()
+
+    await waitFor(() => expect(getGlobalModelInfo).toHaveBeenCalledWith(undefined))
+    expect(getGlobalModelOptions).toHaveBeenCalledWith(undefined, undefined)
+    expect(getAuxiliaryModels).toHaveBeenCalledWith(undefined)
+    expect(getMoaModels).toHaveBeenCalledWith(undefined)
+  })
+
+  it('reads through the explicit scope override when one is set', async () => {
+    await renderModelSettings('research')
+
+    await waitFor(() => expect(getGlobalModelInfo).toHaveBeenCalledWith('research'))
+    expect(getGlobalModelOptions).toHaveBeenCalledWith(undefined, 'research')
+    expect(getAuxiliaryModels).toHaveBeenCalledWith('research')
+    expect(getMoaModels).toHaveBeenCalledWith('research')
+  })
+})
 
 describe('ModelSettings', () => {
   it('loads the current main model and lists the full provider universe', async () => {
