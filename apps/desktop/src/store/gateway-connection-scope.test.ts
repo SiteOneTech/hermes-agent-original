@@ -40,14 +40,18 @@ vi.mock('@/store/session', () => ({
 vi.mock('@/store/notify-baseline', () => ({ markNativeNotifyBaseline: vi.fn() }))
 
 const {
+  activeGatewayConnectionId,
   closeLegacySecondaryGateways,
   closeSecondaryGateways,
   configureGatewayRegistry,
   ensureGatewayForAgent,
   openGatewayForAgent,
   pruneSecondaryGateways,
-  setPrimaryGateway
+  setPrimaryGateway,
+  setPrimaryGatewayConnectionId
 } = await import('./gateway')
+
+const { setApiRequestConnection } = await import('@/hermes')
 
 function installDesktop(): void {
   ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = {
@@ -83,6 +87,25 @@ afterEach(() => {
   closeSecondaryGateways()
   vi.clearAllMocks()
   delete (window as unknown as { hermesDesktop?: unknown }).hermesDesktop
+})
+
+describe('primary gateway registry scope', () => {
+  it('publishes a registered primary connection id for ambient API/WebSocket helpers', () => {
+    setPrimaryGateway({ connectionState: 'open' } as never, 'default')
+    setPrimaryGatewayConnectionId(' homelab-ssh ')
+
+    expect(activeGatewayConnectionId()).toBe('homelab-ssh')
+    expect(setApiRequestConnection).toHaveBeenLastCalledWith('homelab-ssh')
+  })
+
+  it('clears primary connection scope when the primary becomes legacy/local again', () => {
+    setPrimaryGateway({ connectionState: 'open' } as never, 'default')
+    setPrimaryGatewayConnectionId('homelab-ssh')
+    setPrimaryGateway({ connectionState: 'open' } as never, 'default')
+
+    expect(activeGatewayConnectionId()).toBeNull()
+    expect(setApiRequestConnection).toHaveBeenLastCalledWith(null)
+  })
 })
 
 describe('pruneSecondaryGateways with registry-scoped entries', () => {
@@ -138,7 +161,7 @@ describe('pruneSecondaryGateways with registry-scoped entries', () => {
     expect(gatewayMocks.closed).toHaveLength(1)
   })
 
-  it("does not let a remote tile keep-set pin a local same-named secondary", async () => {
+  it('does not let a remote tile keep-set pin a local same-named secondary', async () => {
     // Chrome is on another profile so 'default' is a real secondary, not the
     // spared active key. A homelab bot tile keep-set must keep only the
     // composite scope — the local 'default' socket still idles out.
