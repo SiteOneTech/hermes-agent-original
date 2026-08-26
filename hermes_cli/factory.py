@@ -480,15 +480,31 @@ def _source_root_is_clean(source_root: Path) -> bool:
     return status == ""
 
 
+def _normalized_base_branch_name(ref_name: str) -> str:
+    branch = str(ref_name or "").strip()
+    for prefix in ("refs/remotes/origin/", "refs/heads/", "origin/"):
+        if branch.startswith(prefix):
+            return branch.removeprefix(prefix)
+    return branch
+
+
+def _source_root_is_configured_base_branch(source_root: Path, base_ref: str) -> bool:
+    branch = _git_probe_source_root(source_root, "rev-parse", "--abbrev-ref", "HEAD")
+    if not branch or branch == "HEAD":
+        return False
+    return _normalized_base_branch_name(branch) == _normalized_base_branch_name(base_ref)
+
+
 def _preferred_configured_base_source_root(running_source_root: Path) -> Path | None:
-    """Return an exact configured-base worktree when the running root is stale.
+    """Return an exact configured-base worktree when primary source is not current.
 
     ``hermes`` console scripts installed from a primary checkout can be invoked
-    from that same checkout even when its HEAD is behind ``origin/main``.  In
-    that shape there is no distinct cwd source root to prefer, so status must
-    use a verified worktree at the configured base instead of reusing stale
-    primary Factory code.  If the base ref or worktree cannot be proven exactly,
-    return ``None`` and let the normal status path remain fail-closed.
+    from that same checkout even when its local ``main`` is behind, ahead, or
+    diverged from ``origin/main``.  In that shape there is no distinct cwd source
+    root to prefer, so status/tick must use a verified worktree at the configured
+    base instead of reusing non-current primary Factory code.  If the running
+    source is an isolated feature worktree, or the base ref/worktree cannot be
+    proven exactly, return ``None`` and let the normal path remain fail-closed.
     """
 
     if os.environ.get("HERMES_FACTORY_SOURCE_DELEGATED") == "1":
@@ -500,11 +516,11 @@ def _preferred_configured_base_source_root(running_source_root: Path) -> Path | 
     base = _origin_default_base_ref(running_source_root)
     if base is None:
         return None
-    _base_ref, base_commit = base
+    base_ref, base_commit = base
     running_head = _git_probe_source_root(running_source_root, "rev-parse", "HEAD")
     if not running_head or running_head == base_commit:
         return None
-    if _git_check_source_root(running_source_root, "merge-base", "--is-ancestor", running_head, base_commit) is not True:
+    if not _source_root_is_configured_base_branch(running_source_root, base_ref):
         return None
     candidates: list[Path] = []
     for entry in _git_worktree_entries(running_source_root):
@@ -529,17 +545,17 @@ def _preferred_configured_base_source_root(running_source_root: Path) -> Path | 
     return sorted(candidates, key=lambda path: str(path))[0]
 
 
-def _running_source_is_stale_behind_configured_base(running_source_root: Path) -> bool:
-    """Return whether ``running_source_root`` is behind the configured origin base."""
+def _running_source_needs_configured_base_for_tick(running_source_root: Path) -> bool:
+    """Return whether tick dispatch must refuse this non-current primary source."""
 
     base = _origin_default_base_ref(running_source_root)
     if base is None:
         return False
-    _base_ref, base_commit = base
+    base_ref, base_commit = base
     running_head = _git_probe_source_root(running_source_root, "rev-parse", "HEAD")
     if not running_head or running_head == base_commit:
         return False
-    return _git_check_source_root(running_source_root, "merge-base", "--is-ancestor", running_head, base_commit) is True
+    return _source_root_is_configured_base_branch(running_source_root, base_ref)
 
 
 def _preferred_cwd_source_root(running_source_root: Path) -> Path | None:
@@ -656,10 +672,10 @@ def _resolve_orchestrator_script() -> tuple[Path, Path]:
         running_source_root
     )
     if source_root is None:
-        if _running_source_is_stale_behind_configured_base(running_source_root):
+        if _running_source_needs_configured_base_for_tick(running_source_root):
             raise RuntimeError(
                 "Factory orchestrator configured-base source is unavailable or unverified; "
-                "refusing to run tick dispatch from a stale primary checkout"
+                "refusing to run tick dispatch from a non-current primary checkout"
             )
         source_root = running_source_root
     script = source_root / "scripts" / "factory" / "factory_orchestrator_tick.py"
