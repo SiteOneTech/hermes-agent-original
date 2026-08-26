@@ -2788,6 +2788,12 @@ def _task_covers_reconciliation_anomaly(task: dict[str, Any], code: str) -> bool
     return False
 
 
+def _open_reconciliation_task_covers_anomaly(task: dict[str, Any], code: str) -> bool:
+    """Return True only for live reconciliation rows that cover an anomaly."""
+
+    return _is_reconciliation_task(task) and _task_covers_reconciliation_anomaly(task, code)
+
+
 def _latest_gate_statuses(gates: list[dict[str, Any]]) -> dict[str, str]:
     statuses: dict[str, str] = {}
     for gate in gates:
@@ -3045,7 +3051,7 @@ def ensure_reconciliation_tasks(project: dict[str, Any], findings: list[dict[str
     terminal = ",".join(_q(status) for status in TERMINAL_TASK_STATUSES)
     for finding in findings:
         code = str(finding.get("code") or "")
-        if not code or any(_task_covers_reconciliation_anomaly(task, code) for task in tasks):
+        if not code or any(_open_reconciliation_task_covers_anomaly(task, code) for task in tasks):
             continue
         spec = RECONCILIATION_TASK_SPECS[code]
         task_id = f"{project_id}-reconcile-{code.replace('_', '-')}"

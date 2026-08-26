@@ -1213,6 +1213,164 @@ def test_force_tick_claims_r2df_docs_recovery_before_validation_work_when_docs_a
     assert "Task demo-alr-020-product claimed" not in joined
 
 
+def test_force_tick_ensures_docs_repair_despite_old_non_reconciliation_anomaly_marker(fake_sql, monkeypatch):
+    stale_blocked_product_quality = {
+        "project_id": "demo",
+        "lane_id": "lane-quality",
+        "task_id": "demo-r2cy-r1-product-quality",
+        "status": "blocked",
+        "phase": "quality_review",
+        "priority": 17,
+        "title": "R2cy-R1 product quality task",
+        "description": "Historical product-quality blocker retained for audit only.",
+        "owner_profile": "quality-reviewer",
+        "reviewer_profile": "security-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {"reconciliation_anomaly": "unvalidated_required_docs"},
+    }
+    product_quality = {
+        "project_id": "demo",
+        "lane_id": "lane-quality",
+        "task_id": "demo-r2cy-r1-ready-product-quality",
+        "status": "ready",
+        "phase": "quality_review",
+        "priority": 18,
+        "title": "R2cy-R1 — product quality verification",
+        "description": "Product quality work must stay docs-first gated while required docs are red.",
+        "owner_profile": "quality-reviewer",
+        "reviewer_profile": "security-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {},
+    }
+    product_implementation = {
+        "project_id": "demo",
+        "lane_id": "lane-product",
+        "task_id": "demo-alr-020-product",
+        "status": "ready",
+        "phase": "implementation",
+        "priority": 20,
+        "title": "ALR-020 product implementation",
+        "description": "Normal product work must remain fail-closed while required G1 docs are red.",
+        "owner_profile": "claude-builder",
+        "engine": "claude_code",
+        "dependencies": [],
+        "metadata": {},
+    }
+    docs_repair = {
+        "project_id": "demo",
+        "lane_id": "lane-docs",
+        "task_id": "demo-reconcile-unvalidated-required-docs",
+        "status": "todo",
+        "phase": "documentation",
+        "priority": 36,
+        "title": "R2c — Reconciliation: validate and independently review required Factory docs",
+        "description": "Generated documentation recovery for red G1 required docs.",
+        "owner_profile": "factory-reporter",
+        "reviewer_profile": "factory-orchestrator",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {"factory_reconciliation_task": True, "reconciliation_anomaly": "unvalidated_required_docs"},
+    }
+    red_doc_status = [
+        {
+            "file_name": "FACTORY_INTAKE.md",
+            "category": "g1_required",
+            "exists": True,
+            "indexed": True,
+            "committed": True,
+            "validated": True,
+            "reviewed": False,
+            "blocking": True,
+        }
+    ]
+    project = {
+        "project_id": "demo",
+        "status": "active",
+        "autonomous_enabled": True,
+        "metadata": {"reconciliation_anomalies": ["unvalidated_required_docs"]},
+        "document_status": red_doc_status,
+    }
+    base_tasks = [stale_blocked_product_quality, product_quality, product_implementation]
+    assert factory_pg._dispatch_preflight_blockers(product_quality, docs_ready=False, notion_ready=True) == [
+        "missing_or_unindexed_docs"
+    ]
+
+    def docs_repair_was_ensured() -> bool:
+        return "demo-reconcile-unvalidated-required-docs" in "\n".join(fake_sql.statements)
+
+    def current_tasks() -> list[dict]:
+        return [*base_tasks, docs_repair] if docs_repair_was_ensured() else list(base_tasks)
+
+    def payload_status(project_id=None):
+        return {"projects": [project], "tasks": current_tasks(), "task_runs": []}
+
+    def rows(sql_text, *, user=None, **_):
+        fake_sql.statements.append(sql_text)
+        if "SELECT run_id FROM factory.task_runs" in sql_text:
+            return []
+        if "FROM factory.projects p" in sql_text:
+            return [{"project_id": "demo"}]
+        if "t.status='review_ready'" in sql_text:
+            return []
+        if "status IN ('todo', 'ready')" in sql_text:
+            return [product_quality, product_implementation, *([docs_repair] if docs_repair_was_ensured() else [])]
+        return []
+
+    def statement_one(sql_text, *, user=None, **_):
+        fake_sql.statements.append(sql_text)
+        if "SET status='claimed'" in sql_text and docs_repair["task_id"] in sql_text:
+            return {**docs_repair, "status": "claimed"}
+        if "SET status='claimed'" in sql_text and product_quality["task_id"] in sql_text:
+            return {**product_quality, "status": "claimed"}
+        if "SET status='claimed'" in sql_text and product_implementation["task_id"] in sql_text:
+            return {**product_implementation, "status": "claimed"}
+        return None
+
+    monkeypatch.setattr(factory_pg, "acquire_global_control_plane_lease", lambda *_, **__: {"acquired": True})
+    monkeypatch.setattr(factory_pg, "release_global_control_plane_lease", lambda *_: None)
+    monkeypatch.setattr(factory_pg, "monitor_runs", lambda: {})
+    monkeypatch.setattr(factory_pg, "supervisor_health_check", lambda *_, **__: {"violations": [], "repairs": []})
+    monkeypatch.setattr(factory_pg, "clear_resolved_blockers", lambda project_id: {"project_id": project_id, "reopened": []})
+    monkeypatch.setattr(factory_pg, "status", payload_status)
+    monkeypatch.setattr(factory_pg, "classify_factory_blockers", lambda *_, **__: [])
+    monkeypatch.setattr(factory_pg, "record_factory_blocker_actions", lambda *_, **__: [])
+    monkeypatch.setattr(factory_pg, "reconcile_project", _ORIGINAL_RECONCILE_PROJECT)
+    monkeypatch.setattr(factory_pg, "_recover_false_terminalized_review_runs", lambda *_, **__: [])
+    monkeypatch.setattr(factory_pg, "_scope_unscoped_current_false_review_terminalization_recoveries", lambda *_, **__: [])
+    monkeypatch.setattr(factory_pg, "_revoke_unscoped_false_review_terminalization_recoveries", lambda *_, **__: [])
+    monkeypatch.setattr(factory_pg, "cancel_resolved_reconciliation_tasks", lambda *_, **__: [])
+    monkeypatch.setattr(
+        factory_pg,
+        "reconciliation_findings",
+        lambda *_, **__: [
+            {
+                "code": "unvalidated_required_docs",
+                "message": "Required Factory methodology documents are present but not fully validated/reviewed",
+                "metadata": {"blocking_documents": ["FACTORY_INTAKE.md"]},
+            }
+        ],
+    )
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: current_tasks())
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_project_docs_notion_preflight", lambda *_, **__: (False, True, False, False))
+    monkeypatch.setattr(fake_sql, "rows", rows)
+    monkeypatch.setattr(fake_sql, "statement_one", statement_one)
+
+    tick = factory_pg.force_tick("demo")
+
+    assert tick["claimed"] is not None
+    assert tick["claimed"]["task"]["task_id"] == docs_repair["task_id"]
+    joined = "\n".join(fake_sql.statements)
+    assert "reconciliation_task_ensured" in joined
+    assert "Task demo-reconcile-unvalidated-required-docs claimed" in joined
+    assert "Task demo-r2cy-r1-ready-product-quality claimed" not in joined
+    assert "Task demo-alr-020-product claimed" not in joined
+
+
 def test_claim_next_task_allows_docs_first_pr_review_repair_when_docs_red(fake_sql, monkeypatch):
     review_repair = {
         "project_id": "demo",
