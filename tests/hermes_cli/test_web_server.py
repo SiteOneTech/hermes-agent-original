@@ -4633,6 +4633,7 @@ class TestWebServerEndpoints:
 
         monkeypatch.setattr(ws, "_telegram_onboarding_request_sync", fake_request)
         ws._ACTION_PROCS.pop("gateway-restart", None)
+        monkeypatch.setattr(ws, "_LAST_GATEWAY_RESTART", None)
 
         def fail_spawn_action(subcommand, name):
             assert subcommand == ["gateway", "restart"]

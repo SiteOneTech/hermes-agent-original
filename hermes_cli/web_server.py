@@ -1422,11 +1422,14 @@ CONFIG_SCHEMA = _build_schema_from_config(DEFAULT_CONFIG)
 # by the normalize/denormalize cycle.  Insert model_context_length right after
 # the "model" key so it renders adjacent in the frontend.
 _mcl_entry = _SCHEMA_OVERRIDES["model_context_length"]
+_stt_provider_entry = {**_SCHEMA_OVERRIDES["stt.provider"], "category": "stt"}
 _ordered_schema: Dict[str, Dict[str, Any]] = {}
 for _k, _v in CONFIG_SCHEMA.items():
     _ordered_schema[_k] = _v
     if _k == "model":
         _ordered_schema["model_context_length"] = _mcl_entry
+    if _k == "stt.enabled":
+        _ordered_schema["stt.provider"] = _stt_provider_entry
 CONFIG_SCHEMA = _ordered_schema
 
 
