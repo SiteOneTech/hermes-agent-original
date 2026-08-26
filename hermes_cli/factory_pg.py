@@ -4584,83 +4584,106 @@ def _candidate_requires_validation_readiness_before_dispatch(candidate: dict[str
     return phase.startswith("delivery") or phase in {"release", "final", "final_report"} or final_stage_text
 
 
+_DOCS_FIRST_REPAIR_DOC_TERMS = (
+    "documentation recovery",
+    "document status",
+    "document-status",
+    "docs-first",
+    "g1 docs",
+    "g1 documentation",
+    "required docs",
+    "documentation_index",
+    "documentation index",
+)
+_DOCS_FIRST_REPAIR_TERMS = (
+    "reconciliation",
+    "repair",
+    "recovery",
+    "provenance",
+    "source-root",
+    "source root",
+    "runtime-source",
+    "runtime source",
+    "primary divergence",
+    "diverged-primary",
+    "dispatch behavior",
+    "dispatch preflight",
+    "control-plane",
+    "control plane",
+    "conflict",
+)
+_PRODUCT_OR_RUNTIME_DISPATCH_SCOPE_TERMS = (
+    "alr-020",
+    "alr-030",
+    "alr-040",
+    "alr-050",
+    "alr-060",
+    "alr-061",
+    "alr-062",
+    "alr-063",
+    "alr-070",
+    "alr-080",
+    "product implementation",
+    "ledger implementation",
+    "external runtime",
+    "runtime propagation",
+    "external connector",
+    "trading",
+    "market execution",
+    "risk mutation",
+    "paper/live",
+    "paper live",
+    "paper-run",
+    "paper run",
+    "live-run",
+    "live run",
+    "deployment",
+    "deploy",
+    "messaging",
+    "message connector",
+    "direct sql",
+    "psql",
+    "psycopg2",
+    "base-branch integration",
+    "base branch integration",
+    "direct-integration",
+    "direct integration",
+    "origin/main integration",
+    "base branch merge",
+)
+
+
+def _has_repair_dispatch_terms(task: dict[str, Any]) -> bool:
+    text = _task_text(task)
+    return any(term in text for term in _DOCS_FIRST_REPAIR_TERMS)
+
+
 def _has_docs_first_repair_terms(task: dict[str, Any]) -> bool:
     text = _task_text(task)
-    docs_terms = (
-        "documentation recovery",
-        "document status",
-        "document-status",
-        "docs-first",
-        "g1 docs",
-        "g1 documentation",
-        "required docs",
-        "documentation_index",
-        "documentation index",
-    )
-    repair_terms = (
-        "reconciliation",
-        "repair",
-        "recovery",
-        "provenance",
-        "source-root",
-        "source root",
-        "runtime-source",
-        "runtime source",
-        "primary divergence",
-        "diverged-primary",
-        "dispatch behavior",
-        "dispatch preflight",
-        "control-plane",
-        "control plane",
-        "conflict",
-    )
-    return any(term in text for term in docs_terms) and any(term in text for term in repair_terms)
+    return any(term in text for term in _DOCS_FIRST_REPAIR_DOC_TERMS) and _has_repair_dispatch_terms(task)
+
+
+def _text_has_product_or_runtime_dispatch_scope(text: str) -> bool:
+    return any(term in text for term in _PRODUCT_OR_RUNTIME_DISPATCH_SCOPE_TERMS)
+
+
+def _text_without_negative_dispatch_guardrails(text: str) -> str:
+    chunks = re.split(r"(?<=[.!?;])\s+|\n+", text)
+    retained: list[str] = []
+    negative_marker = re.compile(r"\b(no|without|do not|does not|must not|never|forbidden|prohibited|sin)\b")
+    for chunk in chunks:
+        if negative_marker.search(chunk) and _text_has_product_or_runtime_dispatch_scope(chunk):
+            continue
+        retained.append(chunk)
+    return "\n".join(retained)
+
+
+def _has_positive_product_or_runtime_dispatch_scope(task: dict[str, Any]) -> bool:
+    return _text_has_product_or_runtime_dispatch_scope(_text_without_negative_dispatch_guardrails(_task_text(task)))
 
 
 def _has_product_or_runtime_dispatch_scope(task: dict[str, Any]) -> bool:
-    text = _task_text(task)
-    return any(
-        term in text
-        for term in (
-            "alr-020",
-            "alr-030",
-            "alr-040",
-            "alr-050",
-            "alr-060",
-            "alr-061",
-            "alr-062",
-            "alr-063",
-            "alr-070",
-            "alr-080",
-            "product implementation",
-            "ledger implementation",
-            "external runtime",
-            "runtime propagation",
-            "external connector",
-            "trading",
-            "market execution",
-            "risk mutation",
-            "paper/live",
-            "paper live",
-            "paper-run",
-            "paper run",
-            "live-run",
-            "live run",
-            "deployment",
-            "deploy",
-            "messaging",
-            "message connector",
-            "direct sql",
-            "psql",
-            "psycopg2",
-            "base-branch integration",
-            "base branch integration",
-            "direct-integration",
-            "direct integration",
-            "origin/main integration",
-            "base branch merge",
-        )
-    )
+    return _text_has_product_or_runtime_dispatch_scope(_task_text(task))
 
 
 def _is_docs_first_repair_dispatch_task(task: dict[str, Any]) -> bool:
@@ -4669,6 +4692,8 @@ def _is_docs_first_repair_dispatch_task(task: dict[str, Any]) -> bool:
     if _is_docs_first_validation_repair_task(task):
         return True
     phase = str(task.get("phase") or "").strip().lower().replace("-", "_")
+    if phase == "g1_recovery" and _has_repair_dispatch_terms(task) and not _has_positive_product_or_runtime_dispatch_scope(task):
+        return True
     return _has_docs_first_repair_terms(task) and (
         phase.startswith(("g0", "g1"))
         or phase in {"documentation", "docs", "planning"}
