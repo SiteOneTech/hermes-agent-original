@@ -6841,6 +6841,36 @@ def _project_docs_notion_preflight(project: dict[str, Any], tasks: list[dict[str
     return docs_ready, notion_ready, _metadata_bool(metadata, "notion_required"), _dispatch_docs_first_waived(metadata)
 
 
+def _payload_docs_first_repair_should_preempt_review(payload: dict[str, Any], project_id: Optional[str] = None) -> bool:
+    projects = {
+        str(project.get("project_id") or ""): project
+        for project in payload.get("projects", [])
+        if not project_id or str(project.get("project_id") or "") == project_id
+    }
+    if not projects:
+        return False
+    tasks = payload.get("tasks", [])
+    project_tasks = tasks if isinstance(tasks, list) else []
+    for pid, project in projects.items():
+        if not _project_autonomous_enabled(project, _metadata(project)):
+            continue
+        if str(project.get("status") or "") not in DISPATCHABLE_PROJECT_STATUSES:
+            continue
+        metadata = _metadata(project)
+        document_status = project.get("document_status")
+        primary_runtime_blocked = isinstance(document_status, list) and bool(
+            _g1_document_primary_runtime_blockers_from_rows(document_status)
+        )
+        docs_ready = _payload_project_docs_ready(project) and not primary_runtime_blocked
+        if docs_ready or _dispatch_docs_first_waived(metadata):
+            continue
+        if _has_dependency_ready_docs_first_repair_task(
+            [task for task in project_tasks if str(task.get("project_id") or "") == pid]
+        ):
+            return True
+    return False
+
+
 def _record_dispatch_preflight_denied(project_id: str, task: dict[str, Any], blockers: list[str], *, worker: str) -> None:
     sql.psql(
         f"""
@@ -8068,11 +8098,20 @@ def force_tick(
                 if prepared_successor.get("prepared"):
                     dispatch_project_id = str(prepared_successor["successor_project_id"])
 
-        claimed = claim_next_review(dispatch_project_id, worker="factory-force-tick")
-        if not claimed:
+        docs_repair_preempts_review = _payload_docs_first_repair_should_preempt_review(
+            payload_after_reconcile,
+            project_id=dispatch_project_id,
+        )
+        claimed = None
+        if docs_repair_preempts_review:
             # Documentation/reconciliation repair has priority over product rework
-            # when docs-first gates are red. Otherwise a failed QA/rework loop can
-            # keep executing against invalid methodology context.
+            # and validation review when docs-first gates are red. Otherwise a
+            # failed QA/review loop can keep executing against invalid
+            # methodology context and starve the documentation/G1 recovery.
+            claimed = claim_next_task(dispatch_project_id, worker="factory-force-tick")
+        if not claimed:
+            claimed = claim_next_review(dispatch_project_id, worker="factory-force-tick")
+        if not claimed and not docs_repair_preempts_review:
             claimed = claim_next_task(dispatch_project_id, worker="factory-force-tick")
         if not claimed:
             claimed = claim_next_rework(dispatch_project_id, worker="factory-force-tick")
