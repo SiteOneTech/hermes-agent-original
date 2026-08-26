@@ -857,6 +857,179 @@ def test_claim_next_task_claims_g1_recovery_with_final_gate_wording_before_produ
     assert "Task demo-alr-020-r2-product claimed" not in joined
 
 
+def test_claim_next_task_claims_r2df_r23_phase_g1_recovery_before_validation_deadlock(fake_sql, monkeypatch):
+    required_doc_names = [
+        "FACTORY_INTAKE.md",
+        "REQUIREMENTS_ANALYSIS.md",
+        "PATTERN_ANALYSIS.md",
+        "ASSUMPTIONS_AND_OPEN_QUESTIONS.md",
+        "PRD.md",
+        "ADRS.md",
+        "METHODOLOGY_PLAN.md",
+        "TECHNICAL_BLUEPRINT.md",
+        "TASK_GRAPH.md",
+        "SECURITY_GATES.md",
+    ]
+    document_status = [
+        {
+            "file_name": name,
+            "category": "g1_required",
+            "exists": True,
+            "indexed": True,
+            "committed": True,
+            "validated": True,
+            "reviewed": False,
+            "blocking": True,
+            "missing": ["reviewed"],
+        }
+        for name in required_doc_names
+    ]
+    r2df_r23_recovery = {
+        "project_id": "demo",
+        "lane_id": "lane-g1-recovery",
+        "task_id": "zeus-alpha-research-ledger-core-r2df-r23-fail-closed-review-runtime-fail",
+        "status": "todo",
+        "phase": "g1_recovery",
+        "priority": -3,
+        "title": "R2df-R23 — fail-closed review runtime-failure terminalization recovery",
+        "description": (
+            "Bounded same-project technical rework. Reproduce false review terminalization "
+            "when a provider/runtime failure leaves zero successful model or tool work. "
+            "Make the smallest fail-closed control-plane change so the review remains "
+            "requeueable. No credentials, external runtime, messaging, deployment, or "
+            "trading/risk action."
+        ),
+        "owner_profile": "codex-builder",
+        "reviewer_profile": "security-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {"repo_strategy_status": "passed"},
+    }
+    validation_repair = {
+        "project_id": "demo",
+        "lane_id": "lane-validation",
+        "task_id": "zeus-alpha-research-ledger-core-r2df-r17-docs-first-validation-scheduler",
+        "status": "ready",
+        "phase": "quality_review",
+        "priority": -2,
+        "title": "ALR-062 — independent quality review",
+        "description": "Validation work must wait until required documents are green.",
+        "owner_profile": "quality-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {},
+    }
+    product = {
+        "project_id": "demo",
+        "lane_id": "lane-product",
+        "task_id": "demo-alr-020-product",
+        "status": "ready",
+        "phase": "implementation",
+        "priority": -1,
+        "title": "ALR-020 product implementation",
+        "description": "Normal product implementation must remain fail-closed while required G1 docs are red.",
+        "owner_profile": "claude-builder",
+        "engine": "claude_code",
+        "dependencies": [],
+        "metadata": {},
+    }
+    qa = {
+        "project_id": "demo",
+        "lane_id": "lane-qa",
+        "task_id": "demo-alr-070-qa-smoke",
+        "status": "ready",
+        "phase": "qa",
+        "priority": 0,
+        "title": "ALR-070 QA smoke",
+        "description": "QA smoke must remain docs-first gated.",
+        "owner_profile": "qa-verifier",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {},
+    }
+    security = {
+        "project_id": "demo",
+        "lane_id": "lane-security",
+        "task_id": "demo-alr-063-security",
+        "status": "ready",
+        "phase": "security_review",
+        "priority": 1,
+        "title": "ALR-063 security review",
+        "description": "Security review must remain docs-first gated.",
+        "owner_profile": "security-reviewer",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {},
+    }
+    delivery = {
+        "project_id": "demo",
+        "lane_id": "lane-delivery",
+        "task_id": "demo-alr-080-delivery",
+        "status": "ready",
+        "phase": "delivery",
+        "priority": 2,
+        "title": "ALR-080 delivery handoff",
+        "description": "Final delivery handoff must remain docs-first gated.",
+        "owner_profile": "factory-reporter",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {},
+    }
+    tasks = [r2df_r23_recovery, validation_repair, product, qa, security, delivery]
+    project = {
+        "project_id": "demo",
+        "status": "active",
+        "autonomous_enabled": True,
+        "metadata": {"reconciliation_anomalies": ["unvalidated_required_docs"]},
+        "document_status": document_status,
+    }
+    assert len([row for row in document_status if row["blocking"]]) == 10
+    assert factory_pg._payload_project_docs_ready(project) is False
+
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(
+        factory_pg,
+        "_project_docs_notion_preflight",
+        lambda project_arg, tasks_arg, pending_arg, gates_arg: (False, True, False, False),
+    )
+
+    def rows(sql_text, *, user=None, **_):
+        fake_sql.statements.append(sql_text)
+        if "FROM factory.projects p" in sql_text:
+            return [{"project_id": "demo"}]
+        if "status IN ('todo', 'ready')" in sql_text:
+            return [r2df_r23_recovery, validation_repair, product, qa, security, delivery]
+        return []
+
+    def statement_one(sql_text, *, user=None, **_):
+        fake_sql.statements.append(sql_text)
+        if r2df_r23_recovery["task_id"] in sql_text:
+            return {**r2df_r23_recovery, "status": "claimed"}
+        return None
+
+    monkeypatch.setattr(fake_sql, "rows", rows)
+    monkeypatch.setattr(fake_sql, "statement_one", statement_one)
+
+    result = factory_pg.claim_next_task("demo", worker="factory-force-tick")
+
+    assert result is not None
+    assert result["task"]["task_id"] == r2df_r23_recovery["task_id"]
+    joined = "\n".join(fake_sql.statements)
+    assert f"Task {r2df_r23_recovery['task_id']} claimed" in joined
+    assert "unresolved_validation_tasks" not in joined
+    assert "Task demo-alr-020-product claimed" not in joined
+    assert "Task demo-alr-070-qa-smoke claimed" not in joined
+    assert "Task demo-alr-063-security claimed" not in joined
+    assert "Task demo-alr-080-delivery claimed" not in joined
+    for downstream in (validation_repair, product, qa, security, delivery):
+        assert factory_pg._dispatch_preflight_blockers(downstream, docs_ready=False, notion_ready=True) == [
+            "missing_or_unindexed_docs"
+        ]
+
+
 def test_claim_next_task_routes_only_g1_docs_recovery_before_direct_runtime_scope(fake_sql, monkeypatch):
     r2cw_direct_runtime = {
         "project_id": "demo",
