@@ -144,6 +144,7 @@ def test_service_replaces_client_after_reader_failure(
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / ".git").mkdir()
+    (repo / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
     (repo / "pyproject.toml").write_text("")
     source = repo / "x.py"
     source.write_text("print('hi')\n")

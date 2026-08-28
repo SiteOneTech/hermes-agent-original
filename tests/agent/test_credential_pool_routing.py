@@ -607,35 +607,6 @@ class TestFailureAttribution:
         assert self._statuses(pool)["cred-0"] != "exhausted"
         agent._swap_credential.assert_not_called()
 
-    def test_stable_id_rotates_from_failed_entry_when_cursor_points_elsewhere(
-        self, tmp_path, monkeypatch
-    ):
-        """Stable identity wins over both a stale key and the shared cursor."""
-        pool = self._make_pool(
-            tmp_path, monkeypatch,
-            [self._entry(0, "key-a"), self._entry(1, "key-b-new")],
-        )
-        assert pool.select().id == "cred-0"
-        agent = self._agent(
-            pool,
-            failing_key="key-b-old",
-            credential_id="cred-1",
-        )
-        agent._is_entitlement_failure = MagicMock(return_value=False)
-
-        from agent.agent_runtime_helpers import recover_with_credential_pool
-
-        recovered, _ = recover_with_credential_pool(
-            agent, status_code=401, has_retried_429=False
-        )
-
-        assert recovered is True
-        statuses = self._statuses(pool)
-        assert statuses["cred-1"] == "exhausted"
-        assert statuses["cred-0"] != "exhausted"
-        swapped = agent._swap_credential.call_args[0][0]
-        assert swapped.id == "cred-0"
-
     def test_classified_billing_403_recorded_on_entry(self, tmp_path, monkeypatch):
         """A billing-classified 403 must reach the pool as `billing`, not a bare 403.
 

@@ -16,6 +16,8 @@ Improvements over v2:
   - Richer tool call/result detail in summarizer input
 """
 
+import contextlib
+import contextvars
 import copy
 import hashlib
 import json
@@ -54,6 +56,88 @@ def _safe_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+# ── Pinned summary route ─────────────────────────────────────────────────
+# The summary call normally resolves its provider/model from
+# ``auxiliary.compression``. One caller needs to override that for a single
+# attempt: after the host's progress-aware timeout aborts a stalled summary
+# (#78981), ``agent.conversation_compression`` re-runs compression with the
+# route pinned to a configured ``fallback_chain`` entry. Nothing raised out
+# of the stalled call, so the auxiliary client's own fallback handling — which
+# only runs from its exception path — never saw that failure.
+#
+# A ContextVar, not an attribute on the compressor: the aborted worker is
+# detached and still alive on the pool, and the compressor object is shared
+# with it. Context is copied per worker (``propagate_context_to_thread``), so
+# the pin reaches the retry's whole synchronous call chain and cannot leak
+# into the stalled attempt or any unrelated auxiliary call.
+#
+# Coverage is the single ``_generate_summary`` LLM call only. That is one call
+# per compression run (its only non-recursive call site is the compress path;
+# the two recursive calls are the deliberate main-model retry that must NOT
+# re-issue the pin). Lean ``tail_mode`` additionally runs
+# ``_build_chunk_digests``, which issues its own ``call_llm`` calls directly
+# and never consults the pin — during a stall-fallback retry those digests
+# still target the stalled primary and degrade to per-segment placeholders.
+# Deliberate: the digest path is a best-effort augmentation, not the summary,
+# and pinning it would require weakening the single-use contract below.
+_SUMMARY_ROUTE_PIN: contextvars.ContextVar[Optional[Dict[str, Any]]] = (
+    contextvars.ContextVar("hermes_summary_route_pin", default=None)
+)
+
+# call_llm kwargs a pinned route may set. ``timeout`` lets a fallback entry
+# keep its own deadline instead of inheriting one the primary already burned
+# (same per-entry semantics the aux client applies to chain candidates).
+_PINNED_ROUTE_FIELDS: tuple[str, ...] = (
+    "provider",
+    "model",
+    "base_url",
+    "api_key",
+    "api_mode",
+    "timeout",
+)
+
+
+@contextlib.contextmanager
+def pin_summary_route(route: Optional[Dict[str, Any]]):
+    """Pin the next summary LLM call in this context to an explicit route.
+
+    ``route`` is a mapping of :data:`_PINNED_ROUTE_FIELDS`; ``None`` is a
+    no-op passthrough so callers can wire it unconditionally. Re-entrant-safe:
+    restores the previous pin on exit.
+    """
+    token = _SUMMARY_ROUTE_PIN.set(route if isinstance(route, dict) else None)
+    try:
+        yield
+    finally:
+        _SUMMARY_ROUTE_PIN.reset(token)
+
+
+def take_pinned_summary_route() -> Optional[Dict[str, Any]]:
+    """Read and consume the pinned summary route, if one is installed.
+
+    Single use by design. ``_generate_summary`` retries itself on the main
+    model when the summary route fails; re-issuing the pinned route there
+    would spend a second full deadline on the backend that just failed.
+    """
+    route = _SUMMARY_ROUTE_PIN.get()
+    if route is None:
+        return None
+    _SUMMARY_ROUTE_PIN.set(None)
+    return route
+
+
+def _pinned_summary_call_kwargs() -> Dict[str, Any]:
+    """Consume the pinned route as explicit ``call_llm`` keyword arguments."""
+    route = take_pinned_summary_route()
+    if not route:
+        return {}
+    return {
+        field: route[field]
+        for field in _PINNED_ROUTE_FIELDS
+        if route.get(field) not in (None, "")
+    }
 
 
 _SUMMARY_PERMANENT_QUOTA_MARKERS: tuple[str, ...] = (
@@ -2328,7 +2412,7 @@ class ContextCompressor(ContextEngine):
     @property
     def tail_token_budget(self) -> int:
         if self._tail_token_budget is None:
-            if getattr(self, "tail_mode", "legacy") == "lean":
+            if getattr(self, "tail_mode", "lean") == "lean":
                 # Lean mode (#compaction-v2): the verbatim tail is a small
                 # recency window, not a context hoard — the upgraded summary
                 # (verbatim user messages, constraints section, recovery
@@ -2924,8 +3008,12 @@ class ContextCompressor(ContextEngine):
         self._apply_threshold_tokens_cap()
         # Recalculate token budgets for the new context length so the
         # compressor stays calibrated after a model switch (e.g. 200K → 32K).
-        target_tokens = int(self.threshold_tokens * self.summary_target_ratio)
-        self.tail_token_budget = target_tokens
+        # Reset to None and let the tail_token_budget property recompute
+        # through the MODE-AWARE path: assigning the legacy formula here
+        # directly silently reverted lean mode to the 0.20×threshold hoard
+        # on every mid-session model switch.
+        self._tail_token_budget = None
+        _ = self.tail_token_budget  # eager recompute, same timing as before
         self.max_summary_tokens = min(
             int(context_length * 0.05), _SUMMARY_TOKENS_CEILING,
         )
@@ -3125,7 +3213,7 @@ class ContextCompressor(ContextEngine):
         proactive_prune_min_result_chars: int = 8000,
         proactive_prune_min_reclaim_tokens: int = 4096,
         min_tail_user_messages: int = 1,
-        tail_mode: str = "legacy",
+        tail_mode: str = "lean",
     ):
         self.model = model
         self.base_url = base_url
@@ -3135,7 +3223,7 @@ class ContextCompressor(ContextEngine):
         # Lean tail mode (#compaction-v2): "lean" = small clamped recency
         # tail + verbatim-user-message summary section + recovery pointers;
         # "legacy" = 0.20*window tail (shipping behavior).
-        self.tail_mode = tail_mode if tail_mode in ("legacy", "lean") else "legacy"
+        self.tail_mode = tail_mode if tail_mode in ("legacy", "lean") else "lean"
         # Per-model threshold overrides (longest substring match wins).
         # Stored as a plain dict; resolved in _resolve_threshold(), then the
         # small-context floor is applied on top.
@@ -4460,6 +4548,13 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         # body, exactly where the truncation above cuts.
         summary = _reinject_pruned_skill_markers(summary, _pruned_names)
         summary = self._augment_summary_lean(summary, turns_to_summarize)
+        # Lean continuity sections are appended after the primary fallback
+        # cap. Re-apply that bound so an unavailable summarizer cannot turn
+        # the fallback handoff into an oversized transcript copy; re-inject
+        # markers afterward because truncation may have clipped their block.
+        if len(summary) > _FALLBACK_SUMMARY_MAX_CHARS:
+            summary = summary[: _FALLBACK_SUMMARY_MAX_CHARS - 42].rstrip() + "\n...[fallback summary truncated]"
+            summary = _reinject_pruned_skill_markers(summary, _pruned_names)
         return summary
 
     def _demote_stale_tail_tools(
@@ -4579,7 +4674,7 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         verbatim user messages and the recovery pointer never depend on the
         summarizer's cooperation. No-op in legacy mode.
         """
-        if getattr(self, "tail_mode", "legacy") != "lean":
+        if getattr(self, "tail_mode", "lean") != "lean":
             return summary
         if _LEAN_ANCHOR_HEADING not in summary:
             summary += _redact_compaction_text(
@@ -5011,6 +5106,16 @@ This compaction should PRIORITISE preserving all information related to the focu
                     _aux_context = self.context_length
             except Exception:
                 pass
+            # A pinned route (stall fallback, #78981) is an explicit override:
+            # it replaces the task-config route for this one call so the retry
+            # actually leaves the backend that just stalled, and it re-points
+            # the aux telemetry at where the request really went.
+            _pinned_route = _pinned_summary_call_kwargs()
+            if _pinned_route:
+                call_kwargs.update(_pinned_route)
+                _aux_provider = str(_pinned_route.get("provider") or _aux_provider)
+                _aux_model = str(_pinned_route.get("model") or _aux_model)
+                _aux_context = None
             # Compression is atomic: protect the in-flight summary call from a
             # mid-turn gateway interrupt. Without this, an incoming user message
             # aborts the summary and compression falls back to a degraded static
@@ -5508,6 +5613,14 @@ This compaction should PRIORITISE preserving all information related to the focu
         """Return whether *message* contains user input worth anchoring."""
         if not isinstance(message, dict) or message.get("role") != "user":
             return False
+        # Display-only timeline metadata (e.g. ``display_kind="internal_notification"``
+        # for Kanban/background completion wakes, ``"hidden"`` scaffolding) is a
+        # DB-sidecar notice, not human input. Treating it as an actionable turn
+        # lets routine operational traffic anchor the compaction tail or become
+        # the auto-focus source instead of the user's real objective (#92703).
+        # Mirrors the exclusion in ``is_user_originated_turn``.
+        if message.get("display_kind"):
+            return False
         if cls._has_compressed_summary_metadata(message):
             return False
         content = message.get("content")
@@ -5548,6 +5661,13 @@ This compaction should PRIORITISE preserving all information related to the focu
             if msg.get("role") != "user":
                 continue
             if cls._is_synthetic_compression_user_turn(msg):
+                continue
+            # Display-only timeline notices (e.g. Kanban/background completion
+            # wakes, ``display_kind="internal_notification"``) are operational
+            # traffic, not user intent -- exclude them from the focus hint so
+            # routine notifications don't shadow the user's real objective
+            # (#92703).
+            if msg.get("display_kind"):
                 continue
             content = msg.get("content")
             text = _redact_compaction_text(_content_text_for_contains(content).strip())
@@ -7360,7 +7480,7 @@ This compaction should PRIORITISE preserving all information related to the focu
         # Lean mode: snapshot pristine tool contents BEFORE Phase-1 pruning so
         # the chunk digests summarize what actually happened, not the pruned
         # stubs (#compaction-v2). Bounded per entry to keep memory sane.
-        if getattr(self, "tail_mode", "legacy") == "lean":
+        if getattr(self, "tail_mode", "lean") == "lean":
             self._lean_pristine_tools = {
                 str(m.get("tool_call_id") or ""): (m.get("content") or "")[:80_000]
                 for m in messages
@@ -7438,7 +7558,7 @@ This compaction should PRIORITISE preserving all information related to the focu
         # budget binds without the tool-group alignment floor hoarding old
         # output (#compaction-v2). Runs before summary generation so the
         # recovery stubs are already in place if the summary aborts.
-        if getattr(self, "tail_mode", "legacy") == "lean":
+        if getattr(self, "tail_mode", "lean") == "lean":
             messages = self._demote_stale_tail_tools(messages, compress_end)
         # Snapshot the rehydration state so an aborted attempt below can roll
         # it back. The self-heal scan mutates ``_previous_summary`` (populating
