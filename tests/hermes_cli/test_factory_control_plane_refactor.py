@@ -1008,6 +1008,34 @@ def test_reconciler_creates_task_for_unvalidated_required_docs(tmp_path):
     assert "PRD.md" in finding["metadata"]["blocking_documents"]
 
 
+def test_reconciler_spawns_unvalidated_docs_recovery_when_only_coverage_is_blocked(fake_sql):
+    project = {"project_id": "demo", "status": "active", "risk_level": "medium", "metadata": {}}
+    finding = {
+        "code": "unvalidated_required_docs",
+        "message": "Required Factory methodology documents are present but not fully validated/reviewed",
+        "metadata": {"blocking_documents": ["PRD.md"]},
+    }
+    stale_blocked_recovery = {
+        "project_id": "demo",
+        "task_id": "demo-stale-unvalidated-docs-recovery",
+        "status": "blocked",
+        "phase": "documentation",
+        "title": "Historical G1 documentation recovery",
+        "metadata": {
+            "factory_reconciliation_task": True,
+            "reconciliation_anomaly": "unvalidated_required_docs",
+        },
+    }
+
+    created = factory_pg.ensure_reconciliation_tasks(project, [finding], [stale_blocked_recovery])
+
+    assert created == [{"task_id": "demo-reconcile-unvalidated-required-docs", "code": "unvalidated_required_docs"}]
+    joined = "\n".join(fake_sql.statements)
+    assert "demo-reconcile-unvalidated-required-docs" in joined
+    assert "factory.tasks.status IN" in joined
+    assert "factory.tasks.status='blocked'" in joined
+
+
 def test_reconciler_does_not_cancel_product_validation_task_with_reconciliation_text(fake_sql):
     project = {"project_id": "demo", "metadata": {}}
     findings = []

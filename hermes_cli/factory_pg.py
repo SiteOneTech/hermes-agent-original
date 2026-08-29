@@ -2788,6 +2788,24 @@ def _task_covers_reconciliation_anomaly(task: dict[str, Any], code: str) -> bool
     return False
 
 
+def _task_prevents_new_reconciliation_recovery(task: dict[str, Any], code: str) -> bool:
+    """Return whether an existing task is usable coverage for an anomaly.
+
+    A blocked historical ``unvalidated_required_docs`` row is audit state, not a
+    runnable docs-first recovery route.  Treating it as coverage prevents the
+    reconciler from creating/reopening the deterministic documentation repair,
+    leaving active autonomous projects with zero runs and ``claimed=null`` while
+    G1 docs are still red.  Other anomaly families keep the broader coverage
+    semantics until they have their own source-backed recovery route.
+    """
+
+    if not _task_covers_reconciliation_anomaly(task, code):
+        return False
+    if code == "unvalidated_required_docs" and str(task.get("status") or "") == "blocked":
+        return False
+    return True
+
+
 def _latest_gate_statuses(gates: list[dict[str, Any]]) -> dict[str, str]:
     statuses: dict[str, str] = {}
     for gate in gates:
@@ -3045,7 +3063,7 @@ def ensure_reconciliation_tasks(project: dict[str, Any], findings: list[dict[str
     terminal = ",".join(_q(status) for status in TERMINAL_TASK_STATUSES)
     for finding in findings:
         code = str(finding.get("code") or "")
-        if not code or any(_task_covers_reconciliation_anomaly(task, code) for task in tasks):
+        if not code or any(_task_prevents_new_reconciliation_recovery(task, code) for task in tasks):
             continue
         spec = RECONCILIATION_TASK_SPECS[code]
         task_id = f"{project_id}-reconcile-{code.replace('_', '-')}"
@@ -3060,6 +3078,12 @@ def ensure_reconciliation_tasks(project: dict[str, Any], findings: list[dict[str
             "Do not close the project manually from UI state. Inspect Factory DB, project-local artifacts, gates, and deliverable evidence; then record gates/evidence canonically."
         )
         reopen_note = f"\n\n[factory-reconciler] Reopened because the canonical anomaly recurred: {code}."
+        reopen_condition = f"factory.tasks.status IN ({terminal})"
+        if code == "unvalidated_required_docs":
+            reopen_condition = (
+                f"({reopen_condition} OR "
+                "(factory.tasks.status='blocked' AND factory.tasks.metadata->>'reconciliation_anomaly' = 'unvalidated_required_docs'))"
+            )
         statements.append(
             f"""
             INSERT INTO factory.tasks (
@@ -3076,10 +3100,10 @@ def ensure_reconciliation_tasks(project: dict[str, Any], findings: list[dict[str
               {_j(metadata)}, {_q('reconcile-' + code)}, {int(spec['priority'])}, now(), now()
             )
             ON CONFLICT (task_id) DO UPDATE SET
-              status=CASE WHEN factory.tasks.status IN ({terminal}) THEN 'todo' ELSE factory.tasks.status END,
-              evidence_status=CASE WHEN factory.tasks.status IN ({terminal}) THEN 'missing' ELSE factory.tasks.evidence_status END,
+              status=CASE WHEN {reopen_condition} THEN 'todo' ELSE factory.tasks.status END,
+              evidence_status=CASE WHEN {reopen_condition} THEN 'missing' ELSE factory.tasks.evidence_status END,
               result_summary=CASE
-                WHEN factory.tasks.status IN ({terminal}) THEN COALESCE(factory.tasks.result_summary, '') || {_q(reopen_note)}
+                WHEN {reopen_condition} THEN COALESCE(factory.tasks.result_summary, '') || {_q(reopen_note)}
                 ELSE factory.tasks.result_summary
               END,
               description=EXCLUDED.description,
