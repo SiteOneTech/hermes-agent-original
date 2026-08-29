@@ -69,6 +69,19 @@ describe('host.state focused-session atoms', () => {
     session.setConnection(null)
   })
 
+  it('exposes whether native paths share a machine with the active gateway', async () => {
+    const { host, session } = await setup()
+
+    session.setConnection({ connectionId: 'work', mode: 'remote' } as never)
+    expect(host.state.connectionMode.get()).toBe('remote')
+
+    session.setConnection({ connectionId: 'local', mode: 'local' } as never)
+    expect(host.state.connectionMode.get()).toBe('local')
+
+    session.setConnection(null)
+    expect(host.state.connectionMode.get()).toBeNull()
+  })
+
   it('follows the interacted tile while the primary-only atom stays put', async () => {
     const { host, session, states } = await setup()
     const tree = await import('@/components/pane-shell/tree/store')
