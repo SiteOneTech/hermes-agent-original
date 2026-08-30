@@ -4584,6 +4584,10 @@ def _candidate_requires_validation_readiness_before_dispatch(candidate: dict[str
     return phase.startswith("delivery") or phase in {"release", "final", "final_report"} or final_stage_text
 
 
+def _dispatch_phase_key(value: Any) -> str:
+    return re.sub(r"[\s-]+", "_", str(value or "").strip().lower()).strip("_")
+
+
 _DOCS_FIRST_REPAIR_DOC_TERMS = (
     "documentation recovery",
     "document status",
@@ -4691,12 +4695,13 @@ def _is_docs_first_repair_dispatch_task(task: dict[str, Any]) -> bool:
         return True
     if _is_docs_first_validation_repair_task(task):
         return True
-    phase = str(task.get("phase") or "").strip().lower().replace("-", "_")
+    phase = _dispatch_phase_key(task.get("phase"))
     if phase == "g1_recovery" and _has_repair_dispatch_terms(task) and not _has_positive_product_or_runtime_dispatch_scope(task):
         return True
     return _has_docs_first_repair_terms(task) and (
         phase.startswith(("g0", "g1"))
         or phase in {"documentation", "docs", "planning"}
+        or phase.startswith(("documentation_", "docs_"))
         or not _has_product_or_runtime_dispatch_scope(task)
     )
 

@@ -1386,6 +1386,118 @@ def test_force_tick_claims_r2df_docs_recovery_before_validation_work_when_docs_a
     assert "Task demo-alr-020-product claimed" not in joined
 
 
+def test_claim_next_task_claims_documentation_recovery_with_terminal_state_wording_before_validation_deadlock(fake_sql, monkeypatch):
+    validation_review = {
+        "project_id": "demo",
+        "lane_id": "lane-review",
+        "task_id": "demo-r2df-validation-review",
+        "status": "ready",
+        "phase": "quality_review",
+        "priority": 17,
+        "title": "ALR-062 independent quality review",
+        "description": "Validate product implementation after source increments exist.",
+        "owner_profile": "quality-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {},
+    }
+    product = {
+        "project_id": "demo",
+        "lane_id": "lane-product",
+        "task_id": "demo-alr-020-product",
+        "status": "ready",
+        "phase": "implementation",
+        "priority": 18,
+        "title": "ALR-020 product implementation",
+        "description": "Product work remains fail-closed while required G1 docs are red.",
+        "owner_profile": "claude-builder",
+        "engine": "claude_code",
+        "dependencies": [],
+        "metadata": {},
+    }
+    docs_recovery = {
+        "project_id": "demo",
+        "lane_id": "lane-docs",
+        "task_id": "zeus-alpha-research-ledger-core-r2df-fresh-current-base-g1-documentation",
+        "status": "todo",
+        "phase": "documentation recovery",
+        "priority": 19,
+        "title": "R2df fresh current-base G1 documentation recovery",
+        "description": (
+            "Same-project docs-first repair after canonical resolve-state/tick retired an "
+            "expired no-worker run and then returned claimed=null. Historical terminal-state "
+            "wording is audit evidence only. No merge, deploy, direct SQL, external runtime, "
+            "messaging, trading, risk, or paper/live action."
+        ),
+        "owner_profile": "codex-builder",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {},
+    }
+    document_status = [
+        {
+            "file_name": "FACTORY_INTAKE.md",
+            "category": "g1_required",
+            "exists": True,
+            "indexed": True,
+            "committed": True,
+            "validated": True,
+            "reviewed": False,
+            "blocking": True,
+        }
+    ]
+    project = {
+        "project_id": "demo",
+        "status": "active",
+        "autonomous_enabled": True,
+        "metadata": {"reconciliation_anomalies": ["unvalidated_required_docs"]},
+        "document_status": document_status,
+    }
+    tasks = [validation_review, product, docs_recovery]
+    assert factory_pg._payload_project_docs_ready(project) is False
+
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_project_docs_notion_preflight", lambda *_, **__: (False, True, False, False))
+    assert factory_pg._validation_task_readiness_findings("demo") == [
+        "validation task demo-r2df-validation-review (ALR-062 independent quality review) is not complete; status=ready"
+    ]
+
+    def rows(sql_text, *, user=None, **_):
+        fake_sql.statements.append(sql_text)
+        if "FROM factory.projects p" in sql_text:
+            return [{"project_id": "demo"}]
+        if "status IN ('todo', 'ready')" in sql_text:
+            return [validation_review, product, docs_recovery]
+        return []
+
+    def statement_one(sql_text, *, user=None, **_):
+        fake_sql.statements.append(sql_text)
+        if "SET status='claimed'" in sql_text and docs_recovery["task_id"] in sql_text:
+            return {**docs_recovery, "status": "claimed"}
+        if "SET status='claimed'" in sql_text and product["task_id"] in sql_text:
+            return {**product, "status": "claimed"}
+        return None
+
+    monkeypatch.setattr(fake_sql, "rows", rows)
+    monkeypatch.setattr(fake_sql, "statement_one", statement_one)
+
+    result = factory_pg.claim_next_task("demo", worker="factory-force-tick")
+
+    assert result is not None
+    assert result["task"]["task_id"] == docs_recovery["task_id"]
+    joined = "\n".join(fake_sql.statements)
+    assert f"Task {docs_recovery['task_id']} claimed" in joined
+    assert "unresolved_validation_tasks" not in joined
+    assert "Task demo-alr-020-product claimed" not in joined
+    assert factory_pg._dispatch_preflight_blockers(product, docs_ready=False, notion_ready=True) == [
+        "missing_or_unindexed_docs"
+    ]
+
+
 def test_claim_next_task_allows_docs_first_pr_review_repair_when_docs_red(fake_sql, monkeypatch):
     review_repair = {
         "project_id": "demo",
