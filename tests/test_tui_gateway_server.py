@@ -15509,6 +15509,14 @@ def test_model_options_preserves_canonical_custom_row_after_agent_init(monkeypat
         "hermes_cli.auth.is_provider_explicitly_configured",
         lambda _slug: False,
     )
+    # Keep this fixture independent from a developer's interactive Anthropic
+    # OAuth login (Hermes or Claude Code). This case exercises the custom
+    # provider row only; a real OAuth credential intentionally exposes an
+    # additional Anthropic row in explicit-only pickers.
+    monkeypatch.setattr(
+        "hermes_cli.inventory._anthropic_oauth_credentials_present",
+        lambda: False,
+    )
     monkeypatch.setattr("hermes_cli.inventory._apply_pricing", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("hermes_cli.inventory._apply_capabilities", lambda *_args, **_kwargs: None)
 
@@ -18817,6 +18825,51 @@ class _BareAgent:
     independent of the `if comp:` context-percent block."""
 
     model = "x"
+
+
+def test_get_usage_perf_readouts_present():
+    """cache_hit_pct / avg_latency_s / avg_tps mirror the classic CLI bar."""
+    from collections import deque
+
+    class _PerfAgent:
+        model = "x"
+        session_prompt_tokens = 27_873
+        session_cache_read_tokens = 24_369
+        _api_latency_history = deque([2.1, 4.3], maxlen=10)
+        _api_output_history = deque([130, 190], maxlen=10)
+
+    usage = server._get_usage(_PerfAgent())
+    assert usage["cache_hit_pct"] == 87
+    assert usage["avg_latency_s"] == 3.2
+    assert usage["avg_tps"] == 50.0  # true throughput sum(out)/sum(lat), not mean of ratios
+
+
+def test_get_usage_perf_readouts_omitted_without_data():
+    """Zero cache reads / empty history omit the keys — never fabricate 0s."""
+
+    class _ColdAgent:
+        model = "x"
+        session_prompt_tokens = 100
+        session_cache_read_tokens = 0
+
+    usage = server._get_usage(_ColdAgent())
+    assert "cache_hit_pct" not in usage
+    assert "avg_latency_s" not in usage
+    assert "avg_tps" not in usage
+
+
+def test_get_usage_perf_readouts_guard_negative_latency():
+    """Odd provider timings (negative durations seen in logs) are dropped."""
+    from collections import deque
+
+    class _WeirdAgent:
+        model = "x"
+        _api_latency_history = deque([-0.8], maxlen=10)
+        _api_output_history = deque([100], maxlen=10)
+
+    usage = server._get_usage(_WeirdAgent())
+    assert "avg_latency_s" not in usage
+    assert "avg_tps" not in usage
 
 
 def test_get_usage_includes_active_subagents(monkeypatch):

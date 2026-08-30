@@ -41,6 +41,7 @@ import type {
   FactoryTask,
 } from "@/lib/api";
 import { usePageHeader } from "@/contexts/usePageHeader";
+import { copyTextToClipboard } from "@/lib/clipboard";
 import { cn } from "@/lib/utils";
 
 type BadgeTone = "success" | "warning" | "destructive" | "outline" | "secondary";
@@ -238,35 +239,6 @@ function projectTemplateNotion(project: FactoryProject): { url: string; label: s
   return null;
 }
 
-async function copyText(text: string): Promise<boolean> {
-  if (navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(text);
-      return true;
-    } catch {
-      // Fall through to the DOM fallback below. Some browser/dashboard binds
-      // expose navigator.clipboard but deny writeText outside secure contexts.
-    }
-  }
-
-  try {
-    const textarea = document.createElement("textarea");
-    textarea.value = text;
-    textarea.setAttribute("readonly", "true");
-    textarea.style.position = "fixed";
-    textarea.style.left = "-9999px";
-    textarea.style.top = "0";
-    document.body.appendChild(textarea);
-    textarea.focus();
-    textarea.select();
-    const copied = document.execCommand("copy");
-    document.body.removeChild(textarea);
-    return copied;
-  } catch {
-    return false;
-  }
-}
-
 function projectSearchBlob(project: FactoryProject): string {
   const notion = projectActualNotion(project)?.url ?? "";
   const template = projectTemplateNotion(project)?.url ?? "";
@@ -443,7 +415,7 @@ export default function FactoryPage() {
 
   const copyQuickStatus = useCallback(async () => {
     if (!selectedProject) return;
-    const copied = await copyText(projectStatusPrompt(selectedProject));
+    const copied = await copyTextToClipboard(projectStatusPrompt(selectedProject));
     showToast(copied ? "Status rápido copiado" : "No se pudo copiar el status", copied ? "success" : "error");
   }, [selectedProject, showToast]);
 
