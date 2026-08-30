@@ -4740,6 +4740,15 @@ def _next_runnable_task(
     if dispatch_preflight is not None:
         docs_ready, notion_ready, notion_required, docs_first_waived = dispatch_preflight
 
+        def is_ready_g1_recovery(candidate: dict[str, Any]) -> bool:
+            return _is_docs_first_repair_dispatch_task(candidate) and not _is_validation_task(candidate)
+
+        g1_recovery_preempts_validation = bool(
+            not docs_ready
+            and not docs_first_waived
+            and any(is_ready_g1_recovery(candidate) for candidate in normalized_candidates)
+        )
+
         def preflight_rank(candidate: dict[str, Any]) -> int:
             blockers = _dispatch_preflight_blockers(
                 candidate,
@@ -4748,13 +4757,18 @@ def _next_runnable_task(
                 notion_required=notion_required,
                 docs_first_waived=docs_first_waived,
             )
-            return 1 if blockers else 0
+            if blockers:
+                return 2
+            if g1_recovery_preempts_validation and is_ready_g1_recovery(candidate):
+                return 0
+            return 1
 
         # Preserve SQL priority/created_at ordering inside each bucket, but put
-        # dependency-ready docs/reconciliation repair before product work that a
-        # docs-first preflight would deny. Otherwise the dispatcher repeatedly
-        # selects the lower-priority-number product row, records a denial, and
-        # returns claimed=null even though a repair task is ready.
+        # dependency-ready G1 docs/reconciliation repair before validation or
+        # product work while G1 rows are red. Otherwise the dispatcher can claim
+        # a lower-priority-number validation row (or repeatedly deny product
+        # rows) and leave claimed=null/zero active runs even though the same
+        # project has an eligible recovery task ready.
         normalized_candidates = [
             candidate
             for _idx, candidate in sorted(
