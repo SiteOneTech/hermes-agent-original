@@ -1386,6 +1386,141 @@ def test_force_tick_claims_r2df_docs_recovery_before_validation_work_when_docs_a
     assert "Task demo-alr-020-product claimed" not in joined
 
 
+def test_force_tick_claims_canonical_g1_recovery_before_ready_validation_repair_when_reviewed_false(fake_sql, monkeypatch):
+    reviewed_false_docs = [
+        "FACTORY_INTAKE.md",
+        "REQUIREMENTS_ANALYSIS.md",
+        "PATTERN_ANALYSIS.md",
+        "ASSUMPTIONS_AND_OPEN_QUESTIONS.md",
+        "PRD.md",
+        "ADRS.md",
+        "METHODOLOGY_PLAN.md",
+        "TECHNICAL_BLUEPRINT.md",
+        "TASK_GRAPH.md",
+        "SECURITY_GATES.md",
+    ]
+    document_status = [
+        {
+            "file_name": name,
+            "category": "g1_required",
+            "exists": True,
+            "indexed": True,
+            "committed": True,
+            "validated": True,
+            "reviewed": False,
+            "blocking": True,
+            "missing": ["reviewed"],
+        }
+        for name in reviewed_false_docs
+    ]
+    validation_repair = {
+        "project_id": "demo",
+        "lane_id": "lane-validation",
+        "task_id": "demo-r2df-r37-validation-review",
+        "status": "ready",
+        "phase": "quality_review",
+        "priority": -9,
+        "title": "R2df-R37 — independent validation of canonical G1 review-state dispatch repair",
+        "description": (
+            "Validate docs-first G1 review-state dispatch recovery and control-plane repair. "
+            "This validation must wait for the same-project G1 recovery worker while reviewed=false rows are current."
+        ),
+        "owner_profile": "quality-reviewer",
+        "reviewer_profile": "security-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {},
+    }
+    product = {
+        "project_id": "demo",
+        "lane_id": "lane-product",
+        "task_id": "demo-alr-020-product",
+        "status": "ready",
+        "phase": "implementation",
+        "priority": -8,
+        "title": "ALR-020 product implementation",
+        "description": "Normal product work must remain fail-closed while required G1 docs are red.",
+        "owner_profile": "claude-builder",
+        "engine": "claude_code",
+        "dependencies": [],
+        "metadata": {},
+    }
+    g1_recovery = {
+        "project_id": "demo",
+        "lane_id": "lane-g1-recovery",
+        "task_id": "demo-r2df-r37-canonical-g1-review-state-dispa",
+        "status": "todo",
+        "phase": "g1_recovery",
+        "priority": -7,
+        "title": "R2df-R37 — canonical G1 review-state dispatch recovery",
+        "description": (
+            "Bounded in-project technical rework: diagnose and repair the Factory dispatcher path "
+            "that leaves the project active with zero runs and G1 document-status rows marked "
+            "reviewed=false causing unvalidated_required_docs. Repair only the docs-first "
+            "scheduling/reconciliation path; do not dispatch ALR/product work or interact with external runtimes."
+        ),
+        "owner_profile": "codex-builder",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {"repo_strategy_status": "passed"},
+    }
+    project = {
+        "project_id": "demo",
+        "status": "active",
+        "autonomous_enabled": True,
+        "metadata": {"reconciliation_anomalies": ["unvalidated_required_docs"]},
+        "document_status": document_status,
+    }
+    tasks = [validation_repair, product, g1_recovery]
+    payload = {"projects": [project], "tasks": tasks, "task_runs": []}
+    assert factory_pg._payload_docs_first_repair_should_preempt_review(payload, project_id="demo") is True
+
+    monkeypatch.setattr(factory_pg, "acquire_global_control_plane_lease", lambda *_, **__: {"acquired": True})
+    monkeypatch.setattr(factory_pg, "release_global_control_plane_lease", lambda *_: None)
+    monkeypatch.setattr(factory_pg, "monitor_runs", lambda: {})
+    monkeypatch.setattr(factory_pg, "supervisor_health_check", lambda *_, **__: {"violations": [], "repairs": []})
+    monkeypatch.setattr(factory_pg, "clear_resolved_blockers", lambda project_id: {"project_id": project_id, "reopened": []})
+    monkeypatch.setattr(factory_pg, "status", lambda project_id=None: payload)
+    monkeypatch.setattr(factory_pg, "classify_factory_blockers", lambda *_, **__: [])
+    monkeypatch.setattr(factory_pg, "record_factory_blocker_actions", lambda *_, **__: [])
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_project_docs_notion_preflight", lambda *_, **__: (False, True, False, False))
+
+    def rows(sql_text, *, user=None, **_):
+        fake_sql.statements.append(sql_text)
+        if "FROM factory.projects p" in sql_text:
+            return [{"project_id": "demo"}]
+        if "status IN ('todo', 'ready')" in sql_text:
+            return [validation_repair, product, g1_recovery]
+        return []
+
+    def statement_one(sql_text, *, user=None, **_):
+        fake_sql.statements.append(sql_text)
+        if "SET status='claimed'" in sql_text and validation_repair["task_id"] in sql_text:
+            return {**validation_repair, "status": "claimed"}
+        if "SET status='claimed'" in sql_text and product["task_id"] in sql_text:
+            return {**product, "status": "claimed"}
+        if "SET status='claimed'" in sql_text and g1_recovery["task_id"] in sql_text:
+            return {**g1_recovery, "status": "claimed"}
+        return None
+
+    monkeypatch.setattr(fake_sql, "rows", rows)
+    monkeypatch.setattr(fake_sql, "statement_one", statement_one)
+
+    tick = factory_pg.force_tick("demo")
+
+    assert tick["claimed"] is not None
+    assert tick["claimed"]["task"]["task_id"] == g1_recovery["task_id"]
+    joined = "\n".join(fake_sql.statements)
+    assert "Task demo-r2df-r37-canonical-g1-review-state-dispa claimed" in joined
+    assert "Task demo-r2df-r37-validation-review claimed" not in joined
+    assert "Task demo-alr-020-product claimed" not in joined
+
+
 def test_claim_next_task_allows_docs_first_pr_review_repair_when_docs_red(fake_sql, monkeypatch):
     review_repair = {
         "project_id": "demo",
