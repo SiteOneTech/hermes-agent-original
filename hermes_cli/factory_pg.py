@@ -4555,6 +4555,8 @@ def _candidate_requires_validation_readiness_before_dispatch(candidate: dict[str
     owner = str(candidate.get("owner_profile") or candidate.get("owner_agent_id") or "").lower()
     if owner == "devops-release" and any(term in text for term in ("deploy", "deployment", "sandbox", "preview", "release")):
         return False
+    if _is_g1_or_reconciliation_recovery_route(candidate):
+        return False
     if _is_docs_first_repair_dispatch_task(candidate):
         # G1/documentation recovery is a prerequisite for downstream validation,
         # even when its task text quotes final-stage failure or gate-closure
@@ -4671,8 +4673,9 @@ def _text_without_negative_dispatch_guardrails(text: str) -> str:
     chunks = re.split(r"(?<=[.!?;])\s+|\n+", text)
     retained: list[str] = []
     negative_marker = re.compile(r"\b(no|without|do not|does not|must not|never|forbidden|prohibited|sin)\b")
+    sequence_marker = re.compile(r"\b(before|ahead of|prior to|prerequisite for)\b")
     for chunk in chunks:
-        if negative_marker.search(chunk) and _text_has_product_or_runtime_dispatch_scope(chunk):
+        if (negative_marker.search(chunk) or sequence_marker.search(chunk)) and _text_has_product_or_runtime_dispatch_scope(chunk):
             continue
         retained.append(chunk)
     return "\n".join(retained)
@@ -4686,8 +4689,17 @@ def _has_product_or_runtime_dispatch_scope(task: dict[str, Any]) -> bool:
     return _text_has_product_or_runtime_dispatch_scope(_task_text(task))
 
 
+def _is_g1_or_reconciliation_recovery_route(task: dict[str, Any]) -> bool:
+    phase = str(task.get("phase") or "").strip().lower().replace("-", "_")
+    if phase not in {"g1_recovery", "g1_reconciliation", "reconciliation"} and not phase.startswith("reconciliation_"):
+        return False
+    return not _has_positive_product_or_runtime_dispatch_scope(task)
+
+
 def _is_docs_first_repair_dispatch_task(task: dict[str, Any]) -> bool:
     if _is_reconciliation_task(task) or _is_runtime_bootstrap_repair_task(task):
+        return True
+    if _is_g1_or_reconciliation_recovery_route(task):
         return True
     if _is_docs_first_validation_repair_task(task):
         return True
@@ -7192,6 +7204,15 @@ _REVIEW_RUNTIME_FAILURE_ZERO_TOOL_PATTERNS = (
     "messages:       1 (1 user, 0 tool calls)",
     "messages: 1 (1 user, 0 tool calls)",
 )
+_REVIEW_RUNTIME_PROVIDER_FAILURE_PATTERNS = (
+    "providererror",
+    "provider error",
+    "provider-error",
+    "provider failure",
+    "provider-failure",
+    "provider returned no completion",
+    "no provider configured",
+)
 _REVIEW_RUNTIME_429_PATTERNS = (
     "http 429",
     "http status 429",
@@ -7258,6 +7279,13 @@ def _review_output_has_substantive_content(text: str) -> bool:
     return any(not _review_line_is_prompt_only(line) for line in text.splitlines())
 
 
+def _review_line_reports_zero_tool_calls(folded: str) -> bool:
+    return (
+        re.search(r"\b0\s+tool[- ]calls?\b", folded) is not None
+        or re.search(r"\btool[- ]calls?\s*[:=]\s*0\b", folded) is not None
+    )
+
+
 def _review_line_contains_runtime_failure(line: str) -> bool:
     folded = _clean_review_output_line(line).casefold()
     if not folded:
@@ -7266,7 +7294,9 @@ def _review_line_contains_runtime_failure(line: str) -> bool:
         marker in folded for marker in _REVIEW_RUNTIME_ACTUAL_FAILURE_MARKERS
     ):
         return False
-    if any(pattern in folded for pattern in _REVIEW_RUNTIME_FAILURE_ZERO_TOOL_PATTERNS):
+    if any(pattern in folded for pattern in _REVIEW_RUNTIME_PROVIDER_FAILURE_PATTERNS):
+        return True
+    if any(pattern in folded for pattern in _REVIEW_RUNTIME_FAILURE_ZERO_TOOL_PATTERNS) or _review_line_reports_zero_tool_calls(folded):
         return True
     if "ratelimiterror" in folded and "http 429" in folded and folded.startswith("ratelimiterror"):
         return True
