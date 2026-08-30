@@ -416,6 +416,37 @@ def test_mark_run_finished_review_minimax_429_requeues_even_with_quality_gate(fa
     assert "MiniMax HTTP 429" in joined
 
 
+def test_mark_run_finished_review_provider_error_zero_tool_transcript_requeues_even_with_quality_gate(fake_sql, monkeypatch):
+    calls: list[str] = []
+
+    def integrate(task_id: str, *, actor: str, final_status: str):
+        calls.append(task_id)
+        return {"increment_integration_required": True, "increment_integration_status": "integrated"}
+
+    monkeypatch.setattr(factory_pg, "_integrate_increment_to_base", integrate)
+    fake_sql.one_results = [
+        {"task_id": "task-1", "metadata": {"run_type": "review"}},
+        {"gate_id": 42, "gate_type": "quality", "reviewer": "quality-reviewer"},
+        {"project_id": "demo"},
+    ]
+    output = (
+        "Independent review transcript\n"
+        "STATE: DONE\n"
+        "ProviderError: upstream provider returned no completion.\n"
+        "Messages: 1 user, 0 tool calls\n"
+    )
+
+    factory_pg.mark_run_finished("run-1", exit_code=0, output_summary=output)
+
+    assert calls == []
+    joined = "\n".join(fake_sql.statements)
+    assert "SET status='failed'" in joined
+    assert "SET status='review_ready'" in joined
+    assert "SET status='done'" not in joined
+    assert "review_output_contains_runtime_failure" in joined
+    assert "ProviderError" in joined
+
+
 def test_mark_run_finished_review_can_document_429_condition_with_task_gate(fake_sql, monkeypatch):
     calls: list[str] = []
 
@@ -1383,6 +1414,87 @@ def test_force_tick_claims_r2df_docs_recovery_before_validation_work_when_docs_a
     joined = "\n".join(fake_sql.statements)
     assert "Task demo-r2df-fresh-current-base-g1-documentation claimed" in joined
     assert "Task demo-r2cy-r1-independent-exact-sha-quality-re claimed for review" not in joined
+    assert "Task demo-alr-020-product claimed" not in joined
+
+
+def test_claim_next_task_claims_g1_recovery_with_completion_marker_instruction_before_validation_and_product(fake_sql, monkeypatch):
+    g1_recovery = {
+        "project_id": "demo",
+        "lane_id": "lane-g1",
+        "task_id": "demo-r2df-r41-g1-route-for-failed-reviewer-transcript",
+        "status": "todo",
+        "phase": "g1_recovery",
+        "priority": -102,
+        "title": "R2df-R41 — G1 route for failed reviewer transcript",
+        "description": (
+            "Bounded Factory task. The failed reviewer transcript quoted "
+            "Final semantic state marker: STATE: DONE; si falla, termina con STATE: BLOCKED "
+            "and mentioned final gate closure, but this dependency-free G1 phase work "
+            "must run before unresolved validation rows, product implementation, and base-branch integration; "
+            "it does not perform any of those downstream actions. No direct SQL, merge, deploy, "
+            "credential action, external runtime, ALR dispatch, or primary-checkout mutation."
+        ),
+        "owner_profile": "codex-builder",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {"repo_strategy_status": "passed"},
+    }
+    validation = {
+        "project_id": "demo",
+        "lane_id": "lane-validation",
+        "task_id": "demo-alr-062-quality-review",
+        "status": "todo",
+        "phase": "quality_review",
+        "priority": 10,
+        "title": "ALR-062 independent quality review",
+        "description": "Validation work remains unresolved while G1 is red.",
+        "owner_profile": "quality-reviewer",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {},
+    }
+    product = {
+        "project_id": "demo",
+        "lane_id": "lane-product",
+        "task_id": "demo-alr-020-product",
+        "status": "ready",
+        "phase": "implementation",
+        "priority": 11,
+        "title": "ALR-020 product implementation",
+        "description": "Normal product implementation must remain docs-first gated.",
+        "owner_profile": "claude-builder",
+        "engine": "claude_code",
+        "dependencies": [],
+        "metadata": {},
+    }
+    tasks = [g1_recovery, validation, product]
+    project = {
+        "project_id": "demo",
+        "status": "active",
+        "autonomous_enabled": True,
+        "metadata": {"reconciliation_anomalies": ["unvalidated_required_docs"]},
+        "document_status": [{"file_name": "FACTORY_INTAKE.md", "category": "g1_required", "blocking": True}],
+    }
+    fake_sql.rows_results = [[{"project_id": "demo"}], [g1_recovery, validation, product]]
+    fake_sql.statement_one_results = [{**g1_recovery, "status": "claimed"}]
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(
+        factory_pg,
+        "_project_docs_notion_preflight",
+        lambda project_arg, tasks_arg, pending_arg, gates_arg: (False, True, False, False),
+    )
+
+    result = factory_pg.claim_next_task("demo", worker="factory-force-tick")
+
+    assert result is not None
+    assert result["task"]["task_id"] == g1_recovery["task_id"]
+    joined = "\n".join(fake_sql.statements)
+    assert f"Task {g1_recovery['task_id']} claimed" in joined
+    assert "unresolved_validation_tasks" not in joined
     assert "Task demo-alr-020-product claimed" not in joined
 
 
