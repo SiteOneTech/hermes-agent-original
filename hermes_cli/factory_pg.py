@@ -4651,8 +4651,6 @@ _PRODUCT_OR_RUNTIME_DISPATCH_SCOPE_TERMS = (
     "origin/main integration",
     "base branch merge",
 )
-
-
 def _has_repair_dispatch_terms(task: dict[str, Any]) -> bool:
     text = _task_text(task)
     return any(term in text for term in _DOCS_FIRST_REPAIR_TERMS)
@@ -4686,13 +4684,24 @@ def _has_product_or_runtime_dispatch_scope(task: dict[str, Any]) -> bool:
     return _text_has_product_or_runtime_dispatch_scope(_task_text(task))
 
 
+def _metadata_marks_g1_recovery(task: dict[str, Any]) -> bool:
+    return _metadata(task).get("g1_recovery") is True
+
+
+def _is_explicit_g1_recovery_task(task: dict[str, Any]) -> bool:
+    phase = str(task.get("phase") or "").strip().lower().replace("-", "_")
+    if phase != "g1_recovery" and not _metadata_marks_g1_recovery(task):
+        return False
+    return not _has_positive_product_or_runtime_dispatch_scope(task)
+
+
 def _is_docs_first_repair_dispatch_task(task: dict[str, Any]) -> bool:
     if _is_reconciliation_task(task) or _is_runtime_bootstrap_repair_task(task):
         return True
     if _is_docs_first_validation_repair_task(task):
         return True
     phase = str(task.get("phase") or "").strip().lower().replace("-", "_")
-    if phase == "g1_recovery" and _has_repair_dispatch_terms(task) and not _has_positive_product_or_runtime_dispatch_scope(task):
+    if _is_explicit_g1_recovery_task(task):
         return True
     return _has_docs_first_repair_terms(task) and (
         phase.startswith(("g0", "g1"))
