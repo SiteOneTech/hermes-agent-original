@@ -50,6 +50,8 @@ against double-reconfigure.
 from __future__ import annotations
 
 import os
+from pathlib import Path
+import subprocess
 import sys
 
 _IS_WINDOWS = sys.platform == "win32"
@@ -224,6 +226,247 @@ def activate_durable_lazy_target() -> None:
         # Bootstrap must never crash an entry point. If activation fails the
         # backend simply reports itself unavailable, exactly as before.
         pass
+
+
+def _factory_command_requested(argv: list[str] | tuple[str, ...] | None = None) -> bool:
+    """Return whether the console entry point is about to run ``hermes factory``.
+
+    Generated console scripts start outside the user's current working
+    directory, so editable installs can import a stale primary checkout before
+    the Factory CLI has a chance to delegate to the current source tree.  Keep
+    this parser dependency-free and deliberately tiny: it only needs to find the
+    first Hermes subcommand after global profile flags.
+    """
+
+    args = list(sys.argv[1:] if argv is None else argv)
+    skip_next = False
+    for arg in args:
+        if skip_next:
+            skip_next = False
+            continue
+        if arg == "--":
+            return False
+        if arg in {"-p", "--profile"}:
+            skip_next = True
+            continue
+        if arg.startswith("--profile="):
+            continue
+        if arg.startswith("-"):
+            continue
+        return arg == "factory"
+    return False
+
+
+def _factory_source_root_is_complete(source_root: Path) -> bool:
+    return all(
+        (source_root / rel_path).is_file()
+        for rel_path in (
+            Path("hermes_cli") / "main.py",
+            Path("hermes_cli") / "factory.py",
+            Path("hermes_cli") / "factory_pg.py",
+            Path("scripts") / "factory" / "factory_orchestrator_tick.py",
+        )
+    )
+
+
+def _bootstrap_source_root() -> Path | None:
+    try:
+        root = Path(__file__).resolve().parent
+    except Exception:
+        return None
+    return root if _factory_source_root_is_complete(root) else None
+
+
+def _find_cwd_factory_source_root() -> Path | None:
+    try:
+        cwd = Path.cwd().resolve()
+    except Exception:
+        return None
+    for candidate in (cwd, *cwd.parents):
+        if _factory_source_root_is_complete(candidate):
+            return candidate
+    return None
+
+
+def _same_source_root(left: Path, right: Path) -> bool:
+    try:
+        return left.resolve() == right.resolve()
+    except Exception:
+        return os.path.realpath(str(left)) == os.path.realpath(str(right))
+
+
+def _git_probe_source_root(source_root: Path, *args: str, timeout: int = 10) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(source_root), *args],
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def _git_check_source_root(source_root: Path, *args: str, timeout: int = 10) -> bool | None:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(source_root), *args],
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except Exception:
+        return None
+    if result.returncode == 0:
+        return True
+    if result.returncode == 1:
+        return False
+    return None
+
+
+def _origin_default_base_ref(source_root: Path) -> tuple[str, str] | None:
+    if _git_probe_source_root(source_root, "rev-parse", "--is-inside-work-tree") != "true":
+        return None
+    candidates: list[str] = []
+    origin_head = _git_probe_source_root(source_root, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
+    if origin_head:
+        candidates.append(origin_head)
+    candidates.append("origin/main")
+    seen: set[str] = set()
+    for base_ref in candidates:
+        if not base_ref or base_ref in seen:
+            continue
+        seen.add(base_ref)
+        base_commit = _git_probe_source_root(source_root, "rev-parse", "--verify", f"{base_ref}^{{commit}}")
+        if base_commit:
+            return base_ref, base_commit
+    return None
+
+
+def _git_worktree_entries(source_root: Path) -> list[dict[str, str]]:
+    output = _git_probe_source_root(source_root, "worktree", "list", "--porcelain", timeout=15)
+    if not output:
+        return []
+    entries: list[dict[str, str]] = []
+    current: dict[str, str] | None = None
+    for raw_line in output.splitlines():
+        if raw_line.startswith("worktree "):
+            if current:
+                entries.append(current)
+            current = {"path": raw_line.split(" ", 1)[1]}
+        elif current is not None and raw_line.startswith("HEAD "):
+            current["head"] = raw_line.split(" ", 1)[1]
+        elif current is not None and raw_line.startswith("branch "):
+            current["branch"] = raw_line.split(" ", 1)[1]
+    if current:
+        entries.append(current)
+    return entries
+
+
+def _source_root_is_clean(source_root: Path) -> bool:
+    status = _git_probe_source_root(source_root, "status", "--porcelain", timeout=15)
+    return status == ""
+
+
+def _preferred_configured_base_factory_source_root(running_source_root: Path) -> Path | None:
+    base = _origin_default_base_ref(running_source_root)
+    if base is None:
+        return None
+    _base_ref, base_commit = base
+    running_head = _git_probe_source_root(running_source_root, "rev-parse", "HEAD")
+    if not running_head or running_head == base_commit:
+        return None
+    if _git_check_source_root(running_source_root, "merge-base", "--is-ancestor", running_head, base_commit) is not True:
+        return None
+    candidates: list[Path] = []
+    for entry in _git_worktree_entries(running_source_root):
+        if entry.get("head") != base_commit:
+            continue
+        raw_path = entry.get("path")
+        if not raw_path:
+            continue
+        try:
+            candidate = Path(raw_path).expanduser().resolve()
+        except Exception:
+            continue
+        if _same_source_root(candidate, running_source_root):
+            continue
+        if not _factory_source_root_is_complete(candidate):
+            continue
+        if not _source_root_is_clean(candidate):
+            continue
+        candidates.append(candidate)
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda path: str(path))[0]
+
+
+def _preferred_factory_entrypoint_source_root(running_source_root: Path) -> Path | None:
+    cwd_source_root = _find_cwd_factory_source_root()
+    if cwd_source_root is not None and not _same_source_root(cwd_source_root, running_source_root):
+        return cwd_source_root
+    return _preferred_configured_base_factory_source_root(running_source_root)
+
+
+def _factory_source_env(source_root: Path) -> dict[str, str]:
+    env = {**os.environ}
+    pythonpath = str(source_root)
+    if env.get("PYTHONPATH"):
+        pythonpath = f"{pythonpath}{os.pathsep}{env['PYTHONPATH']}"
+    env["PYTHONPATH"] = pythonpath
+    env["HERMES_PYTHON_SRC_ROOT"] = str(source_root)
+    env["HERMES_FACTORY_SOURCE_DELEGATED"] = "1"
+    return env
+
+
+def _delegate_factory_entrypoint_if_needed() -> bool:
+    """Re-exec ``hermes factory`` from the current/configured source root.
+
+    This runs before importing ``hermes_cli.main``.  That ordering matters for
+    console scripts installed from an editable primary checkout: importing the
+    stale entrypoint first can make ``factory status`` and ``factory project
+    tick`` read/dispatch from obsolete control-plane code even when a clean
+    configured-base worktree is available.
+    """
+
+    if os.environ.get("HERMES_FACTORY_SOURCE_DELEGATED") == "1":
+        return False
+    if not _factory_command_requested():
+        return False
+    running_source_root = _bootstrap_source_root()
+    if running_source_root is None:
+        return False
+    source_root = _preferred_factory_entrypoint_source_root(running_source_root)
+    if source_root is None:
+        return False
+    argv = [sys.executable, "-m", "hermes_cli.main", *sys.argv[1:]]
+    env = _factory_source_env(source_root)
+    os.chdir(source_root)
+    os.execvpe(sys.executable, argv, env)
+    return True
+
+
+def _run_hermes_main():
+    from hermes_cli.main import main as hermes_main
+
+    return hermes_main()
+
+
+def main():
+    """Console-script entry point with a Factory source-root bootstrap."""
+
+    if _delegate_factory_entrypoint_if_needed():
+        return None
+    return _run_hermes_main()
 
 
 # Apply on import — entry points just need ``import hermes_bootstrap``
