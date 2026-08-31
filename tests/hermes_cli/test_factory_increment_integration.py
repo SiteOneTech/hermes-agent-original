@@ -1030,6 +1030,120 @@ def test_claim_next_task_claims_r2df_r23_phase_g1_recovery_before_validation_dea
         ]
 
 
+def test_claim_next_task_uses_active_task_runs_not_orphan_task_status_for_g1_recovery(fake_sql, monkeypatch):
+    document_status = [
+        {
+            "file_name": "FACTORY_INTAKE.md",
+            "category": "g1_required",
+            "exists": True,
+            "indexed": True,
+            "committed": True,
+            "validated": True,
+            "reviewed": False,
+            "blocking": True,
+            "missing": ["reviewed"],
+        }
+    ]
+    stale_orphan = {
+        "project_id": "demo",
+        "lane_id": "lane-stale",
+        "task_id": "demo-r2df-r38-stale-running-without-run",
+        "status": "running",
+        "phase": "g1_recovery",
+        "priority": -101,
+        "title": "R2df-R38 stale no-run terminalization",
+        "description": "Historical running task row left without a queued/running task_run.",
+        "owner_profile": "codex-builder",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {},
+    }
+    r2df_r39 = {
+        "project_id": "demo",
+        "lane_id": "lane-g1",
+        "task_id": "zeus-alpha-research-ledger-core-r2df-r39-fail-closed-terminalization-of-",
+        "status": "todo",
+        "phase": "g1_recovery",
+        "priority": -100,
+        "title": "R2df-R39 — fail-closed terminalization of failed review evidence",
+        "description": (
+            "Bounded Factory control-plane recovery only. Preserve docs-first G1 dispatch; "
+            "on canonical red-G1 state, recovery remains before product/ALR work. "
+            "No direct SQL, merge, deploy, credential change, external runtime, product/ALR dispatch, "
+            "or primary-checkout mutation."
+        ),
+        "owner_profile": "codex-builder",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {"repo_strategy_status": "passed"},
+    }
+    product = {
+        "project_id": "demo",
+        "lane_id": "lane-product",
+        "task_id": "demo-alr-020-product",
+        "status": "ready",
+        "phase": "implementation",
+        "priority": 20,
+        "title": "ALR-020 product implementation",
+        "description": "Normal product implementation must remain fail-closed while required G1 docs are red.",
+        "owner_profile": "claude-builder",
+        "engine": "claude_code",
+        "dependencies": [],
+        "metadata": {},
+    }
+    project = {
+        "project_id": "demo",
+        "status": "active",
+        "autonomous_enabled": True,
+        "metadata": {"reconciliation_anomalies": ["unvalidated_required_docs"]},
+        "document_status": document_status,
+    }
+    tasks = [stale_orphan, r2df_r39, product]
+    payload = {"projects": [project], "tasks": tasks, "task_runs": []}
+    assert factory_pg._payload_project_docs_ready(project) is False
+    assert factory_pg._claimed_null_alert_expected(payload, project_id="demo") is True
+
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(
+        factory_pg,
+        "_project_docs_notion_preflight",
+        lambda project_arg, tasks_arg, pending_arg, gates_arg: (False, True, False, False),
+    )
+
+    def rows(sql_text, *, user=None, **_):
+        fake_sql.statements.append(sql_text)
+        if "FROM factory.projects p" in sql_text:
+            return [{"project_id": "demo"}]
+        if "FROM factory.task_runs" in sql_text and "status IN ('queued','running')" in sql_text:
+            return []
+        if "status IN ('todo', 'ready')" in sql_text:
+            return [r2df_r39, product]
+        return []
+
+    def statement_one(sql_text, *, user=None, **_):
+        fake_sql.statements.append(sql_text)
+        if "SET status='claimed'" in sql_text and r2df_r39["task_id"] in sql_text:
+            return {**r2df_r39, "status": "claimed"}
+        if "SET status='claimed'" in sql_text and product["task_id"] in sql_text:
+            return {**product, "status": "claimed"}
+        return None
+
+    monkeypatch.setattr(fake_sql, "rows", rows)
+    monkeypatch.setattr(fake_sql, "statement_one", statement_one)
+
+    result = factory_pg.claim_next_task("demo", worker="factory-force-tick")
+
+    assert result is not None
+    assert result["task"]["task_id"] == r2df_r39["task_id"]
+    joined = "\n".join(fake_sql.statements)
+    assert f"Task {r2df_r39['task_id']} claimed" in joined
+    assert f"Task {product['task_id']} claimed" not in joined
+
+
 def test_claim_next_task_routes_only_g1_docs_recovery_before_direct_runtime_scope(fake_sql, monkeypatch):
     r2cw_direct_runtime = {
         "project_id": "demo",
