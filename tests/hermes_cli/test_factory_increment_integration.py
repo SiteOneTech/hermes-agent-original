@@ -1621,6 +1621,42 @@ def test_g1_recovery_metadata_keeps_validation_and_reporting_work_fail_closed():
         ]
 
 
+def test_g1_recovery_metadata_scope_keeps_product_runtime_and_external_work_fail_closed():
+    scoped_candidates = [
+        {
+            "task_id": "demo-r2df-r48-alr-metadata",
+            "phase": "documentation",
+            "title": "R2df-R48 — explicit metadata recovery",
+            "description": "Recover current G1 evidence from a clean assigned worktree.",
+            "owner_profile": "codex-builder",
+            "metadata": {"documentation_recovery": True, "scope": "ALR-020"},
+        },
+        {
+            "task_id": "demo-r2df-r48-runtime-metadata",
+            "phase": "documentation",
+            "title": "R2df-R48 — explicit metadata recovery",
+            "description": "Recover current G1 evidence from a clean assigned worktree.",
+            "owner_profile": "codex-builder",
+            "metadata": {"docs_first_recovery": True, "runtime_scope": "external_runtime"},
+        },
+        {
+            "task_id": "demo-r2df-r48-direct-sql-metadata",
+            "phase": "g1_recovery",
+            "title": "R2df-R48 — explicit metadata recovery",
+            "description": "Recover current G1 evidence from a clean assigned worktree.",
+            "owner_profile": "codex-builder",
+            "metadata": {"g1_recovery": True, "direct_sql": True},
+        },
+    ]
+
+    for candidate in scoped_candidates:
+        assert factory_pg._is_explicit_g1_recovery_task(candidate) is False
+        assert factory_pg._candidate_requires_validation_readiness_before_dispatch(candidate) is True
+        assert factory_pg._dispatch_preflight_blockers(candidate, docs_ready=False, notion_ready=True) == [
+            "missing_or_unindexed_docs"
+        ]
+
+
 def test_claim_next_task_allows_docs_first_pr_review_repair_when_docs_red(fake_sql, monkeypatch):
     review_repair = {
         "project_id": "demo",

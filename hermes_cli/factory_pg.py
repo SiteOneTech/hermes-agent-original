@@ -4651,6 +4651,79 @@ _PRODUCT_OR_RUNTIME_DISPATCH_SCOPE_TERMS = (
     "origin/main integration",
     "base branch merge",
 )
+
+_PRODUCT_OR_RUNTIME_METADATA_BOOL_KEYS = {
+    "alr_dispatch",
+    "base_branch_integration",
+    "base_branch_merge",
+    "deploy",
+    "deployment",
+    "direct_integration",
+    "direct_sql",
+    "external_execution",
+    "external_runtime",
+    "external_runtime_scope",
+    "message_connector",
+    "messaging",
+    "paper_live",
+    "paper_live_scope",
+    "product_dispatch",
+    "product_runtime_scope",
+    "product_scope",
+    "risk_mutation",
+    "runtime_dispatch",
+    "runtime_scope",
+    "trading",
+}
+_PRODUCT_OR_RUNTIME_METADATA_VALUE_KEYS = {
+    "alr_scope",
+    "delivery_scope",
+    "dispatch_scope",
+    "integration_scope",
+    "product_scope",
+    "runtime_scope",
+    "scope",
+    "target_scope",
+    "work_scope",
+}
+
+
+def _metadata_scope_key(key: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(key or "").strip().lower()).strip("_")
+
+
+def _metadata_scope_value_has_product_or_runtime_scope(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (list, tuple, set)):
+        return any(_metadata_scope_value_has_product_or_runtime_scope(item) for item in value)
+    if isinstance(value, dict):
+        return any(_metadata_scope_value_has_product_or_runtime_scope(item) for item in value.values())
+    text = str(value).strip().lower()
+    if not text:
+        return False
+    normalized_text = re.sub(r"[^a-z0-9]+", " ", text)
+    return any(
+        _text_has_product_or_runtime_dispatch_scope(_text_without_negative_dispatch_guardrails(candidate))
+        for candidate in (text, normalized_text)
+    )
+
+
+def _metadata_has_product_or_runtime_dispatch_scope(task: dict[str, Any]) -> bool:
+    metadata = _metadata(task)
+    for raw_key, value in metadata.items():
+        key = _metadata_scope_key(raw_key)
+        if key.startswith(("no_", "non_", "not_", "without_")):
+            continue
+        if key in _PRODUCT_OR_RUNTIME_METADATA_BOOL_KEYS and value is True:
+            return True
+        if key in _PRODUCT_OR_RUNTIME_METADATA_VALUE_KEYS and _metadata_scope_value_has_product_or_runtime_scope(value):
+            return True
+    return False
+
+
 def _has_repair_dispatch_terms(task: dict[str, Any]) -> bool:
     text = _task_text(task)
     return any(term in text for term in _DOCS_FIRST_REPAIR_TERMS)
@@ -4677,11 +4750,13 @@ def _text_without_negative_dispatch_guardrails(text: str) -> str:
 
 
 def _has_positive_product_or_runtime_dispatch_scope(task: dict[str, Any]) -> bool:
-    return _text_has_product_or_runtime_dispatch_scope(_text_without_negative_dispatch_guardrails(_task_text(task)))
+    return _text_has_product_or_runtime_dispatch_scope(
+        _text_without_negative_dispatch_guardrails(_task_text(task))
+    ) or _metadata_has_product_or_runtime_dispatch_scope(task)
 
 
 def _has_product_or_runtime_dispatch_scope(task: dict[str, Any]) -> bool:
-    return _text_has_product_or_runtime_dispatch_scope(_task_text(task))
+    return _text_has_product_or_runtime_dispatch_scope(_task_text(task)) or _metadata_has_product_or_runtime_dispatch_scope(task)
 
 
 def _metadata_marks_g1_recovery(task: dict[str, Any]) -> bool:
