@@ -1524,6 +1524,103 @@ def test_force_tick_uses_explicit_g1_recovery_metadata_before_review_when_docs_r
     assert "dispatch_preflight_denied" not in joined
 
 
+def test_claim_next_task_allows_metadata_documentation_recovery_past_validation_readiness(fake_sql, monkeypatch):
+    product = {
+        "project_id": "demo",
+        "lane_id": "lane-product",
+        "task_id": "demo-alr-020-product",
+        "status": "ready",
+        "phase": "implementation",
+        "priority": 18,
+        "title": "ALR-020 product implementation",
+        "description": "Normal product implementation remains blocked by red G1 rows.",
+        "owner_profile": "claude-builder",
+        "engine": "claude_code",
+        "dependencies": [],
+        "metadata": {},
+    }
+    documentation_recovery = {
+        "project_id": "demo",
+        "lane_id": "lane-g1",
+        "task_id": "demo-r2df-r47-explicit-g1-validation",
+        "status": "todo",
+        "phase": "documentation",
+        "priority": 19,
+        "title": "R2df-R47 — explicit G1 validation preflight",
+        "description": (
+            "Final report handoff wording is historical evidence only; the structured metadata "
+            "marks this as the current no-product/no-runtime G1 documentation candidate."
+        ),
+        "owner_profile": "codex-builder",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {"documentation_recovery": True, "no_product_runtime_scope": True},
+    }
+    tasks = [product, documentation_recovery]
+    project = {
+        "project_id": "demo",
+        "status": "active",
+        "autonomous_enabled": True,
+        "metadata": {"reconciliation_anomalies": ["unvalidated_required_docs"]},
+    }
+    fake_sql.rows_results = [[{"project_id": "demo"}], [product, documentation_recovery]]
+    fake_sql.statement_one_results = [{**documentation_recovery, "status": "claimed"}]
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "reconcile_project", lambda project_id: {"project_id": project_id})
+    monkeypatch.setattr(factory_pg, "_project_docs_notion_preflight", lambda *_, **__: (False, True, False, False))
+    monkeypatch.setattr(
+        factory_pg,
+        "_validation_task_readiness_findings",
+        lambda project_id: ["validation task demo-r2cy-r1-product-quality-review is not complete; status=ready"],
+    )
+
+    result = factory_pg.claim_next_task("demo", worker="factory-force-tick")
+
+    joined = "\n".join(fake_sql.statements)
+    assert "unresolved_validation_tasks" not in joined
+    assert result is not None
+    assert result["task"]["task_id"] == documentation_recovery["task_id"]
+    assert f"Task {documentation_recovery['task_id']} claimed" in joined
+    assert f"Task {product['task_id']} claimed" not in joined
+
+
+def test_g1_recovery_metadata_keeps_validation_and_reporting_work_fail_closed():
+    report = {
+        "task_id": "demo-r2df-r47-final-report",
+        "phase": "g1_recovery",
+        "title": "Final delivery report and gate closure",
+        "description": "Report validation evidence after independent review is complete.",
+        "owner_profile": "factory-reporter",
+        "metadata": {"g1_recovery": True},
+    }
+    qa = {
+        "task_id": "demo-r2df-r47-qa",
+        "phase": "qa",
+        "title": "QA smoke verification",
+        "description": "Verify the candidate after implementation.",
+        "owner_profile": "qa-verifier",
+        "metadata": {"g1_recovery": True},
+    }
+    security = {
+        "task_id": "demo-r2df-r47-security",
+        "phase": "security_review",
+        "title": "Security review",
+        "description": "Verify no-egress after implementation.",
+        "owner_profile": "security-reviewer",
+        "metadata": {"g1_recovery": True},
+    }
+
+    assert factory_pg._candidate_requires_validation_readiness_before_dispatch(report) is True
+    for task in (report, qa, security):
+        assert factory_pg._dispatch_preflight_blockers(task, docs_ready=False, notion_ready=True) == [
+            "missing_or_unindexed_docs"
+        ]
+
+
 def test_claim_next_task_allows_docs_first_pr_review_repair_when_docs_red(fake_sql, monkeypatch):
     review_repair = {
         "project_id": "demo",
