@@ -1028,7 +1028,13 @@ def test_compression_restores_user_turn_when_compressor_drops_all_users(tmp_path
     compressed, _sp = agent._compress_context(messages, "sys", approx_tokens=120_000)
 
     user_messages = [msg for msg in compressed if msg.get("role") == "user"]
-    assert user_messages == [{"role": "user", "content": "please continue from here"}]
+    assert [msg.get("content") for msg in user_messages] == [
+        "please continue from here"
+    ]
+    # In-place compaction has already written the compacted rows atomically.
+    # The private marker prevents the next append-only flush from duplicating
+    # this restored anchor in the active session transcript.
+    assert all(msg.get("_db_persisted") is True for msg in user_messages)
 
 
 def test_synthetic_user_scaffolding_does_not_replace_human_anchor(tmp_path: Path) -> None:

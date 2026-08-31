@@ -4831,7 +4831,10 @@ class TestSummaryPromptBounding:
         prompt = mock_call.call_args.kwargs["messages"][0]["content"]
         assert summary.startswith(SUMMARY_PREFIX)
         assert len(prompt) < 180_000
-        assert "summary input truncated" in prompt
+        # Lean compaction samples across the whole oversized region rather
+        # than retaining only a head and tail. The omission marker makes that
+        # lossy sampling explicit to the auxiliary model.
+        assert "chars elided" in prompt
         assert "FIRST_SENTINEL" in prompt
         assert "LAST_SENTINEL" in prompt
 
