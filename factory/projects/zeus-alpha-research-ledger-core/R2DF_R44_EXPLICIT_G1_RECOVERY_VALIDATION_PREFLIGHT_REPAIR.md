@@ -117,4 +117,4 @@ Commands run from the assigned worktree:
 
 ## Delivery state
 
-This candidate is implemented and locally validated. It remains pending commit, push, Zeus-signed non-draft `agent:zeus` PR, and independent exact-SHA review by a distinct reviewer. This artifact does not self-approve, merge, deploy, mutate Factory task status, mutate the primary checkout, or authorize ALR-020/product/runtime dispatch.
+This candidate is implemented and locally validated for PR-first handoff. Commit, push, PR URL, Factory gate id, and exact pushed head SHA are recorded in external readbacks after the containing commit is created, because a committed file cannot reliably name the immutable SHA of the commit that contains itself. Independent exact-SHA review by a distinct reviewer remains pending. This artifact does not self-approve, merge, deploy, mutate Factory task status, mutate the primary checkout, or authorize ALR-020/product/runtime dispatch.
