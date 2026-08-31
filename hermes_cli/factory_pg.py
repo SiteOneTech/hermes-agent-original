@@ -263,6 +263,12 @@ BLOCKER_ACTION_CATEGORIES = {"auto_resolvable", "technical_rework", "human_quest
 DELIVERY_HOLD_STATUS = factory_contracts.ProjectStatus.DELIVERY_HOLD.value
 MANUAL_ATTENTION_STATUS = factory_contracts.ProjectStatus.MANUAL_ATTENTION.value
 CONDITION_HOLD_STATUSES = {DELIVERY_HOLD_STATUS, "hold", "on_hold"}
+RUN_BACKED_IN_FLIGHT_TASK_STATUSES = {
+    factory_contracts.TaskStatus.CLAIMED.value,
+    factory_contracts.TaskStatus.RUNNING.value,
+    factory_contracts.TaskStatus.IN_PROGRESS.value,
+    factory_contracts.TaskStatus.REVIEW_RUNNING.value,
+}
 TERMINAL_PROJECT_STATUSES = {
     factory_contracts.ProjectStatus.COMPLETED.value,
     factory_contracts.ProjectStatus.ACCEPTED.value,
@@ -4477,16 +4483,50 @@ def _has_claimable_autonomous_work(tasks: list[dict[str, Any]]) -> bool:
     return False
 
 
-def _has_active_increment(tasks: list[dict[str, Any]], *, ignore_review_ready: bool = False) -> bool:
+def _tasks_have_run_backed_inflight_status(tasks: list[dict[str, Any]]) -> bool:
+    return any(str(task.get("status") or "") in RUN_BACKED_IN_FLIGHT_TASK_STATUSES for task in tasks)
+
+
+def _active_task_run_task_ids(project_id: str) -> set[str]:
+    rows = sql.rows(
+        f"""
+        SELECT task_id
+        FROM factory.task_runs
+        WHERE project_id={_q(project_id)}
+          AND status IN ('queued','running')
+        """,
+        user=_user(),
+    )
+    return {str(row.get("task_id") or "").strip() for row in rows if str(row.get("task_id") or "").strip()}
+
+
+def _has_active_increment(
+    tasks: list[dict[str, Any]],
+    *,
+    ignore_review_ready: bool = False,
+    active_run_task_ids: set[str] | None = None,
+) -> bool:
     ignored = {"review_ready", "qa_ready"} if ignore_review_ready else set()
+    if active_run_task_ids:
+        return True
     return any(
         str(t.get("status") or "") in ACTIVE_TASK_STATUSES
         and str(t.get("status") or "") not in ignored
+        and not (
+            active_run_task_ids is not None
+            and str(t.get("status") or "") in RUN_BACKED_IN_FLIGHT_TASK_STATUSES
+            and str(t.get("task_id") or "").strip() not in active_run_task_ids
+        )
         for t in tasks
     )
 
 
-def _has_in_flight_increment(tasks: list[dict[str, Any]], *, ignore_review_ready: bool = False) -> bool:
+def _has_in_flight_increment(
+    tasks: list[dict[str, Any]],
+    *,
+    ignore_review_ready: bool = False,
+    active_run_task_ids: set[str] | None = None,
+) -> bool:
     """Return True when a task has a worker/reviewer currently in flight.
 
     A task in ``rework`` is an active increment for project status and for
@@ -4496,9 +4536,16 @@ def _has_in_flight_increment(tasks: list[dict[str, Any]], *, ignore_review_ready
     """
 
     ignored = {"review_ready", "qa_ready"} if ignore_review_ready else set()
+    if active_run_task_ids:
+        return True
     return any(
         str(t.get("status") or "") in IN_FLIGHT_TASK_STATUSES
         and str(t.get("status") or "") not in ignored
+        and not (
+            active_run_task_ids is not None
+            and str(t.get("status") or "") in RUN_BACKED_IN_FLIGHT_TASK_STATUSES
+            and str(t.get("task_id") or "").strip() not in active_run_task_ids
+        )
         for t in tasks
     )
 
@@ -4725,9 +4772,14 @@ def _next_runnable_task(
     *,
     dispatch_preflight: tuple[bool, bool, bool, bool] | None = None,
     ignore_review_ready_inflight: bool = False,
+    active_run_task_ids: set[str] | None = None,
 ) -> dict[str, Any] | None:
     tasks = _tasks(project_id)
-    if _has_in_flight_increment(tasks, ignore_review_ready=ignore_review_ready_inflight):
+    if _has_in_flight_increment(
+        tasks,
+        ignore_review_ready=ignore_review_ready_inflight,
+        active_run_task_ids=active_run_task_ids,
+    ):
         return None
     active_rework_exists = any(str(task.get("status") or "") == "rework" for task in tasks)
     terminal = ",".join(_q(s) for s in TERMINAL_TASK_STATUSES)
@@ -6951,12 +7003,18 @@ def claim_next_task(project_id: Optional[str] = None, *, worker: str = "factory-
             and not docs_first_waived
             and _has_dependency_ready_docs_first_repair_task(tasks)
         )
-        if _has_active_increment(tasks, ignore_review_ready=docs_repair_preempts_review):
+        active_run_task_ids = _active_task_run_task_ids(pid) if _tasks_have_run_backed_inflight_status(tasks) else None
+        if _has_active_increment(
+            tasks,
+            ignore_review_ready=docs_repair_preempts_review,
+            active_run_task_ids=active_run_task_ids,
+        ):
             continue
         task = _next_runnable_task(
             pid,
             dispatch_preflight=(docs_ready, notion_ready, notion_required, docs_first_waived),
             ignore_review_ready_inflight=docs_repair_preempts_review,
+            active_run_task_ids=active_run_task_ids,
         )
         if not task:
             reconcile_project(pid)
