@@ -4688,9 +4688,41 @@ def _metadata_marks_g1_recovery(task: dict[str, Any]) -> bool:
     return _metadata(task).get("g1_recovery") is True
 
 
+def _metadata_marks_documentation_recovery(task: dict[str, Any]) -> bool:
+    metadata = _metadata(task)
+    return any(
+        metadata.get(key) is True
+        for key in (
+            "documentation_recovery",
+            "docs_first_recovery",
+            "g1_documentation_recovery",
+            "validation_preflight_recovery",
+        )
+    )
+
+
+def _is_reporting_dispatch_task(task: dict[str, Any]) -> bool:
+    phase = str(task.get("phase") or "").strip().lower().replace("-", "_")
+    owner = str(task.get("owner_profile") or task.get("owner_agent_id") or "").lower()
+    return owner == "factory-reporter" or phase in {
+        "critical_readiness",
+        "delivery",
+        "delivery_report",
+        "final",
+        "final_report",
+        "release",
+        "report",
+        "reporting",
+    }
+
+
 def _is_explicit_g1_recovery_task(task: dict[str, Any]) -> bool:
     phase = str(task.get("phase") or "").strip().lower().replace("-", "_")
-    if phase != "g1_recovery" and not _metadata_marks_g1_recovery(task):
+    metadata_marks_recovery = _metadata_marks_g1_recovery(task) or _metadata_marks_documentation_recovery(task)
+    metadata_recovery_phase = phase in {"documentation", "docs", "g1_recovery", "planning"} or phase.startswith(("g0", "g1"))
+    if phase != "g1_recovery" and not (metadata_marks_recovery and metadata_recovery_phase):
+        return False
+    if _is_validation_task(task) or _is_reporting_dispatch_task(task):
         return False
     return not _has_positive_product_or_runtime_dispatch_scope(task)
 
@@ -4700,6 +4732,8 @@ def _is_docs_first_repair_dispatch_task(task: dict[str, Any]) -> bool:
         return True
     if _is_docs_first_validation_repair_task(task):
         return True
+    if _is_validation_task(task) or _is_reporting_dispatch_task(task):
+        return False
     phase = str(task.get("phase") or "").strip().lower().replace("-", "_")
     if _is_explicit_g1_recovery_task(task):
         return True
@@ -6810,6 +6844,8 @@ def _is_docs_first_gated_dispatch_task(task: dict[str, Any]) -> bool:
         return False
     if _is_docs_first_repair_dispatch_task(task):
         return False
+    if _is_reporting_dispatch_task(task):
+        return True
     if _has_product_or_runtime_dispatch_scope(task):
         return True
     phase = str(task.get("phase") or "").strip().lower()
