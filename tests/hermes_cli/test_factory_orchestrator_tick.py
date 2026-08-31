@@ -11,7 +11,68 @@ from typing import Any
 
 import pytest
 
+import hermes_bootstrap
 from hermes_cli import factory
+
+
+def test_console_entrypoint_delegates_factory_tick_to_configured_base_before_stale_claimed_null(
+    monkeypatch,
+    tmp_path,
+):
+    primary, current_worktree, stale_sha, current_sha = _make_stale_primary_with_configured_base_worktree(tmp_path)
+    stale_tick = primary / "scripts" / "factory" / "factory_orchestrator_tick.py"
+    current_tick = current_worktree / "scripts" / "factory" / "factory_orchestrator_tick.py"
+    stale_tick.write_text(
+        "print('{\"job\": \"factory_orchestrator_tick\", \"claimed\": null}')\n",
+        encoding="utf-8",
+    )
+    assert current_tick.is_file()
+
+    monkeypatch.chdir(primary)
+    monkeypatch.setattr(hermes_bootstrap, "__file__", str(primary / "hermes_bootstrap.py"))
+    monkeypatch.setattr(sys, "argv", ["hermes", "factory", "project", "tick", "demo", "--json"])
+    assert _git(primary, "rev-parse", "HEAD") == stale_sha
+    assert _git(primary, "rev-parse", "origin/main") == current_sha
+
+    monkeypatch.setattr(
+        hermes_bootstrap,
+        "_run_hermes_main",
+        lambda: (_ for _ in ()).throw(AssertionError("stale hermes_cli.main must not be imported")),
+        raising=False,
+    )
+    captured: dict[str, Any] = {}
+
+    def fake_execvpe(executable, argv, env):
+        captured["executable"] = executable
+        captured["argv"] = [str(part) for part in argv]
+        captured["env"] = dict(env)
+        captured["cwd"] = os.getcwd()
+        raise SystemExit(42)
+
+    monkeypatch.setattr(hermes_bootstrap.os, "execvpe", fake_execvpe)
+
+    with pytest.raises(SystemExit) as exc:
+        hermes_bootstrap.main()
+
+    assert exc.value.code == 42
+    assert captured["executable"] == sys.executable
+    assert captured["argv"] == [
+        sys.executable,
+        "-m",
+        "hermes_cli.main",
+        "factory",
+        "project",
+        "tick",
+        "demo",
+        "--json",
+    ]
+    assert captured["cwd"] == str(current_worktree)
+    env = captured["env"]
+    assert env["PYTHONPATH"].split(os.pathsep)[0] == str(current_worktree)
+    assert env["HERMES_PYTHON_SRC_ROOT"] == str(current_worktree)
+    assert env["HERMES_FACTORY_SOURCE_DELEGATED"] == "1"
+
+
 def _load_orchestrator_module():
     repo_root = Path(__file__).resolve().parents[2]
     script = repo_root / "scripts" / "factory" / "factory_orchestrator_tick.py"
