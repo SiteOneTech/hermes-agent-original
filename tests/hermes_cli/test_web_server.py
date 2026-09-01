@@ -664,6 +664,36 @@ class TestWebServerEndpoints:
 
         assert opens == [True]
 
+    def test_decode_error_triggers_writable_heal(self, tmp_path, monkeypatch):
+        """UnicodeDecodeError — pysqlite failing to decode SQLite's own error
+        message over corrupt file bytes (#98924) — must route through the
+        same one-writable-open heal as malformed schema."""
+        import hermes_state
+        from hermes_cli import web_server
+
+        db_path = tmp_path / "state.db"
+        db_path.write_bytes(b"not-empty")
+        opens = []
+
+        class _OkDB:
+            _conn = None
+
+            def close(self):
+                pass
+
+        def scripted_open(*_args, **kwargs):
+            opens.append(kwargs.get("read_only", False))
+            if opens == [True]:
+                raise UnicodeDecodeError("utf-8", b"\x81", 0, 1, "invalid start byte")
+            return _OkDB()
+
+        monkeypatch.setattr(hermes_state, "SessionDB", scripted_open)
+
+        db = web_server._open_session_db_at_path(db_path, read_only=True)
+
+        assert isinstance(db, _OkDB)
+        assert opens == [True, False, True]
+
     def test_get_sessions_zero_byte_store_returns_empty_list(self):
         from hermes_constants import get_hermes_home
 
@@ -3185,6 +3215,11 @@ class TestWebServerEndpoints:
             raise AssertionError("Nix update guard should not spawn hermes update")
 
         monkeypatch.setattr(web_server, "_dashboard_local_update_managed_externally", lambda: False)
+        # The shared admission gate resolves through hermes_cli.config; the
+        # web_server alias only serves the update-check endpoint.
+        monkeypatch.setattr(
+            "hermes_cli.config.detect_install_method", lambda *_a, **_k: "nix"
+        )
         monkeypatch.setattr(web_server, "detect_install_method", lambda _root: "nix")
         monkeypatch.setattr(web_server, "_spawn_hermes_action", fail_spawn)
         web_server._ACTION_PROCS.pop("hermes-update", None)
@@ -4896,10 +4931,17 @@ class TestWebServerEndpoints:
         app_ = FastAPI()
         ws.mount_spa(app_)
 
-        for route in ("/", "/chat"):
-            resp = TestClient(app_).get(route)
-            assert resp.status_code == 404
-            assert "web UI disabled" in resp.json()["error"]
+        client = TestClient(app_)
+        # The root carries only the rotating desktop session token so a stale
+        # Electron spawn token can be refreshed; it must never serve the SPA.
+        root = client.get("/")
+        assert root.status_code == 200
+        assert "__HERMES_SESSION_TOKEN__" in root.text
+        assert "<body>UI</body>" not in root.text
+
+        chat = client.get("/chat")
+        assert chat.status_code == 404
+        assert "web UI disabled" in chat.json()["error"]
 
     def test_set_model_main_nous_applies_gateway_defaults(self, monkeypatch):
         """Switching the main provider to Nous calls apply_nous_managed_defaults
@@ -8456,6 +8498,69 @@ class TestNewEndpoints:
         assert any(tool["tool"] == "read_file" for tool in resp.json()["tools"])
 
 # ---------------------------------------------------------------------------
+# Desktop-owned loopback backends are not gated by dashboard.public_url (#96490)
+# ---------------------------------------------------------------------------
+
+
+class TestDesktopLoopbackAuthExemption:
+    """``_desktop_loopback_auth_exempt`` decides the #96490 exemption."""
+
+    def test_exempt_with_desktop_env_and_session_token_on_loopback(self, monkeypatch):
+        import hermes_cli.web_server as web_server
+
+        monkeypatch.setenv("HERMES_DESKTOP", "1")
+        monkeypatch.setenv("HERMES_DASHBOARD_SESSION_TOKEN", "desktop-minted")
+        assert web_server._desktop_loopback_auth_exempt("127.0.0.1") is True
+        assert web_server._desktop_loopback_auth_exempt("::1") is True
+
+    def test_exempt_via_ssh_spawn_credentials_without_env_token(self, monkeypatch):
+        import hermes_cli.web_server as web_server
+
+        monkeypatch.setenv("HERMES_DESKTOP", "1")
+        monkeypatch.delenv("HERMES_DASHBOARD_SESSION_TOKEN", raising=False)
+        assert web_server._desktop_loopback_auth_exempt(
+            "127.0.0.1", ssh_session_token="tok"
+        )
+        assert web_server._desktop_loopback_auth_exempt(
+            "127.0.0.1", ssh_owner_nonce="nonce"
+        )
+
+    def test_not_exempt_without_desktop_env(self, monkeypatch):
+        import hermes_cli.web_server as web_server
+
+        monkeypatch.delenv("HERMES_DESKTOP", raising=False)
+        monkeypatch.setenv("HERMES_DASHBOARD_SESSION_TOKEN", "tok")
+        assert web_server._desktop_loopback_auth_exempt("127.0.0.1") is False
+
+    def test_not_exempt_without_any_credential(self, monkeypatch):
+        import hermes_cli.web_server as web_server
+
+        # HERMES_DESKTOP=1 alone is not enough: a plain serve with the env var
+        # exported must stay gated.
+        monkeypatch.setenv("HERMES_DESKTOP", "1")
+        monkeypatch.delenv("HERMES_DASHBOARD_SESSION_TOKEN", raising=False)
+        assert web_server._desktop_loopback_auth_exempt("127.0.0.1") is False
+
+    def test_not_exempt_on_non_loopback_bind(self, monkeypatch):
+        import hermes_cli.web_server as web_server
+
+        monkeypatch.setenv("HERMES_DESKTOP", "1")
+        monkeypatch.setenv("HERMES_DASHBOARD_SESSION_TOKEN", "tok")
+        assert web_server._desktop_loopback_auth_exempt("0.0.0.0") is False
+        assert web_server._desktop_loopback_auth_exempt("192.168.1.10") is False
+
+    def test_public_url_engages_gate_for_non_desktop_loopback(self, monkeypatch):
+        import hermes_cli.web_server as web_server
+
+        # Sanity: the base behaviour is untouched — a non-Desktop loopback
+        # serve with a public_url configured stays ticket-gated.
+        monkeypatch.delenv("HERMES_DESKTOP", raising=False)
+        assert web_server.should_require_dashboard_auth(
+            "127.0.0.1", frozenset({"dash.example.com"})
+        ) is True
+
+
+# ---------------------------------------------------------------------------
 # Model context length: normalize/denormalize + /api/model/info
 # ---------------------------------------------------------------------------
 
@@ -8519,6 +8624,23 @@ class TestModelContextLength:
         assert isinstance(result["model"], dict)
         assert result["model"]["context_length"] == 100000
         assert "model_context_length" not in result  # virtual field removed
+
+    def test_denormalize_context_length_alone_is_applied(self):
+        """The Settings autosave now sends a diff, not the full draft: editing
+        only the Context Window control must not omit ``model`` and thereby
+        drop the context_length edit on the floor (#89597 review)."""
+        from hermes_cli.web_server import _denormalize_config_from_web
+        from hermes_cli.config import save_config
+
+        save_config({
+            "model": {"default": "anthropic/claude-sonnet-4", "provider": "anthropic",
+                      "context_length": 100000}
+        })
+
+        result = _denormalize_config_from_web({"model_context_length": 200000})
+        assert isinstance(result["model"], dict)
+        assert result["model"]["context_length"] == 200000
+        assert result["model"]["default"] == "anthropic/claude-sonnet-4"
 
     def test_denormalize_zero_removes_context_length(self):
         """denormalize with model_context_length=0 should remove context_length key."""
@@ -8584,6 +8706,19 @@ class TestModelContextLength:
         })
         assert isinstance(result["model"], dict)
         assert result["model"]["context_length"] == 32000
+
+    def test_denormalize_model_alone_preserves_context_length(self):
+        """Editing only the Model field retains an unrelated context override."""
+        from hermes_cli.web_server import _denormalize_config_from_web
+        from hermes_cli.config import save_config
+
+        save_config({
+            "model": {"default": "anthropic/claude-sonnet-4", "context_length": 150000}
+        })
+
+        result = _denormalize_config_from_web({"model": "anthropic/claude-opus-4.6"})
+        assert result["model"]["context_length"] == 150000
+        assert result["model"]["default"] == "anthropic/claude-opus-4.6"
 
 
 class TestDenormalizeProviderSwitch:

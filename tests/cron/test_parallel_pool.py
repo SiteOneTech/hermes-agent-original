@@ -286,21 +286,15 @@ class TestSyncMode:
         sched._shutdown_parallel_pool()
 
 
-class TestSequentialPool:
-    """Sequential (workdir/profile) jobs use the persistent cron-seq pool.
+class TestWorkdirParallelPool:
+    """Task-scoped workdir jobs use the normal persistent parallel pool."""
 
-    Verifies the follow-up fix: env/context-mutating jobs no longer run inline
-    in the ticker thread, so a long workdir/profile job can't starve the
-    schedule the same way the parallel path used to.
-    """
-
-    def test_sequential_job_does_not_block_ticker(self, tmp_path, monkeypatch):
+    def test_workdir_job_does_not_block_ticker(self, tmp_path, monkeypatch):
         """sync=False returns immediately even when a workdir job is slow."""
         import cron.scheduler as sched
 
         sched._parallel_pool = None
         sched._parallel_pool_max_workers = None
-        sched._sequential_pool = None
         sched._running_job_ids.clear()
 
         job = {
@@ -311,7 +305,7 @@ class TestSequentialPool:
             "enabled": True,
             "next_run_at": "2020-01-01T00:00:00",
             "deliver": "local",
-            "workdir": str(tmp_path),  # makes it sequential
+            "workdir": str(tmp_path),
         }
 
         barrier = threading.Barrier(2, timeout=5)
@@ -338,13 +332,12 @@ class TestSequentialPool:
         time.sleep(0.1)
         sched._shutdown_parallel_pool()
 
-    def test_sequential_running_guard_prevents_double_dispatch(self, tmp_path, monkeypatch):
+    def test_workdir_running_guard_prevents_double_dispatch(self, tmp_path, monkeypatch):
         """A workdir job already in _running_job_ids is skipped on next tick."""
         import cron.scheduler as sched
 
         sched._parallel_pool = None
         sched._parallel_pool_max_workers = None
-        sched._sequential_pool = None
         sched._running_job_ids.clear()
 
         job = {
@@ -376,17 +369,50 @@ class TestSequentialPool:
         sched._running_job_ids.discard("guard-seq")
         sched._shutdown_parallel_pool()
 
-    def test_get_sequential_pool_is_persistent(self):
-        """_get_sequential_pool returns the same single-thread pool."""
+
+class TestProfileSequentialPool:
+    """Profile overrides remain serialized because they mutate legacy globals."""
+
+    def test_profile_job_uses_sequential_pool_without_blocking_ticker(self, monkeypatch):
         import cron.scheduler as sched
 
+        sched._parallel_pool = None
+        sched._parallel_pool_max_workers = None
         sched._sequential_pool = None
-        pool1 = sched._get_sequential_pool()
-        pool2 = sched._get_sequential_pool()
-        assert pool1 is pool2
+        sched._running_job_ids.clear()
 
+        job = {
+            "id": "slow-profile",
+            "name": "slow-profile",
+            "prompt": "test",
+            "schedule": "every 5m",
+            "enabled": True,
+            "next_run_at": "2020-01-01T00:00:00",
+            "deliver": "local",
+            "profile": "worker",
+        }
+        barrier = threading.Barrier(2, timeout=5)
+
+        def slow_run(j, *, defer_agent_teardown=None, **_kw):
+            barrier.wait()
+            return True, "out", "resp", None
+
+        monkeypatch.setattr(sched, "get_due_jobs", lambda: [job])
+        monkeypatch.setattr(sched, "claim_job_for_fire", lambda *_a, **_kw: True)
+        monkeypatch.setattr(sched, "run_job", slow_run)
+        monkeypatch.setattr(sched, "save_job_output", lambda *_a, **_kw: "/tmp/out")
+        monkeypatch.setattr(sched, "mark_job_run", lambda *_a, **_kw: None)
+        monkeypatch.setattr(sched, "_deliver_result", lambda *_a, **_kw: None)
+
+        start = time.monotonic()
+        assert sched.tick(verbose=False, sync=False) == 1
+        assert time.monotonic() - start < 1.0
+        assert sched._sequential_pool is not None
+        assert sched._parallel_pool is None
+
+        barrier.wait()
+        time.sleep(0.1)
         sched._shutdown_parallel_pool()
-        assert sched._sequential_pool is None
 
 
 class TestTickBatchAdvance:

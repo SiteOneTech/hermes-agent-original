@@ -1596,10 +1596,14 @@ class TestRunJobSessionPersistence:
         monkeypatch.setenv("HERMES_CRON_TIMEOUT", "1")
 
         with self._run_job_patches(tmp_path) as (fake_db, mock_agent_cls), \
-             patch(
-                 "cron.scheduler.concurrent.futures.wait",
-                 return_value=(set(), set()),
-             ):
+            patch(
+                "cron.scheduler.concurrent.futures.wait",
+                return_value=(set(), set()),
+            ), \
+            patch(
+                "cron.scheduler._inactivity_watchdog_loop",
+                return_value=True,
+            ):
             mock_agent = mock_agent_cls.return_value
             mock_agent.get_activity_summary.return_value = {
                 "seconds_since_activity": 2.0,
@@ -2226,6 +2230,9 @@ class TestRunJobSessionPersistence:
         class FakeFuture:
             def result(self):
                 return {"final_response": "ok"}
+
+            def done(self):
+                return False
 
         fake_future = FakeFuture()
         fake_pool = MagicMock()
@@ -2997,9 +3004,11 @@ class TestRunJobSkillBacked:
             register_env_passthrough(["NOTION_API_KEY"])
             return json.dumps({"success": True, "content": "# notion\nUse Notion."})
 
-        def _run_conversation(prompt):
+        def _run_conversation(prompt, *, task_id=None):
             from tools.env_passthrough import get_all_passthrough
 
+            assert isinstance(task_id, str)
+            assert task_id.startswith("cron:skill-env-job:")
             assert "NOTION_API_KEY" in get_all_passthrough()
             return {"final_response": "ok"}
 
@@ -3055,7 +3064,7 @@ class TestRunJobSkillBacked:
             register_credential_file("credentials/google_token.json")
             return json.dumps({"success": True, "content": "# google-workspace\nUse Google."})
 
-        def _run_conversation(prompt):
+        def _run_conversation(prompt, **_kwargs):
             from tools.credential_files import _get_registered
 
             registered = _get_registered()
