@@ -1657,6 +1657,111 @@ def test_g1_recovery_metadata_scope_keeps_product_runtime_and_external_work_fail
         ]
 
 
+def test_claim_next_task_allows_phase_explicit_g1_quality_repair_review_when_docs_red(fake_sql, monkeypatch):
+    document_status = [
+        {
+            "file_name": f"G1_DOC_{idx}.md",
+            "category": "g1_required",
+            "exists": True,
+            "indexed": True,
+            "committed": True,
+            "validated": True,
+            "reviewed": False,
+            "blocking": True,
+            "missing": ["reviewed"],
+        }
+        for idx in range(10)
+    ]
+    g1_quality_repair = {
+        "project_id": "demo",
+        "lane_id": "lane-review",
+        "task_id": "demo-r2cy-r1-independent-exact-sha-quality-re",
+        "status": "ready",
+        "phase": "quality_review",
+        "priority": 17,
+        "title": "R2cy-R1 — independent exact-SHA quality review of PR #99",
+        "description": (
+            "Bounded independent review of the stale/diverged-primary runtime-source path. "
+            "Inspect the exact Factory control-plane diff for fail-closed G1/docs-first "
+            "dispatch behavior and project-local evidence. No merge, deploy, direct SQL, "
+            "external runtime, messaging, product, ALR, or paper/live action."
+        ),
+        "owner_profile": "quality-reviewer",
+        "reviewer_profile": "security-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {"repo_strategy_status": "passed"},
+    }
+    product = {
+        "project_id": "demo",
+        "lane_id": "lane-product",
+        "task_id": "demo-alr-020-product",
+        "status": "ready",
+        "phase": "implementation",
+        "priority": 18,
+        "title": "ALR-020 product implementation",
+        "description": "Normal product implementation must remain fail-closed while required G1 docs are red.",
+        "owner_profile": "claude-builder",
+        "engine": "claude_code",
+        "dependencies": [],
+        "metadata": {},
+    }
+    product_quality_review = {
+        "project_id": "demo",
+        "lane_id": "lane-product-review",
+        "task_id": "demo-product-quality-review",
+        "status": "ready",
+        "phase": "quality_review",
+        "priority": 19,
+        "title": "Independent product quality review",
+        "description": (
+            "Validate product quality after the G1/docs-first control-plane evidence is ready; "
+            "this is not the repair task itself."
+        ),
+        "owner_profile": "quality-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {},
+    }
+    project = {
+        "project_id": "demo",
+        "status": "active",
+        "autonomous_enabled": True,
+        "metadata": {"reconciliation_anomalies": ["unvalidated_required_docs"]},
+        "document_status": document_status,
+    }
+    tasks = [g1_quality_repair, product, product_quality_review]
+    assert len([row for row in document_status if row["blocking"]]) == 10
+    assert factory_pg._payload_project_docs_ready(project) is False
+
+    fake_sql.rows_results = [[{"project_id": "demo"}], [g1_quality_repair, product]]
+    fake_sql.statement_one_results = [{**g1_quality_repair, "status": "claimed"}]
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "reconciliation_findings", lambda *_, **__: [])
+    monkeypatch.setattr(factory_pg, "ensure_reconciliation_tasks", lambda *_, **__: [])
+    monkeypatch.setattr(factory_pg, "reconcile_project", lambda project_id: {"project_id": project_id})
+    monkeypatch.setattr(factory_pg, "_project_docs_notion_preflight", lambda *_, **__: (False, True, False, False))
+
+    result = factory_pg.claim_next_task("demo", worker="factory-force-tick")
+
+    assert factory_pg._dispatch_preflight_blockers(g1_quality_repair, docs_ready=False, notion_ready=True) == []
+    assert factory_pg._dispatch_preflight_blockers(product, docs_ready=False, notion_ready=True) == [
+        "missing_or_unindexed_docs"
+    ]
+    assert factory_pg._dispatch_preflight_blockers(product_quality_review, docs_ready=False, notion_ready=True) == [
+        "missing_or_unindexed_docs"
+    ]
+    assert result is not None
+    assert result["task"]["task_id"] == g1_quality_repair["task_id"]
+    joined = "\n".join(fake_sql.statements)
+    assert f"Task {g1_quality_repair['task_id']} claimed" in joined
+    assert "dispatch_preflight_denied" not in joined
+    assert f"Task {product['task_id']} claimed" not in joined
+
+
 def test_claim_next_task_allows_docs_first_pr_review_repair_when_docs_red(fake_sql, monkeypatch):
     review_repair = {
         "project_id": "demo",
