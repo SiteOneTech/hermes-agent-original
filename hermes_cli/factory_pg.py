@@ -4624,6 +4624,9 @@ _PRODUCT_OR_RUNTIME_DISPATCH_SCOPE_TERMS = (
     "alr-070",
     "alr-080",
     "product implementation",
+    "product quality",
+    "product review",
+    "product validation",
     "ledger implementation",
     "external runtime",
     "runtime propagation",
@@ -6895,7 +6898,9 @@ def _is_docs_first_validation_repair_task(task: dict[str, Any]) -> bool:
         return False
     if _is_reporting_dispatch_task(task) or _has_positive_product_or_runtime_dispatch_scope(task):
         return False
-    if not _has_explicit_g1_or_documentation_recovery_scope(task):
+    explicit_recovery_scope = _has_explicit_g1_or_documentation_recovery_scope(task)
+    phase_explicit_g1_review_repair = phase in {"quality", "quality_review", "review"} and owner == "quality-reviewer"
+    if not explicit_recovery_scope and not phase_explicit_g1_review_repair:
         return False
     text = _task_text(task)
     docs_terms = (
