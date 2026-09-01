@@ -4776,6 +4776,24 @@ def _metadata_marks_documentation_recovery(task: dict[str, Any]) -> bool:
     )
 
 
+def _has_explicit_g1_or_documentation_recovery_scope(task: dict[str, Any]) -> bool:
+    """Return True only for explicit G0/G1/documentation recovery scope.
+
+    Dispatch eligibility must not be inferred from broad task prose alone: old
+    tickets often quote delivery/report/gate failures while describing why a
+    bounded G1 repair exists.  Require a phase or structured metadata signal and
+    let product/runtime/reporting validation remain fail-closed separately.
+    """
+
+    phase = str(task.get("phase") or "").strip().lower().replace("-", "_")
+    return (
+        phase.startswith(("g0", "g1"))
+        or phase in {"documentation", "docs", "planning"}
+        or _metadata_marks_g1_recovery(task)
+        or _metadata_marks_documentation_recovery(task)
+    )
+
+
 def _is_reporting_dispatch_task(task: dict[str, Any]) -> bool:
     phase = str(task.get("phase") or "").strip().lower().replace("-", "_")
     owner = str(task.get("owner_profile") or task.get("owner_agent_id") or "").lower()
@@ -4809,13 +4827,11 @@ def _is_docs_first_repair_dispatch_task(task: dict[str, Any]) -> bool:
         return True
     if _is_validation_task(task) or _is_reporting_dispatch_task(task):
         return False
-    phase = str(task.get("phase") or "").strip().lower().replace("-", "_")
     if _is_explicit_g1_recovery_task(task):
         return True
     return _has_docs_first_repair_terms(task) and (
-        phase.startswith(("g0", "g1"))
-        or phase in {"documentation", "docs", "planning"}
-        or not _has_product_or_runtime_dispatch_scope(task)
+        _has_explicit_g1_or_documentation_recovery_scope(task)
+        and not _has_positive_product_or_runtime_dispatch_scope(task)
     )
 
 
@@ -6872,6 +6888,14 @@ def _is_docs_first_validation_repair_task(task: dict[str, Any]) -> bool:
     """
 
     if not _is_validation_task(task):
+        return False
+    phase = str(task.get("phase") or "").strip().lower().replace("-", "_")
+    owner = str(task.get("owner_profile") or task.get("owner_agent_id") or "").lower()
+    if phase in {"qa", "qa_security", "security", "security_review"} or owner in {"qa-verifier", "security-reviewer"}:
+        return False
+    if _is_reporting_dispatch_task(task) or _has_positive_product_or_runtime_dispatch_scope(task):
+        return False
+    if not _has_explicit_g1_or_documentation_recovery_scope(task):
         return False
     text = _task_text(task)
     docs_terms = (

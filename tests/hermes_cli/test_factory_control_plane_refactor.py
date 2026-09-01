@@ -1199,6 +1199,157 @@ def test_validation_readiness_allows_dependency_ready_documentation_recovery_wit
     assert not any("unresolved_validation_tasks" in statement for statement in fake_sql.statements)
 
 
+def test_validation_readiness_requires_explicit_g1_or_documentation_recovery_signal(fake_sql, monkeypatch):
+    text_only_recovery = {
+        "project_id": "demo",
+        "lane_id": "lane-docs",
+        "task_id": "demo-text-only-g1-docs-recovery",
+        "status": "todo",
+        "phase": "implementation",
+        "priority": 19,
+        "title": "R2df — G1 documentation-index conflict recovery",
+        "description": (
+            "Repair docs-first conflict evidence after final gate closure wording. "
+            "This lacks explicit G1/documentation recovery phase or metadata."
+        ),
+        "owner_profile": "codex-builder",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {},
+    }
+    unrelated_security_review = {
+        "project_id": "demo",
+        "lane_id": "lane-review",
+        "task_id": "demo-alr-063-security-review",
+        "status": "todo",
+        "phase": "security_review",
+        "priority": 62,
+        "title": "ALR-063 independent security and no-egress review",
+        "description": "Review implementation after the product increment exists.",
+        "owner_profile": "security-reviewer",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {},
+    }
+    tasks = [text_only_recovery, unrelated_security_review]
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: {"project_id": project_id, "metadata": {}})
+    fake_sql.rows_results = [[text_only_recovery]]
+
+    selected = factory_pg._next_runnable_task(
+        "demo",
+        dispatch_preflight=(False, True, False, False),
+    )
+
+    assert selected is None
+    joined_statements = "\n".join(fake_sql.statements)
+    assert "demo-text-only-g1-docs-recovery" in joined_statements
+    assert "unresolved_validation_tasks" in joined_statements
+
+
+def test_explicit_g1_recovery_phase_bypasses_validation_deadlock_without_product_runtime_scope(fake_sql, monkeypatch):
+    g1_recovery = {
+        "project_id": "demo",
+        "lane_id": "lane-docs",
+        "task_id": "demo-r2df-r39-fail-closed-terminalization",
+        "status": "todo",
+        "phase": "g1_recovery",
+        "priority": -100,
+        "title": "R2df-R39 — fail-closed terminalization of failed review evidence",
+        "description": (
+            "Bounded current-base Factory control-plane recovery. "
+            "No product implementation, deploy, external runtime, messaging, or direct SQL."
+        ),
+        "owner_profile": "codex-builder",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {},
+    }
+    unrelated_security_review = {
+        "project_id": "demo",
+        "lane_id": "lane-review",
+        "task_id": "demo-alr-063-security-review",
+        "status": "todo",
+        "phase": "security_review",
+        "priority": 62,
+        "title": "ALR-063 independent security and no-egress review",
+        "description": "Review implementation after the product increment exists.",
+        "owner_profile": "security-reviewer",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {},
+    }
+    tasks = [g1_recovery, unrelated_security_review]
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: {"project_id": project_id, "metadata": {}})
+    fake_sql.rows_results = [[g1_recovery, unrelated_security_review]]
+
+    selected = factory_pg._next_runnable_task(
+        "demo",
+        dispatch_preflight=(False, True, False, False),
+    )
+
+    assert selected is not None
+    assert selected["task_id"] == g1_recovery["task_id"]
+    assert not any("unresolved_validation_tasks" in statement for statement in fake_sql.statements)
+
+
+def test_docs_red_preflight_keeps_product_alr_qa_security_runtime_reporting_external_fail_closed():
+    cases = [
+        {
+            "task_id": "demo-product",
+            "phase": "g1_recovery",
+            "title": "G1 documentation recovery for ALR-020 product implementation",
+            "owner_profile": "codex-builder",
+            "metadata": {"documentation_recovery": True},
+        },
+        {
+            "task_id": "demo-runtime",
+            "phase": "g1_recovery",
+            "title": "G1 documentation recovery for runtime propagation",
+            "owner_profile": "codex-builder",
+            "metadata": {"g1_recovery": True},
+        },
+        {
+            "task_id": "demo-external",
+            "phase": "documentation",
+            "title": "G1 documentation recovery with external execution",
+            "owner_profile": "codex-builder",
+            "metadata": {"documentation_recovery": True, "external_execution": True},
+        },
+        {
+            "task_id": "demo-report",
+            "phase": "delivery_report",
+            "title": "G1 documentation recovery final delivery report",
+            "owner_profile": "factory-reporter",
+            "metadata": {"documentation_recovery": True},
+        },
+        {
+            "task_id": "demo-qa",
+            "phase": "qa",
+            "title": "G1 documentation recovery QA verification",
+            "owner_profile": "qa-verifier",
+            "metadata": {"documentation_recovery": True},
+        },
+        {
+            "task_id": "demo-security",
+            "phase": "security_review",
+            "title": "G1 documentation recovery security review",
+            "owner_profile": "security-reviewer",
+            "metadata": {"documentation_recovery": True},
+        },
+    ]
+
+    for task in cases:
+        blockers = factory_pg._dispatch_preflight_blockers(
+            task,
+            docs_ready=False,
+            notion_ready=True,
+            notion_required=False,
+        )
+        assert "missing_or_unindexed_docs" in blockers, task
+
+
 def test_status_attaches_document_status(fake_sql, monkeypatch):
     fake_sql.rows_results = [
         [{"project_id": "demo", "status": "active", "repo_path": None, "metadata": {}}],

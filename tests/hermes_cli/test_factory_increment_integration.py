@@ -1674,7 +1674,7 @@ def test_claim_next_task_allows_docs_first_pr_review_repair_when_docs_red(fake_s
         "reviewer_profile": "security-reviewer",
         "engine": "codex",
         "dependencies": [],
-        "metadata": {},
+        "metadata": {"documentation_recovery": True},
     }
     product = {
         "project_id": "demo",
