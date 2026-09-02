@@ -7565,14 +7565,21 @@ _TASK_BOUND_REVIEW_GATE_TYPES = (
 )
 _REVIEW_RUNTIME_FAILURE_STRONG_PATTERNS = (
     "api call failed",
+    "api failed after 3 retries",
+    "apiconnectionerror",
     "plan usage limit reached",
+    "provider unreachable",
     "rate limited after 3 retries",
     "token plan usage limit reached",
     "usage limit reached: upgrade your token plan",
+    "can't reach the model provider",
 )
 _REVIEW_RUNTIME_FAILURE_ZERO_TOOL_PATTERNS = (
     "messages:       1 (1 user, 0 tool calls)",
     "messages: 1 (1 user, 0 tool calls)",
+)
+_REVIEW_RUNTIME_FAILURE_ZERO_TOOL_RE = re.compile(
+    r"messages:\s*1\s*\([^)]*1\s+user[^)]*0\s+tool\s+calls?[^)]*\)"
 )
 _REVIEW_RUNTIME_429_PATTERNS = (
     "http 429",
@@ -7649,6 +7656,8 @@ def _review_line_contains_runtime_failure(line: str) -> bool:
     ):
         return False
     if any(pattern in folded for pattern in _REVIEW_RUNTIME_FAILURE_ZERO_TOOL_PATTERNS):
+        return True
+    if _REVIEW_RUNTIME_FAILURE_ZERO_TOOL_RE.search(folded):
         return True
     if "ratelimiterror" in folded and "http 429" in folded and folded.startswith("ratelimiterror"):
         return True
@@ -7734,6 +7743,40 @@ def _current_configured_base_commit(project: dict[str, Any] | None) -> str:
     return base_commit if re.fullmatch(r"[0-9a-fA-F]{40}", base_commit) else ""
 
 
+def _false_review_terminalization_recovery_scope(
+    row: dict[str, Any],
+    project: dict[str, Any] | None,
+    *,
+    current_base_commit: str,
+) -> tuple[str, str]:
+    increment_base_after = str(row.get("increment_base_commit_after") or "").strip()
+    if increment_base_after == current_base_commit:
+        return "current_configured_base_terminalization", ""
+    if increment_base_after:
+        return "", ""
+    project_row = project if isinstance(project, dict) else {}
+    if not _project_auto_integration_forbidden(project_row):
+        return "", ""
+    branch = str(row.get("branch") or row.get("task_branch") or "").strip()
+    worktree_path = str(row.get("worktree_path") or row.get("task_worktree_path") or "").strip()
+    if not branch or not worktree_path:
+        return "", ""
+    strategy = factory_contracts.repository_strategy_from_project(project_row)
+    base_branch, base_branch_blocker = _verified_factory_base_branch(project_row, strategy)
+    if base_branch_blocker or _factory_branch_ref_blocker(branch, base_branch=base_branch):
+        return "", ""
+    source_sha, source_blocker = _source_task_commit_for_pr_first_review({"worktree_path": worktree_path})
+    if source_blocker or not source_sha:
+        return "", ""
+    worktree = Path(worktree_path).expanduser()
+    contains = _run_git(worktree, ["merge-base", "--is-ancestor", source_sha, current_base_commit], timeout=30)
+    if contains.returncode == 0:
+        return "", ""
+    if contains.returncode != 1:
+        return "", ""
+    return "unintegrated_pr_first_review_terminalization", source_sha
+
+
 def _recover_false_terminalized_review_runs(project_id: str, *, project: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """Reopen tasks that a stale monitor falsely closed from invalid review output.
 
@@ -7761,6 +7804,8 @@ def _recover_false_terminalized_review_runs(project_id: str, *, project: dict[st
                    r.task_id,
                    r.run_id,
                    t.status AS task_status,
+                   t.branch,
+                   t.worktree_path,
                    t.metadata->>'increment_base_commit_after' AS increment_base_commit_after,
                    t.metadata->>'false_review_terminalization_run_id' AS recovered_run_id,
                    r.output_summary,
@@ -7798,8 +7843,12 @@ def _recover_false_terminalized_review_runs(project_id: str, *, project: dict[st
         if str(row.get("recovered_run_id") or "").strip() == run_id:
             continue
         has_gate = _truthy_database_bool(row.get("has_task_bound_passed_review_gate"))
-        increment_base_after = str(row.get("increment_base_commit_after") or "").strip()
-        if increment_base_after != current_base_commit:
+        recovery_scope, source_sha = _false_review_terminalization_recovery_scope(
+            row,
+            project_row,
+            current_base_commit=current_base_commit,
+        )
+        if not recovery_scope:
             continue
         reason = _review_terminal_success_blocker(str(row.get("output_summary") or ""), has_task_bound_passed_gate=has_gate)
         if not reason:
@@ -7818,10 +7867,12 @@ def _recover_false_terminalized_review_runs(project_id: str, *, project: dict[st
             "false_review_terminalization_run_id": run_id,
             "false_review_terminalization_previous_status": previous_status,
             "false_review_terminalization_recovery_base_commit_after": current_base_commit,
-            "false_review_terminalization_recovery_scope": "current_configured_base_terminalization",
+            "false_review_terminalization_recovery_scope": recovery_scope,
             "review_requeued_by": "factory-reconciler",
             "requires_task_bound_passed_review_gate": True,
         }
+        if source_sha:
+            metadata["false_review_terminalization_source_sha"] = source_sha
         event_metadata = {
             **metadata,
             "run_id": run_id,
