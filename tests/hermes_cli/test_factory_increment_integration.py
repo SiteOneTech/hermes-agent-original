@@ -534,6 +534,36 @@ def test_mark_run_finished_review_generic_http_429_requeues_even_with_task_gate(
     assert "HTTP 429 Too Many Requests" in joined
 
 
+def test_mark_run_finished_review_provider_unreachable_requeues_even_with_task_gate(fake_sql, monkeypatch):
+    calls: list[str] = []
+
+    def integrate(task_id: str, *, actor: str, final_status: str):
+        calls.append(task_id)
+        return {"increment_integration_required": True, "increment_integration_status": "integrated"}
+
+    monkeypatch.setattr(factory_pg, "_integrate_increment_to_base", integrate)
+    fake_sql.one_results = [
+        {"task_id": "task-1", "metadata": {"run_type": "review"}},
+        {"gate_id": 7, "gate_type": "quality", "reviewer": "quality-reviewer"},
+        {"project_id": "demo"},
+    ]
+    output = (
+        "Independent review transcript\n"
+        "STATE: DONE\n"
+        "❌ API failed after 3 retries — Hermes can't reach the model provider.\n"
+    )
+
+    factory_pg.mark_run_finished("run-1", exit_code=0, output_summary=output)
+
+    assert calls == []
+    joined = "\n".join(fake_sql.statements)
+    assert "SET status='failed'" in joined
+    assert "SET status='review_ready'" in joined
+    assert "SET status='done'" not in joined
+    assert "review_output_contains_runtime_failure" in joined
+    assert "API failed after 3 retries" in joined
+
+
 def test_mark_run_finished_review_success_rejects_wrapped_token_plan_terminal_failure(fake_sql, monkeypatch):
     calls: list[str] = []
 
@@ -726,6 +756,90 @@ def test_reconcile_project_recovers_minimax_429_false_terminal_review(fake_sql, 
     assert "false_review_terminalization_recovered" in joined
     assert "review_output_contains_runtime_failure" in joined
     assert "MiniMax HTTP 429" in joined
+    assert "SET status='done'" not in joined
+
+
+def test_reconcile_project_recovers_unintegrated_api_connection_false_terminal_review(fake_sql, monkeypatch):
+    project = {
+        "project_id": "demo",
+        "repo_path": "/tmp/demo",
+        "metadata": {
+            "factory_auto_integration_forbidden": True,
+            "repo_strategy": {
+                "repo_scope": "zeus_only",
+                "work_intent": "add_functionality",
+                "primary_repo": "demo/repo",
+                "primary_repo_path": "/tmp/demo",
+                "primary_repo_remote": "https://example.test/demo.git",
+                "base_branch": "main",
+                "branch_prefix": "factory/demo",
+                "worktree_policy": "isolated",
+            },
+        },
+    }
+    task = {
+        "project_id": "demo",
+        "task_id": "task-1",
+        "status": "done",
+        "title": "Reviewed task",
+        "phase": "g1_recovery",
+        "branch": "factory/demo/task-1",
+        "worktree_path": "/tmp/factory-demo-task-1",
+        "owner_profile": "codex-builder",
+        "reviewer_profile": "quality-reviewer",
+        "metadata": {},
+    }
+    source_sha = "c" * 40
+    fake_sql.json_query_results = [[
+        {
+            "project_id": "demo",
+            "lane_id": "lane",
+            "task_id": "task-1",
+            "run_id": "run-review",
+            "task_status": "done",
+            "increment_base_commit_after": None,
+            "branch": "factory/demo/task-1",
+            "worktree_path": "/tmp/factory-demo-task-1",
+            "output_summary": (
+                "Final semantic state marker:\n"
+                "STATE: DONE; si falla, termina con STATE: BLOCKED y razones/rework.\n\n"
+                "⚠️  API call failed (attempt 1/3): APIConnectionError\n"
+                "⚠️ Provider unreachable — switching to fallback provider...\n"
+                "❌ API failed after 3 retries — Hermes can't reach the model provider.\n"
+                "Messages:       1 (1 user, 0 tool calls)\n"
+            ),
+            "has_task_bound_passed_review_gate": False,
+        }
+    ]]
+    monkeypatch.setattr(factory_pg, "_configured_base_ref_readback", lambda project: {"accepted": True, "base_commit": _BASE_CURRENT})
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: [task])
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "reconciliation_findings", lambda *args, **kwargs: [])
+    monkeypatch.setattr(factory_pg, "ensure_reconciliation_tasks", lambda *args, **kwargs: [])
+    monkeypatch.setattr(factory_pg, "cancel_resolved_reconciliation_tasks", lambda *args, **kwargs: [])
+    monkeypatch.setattr(factory_pg, "_stale_g1_projection_metadata_keys", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        factory_pg,
+        "_source_task_commit_for_pr_first_review",
+        lambda task_arg: (source_sha, None),
+    )
+    monkeypatch.setattr(
+        factory_pg,
+        "_run_git",
+        lambda repo_path, args, *, timeout=120: subprocess.CompletedProcess(args, 1, stdout="", stderr=""),
+    )
+
+    result = _ORIGINAL_RECONCILE_PROJECT("demo")
+
+    assert result["false_review_terminalization_recoveries"] == 1
+    joined = "\n".join(fake_sql.statements)
+    assert "SET status='review_ready'" in joined
+    assert "false_review_terminalization_recovered" in joined
+    assert "unintegrated_pr_first_review_terminalization" in joined
+    assert "APIConnectionError" in joined
+    assert "Provider unreachable" in joined
     assert "SET status='done'" not in joined
 
 
