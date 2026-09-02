@@ -3494,6 +3494,178 @@ def _project_auto_integration_forbidden(project: dict[str, Any]) -> bool:
     return False
 
 
+_PR_FIRST_EXACT_SHA_KEYS = (
+    "exact_source_sha",
+    "reviewed_source_sha",
+    "source_sha",
+    "reviewed_candidate_sha",
+    "candidate_sha",
+    "candidate_commit",
+    "source_commit",
+    "head_sha",
+    "head_commit",
+    "commit_sha",
+    "commit",
+    "branch_commit",
+    "increment_branch_commit",
+)
+_PR_FIRST_EXACT_SHA_CONTAINERS = (
+    "source_delivery",
+    "source",
+    "candidate",
+    "reviewed_candidate",
+    "pull_request",
+    "pr",
+    "quality_review",
+    "review",
+)
+
+
+def _exact_sha40(value: Any) -> str:
+    clean = str(value or "").strip()
+    return clean.lower() if re.fullmatch(r"[0-9a-fA-F]{40}", clean) else ""
+
+
+def _identity_slug(value: Any) -> str:
+    clean = str(value or "").strip()
+    return slugify(clean) if clean else ""
+
+
+def _task_owner_identity(task: dict[str, Any]) -> str:
+    metadata = _metadata(task)
+    for container in (task, metadata):
+        for key in ("owner_profile", "owner_agent_id", "owner", "claimed_by"):
+            identity = _identity_slug(container.get(key))
+            if identity:
+                return identity
+    return ""
+
+
+def _gate_reviewer_identity(gate: dict[str, Any]) -> str:
+    evidence_value = gate.get("evidence")
+    evidence: dict[str, Any] = evidence_value if isinstance(evidence_value, dict) else {}
+    for container in (gate, evidence):
+        for key in ("reviewer", "reviewer_profile", "reviewer_agent_id", "reviewed_by", "actor"):
+            identity = _identity_slug(container.get(key))
+            if identity:
+                return identity
+    return ""
+
+
+def _exact_sha_from_container(container: dict[str, Any]) -> str:
+    sha = _exact_sha40(_commit_value(container, *_PR_FIRST_EXACT_SHA_KEYS))
+    if sha:
+        return sha
+    for key in _PR_FIRST_EXACT_SHA_CONTAINERS:
+        nested = container.get(key)
+        if isinstance(nested, dict):
+            sha = _exact_sha_from_container(nested)
+            if sha:
+                return sha
+    return ""
+
+
+def _gate_reviewed_source_sha(gate: dict[str, Any]) -> str:
+    evidence_value = gate.get("evidence")
+    evidence: dict[str, Any] = evidence_value if isinstance(evidence_value, dict) else {}
+    return _exact_sha_from_container(evidence)
+
+
+def _source_task_commit_for_pr_first_review(task: dict[str, Any]) -> tuple[str, str | None]:
+    worktree_path = str(task.get("worktree_path") or "").strip()
+    if not worktree_path:
+        return "", "pr_first_source_worktree_missing"
+    worktree = Path(worktree_path).expanduser()
+    if not worktree.exists():
+        return "", "pr_first_source_worktree_missing"
+    status = _run_git(worktree, ["status", "--porcelain=v1"], timeout=30)
+    if status.returncode != 0:
+        return "", "pr_first_source_worktree_unverified"
+    if (status.stdout or "").strip():
+        return "", "pr_first_source_worktree_dirty"
+    head = _run_git(worktree, ["rev-parse", "--verify", "HEAD^{commit}"], timeout=30)
+    if head.returncode != 0:
+        return "", "pr_first_source_sha_unverified"
+    source_sha = _exact_sha40(head.stdout)
+    if not source_sha:
+        return "", "pr_first_source_sha_unverified"
+    return source_sha, None
+
+
+def _source_task_requires_pr_first_review(task: dict[str, Any], project: dict[str, Any], final_status: str) -> bool:
+    if str(final_status or "").lower() not in POSITIVE_TERMINAL_TASK_STATUSES:
+        return False
+    if not _project_auto_integration_forbidden(project):
+        return False
+    return bool(str(task.get("branch") or "").strip() and str(task.get("worktree_path") or "").strip())
+
+
+def _load_task_for_pr_first_review(task_id: str) -> dict[str, Any]:
+    tid = str(task_id or "").strip()
+    if not tid:
+        return {}
+    rows = sql.rows(f"SELECT * FROM factory.tasks WHERE task_id={_q(tid)} LIMIT 1", user=_user())
+    return _normalize(rows[0]) if rows else {}
+
+
+def _pr_first_terminal_review_blocker_for_task(
+    task: dict[str, Any],
+    project: dict[str, Any],
+    *,
+    final_status: str,
+    review_gate: dict[str, Any] | None = None,
+) -> str | None:
+    if not task or not project or not _source_task_requires_pr_first_review(task, project, final_status):
+        return None
+    strategy = factory_contracts.repository_strategy_from_project(project)
+    base_branch, base_branch_blocker = _verified_factory_base_branch(project, strategy)
+    if base_branch_blocker:
+        return "pr_first_source_base_branch_unverified"
+    branch = str(task.get("branch") or "").strip()
+    branch_blocker = _factory_branch_ref_blocker(branch, base_branch=base_branch)
+    if branch_blocker:
+        return "pr_first_source_branch_unverified"
+    gate = review_gate or _task_bound_passed_review_gate(str(task.get("task_id") or ""))
+    if not gate:
+        return "pr_first_independent_exact_sha_review_missing"
+    owner = _task_owner_identity(task)
+    if not owner:
+        return "pr_first_source_owner_missing"
+    reviewer = _gate_reviewer_identity(gate)
+    if not reviewer:
+        return "pr_first_review_reviewer_missing"
+    if reviewer == owner:
+        return "pr_first_review_not_independent"
+    reviewed_sha = _gate_reviewed_source_sha(gate)
+    if not reviewed_sha:
+        return "pr_first_review_exact_sha_missing"
+    source_sha, source_blocker = _source_task_commit_for_pr_first_review(task)
+    if source_blocker:
+        return source_blocker
+    if reviewed_sha != source_sha:
+        return "pr_first_review_exact_sha_mismatch"
+    return None
+
+
+def _pr_first_terminal_review_blocker_for_task_id(
+    task_id: str,
+    *,
+    final_status: str,
+    review_gate: dict[str, Any] | None = None,
+) -> str | None:
+    task = _load_task_for_pr_first_review(task_id)
+    if not task:
+        return None
+    project_id = str(task.get("project_id") or "").strip()
+    project = _project(project_id) or {}
+    return _pr_first_terminal_review_blocker_for_task(
+        task,
+        project,
+        final_status=final_status,
+        review_gate=review_gate,
+    )
+
+
 def _increment_integration_required(task: dict[str, Any], project: dict[str, Any], final_status: str) -> bool:
     if str(final_status or "").lower() not in POSITIVE_TERMINAL_TASK_STATUSES:
         return False
@@ -3738,6 +3910,9 @@ def close_task(
     actor_name = str(actor or "factory-orchestrator").strip() or "factory-orchestrator"
     evidence_payload = dict(evidence or {})
     if final_status in POSITIVE_TERMINAL_TASK_STATUSES:
+        pr_first_blocker = _pr_first_terminal_review_blocker_for_task_id(tid, final_status=final_status)
+        if pr_first_blocker:
+            raise ValueError(f"pr-first terminalization blocked for {tid}: {pr_first_blocker}")
         try:
             integration_evidence = _integrate_increment_to_base(tid, actor=actor_name, final_status=final_status)
         except IncrementIntegrationError as exc:
@@ -7511,7 +7686,7 @@ def _task_bound_passed_review_gate(task_id: str) -> dict[str, Any] | None:
     gate_types = ",".join(_q(gate_type) for gate_type in _TASK_BOUND_REVIEW_GATE_TYPES)
     row = sql.one(
         f"""
-        SELECT gate_id, gate_type, reviewer
+        SELECT gate_id, gate_type, reviewer, evidence
         FROM factory.gates
         WHERE task_id={_q(tid)}
           AND status='passed'
@@ -7525,9 +7700,17 @@ def _task_bound_passed_review_gate(task_id: str) -> dict[str, Any] | None:
 
 
 def _review_positive_terminal_blocker(task_id: str, output_summary: str) -> str | None:
-    return _review_terminal_success_blocker(
+    review_gate = _task_bound_passed_review_gate(task_id)
+    blocker = _review_terminal_success_blocker(
         output_summary,
-        has_task_bound_passed_gate=bool(_task_bound_passed_review_gate(task_id)),
+        has_task_bound_passed_gate=bool(review_gate),
+    )
+    if blocker:
+        return blocker
+    return _pr_first_terminal_review_blocker_for_task_id(
+        task_id,
+        final_status="done",
+        review_gate=review_gate,
     )
 
 
