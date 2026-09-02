@@ -1706,6 +1706,167 @@ def test_force_tick_uses_explicit_g1_recovery_metadata_before_review_when_docs_r
     assert "dispatch_preflight_denied" not in joined
 
 
+def test_force_tick_claims_documentation_review_recovery_from_explicit_phase_metadata(fake_sql, monkeypatch):
+    required_doc_names = [
+        "FACTORY_INTAKE.md",
+        "REQUIREMENTS_ANALYSIS.md",
+        "PATTERN_ANALYSIS.md",
+        "ASSUMPTIONS_AND_OPEN_QUESTIONS.md",
+        "PRD.md",
+        "ADRS.md",
+        "METHODOLOGY_PLAN.md",
+        "TECHNICAL_BLUEPRINT.md",
+        "TASK_GRAPH.md",
+        "SECURITY_GATES.md",
+    ]
+    document_status = [
+        {
+            "file_name": name,
+            "category": "g1_required",
+            "exists": True,
+            "indexed": True,
+            "committed": True,
+            "validated": True,
+            "reviewed": False,
+            "blocking": True,
+            "missing": ["reviewed"],
+        }
+        for name in required_doc_names
+    ]
+    product = {
+        "project_id": "demo",
+        "lane_id": "lane-product",
+        "task_id": "demo-alr-020-product",
+        "status": "ready",
+        "phase": "implementation",
+        "priority": 18,
+        "title": "ALR-020 product implementation",
+        "description": "Normal product implementation remains blocked by red G1 rows.",
+        "owner_profile": "claude-builder",
+        "engine": "claude_code",
+        "dependencies": [],
+        "metadata": {},
+    }
+    qa = {
+        "project_id": "demo",
+        "lane_id": "lane-qa",
+        "task_id": "demo-alr-070-qa",
+        "status": "todo",
+        "phase": "qa",
+        "priority": 70,
+        "title": "ALR-070 QA smoke",
+        "description": "QA remains gated until G1 recovery is complete.",
+        "owner_profile": "qa-verifier",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {},
+    }
+    delivery = {
+        "project_id": "demo",
+        "lane_id": "lane-delivery",
+        "task_id": "demo-alr-080-delivery",
+        "status": "todo",
+        "phase": "delivery",
+        "priority": 80,
+        "title": "ALR-080 final delivery",
+        "description": "Delivery remains gated until independent checks are complete.",
+        "owner_profile": "factory-reporter",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {},
+    }
+    documentation_review_recovery = {
+        "project_id": "demo",
+        "lane_id": "lane-g1-review",
+        "task_id": "demo-r2d9-current-red-g1-review-dispatch-repair",
+        "status": "todo",
+        "phase": "documentation_review",
+        "priority": 19,
+        "title": "R2d9 scheduler candidate",
+        "description": (
+            "Bounded same-project control-plane dispatcher lane. "
+            "No deploy, external runtime, direct SQL, messaging, trading, risk, paper/live, or primary mutation."
+        ),
+        "owner_profile": "codex-builder",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {"documentation_review_recovery": True, "no_product_runtime_scope": True},
+    }
+    product_scoped_review_recovery = {
+        **documentation_review_recovery,
+        "task_id": "demo-r2d9-alr-scoped-review-recovery",
+        "priority": 20,
+        "metadata": {"documentation_review_recovery": True, "scope": "ALR-020"},
+    }
+    project = {
+        "project_id": "demo",
+        "status": "active",
+        "autonomous_enabled": True,
+        "metadata": {"reconciliation_anomalies": ["unvalidated_required_docs"]},
+        "document_status": document_status,
+    }
+    tasks = [product, qa, delivery, documentation_review_recovery, product_scoped_review_recovery]
+    assert factory_pg._payload_project_docs_ready(project) is False
+
+    monkeypatch.setattr(factory_pg, "acquire_global_control_plane_lease", lambda *_, **__: {"acquired": True})
+    monkeypatch.setattr(factory_pg, "release_global_control_plane_lease", lambda *_: None)
+    monkeypatch.setattr(factory_pg, "monitor_runs", lambda: {})
+    monkeypatch.setattr(factory_pg, "supervisor_health_check", lambda *_, **__: {"violations": [], "repairs": []})
+    monkeypatch.setattr(factory_pg, "clear_resolved_blockers", lambda project_id: {"project_id": project_id, "reopened": []})
+    monkeypatch.setattr(factory_pg, "status", lambda project_id=None: {"projects": [project], "tasks": tasks, "task_runs": []})
+    monkeypatch.setattr(factory_pg, "classify_factory_blockers", lambda *_, **__: [])
+    monkeypatch.setattr(factory_pg, "record_factory_blocker_actions", lambda *_, **__: [])
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_project_docs_notion_preflight", lambda *_, **__: (False, True, False, False))
+    monkeypatch.setattr(
+        factory_pg,
+        "_validation_task_readiness_findings",
+        lambda project_id: ["validation task demo-alr-070-qa is not complete; status=todo"],
+    )
+
+    def rows(sql_text, *, user=None, **_):
+        fake_sql.statements.append(sql_text)
+        if "FROM factory.projects p" in sql_text:
+            return [{"project_id": "demo"}]
+        if "t.status='review_ready'" in sql_text:
+            return []
+        if "status IN ('todo', 'ready')" in sql_text:
+            return [product, documentation_review_recovery, product_scoped_review_recovery, qa, delivery]
+        return []
+
+    def statement_one(sql_text, *, user=None, **_):
+        fake_sql.statements.append(sql_text)
+        if "SET status='claimed'" in sql_text and documentation_review_recovery["task_id"] in sql_text:
+            return {**documentation_review_recovery, "status": "claimed"}
+        if "SET status='claimed'" in sql_text and product["task_id"] in sql_text:
+            return {**product, "status": "claimed"}
+        if "SET status='claimed'" in sql_text and product_scoped_review_recovery["task_id"] in sql_text:
+            return {**product_scoped_review_recovery, "status": "claimed"}
+        return None
+
+    monkeypatch.setattr(fake_sql, "rows", rows)
+    monkeypatch.setattr(fake_sql, "statement_one", statement_one)
+
+    tick = factory_pg.force_tick("demo")
+
+    assert tick["claimed"] is not None
+    assert tick["claimed"]["task"]["task_id"] == documentation_review_recovery["task_id"]
+    assert factory_pg._dispatch_preflight_blockers(documentation_review_recovery, docs_ready=False, notion_ready=True) == []
+    for downstream in (product, qa, delivery, product_scoped_review_recovery):
+        assert factory_pg._dispatch_preflight_blockers(downstream, docs_ready=False, notion_ready=True) == [
+            "missing_or_unindexed_docs"
+        ]
+    joined = "\n".join(fake_sql.statements)
+    assert f"Task {documentation_review_recovery['task_id']} claimed" in joined
+    assert f"Task {product['task_id']} claimed" not in joined
+    assert f"Task {product_scoped_review_recovery['task_id']} claimed" not in joined
+    assert "dispatch_preflight_denied" not in joined
+
+
 def test_claim_next_task_allows_metadata_documentation_recovery_past_validation_readiness(fake_sql, monkeypatch):
     product = {
         "project_id": "demo",
