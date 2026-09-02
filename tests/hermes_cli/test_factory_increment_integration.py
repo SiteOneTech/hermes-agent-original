@@ -1706,6 +1706,184 @@ def test_force_tick_uses_explicit_g1_recovery_metadata_before_review_when_docs_r
     assert "dispatch_preflight_denied" not in joined
 
 
+def test_force_tick_claims_r2db_g1_recovery_with_fail_closed_product_guardrail_when_docs_red(fake_sql, monkeypatch):
+    required_doc_names = [
+        "FACTORY_INTAKE.md",
+        "REQUIREMENTS_ANALYSIS.md",
+        "PATTERN_ANALYSIS.md",
+        "ASSUMPTIONS_AND_OPEN_QUESTIONS.md",
+        "PRD.md",
+        "ADRS.md",
+        "METHODOLOGY_PLAN.md",
+        "TECHNICAL_BLUEPRINT.md",
+        "TASK_GRAPH.md",
+        "SECURITY_GATES.md",
+    ]
+    document_status = [
+        {
+            "file_name": name,
+            "category": "g1_required",
+            "exists": True,
+            "indexed": True,
+            "committed": True,
+            "validated": True,
+            "reviewed": False,
+            "blocking": True,
+            "missing": ["reviewed"],
+        }
+        for name in required_doc_names
+    ]
+    g1_recovery = {
+        "project_id": "demo",
+        "lane_id": "lane-g1-recovery",
+        "task_id": "zeus-alpha-research-ledger-core-r2db-repair-explicit-g1-recovery-dispatc",
+        "status": "todo",
+        "phase": "g1_recovery",
+        "priority": -116,
+        "title": "R2db — repair explicit G1 recovery dispatch starvation",
+        "description": (
+            "Bounded same-project Factory control-plane technical rework only. "
+            "Canonical current document status has all ten required G1 files "
+            "exists/committed/indexed/validated with reviewed=false and blocking=true. "
+            "The explicit g1_recovery path must be claimable while red G1 continues "
+            "to fail-closed ALR-020 product implementation, QA, security, delivery, "
+            "deploy, external runtime, messaging, direct SQL, trading, risk, and "
+            "paper/live execution."
+        ),
+        "owner_profile": "codex-builder",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {"repo_strategy_status": "passed"},
+    }
+    product_review = {
+        "project_id": "demo",
+        "lane_id": "lane-review",
+        "task_id": "zeus-alpha-research-ledger-core-r2cy-r1-independent-exact-sha-quality-re",
+        "status": "review_ready",
+        "phase": "quality_review",
+        "priority": 17,
+        "title": "R2cy-R1 — independent exact-SHA quality review of PR #99",
+        "description": "Quality validation remains fail-closed while required G1 rows are red.",
+        "owner_profile": "quality-reviewer",
+        "reviewer_profile": "security-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {},
+    }
+    product = {
+        "project_id": "demo",
+        "lane_id": "lane-product",
+        "task_id": "demo-alr-020-product",
+        "status": "ready",
+        "phase": "implementation",
+        "priority": 18,
+        "title": "ALR-020 product implementation",
+        "description": "Product implementation must remain docs-first gated while required G1 rows are red.",
+        "owner_profile": "claude-builder",
+        "engine": "claude_code",
+        "dependencies": [],
+        "metadata": {},
+    }
+    qa = {
+        "project_id": "demo",
+        "lane_id": "lane-qa",
+        "task_id": "demo-alr-070-qa-smoke",
+        "status": "ready",
+        "phase": "qa",
+        "priority": 19,
+        "title": "ALR-070 QA smoke",
+        "description": "QA must remain docs-first gated while required G1 rows are red.",
+        "owner_profile": "qa-verifier",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {},
+    }
+    delivery = {
+        "project_id": "demo",
+        "lane_id": "lane-delivery",
+        "task_id": "demo-alr-080-delivery",
+        "status": "ready",
+        "phase": "delivery",
+        "priority": 20,
+        "title": "ALR-080 delivery handoff",
+        "description": "Final delivery must remain docs-first gated while required G1 rows are red.",
+        "owner_profile": "factory-reporter",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {},
+    }
+    tasks = [product_review, g1_recovery, product, qa, delivery]
+    project = {
+        "project_id": "demo",
+        "status": "active",
+        "autonomous_enabled": True,
+        "metadata": {"reconciliation_anomalies": ["unvalidated_required_docs"]},
+        "document_status": document_status,
+    }
+    assert len([row for row in document_status if row["blocking"]]) == 10
+    assert factory_pg._payload_project_docs_ready(project) is False
+
+    monkeypatch.setattr(factory_pg, "acquire_global_control_plane_lease", lambda *_, **__: {"acquired": True})
+    monkeypatch.setattr(factory_pg, "release_global_control_plane_lease", lambda *_: None)
+    monkeypatch.setattr(factory_pg, "monitor_runs", lambda: {"checked": 0, "finished": 0})
+    monkeypatch.setattr(factory_pg, "supervisor_health_check", lambda *_, **__: {"violations": [], "repairs": []})
+    monkeypatch.setattr(factory_pg, "clear_resolved_blockers", lambda project_id: {"project_id": project_id, "reopened": []})
+    monkeypatch.setattr(factory_pg, "reconcile_project", lambda project_id: {"project_id": project_id})
+    monkeypatch.setattr(factory_pg, "status", lambda project_id=None: {"projects": [project], "tasks": tasks, "task_runs": []})
+    monkeypatch.setattr(factory_pg, "classify_factory_blockers", lambda *_, **__: [])
+    monkeypatch.setattr(factory_pg, "record_factory_blocker_actions", lambda *_, **__: [])
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_project_docs_notion_preflight", lambda *_, **__: (False, True, False, False))
+    monkeypatch.setattr(
+        factory_pg,
+        "_validation_task_readiness_findings",
+        lambda project_id: [
+            "validation task zeus-alpha-research-ledger-core-r2cy-r1-independent-exact-sha-quality-re is not complete; status=ready"
+        ],
+    )
+
+    def rows(sql_text, *, user=None, **_):
+        fake_sql.statements.append(sql_text)
+        if "FROM factory.projects p" in sql_text:
+            return [{"project_id": "demo"}]
+        if "t.status='review_ready'" in sql_text:
+            return [product_review]
+        if "status IN ('todo', 'ready')" in sql_text:
+            return [g1_recovery, product, qa, delivery]
+        return []
+
+    def statement_one(sql_text, *, user=None, **_):
+        fake_sql.statements.append(sql_text)
+        if "SET status='review_running'" in sql_text:
+            return {**product_review, "status": "review_running"}
+        if "SET status='claimed'" in sql_text and g1_recovery["task_id"] in sql_text:
+            return {**g1_recovery, "status": "claimed"}
+        if "SET status='claimed'" in sql_text and product["task_id"] in sql_text:
+            return {**product, "status": "claimed"}
+        return None
+
+    monkeypatch.setattr(fake_sql, "rows", rows)
+    monkeypatch.setattr(fake_sql, "statement_one", statement_one)
+
+    tick = factory_pg.force_tick("demo")
+
+    assert tick["claimed"] is not None
+    assert tick["claimed"]["task"]["task_id"] == g1_recovery["task_id"]
+    joined = "\n".join(fake_sql.statements)
+    assert f"Task {g1_recovery['task_id']} claimed" in joined
+    assert f"Task {product_review['task_id']} claimed for review" not in joined
+    assert f"Task {product['task_id']} claimed" not in joined
+    assert "unresolved_validation_tasks" not in joined
+    for downstream in (product_review, product, qa, delivery):
+        assert factory_pg._dispatch_preflight_blockers(downstream, docs_ready=False, notion_ready=True) == [
+            "missing_or_unindexed_docs"
+        ]
+
+
 def test_claim_next_task_allows_metadata_documentation_recovery_past_validation_readiness(fake_sql, monkeypatch):
     product = {
         "project_id": "demo",
