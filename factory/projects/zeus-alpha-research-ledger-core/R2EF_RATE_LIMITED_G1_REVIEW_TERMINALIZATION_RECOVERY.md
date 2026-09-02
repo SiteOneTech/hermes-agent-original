@@ -12,6 +12,7 @@ branch: factory/zeus-alpha-research-ledger-core/inc-105-r2ef-repair-rate-limited
 worktree: /home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-105-r2ef-repair-rate-limited-g1-revi
 factory_db_source_of_truth: Agent Core Postgres factory.* via Factory CLI
 reviewed: pending
+pull_request: https://github.com/SiteOneTech/hermes-agent-original/pull/161
 ---
 
 # R2ef — rate-limited G1 review terminalization recovery
@@ -122,12 +123,16 @@ The hermetic tests above are the acceptance evidence for the red-G1 dispatch cla
 ## Delivery status
 
 Code candidate SHA: `7e67f40385212ec3e3aa1df8372e0b7de16ca71d`.
+PR-first delivery readback: `https://github.com/SiteOneTech/hermes-agent-original/pull/161` was opened against `main`; readback showed head `9dcad29af33d7cecccf7284b2ea3ba1600c3a1d9`, state `OPEN`, merge state `CLEAN`, and no independent review decision yet.
+
+Factory gate readback from `/tmp/r2ef-status-after-gates.json`:
+
+- Gate `1184`: `implementation` / `passed`, reviewer `codex-builder`, task-bound to `zeus-alpha-research-ledger-core-r2ef-repair-rate-limited-g1-review-termi`.
+- Gate `1185`: `test` / `passed`, reviewer `codex-builder`, task-bound to `zeus-alpha-research-ledger-core-r2ef-repair-rate-limited-g1-review-termi`.
 
 This artifact records the code candidate SHA. The final branch head after adding this evidence file cannot self-embed its own SHA; the final PR/gate/readback should be treated as the exact SHA source for independent quality review.
 
-Pending PR-first steps:
+Remaining PR-first step:
 
-1. push assigned branch to `SiteOneTech/hermes-agent-original`
-2. open PR with `agent:zeus` delivery context
-3. obtain independent exact-SHA quality review by a reviewer different from `codex-builder`
-4. no merge/deploy until explicit approved review path passes
+1. obtain independent exact-SHA quality review by a reviewer different from `codex-builder`
+2. no merge/deploy until explicit approved review path passes
