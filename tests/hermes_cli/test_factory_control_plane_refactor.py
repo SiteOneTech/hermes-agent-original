@@ -1294,6 +1294,102 @@ def test_explicit_g1_recovery_phase_bypasses_validation_deadlock_without_product
     assert not any("unresolved_validation_tasks" in statement for statement in fake_sql.statements)
 
 
+def test_phase_documentation_g1_recovery_bypasses_canonical_258502_validation_rows_without_recovery_metadata(
+    fake_sql, monkeypatch
+):
+    product = {
+        "project_id": "demo",
+        "lane_id": "lane-product",
+        "task_id": "demo-alr-020-product",
+        "status": "ready",
+        "phase": "implementation",
+        "priority": 18,
+        "title": "ALR-020 product implementation",
+        "description": "Normal product implementation must remain fail-closed while G1 docs are red.",
+        "owner_profile": "claude-builder",
+        "engine": "claude_code",
+        "dependencies": [],
+        "metadata": {},
+    }
+    documentation_recovery = {
+        "project_id": "demo",
+        "lane_id": "lane-docs",
+        "task_id": "zeus-alpha-research-ledger-core-r2d4-phase-explicit-g1-documentation-rec",
+        "status": "todo",
+        "phase": "documentation",
+        "priority": 19,
+        "title": "R2d4 — phase-explicit G1 document review evidence restore",
+        "description": (
+            "Same-project Factory control-plane technical rework for event 258502. "
+            "Final gate closure wording is historical evidence only; ten required G1 "
+            "document rows are red for missing reviewed evidence. No product implementation, "
+            "external runtime, deployment, messaging, direct SQL, trading, risk, or paper/live action."
+        ),
+        "owner_profile": "codex-builder",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {"repo_strategy_status": "passed", "source": "factory_task_create"},
+    }
+    unrelated_validation_rows = [
+        {
+            "project_id": "demo",
+            "task_id": "demo-r2df-r14-g1-scheduler-selection-recovery",
+            "status": "blocked",
+            "phase": "quality_review",
+            "title": "R2df-R14 — G1 scheduler selection recovery for canonical documentation task",
+            "description": "Historical validation row unrelated to the current documentation restore.",
+            "owner_profile": "quality-reviewer",
+            "metadata": {},
+        },
+        {
+            "project_id": "demo",
+            "task_id": "demo-r2h-isolated-independent-g1-exact-sha-re",
+            "status": "superseded",
+            "phase": "quality_review",
+            "title": "R2h — isolated independent G1 exact-SHA review",
+            "description": "Superseded G1 review evidence row.",
+            "owner_profile": "quality-reviewer",
+            "metadata": {},
+        },
+        {
+            "project_id": "demo",
+            "task_id": "demo-r2cy-r1-independent-exact-sha-quality-re",
+            "status": "ready",
+            "phase": "quality_review",
+            "title": "R2cy-R1 — independent exact-SHA quality review of PR #99",
+            "description": "Future review work waiting for G1 documentation evidence to be restored.",
+            "owner_profile": "quality-reviewer",
+            "metadata": {},
+        },
+        {
+            "project_id": "demo",
+            "task_id": "demo-alr-063-independent-security-and-no-egress-review",
+            "status": "todo",
+            "phase": "security_review",
+            "title": "ALR-063 Independent security and no-egress review",
+            "description": "Future ALR validation row for product work.",
+            "owner_profile": "security-reviewer",
+            "metadata": {},
+        },
+    ]
+    tasks = [product, documentation_recovery, *unrelated_validation_rows]
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: {"project_id": project_id, "metadata": {}})
+    fake_sql.rows_results = [[product, documentation_recovery]]
+
+    selected = factory_pg._next_runnable_task(
+        "demo",
+        dispatch_preflight=(False, True, False, False),
+    )
+
+    joined_statements = "\n".join(fake_sql.statements)
+    assert selected is not None
+    assert selected["task_id"] == documentation_recovery["task_id"]
+    assert "unresolved_validation_tasks" not in joined_statements
+    assert documentation_recovery["task_id"] not in joined_statements
+
+
 def test_docs_red_preflight_keeps_product_alr_qa_security_runtime_reporting_external_fail_closed():
     cases = [
         {
@@ -1334,9 +1430,23 @@ def test_docs_red_preflight_keeps_product_alr_qa_security_runtime_reporting_exte
         {
             "task_id": "demo-security",
             "phase": "security_review",
-            "title": "G1 documentation recovery security review",
+            "title": "Security review for G1 docs recovery",
             "owner_profile": "security-reviewer",
             "metadata": {"documentation_recovery": True},
+        },
+        {
+            "task_id": "demo-g1-security",
+            "phase": "g1_security_review",
+            "title": "Security review for G1 docs recovery",
+            "owner_profile": "security-reviewer",
+            "metadata": {"documentation_recovery": True},
+        },
+        {
+            "task_id": "demo-activation",
+            "phase": "activation",
+            "title": "Activate current G1 recovery candidate",
+            "owner_profile": "codex-builder",
+            "metadata": {"g1_recovery": True},
         },
     ]
 

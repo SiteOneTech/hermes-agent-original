@@ -1588,6 +1588,144 @@ def test_claim_next_task_allows_metadata_documentation_recovery_past_validation_
     assert f"Task {product['task_id']} claimed" not in joined
 
 
+def test_claim_next_task_allows_phase_documentation_g1_recovery_past_canonical_258502_validation_rows(fake_sql, monkeypatch):
+    required_doc_names = [
+        "FACTORY_INTAKE.md",
+        "REQUIREMENTS_ANALYSIS.md",
+        "PATTERN_ANALYSIS.md",
+        "ASSUMPTIONS_AND_OPEN_QUESTIONS.md",
+        "PRD.md",
+        "ADRS.md",
+        "METHODOLOGY_PLAN.md",
+        "TECHNICAL_BLUEPRINT.md",
+        "TASK_GRAPH.md",
+        "SECURITY_GATES.md",
+    ]
+    document_status = [
+        {
+            "file_name": name,
+            "category": "g1_required",
+            "exists": True,
+            "indexed": True,
+            "committed": True,
+            "validated": True,
+            "reviewed": False,
+            "blocking": True,
+            "missing": ["reviewed"],
+        }
+        for name in required_doc_names
+    ]
+    product = {
+        "project_id": "demo",
+        "lane_id": "lane-product",
+        "task_id": "demo-alr-020-product",
+        "status": "ready",
+        "phase": "implementation",
+        "priority": 18,
+        "title": "ALR-020 product implementation",
+        "description": "Normal ALR product implementation remains blocked while G1 review evidence is red.",
+        "owner_profile": "claude-builder",
+        "engine": "claude_code",
+        "dependencies": [],
+        "metadata": {},
+    }
+    documentation_recovery = {
+        "project_id": "demo",
+        "lane_id": "lane-docs",
+        "task_id": "zeus-alpha-research-ledger-core-r2df-fresh-current-base-g1-documentation",
+        "status": "todo",
+        "phase": "documentation",
+        "priority": 19,
+        "title": "R2df — fresh current-base G1 documentation-index conflict recovery",
+        "description": (
+            "Bounded technical successor to R2ae after canonical resolve-state finalized its run as blocked: "
+            "the R2ae worktree remained stale, PR #44 is conflicting, and Factory reported "
+            "unvalidated_required_docs. Use only the canonical Hermes Factory CLI plus committed "
+            "current-origin project documentation to read the exact current required-document status. "
+            "Do not reuse stale evidence. Rebuild only the smallest project-local documentation/provenance "
+            "candidate that reconciles the actual current required-doc finding and stale/conflicting PR provenance. "
+            "Before completion, independently read back exact candidate SHA, current origin/main ancestry, "
+            "PR state/head/label, Factory document status, and gates. Deliver only a Zeus-signed, "
+            "agent:zeus-labelled, non-draft PR on the assigned branch; required independent quality review "
+            "must assess that exact SHA. No merge or direct base integration, primary-checkout mutation, "
+            "direct SQL, credentials, external runtime/provider, Vonash, Magnus, VAOS, RAG/KB, broker, "
+            "trading, risk, paper/live activation, deployment, or messaging operation."
+        ),
+        "owner_profile": "codex-builder",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {"repo_strategy_status": "passed", "source": "factory_task_create"},
+    }
+    validation_tasks = [
+        {
+            "project_id": "demo",
+            "task_id": "zeus-alpha-research-ledger-core-r2df-r14-g1-scheduler-selection-recovery",
+            "status": "blocked",
+            "phase": "quality_review",
+            "title": "R2df-R14 — G1 scheduler selection recovery for canonical documentation task",
+            "description": "Historical validation row unrelated to the current documentation recovery dispatch.",
+            "owner_profile": "quality-reviewer",
+            "metadata": {},
+        },
+        {
+            "project_id": "demo",
+            "task_id": "zeus-alpha-research-ledger-core-r2h-isolated-independent-g1-exact-sha-re",
+            "status": "superseded",
+            "phase": "quality_review",
+            "title": "R2h — isolated independent G1 exact-SHA review of SiteOneTech PR #29",
+            "description": "Superseded historical G1 review row.",
+            "owner_profile": "quality-reviewer",
+            "metadata": {},
+        },
+        {
+            "project_id": "demo",
+            "task_id": "zeus-alpha-research-ledger-core-r2cy-r1-independent-exact-sha-quality-re",
+            "status": "ready",
+            "phase": "quality_review",
+            "title": "R2cy-R1 — independent exact-SHA quality review of PR #99",
+            "description": "Future validation work that cannot validate until current G1 docs are recovered.",
+            "owner_profile": "quality-reviewer",
+            "metadata": {},
+        },
+        {
+            "project_id": "demo",
+            "task_id": "zeus-alpha-research-ledger-core-alr-063-independent-security-and-no-egre",
+            "status": "todo",
+            "phase": "security_review",
+            "title": "ALR-063 Independent security and no-egress review",
+            "description": "Future ALR validation row for product work.",
+            "owner_profile": "security-reviewer",
+            "metadata": {},
+        },
+    ]
+    tasks = [product, documentation_recovery, *validation_tasks]
+    project = {
+        "project_id": "demo",
+        "status": "active",
+        "autonomous_enabled": True,
+        "metadata": {"reconciliation_anomalies": ["unvalidated_required_docs"]},
+        "document_status": document_status,
+    }
+    fake_sql.rows_results = [[{"project_id": "demo"}], [product, documentation_recovery]]
+    fake_sql.statement_one_results = [{**documentation_recovery, "status": "claimed"}]
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "reconcile_project", lambda project_id: {"project_id": project_id})
+    monkeypatch.setattr(factory_pg, "_project_docs_notion_preflight", lambda *_, **__: (False, True, False, False))
+
+    result = factory_pg.claim_next_task("demo", worker="factory-force-tick")
+
+    joined = "\n".join(fake_sql.statements)
+    assert result is not None
+    assert result["task"]["task_id"] == documentation_recovery["task_id"]
+    assert f"Task {documentation_recovery['task_id']} claimed" in joined
+    assert "unresolved_validation_tasks" not in joined
+    assert f"Task {product['task_id']} claimed" not in joined
+
+
 def test_g1_recovery_metadata_keeps_validation_and_reporting_work_fail_closed():
     report = {
         "task_id": "demo-r2df-r47-final-report",
