@@ -759,6 +759,227 @@ def test_reconcile_project_recovers_minimax_429_false_terminal_review(fake_sql, 
     assert "SET status='done'" not in joined
 
 
+def test_force_tick_recovers_failed_rate_limited_g1_review_and_dispatches_retry(fake_sql, monkeypatch):
+    required_doc_names = [
+        "FACTORY_INTAKE.md",
+        "REQUIREMENTS_ANALYSIS.md",
+        "PATTERN_ANALYSIS.md",
+        "ASSUMPTIONS_AND_OPEN_QUESTIONS.md",
+        "PRD.md",
+        "ADRS.md",
+        "METHODOLOGY_PLAN.md",
+        "TECHNICAL_BLUEPRINT.md",
+        "TASK_GRAPH.md",
+        "SECURITY_GATES.md",
+    ]
+    document_status = [
+        {
+            "file_name": name,
+            "category": "g1_required",
+            "exists": True,
+            "indexed": True,
+            "committed": True,
+            "validated": True,
+            "reviewed": False,
+            "blocking": True,
+            "missing": ["reviewed"],
+        }
+        for name in required_doc_names
+    ]
+    g1_review = {
+        "project_id": "demo",
+        "lane_id": "lane-g1-review",
+        "task_id": "demo-r2ed-g1-documentation-review-recovery",
+        "status": "done",
+        "phase": "g1_recovery",
+        "priority": 2,
+        "title": "R2ed — G1 documentation-review recovery retry",
+        "description": (
+            "Same-project Factory control-plane repair for unreviewed required G1 documents. "
+            "Retry the independent documentation-review after the provider rate limit clears."
+        ),
+        "owner_profile": "quality-reviewer",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "minimax",
+        "dependencies": [],
+        "metadata": {"increment_base_commit_after": _BASE_CURRENT, "g1_recovery": True},
+    }
+    product_review = {
+        "project_id": "demo",
+        "lane_id": "lane-product-review",
+        "task_id": "demo-alr-020-product-quality-review",
+        "status": "review_ready",
+        "phase": "quality_review",
+        "priority": 1,
+        "title": "ALR-020 product quality review",
+        "description": "Normal product review waits until required G1 documents are reviewed.",
+        "owner_profile": "quality-reviewer",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {},
+    }
+    product = {
+        "project_id": "demo",
+        "lane_id": "lane-product",
+        "task_id": "demo-alr-020-product",
+        "status": "ready",
+        "phase": "implementation",
+        "priority": 3,
+        "title": "ALR-020 product implementation",
+        "description": "Product implementation remains docs-first gated while G1 is red.",
+        "owner_profile": "claude-builder",
+        "engine": "claude_code",
+        "dependencies": [],
+        "metadata": {},
+    }
+    qa = {
+        "project_id": "demo",
+        "lane_id": "lane-qa",
+        "task_id": "demo-alr-070-qa-smoke",
+        "status": "ready",
+        "phase": "qa",
+        "priority": 4,
+        "title": "ALR-070 QA smoke",
+        "description": "QA smoke waits for G1 readiness.",
+        "owner_profile": "qa-verifier",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {},
+    }
+    security = {
+        "project_id": "demo",
+        "lane_id": "lane-security",
+        "task_id": "demo-alr-063-security-review",
+        "status": "ready",
+        "phase": "security_review",
+        "priority": 5,
+        "title": "ALR-063 security review",
+        "description": "Security review waits for G1 readiness.",
+        "owner_profile": "security-reviewer",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {},
+    }
+    delivery = {
+        "project_id": "demo",
+        "lane_id": "lane-delivery",
+        "task_id": "demo-alr-080-delivery",
+        "status": "ready",
+        "phase": "delivery",
+        "priority": 6,
+        "title": "ALR-080 delivery handoff",
+        "description": "Delivery waits for G1 readiness.",
+        "owner_profile": "factory-reporter",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {},
+    }
+    tasks = [product_review, g1_review, product, qa, security, delivery]
+    project = {
+        "project_id": "demo",
+        "status": "active",
+        "autonomous_enabled": True,
+        "metadata": {"reconciliation_anomalies": ["unvalidated_required_docs"]},
+        "document_status": document_status,
+    }
+    output = "STATE: DONE\nMiniMax HTTP 429 rate-limit failure after three provider retries.\nMessages:       1 (1 user, 0 tool calls)"
+
+    monkeypatch.setattr(factory_pg, "acquire_global_control_plane_lease", lambda *_, **__: {"acquired": True})
+    monkeypatch.setattr(factory_pg, "release_global_control_plane_lease", lambda *_: None)
+    monkeypatch.setattr(factory_pg, "monitor_runs", lambda: {})
+    monkeypatch.setattr(factory_pg, "supervisor_health_check", lambda *_, **__: {"violations": [], "repairs": []})
+    monkeypatch.setattr(factory_pg, "clear_resolved_blockers", lambda project_id: {"project_id": project_id, "reopened": []})
+    monkeypatch.setattr(factory_pg, "status", lambda project_id=None: {"projects": [project], "tasks": tasks, "task_runs": []})
+    monkeypatch.setattr(factory_pg, "classify_factory_blockers", lambda *_, **__: [])
+    monkeypatch.setattr(factory_pg, "record_factory_blocker_actions", lambda *_, **__: [])
+    monkeypatch.setattr(factory_pg, "_configured_base_ref_readback", lambda project_arg: {"accepted": True, "base_commit": _BASE_CURRENT})
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "reconciliation_findings", lambda *args, **kwargs: [])
+    monkeypatch.setattr(factory_pg, "ensure_reconciliation_tasks", lambda *args, **kwargs: [])
+    monkeypatch.setattr(factory_pg, "cancel_resolved_reconciliation_tasks", lambda *args, **kwargs: [])
+    monkeypatch.setattr(factory_pg, "_stale_g1_projection_metadata_keys", lambda *args, **kwargs: [])
+    monkeypatch.setattr(factory_pg, "evaluate_project_successions", lambda: [])
+    monkeypatch.setattr(factory_pg, "reconcile_project", _ORIGINAL_RECONCILE_PROJECT)
+
+    def psql(sql_text, *, user=None, **_):
+        fake_sql.statements.append(sql_text)
+        if "SET status='review_ready'" in sql_text and g1_review["task_id"] in sql_text:
+            g1_review["status"] = "review_ready"
+            g1_review["metadata"] = {
+                **g1_review["metadata"],
+                "false_review_terminalization_recovered": True,
+                "requires_task_bound_passed_review_gate": True,
+            }
+
+    def rows(sql_text, *, user=None, **_):
+        fake_sql.statements.append(sql_text)
+        if "SELECT run_id FROM factory.task_runs" in sql_text:
+            return []
+        if "FROM factory.projects p" in sql_text:
+            return [{"project_id": "demo"}]
+        if "t.status='review_ready'" in sql_text:
+            return [task for task in (product_review, g1_review) if task["status"] == "review_ready"]
+        if "status IN ('todo', 'ready')" in sql_text:
+            return [product, qa, security, delivery]
+        return []
+
+    def json_query(sql_text, *, user=None, **_):
+        fake_sql.statements.append(sql_text)
+        if "FROM factory.task_runs r" in sql_text and "r.status='failed'" in sql_text:
+            return [
+                {
+                    "project_id": "demo",
+                    "lane_id": g1_review["lane_id"],
+                    "task_id": g1_review["task_id"],
+                    "run_id": "run-r2ed-review-429",
+                    "task_status": "done",
+                    "increment_base_commit_after": _BASE_CURRENT,
+                    "output_summary": output,
+                    "has_task_bound_passed_review_gate": False,
+                }
+            ]
+        return []
+
+    def statement_one(sql_text, *, user=None, **_):
+        fake_sql.statements.append(sql_text)
+        if "SET status='review_running'" in sql_text and g1_review["task_id"] in sql_text:
+            return {**g1_review, "status": "review_running"}
+        if "SET status='claimed'" in sql_text:
+            for candidate in (product, qa, security, delivery):
+                if candidate["task_id"] in sql_text:
+                    return {**candidate, "status": "claimed"}
+        return None
+
+    monkeypatch.setattr(fake_sql, "psql", psql)
+    monkeypatch.setattr(fake_sql, "rows", rows)
+    monkeypatch.setattr(fake_sql, "json_query", json_query)
+    monkeypatch.setattr(fake_sql, "statement_one", statement_one)
+
+    tick = factory_pg.force_tick("demo")
+
+    assert g1_review["status"] == "review_ready"
+    assert tick["claimed"] is not None
+    assert tick["claimed"]["task"]["task_id"] == g1_review["task_id"]
+    assert tick["claimed"]["run_type"] == "review"
+    joined = "\n".join(fake_sql.statements)
+    assert "false_review_terminalization_recovered" in joined
+    assert "review_output_contains_runtime_failure" in joined
+    assert "MiniMax HTTP 429" in joined
+    assert "Task demo-alr-020-product-quality-review claimed for review" not in joined
+    assert "Task demo-alr-020-product claimed" not in joined
+    assert "Task demo-alr-070-qa-smoke claimed" not in joined
+    assert "Task demo-alr-063-security-review claimed" not in joined
+    assert "Task demo-alr-080-delivery claimed" not in joined
+    for downstream in (product_review, product, qa, security, delivery):
+        assert factory_pg._dispatch_preflight_blockers(downstream, docs_ready=False, notion_ready=True) == [
+            "missing_or_unindexed_docs"
+        ]
+
+
 def test_reconcile_project_recovers_unintegrated_api_connection_false_terminal_review(fake_sql, monkeypatch):
     project = {
         "project_id": "demo",
