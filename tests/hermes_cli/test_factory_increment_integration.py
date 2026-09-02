@@ -2211,6 +2211,138 @@ def test_recovered_g1_docs_task_dispatches_while_product_remains_docs_first_bloc
     assert "dispatch_preflight_denied" not in joined
 
 
+def test_recursive_g1_recovery_with_deny_guardrail_claims_before_validation_history(fake_sql, monkeypatch):
+    recovery = {
+        "project_id": "demo",
+        "lane_id": "lane-g1",
+        "task_id": "demo-r2ea-recursive-g1-recovery",
+        "status": "todo",
+        "phase": "g1_recovery",
+        "priority": -104,
+        "title": "R2ea — recursive G1 recovery preflight",
+        "description": (
+            "Bounded same-project Factory control-plane recovery. "
+            "Close final gate closure evidence only after this repair. "
+            "Continue to deny product, ALR implementation, QA, delivery, review, external runtime, "
+            "external execution, deploy, messaging, direct SQL, trading, risk, and paper/live activation work."
+        ),
+        "owner_profile": "codex-builder",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {},
+    }
+    unresolved_review = {
+        "project_id": "demo",
+        "lane_id": "lane-review",
+        "task_id": "demo-alr-063-security-review",
+        "status": "ready",
+        "phase": "security_review",
+        "priority": 62,
+        "title": "ALR-063 independent security review",
+        "description": "Downstream validation remains open while G1 recovery runs.",
+        "owner_profile": "security-reviewer",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {},
+    }
+    tasks = [recovery, unresolved_review]
+    project = {
+        "project_id": "demo",
+        "status": "active",
+        "autonomous_enabled": True,
+        "document_status": [{"category": "g1_required", "file_name": "PRD.md", "blocking": True}],
+        "metadata": {},
+    }
+    fake_sql.rows_results = [[{"project_id": "demo"}], [recovery]]
+    fake_sql.statement_one_results = [{**recovery, "status": "claimed"}]
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(
+        factory_pg,
+        "_project_docs_notion_preflight",
+        lambda project_arg, tasks_arg, pending_arg, gates_arg: (False, True, False, False),
+    )
+
+    result = factory_pg.claim_next_task("demo", worker="factory-force-tick")
+
+    joined = "\n".join(fake_sql.statements)
+    assert result is not None, (
+        "expected explicit G1 recovery claim; pre-repair self-denial leaves active_runs=0 "
+        "and records unresolved_validation_tasks:\n" + joined
+    )
+    assert result["task"]["task_id"] == recovery["task_id"]
+    assert "INSERT INTO factory.task_runs" in joined
+    assert f"Task {recovery['task_id']} claimed" in joined
+    assert "dispatch_preflight_denied" not in joined
+    assert "unresolved_validation_tasks" not in joined
+
+
+def test_docs_first_reconciliation_preflight_still_fails_closed_for_execution_phases():
+    cases = [
+        {
+            "task_id": "demo-alr-reconciliation",
+            "phase": "g1_recovery",
+            "title": "ALR-020 product implementation reconciliation",
+            "owner_profile": "codex-builder",
+            "metadata": {"factory_reconciliation_task": True, "reconciliation_anomaly": "unvalidated_required_docs"},
+        },
+        {
+            "task_id": "demo-external-reconciliation",
+            "phase": "documentation",
+            "title": "G1 documentation reconciliation",
+            "description": "Runs external execution outside the Factory control plane.",
+            "owner_profile": "codex-builder",
+            "metadata": {"factory_reconciliation_task": True, "external_execution": True},
+        },
+        {
+            "task_id": "demo-qa-reconciliation",
+            "phase": "qa",
+            "title": "G1 documentation reconciliation QA",
+            "owner_profile": "qa-verifier",
+            "metadata": {"factory_reconciliation_task": True, "reconciliation_anomaly": "unvalidated_required_docs"},
+        },
+        {
+            "task_id": "demo-review-reconciliation",
+            "phase": "review",
+            "title": "G1 documentation reconciliation review",
+            "owner_profile": "quality-reviewer",
+            "metadata": {"factory_reconciliation_task": True, "reconciliation_anomaly": "unvalidated_required_docs"},
+        },
+        {
+            "task_id": "demo-delivery-reconciliation",
+            "phase": "delivery",
+            "title": "G1 documentation reconciliation delivery report",
+            "owner_profile": "factory-reporter",
+            "metadata": {
+                "factory_reconciliation_task": True,
+                "reconciliation_anomaly": "unvalidated_required_docs",
+                "task_phase": "documentation",
+            },
+        },
+    ]
+
+    for task in cases:
+        assert factory_pg._dispatch_preflight_blockers(task, docs_ready=False, notion_ready=True) == [
+            "missing_or_unindexed_docs"
+        ], task
+
+
+def test_g1_recovery_prose_reconciliation_is_not_structured_reconciliation_task():
+    task = {
+        "task_id": "demo-r2ea-recursive-g1-recovery",
+        "phase": "g1_recovery",
+        "title": "R2ea — recursive G1 recovery preflight",
+        "description": "Permit only eligible same-project g1_recovery/documentation reconciliation tasks.",
+        "owner_profile": "codex-builder",
+        "metadata": {},
+    }
+
+    assert factory_pg._is_reconciliation_task(task) is False
+
+
 def test_claim_next_task_keeps_priority_order_when_docs_ready(fake_sql, monkeypatch):
     product = {
         "project_id": "demo",
