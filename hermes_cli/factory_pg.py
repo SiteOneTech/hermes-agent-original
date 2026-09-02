@@ -4798,8 +4798,10 @@ _PRODUCT_OR_RUNTIME_DISPATCH_SCOPE_TERMS = (
     "alr-063",
     "alr-070",
     "alr-080",
+    "alr implementation",
     "product implementation",
     "ledger implementation",
+    "external execution",
     "external runtime",
     "runtime propagation",
     "external connector",
@@ -4965,7 +4967,9 @@ def _text_has_product_or_runtime_dispatch_scope(text: str) -> bool:
 def _text_without_negative_dispatch_guardrails(text: str) -> str:
     chunks = re.split(r"(?<=[.!?;])\s+|\n+", text)
     retained: list[str] = []
-    negative_marker = re.compile(r"\b(no|without|do not|does not|must not|never|forbidden|prohibited|sin)\b")
+    negative_marker = re.compile(
+        r"\b(no|without|do not|does not|must not|never|forbidden|prohibited|sin|deny|denies|denied|denying)\b"
+    )
     for chunk in chunks:
         if negative_marker.search(chunk) and _text_has_product_or_runtime_dispatch_scope(chunk):
             continue
@@ -5026,10 +5030,14 @@ def _has_explicit_g1_or_documentation_recovery_scope(task: dict[str, Any]) -> bo
     """
 
     return (
-        any(_phase_allows_g1_or_documentation_recovery(phase) for phase in _candidate_phase_signals(task))
+        _candidate_has_g1_or_documentation_recovery_phase(task)
         or _metadata_marks_g1_recovery(task)
         or _metadata_marks_documentation_recovery(task)
     )
+
+
+def _candidate_has_g1_or_documentation_recovery_phase(task: dict[str, Any]) -> bool:
+    return any(_phase_allows_g1_or_documentation_recovery(phase) for phase in _candidate_phase_signals(task))
 
 
 def _is_reporting_dispatch_task(task: dict[str, Any]) -> bool:
@@ -5059,11 +5067,24 @@ def _is_explicit_g1_recovery_task(task: dict[str, Any]) -> bool:
 
 
 def _is_docs_first_repair_dispatch_task(task: dict[str, Any]) -> bool:
-    if _is_reconciliation_task(task) or _is_runtime_bootstrap_repair_task(task):
+    if _is_runtime_bootstrap_repair_task(task):
         return True
     if _is_docs_first_validation_repair_task(task):
         return True
-    if _is_validation_task(task) or _is_reporting_dispatch_task(task):
+    if _is_validation_task(task):
+        return False
+    if _has_positive_product_or_runtime_dispatch_scope(task):
+        return False
+    row_phase = _normalize_dispatch_phase(task.get("phase"))
+    has_recovery_phase = _candidate_has_g1_or_documentation_recovery_phase(task)
+    if _is_reporting_dispatch_task(task) and not _phase_allows_g1_or_documentation_recovery(row_phase):
+        return False
+    if _is_reconciliation_task(task):
+        # Reconciliation wording/metadata is not enough by itself: only an
+        # explicit G0/G1/documentation/planning recovery phase may bypass the
+        # docs-first preflight while G1 is red.
+        return has_recovery_phase
+    if _is_reporting_dispatch_task(task):
         return False
     if _is_explicit_g1_recovery_task(task):
         return True
@@ -7175,10 +7196,6 @@ def _is_docs_first_gated_dispatch_task(task: dict[str, Any]) -> bool:
     ship contracts detached from the canonical plan.
     """
 
-    if _is_reconciliation_task(task) or _is_runtime_bootstrap_repair_task(task):
-        return False
-    if _is_docs_first_validation_repair_task(task):
-        return False
     if _is_docs_first_repair_dispatch_task(task):
         return False
     if _is_reporting_dispatch_task(task):
@@ -7224,7 +7241,7 @@ def _dispatch_preflight_blockers(
 
     if not _is_docs_first_gated_dispatch_task(task):
         return []
-    if _is_reconciliation_task(task) or _is_runtime_bootstrap_repair_task(task) or docs_first_waived:
+    if docs_first_waived:
         return []
     blockers: list[str] = []
     if not docs_ready:
