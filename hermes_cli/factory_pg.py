@@ -4651,6 +4651,21 @@ _PRODUCT_OR_RUNTIME_DISPATCH_SCOPE_TERMS = (
     "origin/main integration",
     "base branch merge",
 )
+_HISTORICAL_TERMINAL_SOURCE_SCOPE_TERMS = {
+    "base-branch integration",
+    "base branch integration",
+    "origin/main integration",
+    "base branch merge",
+}
+_HISTORICAL_TERMINAL_SOURCE_WORDING_TERMS = (
+    "source increment not integrated",
+    "source-increment-not-integrated",
+    "terminal source",
+    "terminal-word",
+    "terminal word",
+    "terminalized",
+    "terminalization",
+)
 
 _PRODUCT_OR_RUNTIME_METADATA_BOOL_KEYS = {
     "alr_dispatch",
@@ -4783,7 +4798,23 @@ def _text_without_negative_dispatch_guardrails(text: str) -> str:
     return "\n".join(retained)
 
 
+def _has_historical_terminal_source_integration_wording(task: dict[str, Any]) -> bool:
+    text = _text_without_negative_dispatch_guardrails(_task_text(task))
+    if not any(term in text for term in _HISTORICAL_TERMINAL_SOURCE_WORDING_TERMS):
+        return False
+    if not _has_repair_dispatch_terms(task):
+        return False
+    if _metadata_has_product_or_runtime_dispatch_scope(task):
+        return False
+    matched_scope_terms = [term for term in _PRODUCT_OR_RUNTIME_DISPATCH_SCOPE_TERMS if term in text]
+    return bool(matched_scope_terms) and all(
+        term in _HISTORICAL_TERMINAL_SOURCE_SCOPE_TERMS for term in matched_scope_terms
+    )
+
+
 def _has_positive_product_or_runtime_dispatch_scope(task: dict[str, Any]) -> bool:
+    if _has_historical_terminal_source_integration_wording(task):
+        return False
     return _text_has_product_or_runtime_dispatch_scope(
         _text_without_negative_dispatch_guardrails(_task_text(task))
     ) or _metadata_has_product_or_runtime_dispatch_scope(task)
