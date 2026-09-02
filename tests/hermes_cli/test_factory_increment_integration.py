@@ -2108,6 +2108,109 @@ def test_claimed_null_predicate_sees_docs_repair_as_claimable():
     assert factory_pg._claimed_null_alert_expected(payload, project_id="demo") is True
 
 
+def test_monitor_recovers_expired_unspawned_queued_run_as_non_active(fake_sql):
+    fake_sql.rows_results = [[]]
+    fake_sql.json_query_results = [
+        [
+            {
+                "project_id": "demo",
+                "lane_id": "lane-docs",
+                "task_id": "demo-reconcile-unvalidated-required-docs",
+                "run_id": "run-expired-queued",
+                "run_type": "implementation",
+                "previous_status": "claimed",
+                "new_status": "ready",
+                "task_requeued": True,
+            }
+        ],
+        [],
+        [],
+    ]
+
+    result = factory_pg.monitor_runs()
+
+    assert result["checked"] == 0
+    assert result["expired_queued_runs_recovered"] == 1
+    joined = "\n".join(fake_sql.statements)
+    assert "r.status='queued'" in joined
+    assert "r.process_id IS NULL" in joined
+    assert "NULLIF(r.session_id, '') IS NULL" in joined
+    assert "NULLIF(r.log_path, '') IS NULL" in joined
+    assert "NULLIF(r.prompt_path, '') IS NULL" in joined
+    assert "t.lease_until <= now()" in joined
+    assert "SET status='failed'" in joined
+    assert "queued_dispatch_recovered" in joined
+    assert "The original run is preserved as failed and the task is requeued" in joined
+
+
+def test_recovered_g1_docs_task_dispatches_while_product_remains_docs_first_blocked(fake_sql, monkeypatch):
+    product = {
+        "project_id": "demo",
+        "lane_id": "lane-product",
+        "task_id": "demo-product-implementation",
+        "status": "todo",
+        "phase": "implementation",
+        "priority": 10,
+        "title": "Product implementation",
+        "description": "Implement product code after G1 documents are ready.",
+        "owner_profile": "codex-builder",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {},
+    }
+    recovered_docs = {
+        "project_id": "demo",
+        "lane_id": "lane-docs",
+        "task_id": "demo-reconcile-unvalidated-required-docs",
+        "status": "ready",
+        "phase": "documentation",
+        "priority": 36,
+        "title": "R2c — Reconciliation: validate and independently review required Factory docs",
+        "description": "Recovered docs-first G1 required-document validation task after expired queued dispatch.",
+        "owner_profile": "factory-reporter",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {
+            "factory_reconciliation_task": True,
+            "reconciliation_anomaly": "unvalidated_required_docs",
+            "expired_queued_dispatch_run_id": "run-expired-queued",
+        },
+    }
+    tasks = [product, recovered_docs]
+    project = {
+        "project_id": "demo",
+        "status": "active",
+        "autonomous_enabled": True,
+        "document_status": [{"category": "g1_required", "file_name": "PRD.md", "blocking": True}],
+        "metadata": {},
+    }
+    fake_sql.rows_results = [[{"project_id": "demo"}], [product, recovered_docs]]
+    fake_sql.statement_one_results = [{**recovered_docs, "status": "claimed"}]
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(
+        factory_pg,
+        "_project_docs_notion_preflight",
+        lambda project_arg, tasks_arg, pending_arg, gates_arg: (False, True, False, False),
+    )
+
+    result = factory_pg.claim_next_task("demo", worker="factory-force-tick")
+
+    assert result is not None
+    assert result["task"]["task_id"] == recovered_docs["task_id"]
+    assert factory_pg._dispatch_preflight_blockers(product, docs_ready=False, notion_ready=True) == [
+        "missing_or_unindexed_docs"
+    ]
+    assert factory_pg._dispatch_preflight_blockers(recovered_docs, docs_ready=False, notion_ready=True) == []
+    joined = "\n".join(fake_sql.statements)
+    assert "Task demo-reconcile-unvalidated-required-docs claimed" in joined
+    assert "Task demo-product-implementation claimed" not in joined
+    assert "dispatch_preflight_denied" not in joined
+
+
 def test_claim_next_task_keeps_priority_order_when_docs_ready(fake_sql, monkeypatch):
     product = {
         "project_id": "demo",
