@@ -4909,7 +4909,15 @@ def _candidate_phase_signals(task: dict[str, Any]) -> list[str]:
 
 
 def _phase_allows_g1_or_documentation_recovery(phase: str) -> bool:
-    return phase.startswith(("g0", "g1")) or phase in {"documentation", "docs", "planning"}
+    return phase.startswith(("g0", "g1")) or phase in {
+        "documentation",
+        "documentation_review",
+        "documentation_review_recovery",
+        "docs",
+        "docs_review",
+        "docs_review_recovery",
+        "planning",
+    }
 
 
 def _metadata_scope_key(key: Any) -> str:
@@ -5011,6 +5019,9 @@ def _metadata_marks_documentation_recovery(task: dict[str, Any]) -> bool:
             "documentation_recovery",
             "docs_first_recovery",
             "g1_documentation_recovery",
+            "g1_documentation_review_recovery",
+            "documentation_review_recovery",
+            "docs_review_recovery",
             "validation_preflight_recovery",
         )
     )
