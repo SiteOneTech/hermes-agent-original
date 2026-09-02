@@ -4555,6 +4555,12 @@ def _candidate_requires_validation_readiness_before_dispatch(candidate: dict[str
     owner = str(candidate.get("owner_profile") or candidate.get("owner_agent_id") or "").lower()
     if owner == "devops-release" and any(term in text for term in ("deploy", "deployment", "sandbox", "preview", "release")):
         return False
+    if (
+        (phase.startswith(("g0", "g1")) or phase in {"documentation", "docs", "planning"})
+        and not _is_reporting_dispatch_task(candidate)
+        and not _has_positive_product_or_runtime_dispatch_scope(candidate)
+    ):
+        return False
     if _is_docs_first_repair_dispatch_task(candidate):
         # G1/documentation recovery is a prerequisite for downstream validation,
         # even when its task text quotes final-stage failure or gate-closure
@@ -4637,6 +4643,7 @@ _PRODUCT_OR_RUNTIME_DISPATCH_SCOPE_TERMS = (
     "paper run",
     "live-run",
     "live run",
+    "activation",
     "deployment",
     "deploy",
     "messaging",
@@ -4654,6 +4661,7 @@ _PRODUCT_OR_RUNTIME_DISPATCH_SCOPE_TERMS = (
 
 _PRODUCT_OR_RUNTIME_METADATA_BOOL_KEYS = {
     "alr_dispatch",
+    "activation",
     "base_branch_integration",
     "base_branch_merge",
     "deploy",
@@ -6943,15 +6951,23 @@ def _is_docs_first_gated_dispatch_task(task: dict[str, Any]) -> bool:
         return False
     if _is_docs_first_repair_dispatch_task(task):
         return False
+    if _is_validation_task(task):
+        return True
     if _is_reporting_dispatch_task(task):
         return True
+    phase = str(task.get("phase") or "").strip().lower()
+    phase_normalized = phase.replace("-", "_")
+    if (
+        (phase_normalized.startswith(("g0", "g1")) or phase_normalized in {"documentation", "docs", "planning"})
+        and not _has_positive_product_or_runtime_dispatch_scope(task)
+    ):
+        return False
     if _has_product_or_runtime_dispatch_scope(task):
         return True
-    phase = str(task.get("phase") or "").strip().lower()
     if phase.startswith(("g0", "g1")) or phase in {"documentation", "planning"}:
         return False
     text = "\n".join(str(task.get(key) or "") for key in ("task_id", "title", "description", "engine", "owner_profile")).lower()
-    gated_phase = phase.startswith(("implementation", "qa", "security", "delivery", "deploy", "release"))
+    gated_phase = phase.startswith(("implementation", "qa", "security", "delivery", "deploy", "release", "activation"))
     gated_text = any(
         term in text
         for term in (
@@ -6967,6 +6983,7 @@ def _is_docs_first_gated_dispatch_task(task: dict[str, Any]) -> bool:
             "browser qa",
             "sandbox",
             "deploy",
+            "activation",
             "delivery report",
             "release",
         )

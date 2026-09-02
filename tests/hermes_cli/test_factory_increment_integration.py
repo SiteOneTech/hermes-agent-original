@@ -1588,6 +1588,181 @@ def test_claim_next_task_allows_metadata_documentation_recovery_past_validation_
     assert f"Task {product['task_id']} claimed" not in joined
 
 
+def test_force_tick_claims_phase_explicit_g1_documentation_recovery_despite_unresolved_validation_rows(
+    fake_sql, monkeypatch
+):
+    required_doc_names = [
+        "FACTORY_INTAKE.md",
+        "REQUIREMENTS_ANALYSIS.md",
+        "PATTERN_ANALYSIS.md",
+        "ASSUMPTIONS_AND_OPEN_QUESTIONS.md",
+        "PRD.md",
+        "ADRS.md",
+        "METHODOLOGY_PLAN.md",
+        "TECHNICAL_BLUEPRINT.md",
+        "TASK_GRAPH.md",
+        "SECURITY_GATES.md",
+    ]
+    document_status = [
+        {
+            "file_name": name,
+            "category": "g1_required",
+            "exists": True,
+            "indexed": True,
+            "committed": True,
+            "validated": True,
+            "reviewed": False,
+            "blocking": True,
+            "missing": ["reviewed"],
+        }
+        for name in required_doc_names
+    ]
+    product = {
+        "project_id": "demo",
+        "lane_id": "lane-product",
+        "task_id": "demo-alr-020-product",
+        "status": "ready",
+        "phase": "implementation",
+        "priority": 18,
+        "title": "ALR-020 product implementation",
+        "description": "Normal ALR product implementation remains blocked while G1 review evidence is red.",
+        "owner_profile": "claude-builder",
+        "engine": "claude_code",
+        "dependencies": [],
+        "metadata": {},
+    }
+    documentation_recovery = {
+        "project_id": "demo",
+        "lane_id": "lane-g1",
+        "task_id": "zeus-alpha-research-ledger-core-r2d5-g1-review-evidence-restore",
+        "status": "todo",
+        "phase": "documentation",
+        "priority": 19,
+        "title": "R2d5 — phase-explicit G1 review evidence restore",
+        "description": (
+            "Bounded same-project Factory control-plane recovery for ten required G1 rows "
+            "missing reviewed evidence after the historical final gate closure path. "
+            "No product implementation, ALR dispatch, external runtime, deployment, messaging, "
+            "direct SQL, trading, risk, paper/live activation, or credential change."
+        ),
+        "owner_profile": "codex-builder",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {"repo_strategy_status": "passed", "source": "factory_task_create"},
+    }
+    validation_rows = [
+        {
+            "project_id": "demo",
+            "task_id": "demo-r2df-r14-g1-scheduler-selection-recovery",
+            "status": "blocked",
+            "phase": "quality_review",
+            "title": "R2df-R14 — historical G1 scheduler review",
+            "description": "Historical blocked validation row unrelated to the current recovery.",
+            "owner_profile": "quality-reviewer",
+            "dependencies": [],
+            "metadata": {},
+        },
+        {
+            "project_id": "demo",
+            "task_id": "demo-r2h-isolated-independent-g1-exact-sha-review",
+            "status": "superseded",
+            "phase": "quality_review",
+            "title": "R2h — superseded G1 exact-SHA review",
+            "description": "Superseded historical validation row.",
+            "owner_profile": "quality-reviewer",
+            "dependencies": [],
+            "metadata": {},
+        },
+        {
+            "project_id": "demo",
+            "task_id": "demo-r2cy-r1-independent-exact-sha-quality-review",
+            "status": "ready",
+            "phase": "quality_review",
+            "title": "R2cy-R1 — independent exact-SHA quality review",
+            "description": "Future validation work must wait for the current G1 recovery.",
+            "owner_profile": "quality-reviewer",
+            "dependencies": [],
+            "metadata": {},
+        },
+        {
+            "project_id": "demo",
+            "task_id": "demo-alr-063-independent-security-review",
+            "status": "todo",
+            "phase": "security_review",
+            "title": "ALR-063 independent security review",
+            "description": "Future ALR validation row for product work.",
+            "owner_profile": "security-reviewer",
+            "dependencies": [],
+            "metadata": {},
+        },
+    ]
+    tasks = [product, documentation_recovery, *validation_rows]
+    project = {
+        "project_id": "demo",
+        "status": "active",
+        "autonomous_enabled": True,
+        "metadata": {"reconciliation_anomalies": ["unvalidated_required_docs"]},
+        "document_status": document_status,
+    }
+    assert len([row for row in document_status if row["blocking"]]) == 10
+    assert factory_pg._payload_project_docs_ready(project) is False
+
+    monkeypatch.setattr(factory_pg, "acquire_global_control_plane_lease", lambda *_, **__: {"acquired": True})
+    monkeypatch.setattr(factory_pg, "release_global_control_plane_lease", lambda *_: None)
+    monkeypatch.setattr(factory_pg, "monitor_runs", lambda: {})
+    monkeypatch.setattr(factory_pg, "supervisor_health_check", lambda *_, **__: {"violations": [], "repairs": []})
+    monkeypatch.setattr(factory_pg, "clear_resolved_blockers", lambda project_id: {"project_id": project_id, "reopened": []})
+    monkeypatch.setattr(factory_pg, "reconcile_project", lambda project_id: {"project_id": project_id})
+    monkeypatch.setattr(factory_pg, "status", lambda project_id=None: {"projects": [project], "tasks": tasks, "task_runs": []})
+    monkeypatch.setattr(factory_pg, "classify_factory_blockers", lambda *_, **__: [])
+    monkeypatch.setattr(factory_pg, "record_factory_blocker_actions", lambda *_, **__: [])
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_project_docs_notion_preflight", lambda *_, **__: (False, True, False, False))
+    monkeypatch.setattr(
+        factory_pg,
+        "_validation_task_readiness_findings",
+        lambda project_id: [
+            "validation task demo-r2df-r14-g1-scheduler-selection-recovery is not complete; status=blocked",
+            "validation task demo-r2cy-r1-independent-exact-sha-quality-review is not complete; status=ready",
+            "validation task demo-alr-063-independent-security-review is not complete; status=todo",
+        ],
+    )
+
+    def rows(sql_text, *, user=None, **_):
+        fake_sql.statements.append(sql_text)
+        if "FROM factory.projects p" in sql_text:
+            return [{"project_id": "demo"}]
+        if "t.status='review_ready'" in sql_text:
+            return []
+        if "status IN ('todo', 'ready')" in sql_text:
+            return [product, documentation_recovery]
+        return []
+
+    def statement_one(sql_text, *, user=None, **_):
+        fake_sql.statements.append(sql_text)
+        if "SET status='claimed'" in sql_text and documentation_recovery["task_id"] in sql_text:
+            return {**documentation_recovery, "status": "claimed"}
+        if "SET status='claimed'" in sql_text and product["task_id"] in sql_text:
+            return {**product, "status": "claimed"}
+        return None
+
+    monkeypatch.setattr(fake_sql, "rows", rows)
+    monkeypatch.setattr(fake_sql, "statement_one", statement_one)
+
+    tick = factory_pg.force_tick("demo")
+
+    joined = "\n".join(fake_sql.statements)
+    assert tick["claimed"] is not None, joined
+    assert tick["claimed"]["task"]["task_id"] == documentation_recovery["task_id"]
+    assert f"Task {documentation_recovery['task_id']} claimed" in joined
+    assert "unresolved_validation_tasks" not in joined
+    assert f"Task {product['task_id']} claimed" not in joined
+
+
 def test_g1_recovery_metadata_keeps_validation_and_reporting_work_fail_closed():
     report = {
         "task_id": "demo-r2df-r47-final-report",
@@ -1619,6 +1794,22 @@ def test_g1_recovery_metadata_keeps_validation_and_reporting_work_fail_closed():
         assert factory_pg._dispatch_preflight_blockers(task, docs_ready=False, notion_ready=True) == [
             "missing_or_unindexed_docs"
         ]
+
+
+def test_g1_recovery_activation_work_remains_validation_and_docs_first_gated():
+    activation = {
+        "task_id": "demo-r2d5-activation",
+        "phase": "activation",
+        "title": "Activate G1 recovery candidate",
+        "description": "Activation work must wait until required G1 rows and validation work are green.",
+        "owner_profile": "codex-builder",
+        "metadata": {"g1_recovery": True},
+    }
+
+    assert factory_pg._candidate_requires_validation_readiness_before_dispatch(activation) is True
+    assert factory_pg._dispatch_preflight_blockers(activation, docs_ready=False, notion_ready=True) == [
+        "missing_or_unindexed_docs"
+    ]
 
 
 def test_g1_recovery_metadata_scope_keeps_product_runtime_and_external_work_fail_closed():
