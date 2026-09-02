@@ -7122,7 +7122,10 @@ def _is_docs_first_validation_repair_task(task: dict[str, Any]) -> bool:
     Ordinary product quality/security/QA tasks remain docs-first gated. A
     bounded exact-SHA review of the control-plane/doc-status repair path is the
     work that makes G1 provenance independently reviewable, so blocking it on
-    the same stale docs-first projection creates a deadlock.
+    the same stale docs-first projection creates a deadlock.  Eligibility is
+    deliberately phase/metadata based: task titles and historical summaries can
+    quote both product and recovery language, so they must not be the positive
+    signal that selects a red-G1 review reconciliation task.
     """
 
     if not _is_validation_task(task):
@@ -7135,34 +7138,7 @@ def _is_docs_first_validation_repair_task(task: dict[str, Any]) -> bool:
         return False
     if not _has_explicit_g1_or_documentation_recovery_scope(task):
         return False
-    text = _task_text(task)
-    docs_terms = (
-        "docs-first",
-        "g1",
-        "document status",
-        "document-status",
-        "documentation",
-        "documentation_index",
-        "documentation index",
-        "required docs",
-    )
-    repair_terms = (
-        "reconciliation",
-        "repair",
-        "recovery",
-        "provenance",
-        "source-root",
-        "source root",
-        "runtime-source",
-        "runtime source",
-        "primary divergence",
-        "diverged-primary",
-        "dispatch behavior",
-        "dispatch preflight",
-        "control-plane",
-        "control plane",
-    )
-    return any(term in text for term in docs_terms) and any(term in text for term in repair_terms)
+    return True
 
 
 def _is_docs_first_gated_dispatch_task(task: dict[str, Any]) -> bool:
