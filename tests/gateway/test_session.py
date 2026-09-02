@@ -2659,7 +2659,7 @@ class TestGatewaySessionDbRecovery:
                 content = kwargs["content"]
                 self.attempts.append(content)
                 if len(self.attempts) <= 2:
-                    raise RuntimeError("database disk image is malformed")
+                    raise RuntimeError("no such table: messages_fts")
                 self.persisted.append(content)
 
         store = object.__new__(SessionStore)
@@ -2694,8 +2694,13 @@ class TestGatewaySessionDbRecovery:
             def append_message(self, **kwargs):
                 raise RuntimeError("database disk image is malformed")
 
-            def replace_messages(self, session_id, messages, *, active_only=False):
-                self.replaced.append((session_id, messages, active_only))
+            def replace_messages(
+                self, session_id, messages, *, active_only=False,
+                reject_active_turn_lease=False,
+            ):
+                self.replaced.append(
+                    (session_id, messages, active_only, reject_active_turn_lease)
+                )
 
         store = object.__new__(SessionStore)
         store._db = FakeDb()
@@ -2728,11 +2733,14 @@ class TestGatewaySessionDbRecovery:
             def append_message(self, **kwargs):
                 raise RuntimeError("database disk image is malformed")
 
-            def list_recent_user_messages(self, session_id, limit=10):
-                return [{"id": 1, "content": "old"}]
+            def get_active_message_ids(self, session_id):
+                return [1]
 
-            def rewind_to_message(self, session_id, target_id):
-                return {"target_message": {"id": target_id, "content": "old"}}
+            def get_messages_as_conversation(self, session_id, *, include_row_ids=False):
+                return [{"_row_id": 1, "role": "user", "content": "old"}]
+
+            def rewind_to_message(self, session_id, target_id, **_kwargs):
+                return {"rewound_count": 1}
 
         store = object.__new__(SessionStore)
         store._db = FakeDb()
@@ -2872,7 +2880,7 @@ class TestGatewaySessionDbRecovery:
             (1.0, "session_reset", recovered.session_id),
         )
         recovered_store._db._conn.commit()
-        (tmp_path / "sessions.json").unlink()
+        (tmp_path / "sessions.json").unlink(missing_ok=True)
         reset_store = SessionStore(sessions_dir=tmp_path, config=config)
         fresh = reset_store.get_or_create_session(source)
         assert fresh.session_id != entry.session_id
@@ -2905,7 +2913,9 @@ class TestGatewayRoutingTable:
         # and would otherwise be shared by every SessionDB() in this file's
         # subprocess, leaking gateway_routing rows between tests.
         import hermes_state
+        import hermes_constants
         monkeypatch.setattr(hermes_state, "DEFAULT_DB_PATH", tmp_path / "state.db")
+        monkeypatch.setattr(hermes_constants, "get_hermes_home", lambda: tmp_path)
 
     def _source(self, chat_id="chat-1", user_id="user-1"):
         return SessionSource(
@@ -2969,6 +2979,7 @@ class TestGatewayRoutingTable:
         recovered = restarted.get_or_create_session(self._source())
         assert recovered.session_id == entry.session_id
         # And the next save persists the imported entry into the DB table.
+        restarted._save()
         rows = restarted._db.load_gateway_routing_entries(
             scope=restarted._routing_scope()
         )
