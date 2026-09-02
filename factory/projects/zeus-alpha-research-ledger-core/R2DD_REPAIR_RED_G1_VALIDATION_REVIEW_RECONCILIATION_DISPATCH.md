@@ -23,7 +23,7 @@ R2dd is a bounded same-project Factory scheduler/control-plane repair for `zeus-
 
 Changed runtime scope is limited to `hermes_cli/factory_pg.py`, focused Factory regression coverage in `tests/hermes_cli/test_factory_increment_integration.py`, and project-local evidence/index docs in `factory/projects/zeus-alpha-research-ledger-core/`.
 
-No Alpha Ledger product/runtime code, migrations, provider/model/auth configuration, tools, schedulers, deployment, credentials, messaging, primary checkout mutation, direct SQL, task-status mutation, merge, external runtime, external dispatch, Vonash/Magnus/VAOS/RAG/KB/broker/trading/risk/paper/live action, or production/sandbox propagation is authorized or performed by this increment.
+No Alpha Ledger product/runtime code, migrations, provider/model/auth configuration, tools, schedulers, deployment, credentials, messaging, primary checkout mutation, direct SQL, manual task-status mutation, merge, external runtime, external dispatch, Vonash/Magnus/VAOS/RAG/KB/broker/trading/risk/paper/live action, or production/sandbox propagation is authorized or performed by this increment. Sanctioned `factory status` readbacks may execute reviewed Factory reconciliation code and preserve any resulting status events as canonical evidence rather than ad-hoc DB writes.
 
 ## Canonical documents read before implementation
 
