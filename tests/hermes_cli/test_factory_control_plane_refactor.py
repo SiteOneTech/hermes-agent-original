@@ -1039,6 +1039,59 @@ def test_reconciler_does_not_cancel_product_validation_task_with_reconciliation_
     assert "demo-qa-security" not in joined.split("demo-reconcile-unvalidated-required-docs")[0]
 
 
+def test_reconcile_project_preserves_active_reconciliation_run_when_anomaly_clears(monkeypatch):
+    fake = FakeSql()
+    monkeypatch.setattr(factory_pg, "sql", fake)
+    monkeypatch.setattr(factory_pg, "ensure_runtime_schema", lambda: None)
+    monkeypatch.setattr(factory_pg, "_recover_false_terminalized_review_runs", lambda *args, **kwargs: [])
+    monkeypatch.setattr(factory_pg, "_scope_unscoped_current_false_review_terminalization_recoveries", lambda *args, **kwargs: [])
+    monkeypatch.setattr(factory_pg, "_revoke_unscoped_false_review_terminalization_recoveries", lambda *args, **kwargs: [])
+    project = {
+        "project_id": "demo",
+        "status": "active",
+        "autonomous_enabled": True,
+        "metadata": {"reconciliation_anomalies": ["unvalidated_required_docs"]},
+    }
+    running_recovery = {
+        "project_id": "demo",
+        "task_id": "demo-r2ea-g1-recovery",
+        "status": "running",
+        "phase": "g1_recovery",
+        "evidence_status": "present",
+        "result_summary": "Implementation/test gates passed; PR #151 is the active candidate.",
+        "metadata": {
+            "factory_reconciliation_task": True,
+            "reconciliation_anomaly": "unvalidated_required_docs",
+            "task_phase": "g1_recovery",
+            "candidate_sha": "f" * 40,
+            "pull_request": {
+                "number": 151,
+                "url": "https://github.com/SiteOneTech/hermes-agent-original/pull/151",
+                "head_sha": "f" * 40,
+                "state": "open",
+            },
+            "passed_gate_ids": [1158, 1159],
+        },
+    }
+    active_run = {"run_id": "run-active", "task_id": running_recovery["task_id"], "status": "running"}
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: [running_recovery])
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "reconciliation_findings", lambda *args, **kwargs: [])
+    fake.rows_results = [[active_run], [active_run]]
+
+    result = factory_pg.reconcile_project("demo")
+
+    assert result["status"] == "active"
+    assert result["active_runs"] == 1
+    assert result["reconciliation_tasks_cancelled"] == 0
+    joined = "\n".join(fake.statements)
+    assert "resolved_reconciliation_task_cancelled" not in joined
+    assert "Reconciliation anomaly resolved; task auto-cancelled" not in joined
+    assert "status='cancelled'" not in joined
+
+
 def test_unvalidated_required_docs_reconciliation_resolves_from_current_document_status(monkeypatch):
     project = {
         "project_id": "demo",
