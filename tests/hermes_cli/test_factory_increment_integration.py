@@ -1820,6 +1820,194 @@ def test_force_tick_uses_explicit_g1_recovery_metadata_before_review_when_docs_r
     assert "dispatch_preflight_denied" not in joined
 
 
+def test_force_tick_claims_structured_g1_review_reconciliation_before_red_g1_quality_review(fake_sql, monkeypatch):
+    required_doc_names = [
+        "FACTORY_INTAKE.md",
+        "REQUIREMENTS_ANALYSIS.md",
+        "PATTERN_ANALYSIS.md",
+        "ASSUMPTIONS_AND_OPEN_QUESTIONS.md",
+        "PRD.md",
+        "ADRS.md",
+        "METHODOLOGY_PLAN.md",
+        "TECHNICAL_BLUEPRINT.md",
+        "TASK_GRAPH.md",
+        "SECURITY_GATES.md",
+    ]
+    document_status = [
+        {
+            "file_name": name,
+            "category": "g1_required",
+            "exists": True,
+            "indexed": True,
+            "committed": True,
+            "validated": True,
+            "reviewed": False,
+            "blocking": True,
+            "missing": ["reviewed"],
+        }
+        for name in required_doc_names
+    ]
+    product_quality_review = {
+        "project_id": "demo",
+        "lane_id": "lane-review",
+        "task_id": "demo-r2cy-r1-independent-exact-sha-quality-re",
+        "status": "review_ready",
+        "phase": "quality_review",
+        "priority": 17,
+        "title": "R2cy-R1 independent exact-SHA quality review of PR #99",
+        "description": "Validate the ALR-020 product candidate after required G1 rows are green.",
+        "owner_profile": "quality-reviewer",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {"candidate_sha": "9" * 40},
+    }
+    g1_review_reconciliation = {
+        "project_id": "demo",
+        "lane_id": "lane-review",
+        "task_id": "demo-r2dd-structured-review",
+        "status": "review_ready",
+        "phase": "quality_review",
+        "priority": 18,
+        "title": "R2dd exact-SHA assessment",
+        "description": "Assess the bounded same-project control-plane candidate.",
+        "owner_profile": "quality-reviewer",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {
+            "task_phase": "g1_recovery",
+            "documentation_recovery": True,
+            "review_scope": "g1_documentation_reconciliation",
+            "no_product_runtime_scope": True,
+            "candidate_sha": "8" * 40,
+        },
+    }
+    product = {
+        "project_id": "demo",
+        "lane_id": "lane-product",
+        "task_id": "demo-alr-020-product",
+        "status": "ready",
+        "phase": "implementation",
+        "priority": 19,
+        "title": "ALR-020 product implementation",
+        "description": "Normal product work must remain fail-closed while required G1 docs are red.",
+        "owner_profile": "claude-builder",
+        "engine": "claude_code",
+        "dependencies": [],
+        "metadata": {},
+    }
+    qa = {
+        "project_id": "demo",
+        "lane_id": "lane-qa",
+        "task_id": "demo-alr-070-qa-smoke",
+        "status": "ready",
+        "phase": "qa",
+        "priority": 20,
+        "title": "ALR-070 QA smoke",
+        "description": "QA remains docs-first gated.",
+        "owner_profile": "qa-verifier",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {},
+    }
+    security = {
+        "project_id": "demo",
+        "lane_id": "lane-security",
+        "task_id": "demo-alr-063-security",
+        "status": "ready",
+        "phase": "security_review",
+        "priority": 21,
+        "title": "ALR-063 security review",
+        "description": "Security review remains docs-first gated.",
+        "owner_profile": "security-reviewer",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {},
+    }
+    delivery = {
+        "project_id": "demo",
+        "lane_id": "lane-delivery",
+        "task_id": "demo-alr-080-delivery",
+        "status": "ready",
+        "phase": "delivery",
+        "priority": 22,
+        "title": "ALR-080 delivery handoff",
+        "description": "Final delivery remains docs-first gated.",
+        "owner_profile": "factory-reporter",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {},
+    }
+    tasks = [product_quality_review, g1_review_reconciliation, product, qa, security, delivery]
+    project = {
+        "project_id": "demo",
+        "status": "active",
+        "autonomous_enabled": True,
+        "metadata": {"reconciliation_anomalies": ["pending_effective_gates"]},
+        "document_status": document_status,
+    }
+    review_text = factory_pg._task_text(g1_review_reconciliation)
+    assert "g1" not in review_text
+    assert "documentation" not in review_text
+    assert "reconciliation" not in review_text
+    assert "recovery" not in review_text
+    assert len([row for row in document_status if row["blocking"]]) == 10
+    assert factory_pg._payload_project_docs_ready(project) is False
+
+    monkeypatch.setattr(factory_pg, "acquire_global_control_plane_lease", lambda *_, **__: {"acquired": True})
+    monkeypatch.setattr(factory_pg, "release_global_control_plane_lease", lambda *_: None)
+    monkeypatch.setattr(factory_pg, "monitor_runs", lambda: {})
+    monkeypatch.setattr(factory_pg, "supervisor_health_check", lambda *_, **__: {"violations": [], "repairs": []})
+    monkeypatch.setattr(factory_pg, "clear_resolved_blockers", lambda project_id: {"project_id": project_id, "reopened": []})
+    monkeypatch.setattr(factory_pg, "status", lambda project_id=None: {"projects": [project], "tasks": tasks, "task_runs": []})
+    monkeypatch.setattr(factory_pg, "classify_factory_blockers", lambda *_, **__: [])
+    monkeypatch.setattr(factory_pg, "record_factory_blocker_actions", lambda *_, **__: [])
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_project_docs_notion_preflight", lambda *_, **__: (False, True, False, False))
+
+    def rows(sql_text, *, user=None, **_):
+        fake_sql.statements.append(sql_text)
+        if "FROM factory.projects p" in sql_text:
+            return [{"project_id": "demo"}]
+        if "t.status='review_ready'" in sql_text:
+            return [product_quality_review, g1_review_reconciliation]
+        if "status IN ('todo', 'ready')" in sql_text:
+            return [product, qa, security, delivery]
+        return []
+
+    def statement_one(sql_text, *, user=None, **_):
+        fake_sql.statements.append(sql_text)
+        if "SET status='review_running'" in sql_text and g1_review_reconciliation["task_id"] in sql_text:
+            return {**g1_review_reconciliation, "status": "review_running"}
+        if "SET status='claimed'" in sql_text and product["task_id"] in sql_text:
+            return {**product, "status": "claimed"}
+        return None
+
+    monkeypatch.setattr(fake_sql, "rows", rows)
+    monkeypatch.setattr(fake_sql, "statement_one", statement_one)
+
+    tick = factory_pg.force_tick("demo")
+
+    assert tick["claimed"] is not None
+    assert tick["claimed"]["task"]["task_id"] == g1_review_reconciliation["task_id"]
+    assert tick["claimed"].get("run_type") == "review"
+    joined = "\n".join(fake_sql.statements)
+    assert f"Task {g1_review_reconciliation['task_id']} claimed for review" in joined
+    assert f"Task {product_quality_review['task_id']} claimed for review" not in joined
+    assert f"Task {product['task_id']} claimed" not in joined
+    assert "dispatch_preflight_denied" in joined
+    assert product_quality_review["task_id"] in joined
+    assert "missing_or_unindexed_docs" in joined
+    for downstream in (product, qa, security, delivery):
+        assert factory_pg._dispatch_preflight_blockers(downstream, docs_ready=False, notion_ready=True) == [
+            "missing_or_unindexed_docs"
+        ]
+
+
 def test_claim_next_task_allows_metadata_documentation_recovery_past_validation_readiness(fake_sql, monkeypatch):
     product = {
         "project_id": "demo",
