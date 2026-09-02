@@ -4568,19 +4568,7 @@ def _candidate_requires_validation_readiness_before_dispatch(candidate: dict[str
         # documentation-readiness repair itself and must remain fail-closed until
         # validation rows are resolved.
         return True
-    final_stage_text = any(
-        term in text
-        for term in (
-            "delivery report",
-            "final delivery",
-            "final report",
-            "final gate",
-            "final handoff",
-            "gate closure",
-            "closure report",
-            "release report",
-        )
-    ) or re.search(r"\bfinal\s+(?:delivery|report|gate|closure|handoff)\b", text) is not None
+    final_stage_text = _text_has_positive_final_delivery_reporting_scope(text)
     return phase.startswith("delivery") or phase in {"release", "final", "final_report"} or final_stage_text
 
 
@@ -4749,6 +4737,38 @@ def _text_without_negative_dispatch_guardrails(text: str) -> str:
     return "\n".join(retained)
 
 
+_FINAL_DELIVERY_REPORTING_TERMS = (
+    "delivery report",
+    "final delivery",
+    "final report",
+    "final gate",
+    "final handoff",
+    "gate closure",
+    "closure report",
+    "release report",
+)
+
+
+def _text_has_positive_final_delivery_reporting_scope(text: str) -> bool:
+    chunks = re.split(r"(?<=[.!?;])\s+|\n+", text)
+    negative_marker = re.compile(r"\b(no|without|do not|does not|must not|never|forbidden|prohibited|sin)\b")
+    historical_marker = re.compile(r"\b(historical|stale|audit|quoted|quote|evidence only)\b")
+    for chunk in chunks:
+        has_reporting_term = any(term in chunk for term in _FINAL_DELIVERY_REPORTING_TERMS) or (
+            re.search(r"\bfinal\s+(?:delivery|report|gate|closure|handoff)\b", chunk) is not None
+        )
+        if not has_reporting_term:
+            continue
+        if negative_marker.search(chunk) or historical_marker.search(chunk):
+            continue
+        return True
+    return False
+
+
+def _has_positive_final_delivery_reporting_scope(task: dict[str, Any]) -> bool:
+    return _text_has_positive_final_delivery_reporting_scope(_task_text(task))
+
+
 def _has_positive_product_or_runtime_dispatch_scope(task: dict[str, Any]) -> bool:
     return _text_has_product_or_runtime_dispatch_scope(
         _text_without_negative_dispatch_guardrails(_task_text(task))
@@ -4825,8 +4845,19 @@ def _is_docs_first_repair_dispatch_task(task: dict[str, Any]) -> bool:
         return True
     if _is_docs_first_validation_repair_task(task):
         return True
-    if _is_validation_task(task) or _is_reporting_dispatch_task(task):
+    if _is_validation_task(task):
         return False
+    if _is_reporting_dispatch_task(task):
+        owner = str(task.get("owner_profile") or task.get("owner_agent_id") or "").lower()
+        if not (
+            owner == "factory-reporter"
+            and _has_explicit_g1_or_documentation_recovery_scope(task)
+            and _has_docs_first_repair_terms(task)
+            and not _has_positive_product_or_runtime_dispatch_scope(task)
+            and not _has_positive_final_delivery_reporting_scope(task)
+        ):
+            return False
+        return True
     if _is_explicit_g1_recovery_task(task):
         return True
     return _has_docs_first_repair_terms(task) and (
