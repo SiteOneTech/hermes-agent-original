@@ -2147,6 +2147,158 @@ def test_claim_next_task_allows_docs_first_pr_review_repair_when_docs_red(fake_s
     assert "Task demo-product-implementation claimed" not in joined
 
 
+def test_force_tick_claims_current_docs_first_exact_sha_review_recovery_while_g1_red(fake_sql, monkeypatch):
+    current_review_recovery = {
+        "project_id": "demo",
+        "lane_id": "lane-review",
+        "task_id": "zeus-alpha-research-ledger-core-r2cy-r1-independent-exact-sha-quality-re",
+        "status": "ready",
+        "phase": "quality_review",
+        "priority": 17,
+        "title": "Current review row; title is not a dispatch classifier",
+        "description": "Independent bounded Factory control-plane review candidate.",
+        "owner_profile": "quality-reviewer",
+        "reviewer_profile": "security-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "branch": "factory/demo/inc-017-r2cy-r1",
+        "worktree_path": "/tmp/factory/demo/inc-017-r2cy-r1",
+        "metadata": {"repo_strategy_status": "passed", "source": "factory_task_create"},
+    }
+    product = {
+        "project_id": "demo",
+        "lane_id": "lane-product",
+        "task_id": "demo-r2cw-live-run-recovery",
+        "status": "ready",
+        "phase": "implementation",
+        "priority": 19,
+        "title": "Product implementation recovery",
+        "description": "External runtime and live-run integration remain blocked while G1 is red.",
+        "owner_profile": "claude-builder",
+        "engine": "claude_code",
+        "dependencies": [],
+        "metadata": {"repo_strategy_status": "passed", "source": "factory_task_create"},
+    }
+    alr = {
+        "project_id": "demo",
+        "lane_id": "lane-alr",
+        "task_id": "demo-alr-020-r2-product-signature",
+        "status": "ready",
+        "phase": "implementation",
+        "priority": 20,
+        "title": "ALR implementation",
+        "description": "Local Advisory Ledger implementation work.",
+        "owner_profile": "claude-builder",
+        "engine": "claude_code",
+        "dependencies": [],
+        "metadata": {
+            "repo_strategy_status": "passed",
+            "source": "factory_task_create",
+            "project_phase": "local_advisory_ledger_v1",
+            "scope": "ALR-020 local advisory ledger product",
+        },
+    }
+    qa = {
+        "project_id": "demo",
+        "lane_id": "lane-qa",
+        "task_id": "demo-alr-070-qa-smoke",
+        "status": "todo",
+        "phase": "qa",
+        "priority": 70,
+        "title": "QA smoke",
+        "description": "QA for product candidate.",
+        "owner_profile": "qa-verifier",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {"repo_strategy_status": "passed", "source": "factory_task_create"},
+    }
+    security = {
+        "project_id": "demo",
+        "lane_id": "lane-security",
+        "task_id": "demo-alr-063-security-review",
+        "status": "todo",
+        "phase": "security_review",
+        "priority": 62,
+        "title": "Security review",
+        "description": "Security verification for product candidate.",
+        "owner_profile": "security-reviewer",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {"repo_strategy_status": "passed", "source": "factory_task_create"},
+    }
+    delivery = {
+        "project_id": "demo",
+        "lane_id": "lane-delivery",
+        "task_id": "demo-alr-080-delivery",
+        "status": "todo",
+        "phase": "delivery",
+        "priority": 80,
+        "title": "Delivery report",
+        "description": "Delivery handoff for product candidate.",
+        "owner_profile": "factory-reporter",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {"repo_strategy_status": "passed", "source": "factory_task_create"},
+    }
+    tasks = [current_review_recovery, product, alr, security, qa, delivery]
+    project = {
+        "project_id": "demo",
+        "status": "active",
+        "autonomous_enabled": True,
+        "metadata": {"reconciliation_anomalies": ["unvalidated_required_docs"]},
+        "document_status": [{"category": "g1_required", "file_name": "PRD.md", "blocking": True}],
+    }
+    payload = {"projects": [project], "tasks": tasks, "task_runs": [], "gates": [], "events": []}
+
+    def rows(sql_text, *, user=None, **_):
+        fake_sql.statements.append(sql_text)
+        if "FROM factory.projects p" in sql_text:
+            return [{"project_id": "demo"}]
+        if "t.status='review_ready'" in sql_text:
+            return []
+        if "status IN ('todo', 'ready')" in sql_text:
+            return tasks
+        return []
+
+    def statement_one(sql_text, *, user=None, **_):
+        fake_sql.statements.append(sql_text)
+        if current_review_recovery["task_id"] in sql_text:
+            return {**current_review_recovery, "status": "claimed"}
+        return None
+
+    monkeypatch.setattr(fake_sql, "rows", rows)
+    monkeypatch.setattr(fake_sql, "statement_one", statement_one)
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_project_docs_notion_preflight", lambda *_, **__: (False, True, False, False))
+    monkeypatch.setattr(factory_pg, "acquire_global_control_plane_lease", lambda *_, **__: {"acquired": True})
+    monkeypatch.setattr(factory_pg, "release_global_control_plane_lease", lambda *_, **__: None)
+    monkeypatch.setattr(factory_pg, "monitor_runs", lambda: {"checked": 0})
+    monkeypatch.setattr(factory_pg, "supervisor_health_check", lambda *_, **__: {"violations": [], "repairs": []})
+    monkeypatch.setattr(factory_pg, "clear_resolved_blockers", lambda project_id: {"project_id": project_id, "reopened": []})
+    monkeypatch.setattr(factory_pg, "reconcile_project", lambda project_id: {"project_id": project_id})
+    monkeypatch.setattr(factory_pg, "status", lambda project_id=None: payload)
+    monkeypatch.setattr(factory_pg, "classify_factory_blockers", lambda *_, **__: [{"kind": "unvalidated_required_docs"}])
+    monkeypatch.setattr(factory_pg, "record_factory_blocker_actions", lambda *_, **__: [])
+
+    result = factory_pg.force_tick("demo")
+
+    assert result["claimed"] is not None
+    assert result["claimed"]["task"]["task_id"] == current_review_recovery["task_id"]
+    assert result["claimed"]["worker_profile"] == "quality-reviewer"
+    joined = "\n".join(fake_sql.statements)
+    assert "INSERT INTO factory.task_runs" in joined
+    assert "dispatch_preflight_denied" not in joined
+    assert f"Task {current_review_recovery['task_id']} claimed" in joined
+    for denied in (product, alr, qa, security, delivery):
+        assert factory_pg._dispatch_preflight_blockers(denied, docs_ready=False, notion_ready=True) == [
+            "missing_or_unindexed_docs"
+        ]
+        assert f"Task {denied['task_id']} claimed" not in joined
+
+
 def test_validation_readiness_ignores_superseded_historical_validation_task(fake_sql):
     fake_sql.rows_results = [[
         {
