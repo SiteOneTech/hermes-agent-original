@@ -8181,6 +8181,147 @@ def _repair_orphan_in_flight_tasks(project_id: Optional[str] = None) -> list[dic
     return repaired
 
 
+def _repair_expired_queued_runs(project_id: Optional[str] = None) -> list[dict[str, Any]]:
+    """Finalize queued runs that never registered a worker and requeue the task.
+
+    A run can be inserted as ``queued`` after a task claim but before the cron
+    script writes prompt/log paths and calls ``mark_run_spawned``.  If that
+    process dies in the gap, monitor_runs() used to ignore the row because it was
+    not ``running``, while claim dispatch treated the queued row as active
+    forever.  Recover only rows whose task lease expired and that have no worker
+    registration evidence at all; any process/session/log/prompt evidence stays
+    fail-closed for the normal running-run monitor path.
+    """
+
+    ensure_runtime_schema()
+    project_filter = "" if not project_id else f"AND r.project_id={_q(project_id)}"
+    recovery_note = (
+        "Factory monitor recovered expired queued dispatch before worker spawn: "
+        "no process_id/session_id/log_path/prompt_path was registered before "
+        "the task lease expired. The original run is preserved as failed and "
+        "the task is requeued for canonical dispatch."
+    )
+    rows = _normalize_rows(sql.json_query(
+        f"""
+        WITH stale AS (
+            SELECT
+                r.run_id,
+                r.task_id,
+                r.project_id,
+                r.lane_id,
+                COALESCE(r.metadata->>'run_type', 'implementation') AS run_type,
+                COALESCE(r.metadata->>'previous_status', '') AS previous_status,
+                t.status AS task_status,
+                CASE
+                    WHEN COALESCE(r.metadata->>'run_type', 'implementation')='review'
+                         OR t.status='review_running'
+                    THEN 'review_ready'
+                    WHEN COALESCE(r.metadata->>'run_type', '')='rework'
+                         OR COALESCE(r.metadata->>'previous_status', '')='rework'
+                    THEN 'rework'
+                    ELSE 'ready'
+                END AS new_task_status
+            FROM factory.task_runs r
+            JOIN factory.tasks t ON t.task_id=r.task_id AND t.project_id=r.project_id
+            WHERE r.status='queued'
+              {project_filter}
+              AND r.process_id IS NULL
+              AND NULLIF(r.session_id, '') IS NULL
+              AND NULLIF(r.log_path, '') IS NULL
+              AND NULLIF(r.prompt_path, '') IS NULL
+              AND (
+                t.lease_until <= now()
+                OR (
+                    t.lease_until IS NULL
+                    AND COALESCE(r.heartbeat_at, r.started_at) <= now() - interval '30 minutes'
+                )
+              )
+        ), updated_runs AS (
+            UPDATE factory.task_runs r
+            SET status='failed',
+                exit_code=1,
+                finished_at=now(),
+                heartbeat_at=now(),
+                output_summary=CONCAT_WS(E'\n\n', NULLIF(r.output_summary, ''), {_q(recovery_note)}),
+                metadata=r.metadata
+                    || {_j({'queued_dispatch_recovered': True, 'queued_dispatch_recovered_by': 'factory-monitor', 'queued_dispatch_recovery_reason': 'expired_before_worker_spawn', 'worker_registration_evidence': 'absent'})}
+                    || jsonb_build_object('queued_dispatch_recovered_at', now())
+            FROM stale s
+            WHERE r.run_id=s.run_id
+              AND r.status='queued'
+            RETURNING
+                r.run_id,
+                r.task_id,
+                r.project_id,
+                r.lane_id,
+                s.run_type,
+                s.previous_status,
+                s.task_status,
+                s.new_task_status
+        ), updated_tasks AS (
+            UPDATE factory.tasks t
+            SET status=u.new_task_status,
+                claimed_by=NULL,
+                claimed_at=NULL,
+                lease_until=NULL,
+                metadata=t.metadata
+                    || {_j({'expired_queued_dispatch_recovered': True, 'expired_queued_dispatch_recovered_by': 'factory-monitor'})}
+                    || jsonb_build_object(
+                        'expired_queued_dispatch_run_id', u.run_id,
+                        'expired_queued_dispatch_previous_status', u.task_status,
+                        'expired_queued_dispatch_new_status', u.new_task_status,
+                        'expired_queued_dispatch_recovered_at', now()
+                    ),
+                updated_at=now()
+            FROM updated_runs u
+            WHERE t.task_id=u.task_id
+              AND t.project_id=u.project_id
+              AND t.status IN ('claimed','running','in_progress','review_running')
+            RETURNING
+                t.project_id,
+                t.lane_id,
+                t.task_id,
+                t.status AS task_new_status,
+                u.run_id
+        ), recorded AS (
+            INSERT INTO factory.events(project_id, lane_id, task_id, actor, event_type, message, metadata)
+            SELECT
+                u.project_id,
+                u.lane_id,
+                u.task_id,
+                'factory-monitor',
+                'queued_dispatch_recovered',
+                'Recovered expired queued Factory run before worker spawn',
+                jsonb_build_object(
+                    'run_id', u.run_id,
+                    'run_type', u.run_type,
+                    'previous_status', u.task_status,
+                    'new_status', COALESCE(t.task_new_status, u.new_task_status),
+                    'task_requeued', t.task_id IS NOT NULL,
+                    'runtime_contract', 'queued_run_without_worker_registration_must_not_remain_active'
+                )
+            FROM updated_runs u
+            LEFT JOIN updated_tasks t ON t.run_id=u.run_id
+            RETURNING 1
+        )
+        SELECT COALESCE(jsonb_agg(jsonb_build_object(
+            'project_id', u.project_id,
+            'lane_id', u.lane_id,
+            'task_id', u.task_id,
+            'run_id', u.run_id,
+            'run_type', u.run_type,
+            'previous_status', u.task_status,
+            'new_status', COALESCE(t.task_new_status, u.new_task_status),
+            'task_requeued', t.task_id IS NOT NULL
+        )), '[]'::jsonb)::text
+        FROM updated_runs u
+        LEFT JOIN updated_tasks t ON t.run_id=u.run_id;
+        """,
+        user=_user(),
+    ) or [])
+    return rows
+
+
 def monitor_runs() -> dict[str, Any]:
     ensure_runtime_schema()
     running = _normalize_rows(sql.rows("SELECT * FROM factory.task_runs WHERE status='running' ORDER BY started_at", user=_user()))
@@ -8242,10 +8383,12 @@ def monitor_runs() -> dict[str, Any]:
             mark_run_finished(run["run_id"], exit_code=1, output_summary=summary + monitor_note)
             finished += 1
             finalized_dead_without_exit += 1
+    expired_queued = _repair_expired_queued_runs()
     repaired = _repair_orphan_in_flight_tasks()
     return {
         "checked": checked,
         "finished": finished,
+        "expired_queued_runs_recovered": len(expired_queued),
         "orphan_inflight_repaired": len(repaired),
         "finalized_from_stale_semantic_marker": finalized_from_marker,
         "finalized_dead_without_exit": finalized_dead_without_exit,
