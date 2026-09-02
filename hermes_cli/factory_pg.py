@@ -4686,6 +4686,40 @@ _PRODUCT_OR_RUNTIME_METADATA_VALUE_KEYS = {
     "target_scope",
     "work_scope",
 }
+_G1_RECOVERY_METADATA_PHASE_KEYS = (
+    "dispatch_phase",
+    "factory_phase",
+    "phase",
+    "recovery_phase",
+    "task_phase",
+)
+
+
+def _normalize_dispatch_phase(value: Any) -> str:
+    return str(value or "").strip().lower().replace("-", "_")
+
+
+def _metadata_phase_signals(task: dict[str, Any]) -> list[str]:
+    metadata = _metadata(task)
+    phases: list[str] = []
+    for key in _G1_RECOVERY_METADATA_PHASE_KEYS:
+        value = metadata.get(key)
+        values = value if isinstance(value, (list, tuple, set)) else [value]
+        for item in values:
+            phase = _normalize_dispatch_phase(item)
+            if phase:
+                phases.append(phase)
+    return phases
+
+
+def _candidate_phase_signals(task: dict[str, Any]) -> list[str]:
+    phases = [_normalize_dispatch_phase(task.get("phase"))]
+    phases.extend(_metadata_phase_signals(task))
+    return [phase for phase in phases if phase]
+
+
+def _phase_allows_g1_or_documentation_recovery(phase: str) -> bool:
+    return phase.startswith(("g0", "g1")) or phase in {"documentation", "docs", "planning"}
 
 
 def _metadata_scope_key(key: Any) -> str:
@@ -4785,10 +4819,8 @@ def _has_explicit_g1_or_documentation_recovery_scope(task: dict[str, Any]) -> bo
     let product/runtime/reporting validation remain fail-closed separately.
     """
 
-    phase = str(task.get("phase") or "").strip().lower().replace("-", "_")
     return (
-        phase.startswith(("g0", "g1"))
-        or phase in {"documentation", "docs", "planning"}
+        any(_phase_allows_g1_or_documentation_recovery(phase) for phase in _candidate_phase_signals(task))
         or _metadata_marks_g1_recovery(task)
         or _metadata_marks_documentation_recovery(task)
     )
@@ -4810,10 +4842,10 @@ def _is_reporting_dispatch_task(task: dict[str, Any]) -> bool:
 
 
 def _is_explicit_g1_recovery_task(task: dict[str, Any]) -> bool:
-    phase = str(task.get("phase") or "").strip().lower().replace("-", "_")
+    phases = _candidate_phase_signals(task)
     metadata_marks_recovery = _metadata_marks_g1_recovery(task) or _metadata_marks_documentation_recovery(task)
-    metadata_recovery_phase = phase in {"documentation", "docs", "g1_recovery", "planning"} or phase.startswith(("g0", "g1"))
-    if phase != "g1_recovery" and not (metadata_marks_recovery and metadata_recovery_phase):
+    metadata_recovery_phase = any(_phase_allows_g1_or_documentation_recovery(phase) for phase in phases)
+    if "g1_recovery" not in phases and not (metadata_marks_recovery and metadata_recovery_phase):
         return False
     if _is_validation_task(task) or _is_reporting_dispatch_task(task):
         return False

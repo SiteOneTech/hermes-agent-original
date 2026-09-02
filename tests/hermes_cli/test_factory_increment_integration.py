@@ -1588,6 +1588,135 @@ def test_claim_next_task_allows_metadata_documentation_recovery_past_validation_
     assert f"Task {product['task_id']} claimed" not in joined
 
 
+def test_claim_next_task_uses_metadata_phase_for_g1_recovery_before_validation_history(fake_sql, monkeypatch):
+    g1_recovery = {
+        "project_id": "demo",
+        "lane_id": "lane-g1",
+        "task_id": "demo-r2d6-metadata-phase-g1-recovery",
+        "status": "todo",
+        "phase": "implementation",
+        "priority": -102,
+        "title": "R2d6 — recurrent G1 recovery self-denial repair",
+        "description": (
+            "Bounded Factory control-plane recovery. The final gate closure wording is "
+            "historical validation evidence only; route by explicit metadata phase before "
+            "unresolved_validation_tasks history. No Alpha Ledger product changes, direct SQL, "
+            "deploy, external runtime, messaging, trading, risk, paper/live, or primary mutation."
+        ),
+        "owner_profile": "codex-builder",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {"task_phase": "g1_recovery", "no_product_runtime_scope": True},
+    }
+    blocked_historical_g1_validation = {
+        "project_id": "demo",
+        "lane_id": "lane-history",
+        "task_id": "demo-r2df-r14-historical-g1-review-route",
+        "status": "blocked",
+        "phase": "g1_recovery",
+        "priority": -101,
+        "title": "R2df-R14 — G1 review-route recovery history",
+        "description": "Historical blocked G1 recovery row with review wording; not the current candidate.",
+        "owner_profile": "quality-reviewer",
+        "reviewer_profile": "security-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {},
+    }
+    superseded_historical_review = {
+        "project_id": "demo",
+        "lane_id": "lane-history",
+        "task_id": "demo-r2h-superseded-quality-review",
+        "status": "superseded",
+        "phase": "quality_review",
+        "priority": -100,
+        "title": "R2h — superseded exact-SHA review",
+        "description": "Historical review path replaced by current-base evidence.",
+        "owner_profile": "quality-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {"task_close_status": "superseded"},
+    }
+    ready_review = {
+        "project_id": "demo",
+        "lane_id": "lane-review",
+        "task_id": "demo-r2cy-r1-independent-exact-sha-quality-re",
+        "status": "ready",
+        "phase": "quality_review",
+        "priority": 17,
+        "title": "R2cy-R1 — independent exact-SHA quality review of PR #99",
+        "description": "Quality validation remains fail-closed while required G1 rows are red.",
+        "owner_profile": "quality-reviewer",
+        "reviewer_profile": "security-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {},
+    }
+    downstream_alr_validation = {
+        "project_id": "demo",
+        "lane_id": "lane-alr-review",
+        "task_id": "demo-alr-063-independent-security-and-no-egress",
+        "status": "todo",
+        "phase": "security_review",
+        "priority": 62,
+        "title": "ALR-063 independent security and no-egress review",
+        "description": "Downstream ALR validation must not run until G1 recovery is complete.",
+        "owner_profile": "security-reviewer",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {},
+    }
+    product = {
+        "project_id": "demo",
+        "lane_id": "lane-product",
+        "task_id": "demo-alr-020-product",
+        "status": "ready",
+        "phase": "implementation",
+        "priority": 18,
+        "title": "ALR-020 product implementation",
+        "description": "Normal Alpha Ledger product implementation remains fail-closed while G1 rows are red.",
+        "owner_profile": "claude-builder",
+        "engine": "claude_code",
+        "dependencies": [],
+        "metadata": {},
+    }
+    tasks = [
+        g1_recovery,
+        blocked_historical_g1_validation,
+        superseded_historical_review,
+        ready_review,
+        downstream_alr_validation,
+        product,
+    ]
+    project = {
+        "project_id": "demo",
+        "status": "active",
+        "autonomous_enabled": True,
+        "metadata": {"reconciliation_anomalies": ["unvalidated_required_docs"]},
+        "document_status": [{"category": "g1_required", "blocking": True}],
+    }
+    fake_sql.rows_results = [[{"project_id": "demo"}], [g1_recovery, product]]
+    fake_sql.statement_one_results = [{**g1_recovery, "status": "claimed"}]
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_project_docs_notion_preflight", lambda *_, **__: (False, True, False, False))
+
+    result = factory_pg.claim_next_task("demo", worker="factory-force-tick")
+
+    joined = "\n".join(fake_sql.statements)
+    assert result is not None
+    assert result["task"]["task_id"] == g1_recovery["task_id"]
+    assert f"Task {g1_recovery['task_id']} claimed" in joined
+    assert "dispatch_preflight_denied" not in joined
+    assert f"Task {product['task_id']} claimed" not in joined
+    assert factory_pg._dispatch_preflight_blockers(product, docs_ready=False, notion_ready=True) == [
+        "missing_or_unindexed_docs"
+    ]
+
+
 def test_g1_recovery_metadata_keeps_validation_and_reporting_work_fail_closed():
     report = {
         "task_id": "demo-r2df-r47-final-report",
@@ -1646,6 +1775,14 @@ def test_g1_recovery_metadata_scope_keeps_product_runtime_and_external_work_fail
             "description": "Recover current G1 evidence from a clean assigned worktree.",
             "owner_profile": "codex-builder",
             "metadata": {"g1_recovery": True, "direct_sql": True},
+        },
+        {
+            "task_id": "demo-r2d6-metadata-phase-product",
+            "phase": "implementation",
+            "title": "ALR-020 product implementation",
+            "description": "Product implementation must remain gated even with metadata task_phase=g1_recovery.",
+            "owner_profile": "codex-builder",
+            "metadata": {"task_phase": "g1_recovery", "no_product_runtime_scope": True},
         },
     ]
 
