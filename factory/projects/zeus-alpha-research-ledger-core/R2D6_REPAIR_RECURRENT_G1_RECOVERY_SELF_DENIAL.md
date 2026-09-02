@@ -60,18 +60,20 @@ Commands executed from the assigned worktree:
 
 Canonical status was read via the approved Factory CLI only:
 
-`/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory status zeus-alpha-research-ledger-core --json > /tmp/r2d6-status-after.json`
+`/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory status zeus-alpha-research-ledger-core --json > /tmp/r2d6-status-final.json`
 
-Readback summary from `/tmp/r2d6-status-after.json`:
+Readback summary from `/tmp/r2d6-status-final.json` after recording the implementation gate:
 
 - `db_backend`: `agent_core_postgres`
 - project `zeus-alpha-research-ledger-core`: `status=active`, `autonomous_enabled=true`
-- `reconciliation_anomalies`: `["source_increment_not_integrated"]`
-- active runs counted from status payload: `0`
+- `reconciliation_anomalies`: `[]`
 - current R2d6 task: `status=running`, `phase=g1_recovery`, `owner_profile=codex-builder`
+- implementation gate `1149`: `passed`, reviewer `codex-builder`, task `zeus-alpha-research-ledger-core-r2d6-repair-recurrent-g1-recovery-self-d`
 - latest historical denial evidence still includes events `259216`–`259219` with `unresolved_validation_tasks` blockers, plus event `259221` correctly failing closed for `R2cy-R1` with `missing_or_unindexed_docs`.
 
-No live `factory worker dispatch`, direct SQL, product execution, deploy, external runtime, messaging, primary mutation, merge, or activation was executed. The live canonical status cannot show this unmerged local control-plane code selecting the next recovery worker until the Zeus-signed PR is reviewed and integrated; current status therefore records the exact source-backed technical cause as `source_increment_not_integrated`.
+The earlier post-code/pre-gate snapshot `/tmp/r2d6-status-after.json` recorded the source-backed live limitation as `reconciliation_anomalies=["source_increment_not_integrated"]`. The final approved-CLI readback after the implementation gate records clean project reconciliation metadata; this still does not authorize live worker dispatch or merge.
+
+No live `factory worker dispatch`, direct SQL, product execution, deploy, external runtime, messaging, primary mutation, merge, or activation was executed. Because runtime dispatch was explicitly out of scope, the claim/spawn proof is limited to hermetic tests plus canonical status/gate readback, pending independent exact-SHA review and integration.
 
 ## Delivery boundary
 
