@@ -1294,6 +1294,55 @@ def test_explicit_g1_recovery_phase_bypasses_validation_deadlock_without_product
     assert not any("unresolved_validation_tasks" in statement for statement in fake_sql.statements)
 
 
+def test_explicit_g1_recovery_phase_bypasses_validation_deadlock_with_historical_terminal_source_wording(fake_sql, monkeypatch):
+    g1_recovery = {
+        "project_id": "demo",
+        "lane_id": "lane-docs",
+        "task_id": "demo-r2d7-g1-terminal-word-recovery",
+        "status": "todo",
+        "phase": "g1_recovery",
+        "priority": -100,
+        "title": "R2d7 — G1 preflight terminal-word recovery routing",
+        "description": (
+            "Bounded Factory control-plane repair after a source increment not integrated "
+            "finding quoted terminal source evidence for origin/main integration. "
+            "Route only the G1 recovery; no ALR/product implementation, deploy, "
+            "external runtime, messaging, direct SQL, trading, risk, or paper/live activation."
+        ),
+        "owner_profile": "codex-builder",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {},
+    }
+    unresolved_security_review = {
+        "project_id": "demo",
+        "lane_id": "lane-review",
+        "task_id": "demo-alr-063-security-review",
+        "status": "todo",
+        "phase": "security_review",
+        "priority": 62,
+        "title": "ALR-063 independent security and no-egress review",
+        "description": "Review implementation after the product increment exists.",
+        "owner_profile": "security-reviewer",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {},
+    }
+    tasks = [g1_recovery, unresolved_security_review]
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: {"project_id": project_id, "metadata": {}})
+    fake_sql.rows_results = [[g1_recovery, unresolved_security_review]]
+
+    selected = factory_pg._next_runnable_task(
+        "demo",
+        dispatch_preflight=(False, True, False, False),
+    )
+
+    assert selected is not None
+    assert selected["task_id"] == g1_recovery["task_id"]
+    assert not any("unresolved_validation_tasks" in statement for statement in fake_sql.statements)
+
+
 def test_docs_red_preflight_keeps_product_alr_qa_security_runtime_reporting_external_fail_closed():
     cases = [
         {
@@ -1302,6 +1351,14 @@ def test_docs_red_preflight_keeps_product_alr_qa_security_runtime_reporting_exte
             "title": "G1 documentation recovery for ALR-020 product implementation",
             "owner_profile": "codex-builder",
             "metadata": {"documentation_recovery": True},
+        },
+        {
+            "task_id": "demo-product-terminal-source-wording",
+            "phase": "g1_recovery",
+            "title": "G1 terminal source recovery for ALR-020 product implementation",
+            "description": "Product implementation still targets origin/main integration.",
+            "owner_profile": "codex-builder",
+            "metadata": {"g1_recovery": True},
         },
         {
             "task_id": "demo-runtime",
