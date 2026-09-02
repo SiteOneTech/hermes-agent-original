@@ -4973,8 +4973,30 @@ def _text_without_negative_dispatch_guardrails(text: str) -> str:
     return "\n".join(retained)
 
 
+def _text_without_validation_readiness_history(text: str) -> str:
+    """Remove generated validation-readiness findings from dispatch-scope text.
+
+    G1 recovery tasks often quote the blocker that stopped the previous tick,
+    for example ``validation task ... is not complete; status=todo``.  Those
+    audit snippets can mention ALR validation task IDs or broad completion words
+    without making the current structured recovery task product/runtime work.
+    """
+
+    chunks = re.split(r"(?<=[.!?;])\s+|\n+", text)
+    retained: list[str] = []
+    for chunk in chunks:
+        normalized = chunk.lower()
+        if "validation task" in normalized and (
+            " is not complete" in normalized
+            or " is cancelled without a completed superseding qa/security task" in normalized
+        ):
+            continue
+        retained.append(chunk)
+    return "\n".join(retained)
+
+
 def _has_historical_terminal_source_integration_wording(task: dict[str, Any]) -> bool:
-    text = _text_without_negative_dispatch_guardrails(_task_text(task))
+    text = _text_without_validation_readiness_history(_text_without_negative_dispatch_guardrails(_task_text(task)))
     if not any(term in text for term in _HISTORICAL_TERMINAL_SOURCE_WORDING_TERMS):
         return False
     if not _has_repair_dispatch_terms(task):
@@ -4991,7 +5013,7 @@ def _has_positive_product_or_runtime_dispatch_scope(task: dict[str, Any]) -> boo
     if _has_historical_terminal_source_integration_wording(task):
         return False
     return _text_has_product_or_runtime_dispatch_scope(
-        _text_without_negative_dispatch_guardrails(_task_text(task))
+        _text_without_validation_readiness_history(_text_without_negative_dispatch_guardrails(_task_text(task)))
     ) or _metadata_has_product_or_runtime_dispatch_scope(task)
 
 
