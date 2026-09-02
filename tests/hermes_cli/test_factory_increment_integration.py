@@ -2013,6 +2013,75 @@ def test_claim_next_task_uses_metadata_phase_for_g1_recovery_before_validation_h
     ]
 
 
+def test_claim_next_task_uses_g1_phase_before_completion_history_text_match(fake_sql, monkeypatch):
+    g1_recovery = {
+        "project_id": "demo",
+        "lane_id": "lane-g1",
+        "task_id": "demo-r2dg-structured-g1-recovery-scheduler-by",
+        "status": "todo",
+        "phase": "g1_recovery",
+        "priority": -104,
+        "title": "R2dg — structured G1 recovery scheduler bypass",
+        "description": (
+            "Bounded same-project Factory control-plane recovery. The previous forced tick "
+            "quoted downstream validation history: validation task demo-alr-061-independent-"
+            "specification-and-ar is not complete; status=todo. The broad completion-word "
+            "history must not make this dependency-ready G1 recovery wait for validation rows."
+        ),
+        "owner_profile": "codex-builder",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {},
+    }
+    product = {
+        "project_id": "demo",
+        "lane_id": "lane-product",
+        "task_id": "demo-alr-020-product",
+        "status": "ready",
+        "phase": "implementation",
+        "priority": -103,
+        "title": "ALR-020 product implementation",
+        "description": "Product implementation remains blocked while G1 docs and validation are red.",
+        "owner_profile": "claude-builder",
+        "engine": "claude_code",
+        "dependencies": [],
+        "metadata": {},
+    }
+    tasks = [g1_recovery, product]
+    project = {
+        "project_id": "demo",
+        "status": "active",
+        "autonomous_enabled": True,
+        "metadata": {"reconciliation_anomalies": ["unvalidated_required_docs"]},
+        "document_status": [{"category": "g1_required", "blocking": True}],
+    }
+    fake_sql.rows_results = [[{"project_id": "demo"}], [g1_recovery, product]]
+    fake_sql.statement_one_results = [{**g1_recovery, "status": "claimed"}]
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_project_docs_notion_preflight", lambda *_, **__: (False, True, False, False))
+    monkeypatch.setattr(
+        factory_pg,
+        "_validation_task_readiness_findings",
+        lambda project_id: ["validation task demo-alr-061-independent-specification-and-ar is not complete; status=todo"],
+    )
+
+    result = factory_pg.claim_next_task("demo", worker="factory-force-tick")
+
+    joined = "\n".join(fake_sql.statements)
+    assert result is not None
+    assert result["task"]["task_id"] == g1_recovery["task_id"]
+    assert f"Task {g1_recovery['task_id']} claimed" in joined
+    assert "dispatch_preflight_denied" not in joined
+    assert f"Task {product['task_id']} claimed" not in joined
+    assert factory_pg._dispatch_preflight_blockers(product, docs_ready=False, notion_ready=True) == [
+        "missing_or_unindexed_docs"
+    ]
+
+
 def test_g1_recovery_metadata_keeps_validation_and_reporting_work_fail_closed():
     report = {
         "task_id": "demo-r2df-r47-final-report",
