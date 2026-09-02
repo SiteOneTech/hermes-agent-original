@@ -102,7 +102,7 @@ def test_close_task_refuses_done_when_increment_integration_fails(fake_sql, monk
     assert "task_closed" not in joined
 
 
-def test_close_task_respects_project_auto_integration_forbidden_without_increment_event(fake_sql, monkeypatch):
+def test_close_task_fail_closed_for_pr_first_project_without_independent_exact_sha_review(fake_sql, monkeypatch):
     task = {
         "project_id": "demo",
         "lane_id": "lane",
@@ -110,7 +110,8 @@ def test_close_task_respects_project_auto_integration_forbidden_without_incremen
         "status": "review_ready",
         "branch": "factory/demo/task-1",
         "worktree_path": "/tmp/factory-demo-task-1",
-        "metadata": {},
+        "owner_profile": "codex-builder",
+        "metadata": {"implementation_evidence": {"tests": "passed"}},
     }
     project = {
         "project_id": "demo",
@@ -121,7 +122,7 @@ def test_close_task_respects_project_auto_integration_forbidden_without_incremen
             "repo_strategy": {"primary_repo_path": "/tmp/factory-demo-repo", "base_branch": "main"},
         },
     }
-    fake_sql.one_results = [task]
+    fake_sql.rows_results = [[task]]
     fake_sql.statement_one_results = [{"project_id": "demo", "lane_id": "lane", "task_id": "task-1", "status": "done"}]
     monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
     calls: list[list[str]] = []
@@ -132,12 +133,13 @@ def test_close_task_respects_project_auto_integration_forbidden_without_incremen
 
     monkeypatch.setattr(factory_pg, "_run_git", record_git)
 
-    result = factory_pg.close_task("task-1", result_summary="QA passed", evidence={}, actor="qa", reconcile=False)
+    with pytest.raises(ValueError, match="pr-first terminalization blocked"):
+        factory_pg.close_task("task-1", result_summary="QA passed", evidence={}, actor="qa", reconcile=False)
 
-    assert result["status"] == "done"
     assert calls == []
     joined = "\n".join(fake_sql.statements)
-    assert "task_closed" in joined
+    assert "SET status='done'" not in joined
+    assert "task_closed" not in joined
     assert "increment_integrated" not in joined
     assert "merge_no_ff_push_origin" not in joined
 
@@ -199,6 +201,186 @@ def test_mark_run_finished_review_success_requires_task_bound_gate(fake_sql, mon
     assert "SET status='review_ready'" in joined
     assert "SET status='done'" not in joined
     assert "review_success_without_task_bound_passed_gate" in joined
+    assert "review_run_failed" in joined
+
+
+def test_mark_run_finished_pr_first_review_requires_exact_source_sha(fake_sql, monkeypatch):
+    source_sha = "c" * 40
+    reviewed_sha = "d" * 40
+    calls: list[str] = []
+
+    def integrate(task_id: str, *, actor: str, final_status: str):
+        calls.append(task_id)
+        return {"increment_integration_required": False, "reason": "project_auto_integration_forbidden"}
+
+    task = {
+        "project_id": "demo",
+        "task_id": "task-1",
+        "status": "review_ready",
+        "branch": "factory/demo/task-1",
+        "worktree_path": "/tmp/factory-demo-task-1",
+        "owner_profile": "codex-builder",
+        "metadata": {"implementation_evidence": {"tests": "passed"}},
+    }
+    project = {
+        "project_id": "demo",
+        "repo_path": "/tmp/factory-demo-repo",
+        "base_branch": "main",
+        "metadata": {
+            "factory_auto_integration_forbidden": True,
+            "repo_strategy": {"primary_repo_path": "/tmp/factory-demo-repo", "base_branch": "main"},
+        },
+    }
+    quality_gate = {
+        "gate_id": 42,
+        "gate_type": "quality",
+        "reviewer": "quality-reviewer",
+        "evidence": {"candidate_commit": reviewed_sha},
+    }
+    fake_sql.one_results = [
+        {"task_id": "task-1", "metadata": {"run_type": "review"}},
+        quality_gate,
+        {"project_id": "demo"},
+    ]
+    fake_sql.rows_results = [[task]]
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(
+        factory_pg,
+        "_source_task_commit_for_pr_first_review",
+        lambda task_arg: (source_sha, None),
+        raising=False,
+    )
+    monkeypatch.setattr(factory_pg, "_integrate_increment_to_base", integrate)
+
+    factory_pg.mark_run_finished(
+        "run-1",
+        exit_code=0,
+        output_summary="Reviewed exact candidate SHA, but not the source head.\nSTATE: DONE",
+    )
+
+    assert calls == []
+    joined = "\n".join(fake_sql.statements)
+    assert "SET status='failed'" in joined
+    assert "SET status='review_ready'" in joined
+    assert "SET status='done'" not in joined
+    assert "pr_first_review_exact_sha_mismatch" in joined
+    assert "review_run_failed" in joined
+
+
+def test_close_task_pr_first_project_allows_done_after_independent_exact_source_sha_review_without_merge(fake_sql, monkeypatch):
+    source_sha = "e" * 40
+    task = {
+        "project_id": "demo",
+        "lane_id": "lane",
+        "task_id": "task-1",
+        "status": "review_ready",
+        "branch": "factory/demo/task-1",
+        "worktree_path": "/tmp/factory-demo-task-1",
+        "owner_profile": "codex-builder",
+        "metadata": {"implementation_evidence": {"tests": "passed"}},
+    }
+    project = {
+        "project_id": "demo",
+        "repo_path": "/tmp/factory-demo-repo",
+        "base_branch": "main",
+        "metadata": {
+            "factory_auto_integration_forbidden": True,
+            "repo_strategy": {"primary_repo_path": "/tmp/factory-demo-repo", "base_branch": "main"},
+        },
+    }
+    fake_sql.rows_results = [[task]]
+    fake_sql.one_results = [
+        {
+            "gate_id": 42,
+            "gate_type": "quality",
+            "reviewer": "quality-reviewer",
+            "evidence": {"candidate_commit": source_sha},
+        },
+        task,
+    ]
+    fake_sql.statement_one_results = [{"project_id": "demo", "lane_id": "lane", "task_id": "task-1", "status": "done"}]
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(
+        factory_pg,
+        "_source_task_commit_for_pr_first_review",
+        lambda task_arg: (source_sha, None),
+    )
+    git_calls: list[list[str]] = []
+
+    def record_git(_repo_path, args, *, timeout=120):
+        git_calls.append(args)
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(factory_pg, "_run_git", record_git)
+
+    result = factory_pg.close_task("task-1", result_summary="QA passed", evidence={}, actor="qa", reconcile=False)
+
+    assert result["status"] == "done"
+    assert git_calls == []
+    joined = "\n".join(fake_sql.statements)
+    assert "SET status='done'" in joined
+    assert "task_closed" in joined
+    assert "increment_integrated" not in joined
+    assert "merge_no_ff_push_origin" not in joined
+
+
+def test_mark_run_finished_pr_first_review_requires_non_self_exact_sha_review(fake_sql, monkeypatch):
+    source_sha = "f" * 40
+    calls: list[str] = []
+
+    def integrate(task_id: str, *, actor: str, final_status: str):
+        calls.append(task_id)
+        return {"increment_integration_required": False, "reason": "project_auto_integration_forbidden"}
+
+    task = {
+        "project_id": "demo",
+        "task_id": "task-1",
+        "status": "review_ready",
+        "branch": "factory/demo/task-1",
+        "worktree_path": "/tmp/factory-demo-task-1",
+        "owner_profile": "codex-builder",
+        "metadata": {"implementation_evidence": {"tests": "passed"}},
+    }
+    project = {
+        "project_id": "demo",
+        "repo_path": "/tmp/factory-demo-repo",
+        "base_branch": "main",
+        "metadata": {
+            "factory_auto_integration_forbidden": True,
+            "repo_strategy": {"primary_repo_path": "/tmp/factory-demo-repo", "base_branch": "main"},
+        },
+    }
+    fake_sql.one_results = [
+        {"task_id": "task-1", "metadata": {"run_type": "review"}},
+        {
+            "gate_id": 42,
+            "gate_type": "quality",
+            "reviewer": "codex-builder",
+            "evidence": {"candidate_commit": source_sha},
+        },
+        {"project_id": "demo"},
+    ]
+    fake_sql.rows_results = [[task]]
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(
+        factory_pg,
+        "_source_task_commit_for_pr_first_review",
+        lambda task_arg: (source_sha, None),
+    )
+    monkeypatch.setattr(factory_pg, "_integrate_increment_to_base", integrate)
+
+    factory_pg.mark_run_finished(
+        "run-1",
+        exit_code=0,
+        output_summary="Self-review claimed exact source SHA.\nSTATE: DONE",
+    )
+
+    assert calls == []
+    joined = "\n".join(fake_sql.statements)
+    assert "SET status='failed'" in joined
+    assert "SET status='review_ready'" in joined
+    assert "SET status='done'" not in joined
+    assert "pr_first_review_not_independent" in joined
     assert "review_run_failed" in joined
 
 
