@@ -99,6 +99,19 @@ def test_nearest_root_excludes_take_priority(tmp_path: Path):
     assert found is None
 
 
+def test_nearest_root_skips_package_dirs(tmp_path: Path):
+    # hermes_cli/setup.py is a module inside a package, not a project
+    # marker; treating it as one spawned a second pyright per worktree.
+    root = tmp_path / "p"
+    pkg = root / "hermes_cli"
+    pkg.mkdir(parents=True)
+    (root / "pyproject.toml").write_text("")
+    (pkg / "__init__.py").write_text("")
+    (pkg / "setup.py").write_text("")
+    found = nearest_root(str(pkg / "main.py"), ["pyproject.toml", "setup.py"])
+    assert found == str(root)
+
+
 def test_nearest_root_returns_none_when_no_marker(tmp_path: Path):
     f = tmp_path / "x.py"
     f.write_text("")

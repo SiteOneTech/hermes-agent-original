@@ -476,6 +476,9 @@ class TestWebServerEndpoints:
 
         legacy = sqlite3.connect(str(db_path))
         try:
+            # SQLite refuses DROP COLUMN while an index references the
+            # column; a pre-column legacy store has neither.
+            legacy.execute("DROP INDEX IF EXISTS idx_sessions_effective_activity")
             legacy.execute(f"ALTER TABLE sessions DROP COLUMN {missing_column}")
             legacy.commit()
         finally:
@@ -522,6 +525,7 @@ class TestWebServerEndpoints:
 
         legacy = sqlite3.connect(str(db_path))
         try:
+            legacy.execute("DROP INDEX IF EXISTS idx_sessions_effective_activity")
             legacy.execute("ALTER TABLE sessions DROP COLUMN last_activity_at")
             legacy.commit()
         finally:

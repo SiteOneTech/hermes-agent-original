@@ -8,8 +8,7 @@ Covers:
 import pytest
 from unittest.mock import MagicMock, patch
 
-from tools.file_operations import ShellFileOperations, _parse_search_context_line
-from tools.tool_output_limits import get_max_line_length
+from tools.file_operations import ReadResult, ShellFileOperations, _parse_search_context_line
 
 
 # =========================================================================
@@ -202,26 +201,18 @@ class TestPaginationBounds:
         env = MagicMock()
         env.cwd = "/tmp"
         ops = ShellFileOperations(env)
-        page = {
-            "state": "regular",
-            "file_size": 12,
-            "total_lines": 2,
-            "sample": "bGluZTEKbGluZTIK",
-            "content": "bGluZTEK",
-        }
-
-        with patch.object(ops, "_read_regular_file_page", return_value=page) as safe_reader:
+        expected = ReadResult(content="1|line1", total_lines=2, file_size=12)
+        # An unparsable compound response reaches the retained sequential
+        # fallback; this asserts normalized pagination at the current seam.
+        with patch.object(ops, "_exec", return_value=MagicMock(exit_code=0, stdout="garbled")), \
+             patch.object(ops, "_read_file_sequential", return_value=expected) as safe_reader:
             result = ops.read_file("notes.txt", offset=0, limit=0)
 
         assert result.error is None
         assert "1|line1" in result.content
-        # Pagination is clamped (0/0 -> 1/1) before it reaches the
-        # descriptor-safe reader; the per-line clamp travels with it.
-        safe_reader.assert_called_once_with(
-            "notes.txt", 1, 1,
-            metadata_only=False,
-            line_clamp=get_max_line_length() + 1,
-        )
+        # Pagination is clamped (0/0 -> 1/1) before it reaches the safe
+        # reader's fallback path.
+        safe_reader.assert_called_once_with("notes.txt", 1, 1)
 
     def test_search_clamps_offset_and_limit_before_building_head_pipeline(self):
         env = MagicMock()
@@ -233,7 +224,7 @@ class TestPaginationBounds:
             commands.append(command)
             if command.startswith("test -e"):
                 return MagicMock(exit_code=0, stdout="exists")
-            if command.startswith("rg --files"):
+            if "--files" in command:
                 return MagicMock(exit_code=0, stdout="a.py\n")
             return MagicMock(exit_code=0, stdout="")
 
@@ -242,9 +233,9 @@ class TestPaginationBounds:
             result = ops.search("*.py", target="files", path=".", offset=-4, limit=-2)
 
         assert result.files == ["a.py"]
-        rg_commands = [cmd for cmd in commands if cmd.startswith("rg --files")]
+        rg_commands = [cmd for cmd in commands if "--files" in cmd]
         assert rg_commands
-        assert "| head -n 1" in rg_commands[0]
+        assert "| head -n 2" in rg_commands[0]
 
 
 # =========================================================================

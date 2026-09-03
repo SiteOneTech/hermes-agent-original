@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock
 
+from tools.environments.local import _find_bash, _msys_to_windows_path, LocalEnvironment
 from tools.file_operations import (
     _is_write_denied,
     ReadResult,
@@ -24,18 +25,24 @@ from tools.file_operations import (
 )
 
 
-def _safe_read_page_output(content: bytes, *, total_lines: int | None = None) -> str:
-    """Emulate the descriptor-safe reader's marked backend response."""
-    if total_lines is None:
-        total_lines = content.count(b"\n")
-    encoded = base64.b64encode(content).decode("ascii")
-    return "__HERMES_SAFE_READ__" + json.dumps({
-        "state": "regular",
-        "file_size": len(content),
-        "total_lines": total_lines,
-        "sample": base64.b64encode(content[:1000]).decode("ascii"),
-        "content": encoded,
-    }, separators=(",", ":"))
+def _compound_read_output(command: str, content: bytes) -> str:
+    """Emulate the current one-round-trip safe read protocol."""
+    match = re.search(r"(__HERMES_RF_[0-9a-f]{32}__)", command)
+    assert match, command
+    sentinel = match.group(1)
+    page = content.decode("utf-8", "replace")
+    if page and not page.endswith("\n"):
+        # The ``cut`` stage newline-terminates an unterminated final line.
+        page += "\n"
+    segments = (
+        str(len(content)),
+        base64.b64encode(content[:1000]).decode("ascii"),
+        page,
+        str(content.count(b"\n")),
+        "1" if content.endswith(b"\n") else "0",
+        "0 0",
+    )
+    return (sentinel + "\n").join(segments)
 
 
 # =========================================================================
@@ -171,10 +178,16 @@ class TestSearchResult:
         assert d["matches"][0]["path"] == "a.py"
 
 
-    def test_truncated_flag(self):
+    def test_truncated_flag_marks_total_as_lower_bound(self):
         r = SearchResult(total_count=100, truncated=True)
         d = r.to_dict()
         assert d["truncated"] is True
+        assert d["total_count_is_lower_bound"] is True
+
+    def test_untruncated_total_omits_lower_bound_flag(self):
+        r = SearchResult(total_count=100)
+        d = r.to_dict()
+        assert "total_count_is_lower_bound" not in d
 
 
 class TestSearchResultDensify:
@@ -271,16 +284,29 @@ def make_real_subprocess_env(cwd: str, include_stderr: bool = False) -> MagicMoc
     env.cwd = cwd
 
     def execute(command, **kwargs):
+        stdin_data = kwargs.get("stdin_data")
+        is_windows = os.name == "nt"
+        if is_windows:
+            # Match LocalEnvironment: commands are POSIX scripts executed by
+            # Git Bash, and stdin bytes must bypass Windows newline rewriting.
+            command = [_find_bash(), "-c", command]
         completed = subprocess.run(
             command,
-            shell=True,
-            text=True,
+            shell=not is_windows,
+            text=not is_windows,
             capture_output=True,
-            input=kwargs.get("stdin_data"),
+            input=(stdin_data.encode("utf-8", "surrogateescape")
+                   if is_windows and stdin_data is not None else stdin_data),
         )
-        output = completed.stdout
+        output = (
+            completed.stdout.decode("utf-8", "replace")
+            if is_windows else completed.stdout
+        )
         if include_stderr:
-            output += completed.stderr
+            output += (
+                completed.stderr.decode("utf-8", "replace")
+                if is_windows else completed.stderr
+            )
         return {
             "output": output,
             "returncode": completed.returncode,
@@ -313,14 +339,14 @@ class TestShellFileOpsHelpers:
 
     @pytest.mark.windows_only
     def test_read_file_uses_bash_safe_windows_paths(self, mock_env):
-        """The descriptor-safe backend still receives the MSYS path form."""
+        """The compound safe-read backend still receives the MSYS path form."""
         commands = []
 
         def side_effect(command, **kwargs):
             commands.append(command)
-            if command.startswith(("python3 -c", "python -c")):
+            if "__HERMES_RF_" in command:
                 return {
-                    "output": _safe_read_page_output(b"hello"),
+                    "output": _compound_read_output(command, b"hello"),
                     "returncode": 0,
                 }
             return {"output": "", "returncode": 0}
@@ -331,8 +357,8 @@ class TestShellFileOpsHelpers:
 
         assert result.error is None
         assert len(commands) == 1
-        assert commands[0].startswith("python3 -c ")
-        assert "'/c/Users/alice/notes.txt' 1 2000 -1 0" in commands[0]
+        assert commands[0].startswith("if [ -f ")
+        assert "'/c/Users/alice/notes.txt'" in commands[0]
 
     def test_is_likely_binary_by_extension(self, file_ops):
         assert file_ops._is_likely_binary("photo.png") is True
@@ -347,14 +373,13 @@ class TestShellFileOpsHelpers:
         assert ops.cwd == "/"
 
     def test_read_file_strips_leaked_terminal_fence_markers(self, mock_env):
-        leaked = (
-            "'\x07\x1b]0;python3 -c safe-reader\x07\n"
-            + _safe_read_page_output(b"print('ok')\n")
-            + "\n\x07'\n"
-        )
-
         def side_effect(command, **kwargs):
-            if command.startswith(("python3 -c", "python -c")):
+            if "__HERMES_RF_" in command:
+                leaked = (
+                    "'\x07\x1b]0;safe-read\x07\n"
+                    + _compound_read_output(command, b"print('ok')\n")
+                    + "\n\x07'\n"
+                )
                 return {"output": leaked, "returncode": 0}
             return {"output": "", "returncode": 0}
 
@@ -370,13 +395,18 @@ class TestShellFileOpsHelpers:
 
     def test_read_file_raw_strips_leaked_terminal_fence_markers(self, mock_env):
         leaked = (
-            "\x07'\n"
-            + _safe_read_page_output(b"alpha\n")
-            + "\n\x1b]0;python3 -c safe-reader\x07\n"
+            "'\x1b]0;safe-read\x07\nalpha\n\x1b]0;safe-read\x07\n"
         )
 
         def side_effect(command, **kwargs):
-            if command.startswith(("python3 -c", "python -c")):
+            if command.startswith("if [ -f "):
+                return {"output": "6\n", "returncode": 0}
+            if command.startswith("head -c 1000"):
+                return {
+                    "output": base64.b64encode(b"alpha\n").decode("ascii"),
+                    "returncode": 0,
+                }
+            if command.startswith("cat "):
                 return {"output": leaked, "returncode": 0}
             return {"output": "", "returncode": 0}
 
@@ -426,7 +456,7 @@ class TestSearchPathValidation:
 
 class TestSearchFilesFallbackHiddenPaths:
     def _make_env(self):
-        return make_real_subprocess_env("/")
+        return LocalEnvironment("/")
 
     def test_hidden_root_with_hidden_ancestor_includes_files(self, tmp_path, monkeypatch):
         """Fallback find should include visible files when path is inside hidden root."""
@@ -763,9 +793,9 @@ class TestByteLayerBinaryDetection:
 
     def _dispatch(self, cjk_bytes):
         def side_effect(command, **kwargs):
-            if command.startswith(("python3 -c", "python -c")):
+            if "__HERMES_RF_" in command:
                 return {
-                    "output": _safe_read_page_output(cjk_bytes),
+                    "output": _compound_read_output(command, cjk_bytes),
                     "returncode": 0,
                 }
             return {"output": "", "returncode": 0}
