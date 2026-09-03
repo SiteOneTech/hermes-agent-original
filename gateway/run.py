@@ -51,6 +51,7 @@ from typing import Awaitable, Callable, Dict, Optional, Any, List, Tuple, Union,
 from agent.async_utils import consume_detached_task_result, safe_schedule_threadsafe
 from agent.conversation_compression import (
     COMPACTION_DONE_STATUS,
+    COMPACTION_HEARTBEAT_STATUS,
     COMPACTION_STATUS,
     COMPRESSION_RETRY_CONTEXT_REDUCED_STATUS_TEMPLATE,
     COMPRESSION_RETRY_MESSAGES_STATUS_TEMPLATE,
@@ -131,7 +132,8 @@ _TELEGRAM_NOISY_STATUS_RE = re.compile(
     r"|auto-lowered\s+(?:this\s+)?session'?s?\s+threshold"
     r"|configured\s+auxiliary\s+compression\s+provider\s+.+\s+unavailable"
     r"|skipping\s+concurrent\s+compression"
-    r"|compacting\s+context\s+[—-]\s+summarizing\s+earlier\s+conversation"
+    rf"|{re.escape(COMPACTION_STATUS)}"
+    rf"|{re.escape(COMPACTION_HEARTBEAT_STATUS)}"
     r"|resumed\s+after\s+\d+s\s+idle\s+[—-]\s+compacting"
     r"|preflight\s+compression"
     r"|pre[- ]api\s+compression"
@@ -533,6 +535,7 @@ _COMPRESSION_PROGRESS_STATUS_RE = re.compile(
         _status_template_to_regex(_template)
         for _template in (
             COMPACTION_STATUS,
+            COMPACTION_HEARTBEAT_STATUS,
             COMPACTION_DONE_STATUS,
             PRE_API_COMPRESSION_STATUS_TEMPLATE,
             PREFLIGHT_COMPRESSION_STATUS_TEMPLATE,
@@ -27478,17 +27481,30 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if not error:
             return
 
-        from hermes_state import classify_persistence_error, format_session_db_unavailable
+        from hermes_state import (
+            _default_db_path,
+            classify_persistence_error,
+            format_session_db_unavailable,
+        )
 
         cause = classify_persistence_error(error)
         hint = format_session_db_unavailable()
         if cause == "corrupt":
+            # Copy-pasteable, so name the real store (profiles / HERMES_HOME
+            # do not live under ~/.hermes).
+            db_path = _default_db_path()
             message = (
                 "⚠️ Session database corruption detected. Messages may not be "
                 "persisted. Recovery options:\n"
                 "1. Run `hermes doctor --fix`\n"
-                "2. Salvage with: sqlite3 ~/.hermes/state.db \".recover\" "
-                "(then replace state.db)\n"
+                "2. Stop the gateway, then recover with:\n"
+                f"   hermes sessions recover --source {db_path} "
+                "--inspect-only\n"
+                "   (if it reports recoverable) hermes sessions recover "
+                f"--source {db_path} --output recovered-state.db\n"
+                "   — recovery snapshots the damaged file first; do NOT run "
+                "`sqlite3 ... \".recover\"` against the live state.db, a "
+                "vulnerable sqlite3 CLI can corrupt it further\n"
                 "3. Restore from a backup in ~/.hermes/backups/\n"
                 "Run `hermes doctor` for sanitized diagnostics."
             )
