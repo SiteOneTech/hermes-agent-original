@@ -1820,6 +1820,215 @@ def test_force_tick_uses_explicit_g1_recovery_metadata_before_review_when_docs_r
     assert "dispatch_preflight_denied" not in joined
 
 
+def test_force_tick_claims_guardrail_scoped_red_g1_recovery_and_spawns_one_worker(fake_sql, monkeypatch):
+    document_status = [
+        {
+            "file_name": name,
+            "category": "g1_required",
+            "exists": True,
+            "indexed": True,
+            "committed": True,
+            "validated": True,
+            "reviewed": False,
+            "blocking": True,
+            "missing": ["reviewed"],
+        }
+        for name in (
+            "FACTORY_INTAKE.md",
+            "REQUIREMENTS_ANALYSIS.md",
+            "PATTERN_ANALYSIS.md",
+            "ASSUMPTIONS_AND_OPEN_QUESTIONS.md",
+            "PRD.md",
+            "ADRS.md",
+            "METHODOLOGY_PLAN.md",
+            "TECHNICAL_BLUEPRINT.md",
+            "TASK_GRAPH.md",
+            "SECURITY_GATES.md",
+        )
+    ]
+    product = {
+        "project_id": "demo",
+        "lane_id": "lane-product",
+        "task_id": "demo-alr-020-product",
+        "status": "ready",
+        "phase": "implementation",
+        "priority": 18,
+        "title": "ALR-020 product implementation",
+        "description": "Normal Alpha Ledger product work remains blocked while required G1 rows are red.",
+        "owner_profile": "claude-builder",
+        "engine": "claude_code",
+        "dependencies": [],
+        "metadata": {},
+    }
+    recovery = {
+        "project_id": "demo",
+        "lane_id": "lane-g1",
+        "task_id": "demo-r2f6-current-base-red-g1-dispatch-recovery",
+        "status": "todo",
+        "phase": "g1_recovery",
+        "priority": 19,
+        "title": "R2f6 — current-base red-G1 dispatch recovery bootstrap",
+        "description": (
+            "Bounded same-project Factory control-plane technical rework only. "
+            "Reproduce the current-base G1 documentation dispatch starvation, then "
+            "select exactly one eligible same-project g1_recovery task. "
+            "Preserve fail-closed denial for all Alpha Ledger product, ALR, QA/security, delivery, "
+            "deploy, messaging, external-runtime, broker, trading/risk, paper/live, and external work. "
+            "Scope strictly Factory control-plane, hermetic tests, and project-local evidence; no "
+            "direct SQL, primary-checkout mutation, merge, deployment, credential change, external "
+            "dispatch, product change, or runtime work."
+        ),
+        "owner_profile": "codex-builder",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {},
+    }
+    project = {
+        "project_id": "demo",
+        "status": "active",
+        "autonomous_enabled": True,
+        "metadata": {"reconciliation_anomalies": ["unvalidated_required_docs"]},
+        "document_status": document_status,
+    }
+    tasks = [product, recovery]
+
+    monkeypatch.setattr(factory_pg, "acquire_global_control_plane_lease", lambda *_, **__: {"acquired": True})
+    monkeypatch.setattr(factory_pg, "release_global_control_plane_lease", lambda *_: None)
+    monkeypatch.setattr(factory_pg, "monitor_runs", lambda: {})
+    monkeypatch.setattr(factory_pg, "supervisor_health_check", lambda *_, **__: {"violations": [], "repairs": []})
+    monkeypatch.setattr(factory_pg, "clear_resolved_blockers", lambda project_id: {"project_id": project_id, "reopened": []})
+    monkeypatch.setattr(factory_pg, "status", lambda project_id=None: {"projects": [project], "tasks": tasks, "task_runs": []})
+    monkeypatch.setattr(factory_pg, "classify_factory_blockers", lambda *_, **__: [])
+    monkeypatch.setattr(factory_pg, "record_factory_blocker_actions", lambda *_, **__: [])
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_project_docs_notion_preflight", lambda *_, **__: (False, True, False, False))
+    monkeypatch.setattr(
+        factory_pg,
+        "_validation_task_readiness_findings",
+        lambda project_id: ["validation task demo-alr-063-security-review is not complete; status=todo"],
+    )
+
+    def rows(sql_text, *, user=None, **_):
+        fake_sql.statements.append(sql_text)
+        if "FROM factory.projects p" in sql_text:
+            return [{"project_id": "demo"}]
+        if "t.status='review_ready'" in sql_text:
+            return []
+        if "status IN ('todo', 'ready')" in sql_text:
+            return [product, recovery]
+        return []
+
+    def statement_one(sql_text, *, user=None, **_):
+        fake_sql.statements.append(sql_text)
+        if "SET status='claimed'" in sql_text and recovery["task_id"] in sql_text:
+            return {**recovery, "status": "claimed"}
+        if "SET status='claimed'" in sql_text and product["task_id"] in sql_text:
+            return {**product, "status": "claimed"}
+        return None
+
+    monkeypatch.setattr(fake_sql, "rows", rows)
+    monkeypatch.setattr(fake_sql, "statement_one", statement_one)
+
+    tick = factory_pg.force_tick("demo")
+
+    task_run_inserts = [statement for statement in fake_sql.statements if "INSERT INTO factory.task_runs" in statement]
+    assert len(task_run_inserts) == 1
+    assert tick["claimed"] is not None
+    assert tick["claimed"]["task"]["task_id"] == recovery["task_id"]
+    joined = "\n".join(fake_sql.statements)
+    assert f"Task {recovery['task_id']} claimed" in joined
+    assert f"Task {product['task_id']} claimed" not in joined
+    assert "dispatch_preflight_denied" not in joined
+
+    fail_closed_cases = [
+        {
+            "task_id": "demo-alpha-ledger-product",
+            "phase": "g1_recovery",
+            "title": "G1 recovery for Alpha Ledger product dispatch",
+            "owner_profile": "codex-builder",
+            "metadata": {"g1_recovery": True},
+        },
+        {
+            "task_id": "demo-alr-product",
+            "phase": "documentation",
+            "title": "ALR-020 documentation recovery for product implementation",
+            "owner_profile": "codex-builder",
+            "metadata": {"documentation_recovery": True},
+        },
+        {
+            "task_id": "demo-qa-security",
+            "phase": "g1_recovery",
+            "title": "G1 recovery for QA/security validation dispatch",
+            "owner_profile": "codex-builder",
+            "metadata": {"g1_recovery": True},
+        },
+        {
+            "task_id": "demo-delivery",
+            "phase": "delivery",
+            "title": "Delivery handoff",
+            "owner_profile": "factory-reporter",
+            "metadata": {"documentation_recovery": True},
+        },
+        {
+            "task_id": "demo-deploy",
+            "phase": "g1_recovery",
+            "title": "G1 recovery for deploy activation",
+            "owner_profile": "codex-builder",
+            "metadata": {"g1_recovery": True},
+        },
+        {
+            "task_id": "demo-messaging",
+            "phase": "g1_recovery",
+            "title": "G1 recovery for messaging connector",
+            "owner_profile": "codex-builder",
+            "metadata": {"g1_recovery": True},
+        },
+        {
+            "task_id": "demo-external-runtime",
+            "phase": "g1_recovery",
+            "title": "G1 recovery for external-runtime dispatch",
+            "owner_profile": "codex-builder",
+            "metadata": {"g1_recovery": True},
+        },
+        {
+            "task_id": "demo-broker",
+            "phase": "g1_recovery",
+            "title": "G1 recovery for broker connector dispatch",
+            "owner_profile": "codex-builder",
+            "metadata": {"g1_recovery": True},
+        },
+        {
+            "task_id": "demo-trading-risk",
+            "phase": "g1_recovery",
+            "title": "G1 recovery for trading/risk workflow",
+            "owner_profile": "codex-builder",
+            "metadata": {"g1_recovery": True},
+        },
+        {
+            "task_id": "demo-paper-live",
+            "phase": "g1_recovery",
+            "title": "G1 recovery for paper/live activation",
+            "owner_profile": "codex-builder",
+            "metadata": {"g1_recovery": True},
+        },
+        {
+            "task_id": "demo-external-work",
+            "phase": "g1_recovery",
+            "title": "G1 recovery for external work dispatch",
+            "owner_profile": "codex-builder",
+            "metadata": {"g1_recovery": True},
+        },
+    ]
+    for candidate in fail_closed_cases:
+        assert factory_pg._dispatch_preflight_blockers(candidate, docs_ready=False, notion_ready=True) == [
+            "missing_or_unindexed_docs"
+        ]
+
+
 def test_claim_next_task_allows_metadata_documentation_recovery_past_validation_readiness(fake_sql, monkeypatch):
     product = {
         "project_id": "demo",
