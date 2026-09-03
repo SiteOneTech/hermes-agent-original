@@ -1146,10 +1146,18 @@ def test_dispatch_validation_readiness_does_not_deadlock_deploy_prerequisite():
         "description": "Close release only after validation evidence is complete.",
         "owner_profile": "factory-reporter",
     }
+    closing_report = {
+        "task_id": "demo-closing-report",
+        "phase": "reporting",
+        "title": "Closing/readiness evidence summary",
+        "description": "Summarize validation status for the human delivery handoff.",
+        "owner_profile": "factory-reporter",
+    }
 
     assert factory_pg._candidate_requires_validation_readiness_before_dispatch(deploy) is False
     assert factory_pg._candidate_requires_validation_readiness_before_dispatch(final_report) is True
     assert factory_pg._candidate_requires_validation_readiness_before_dispatch(release) is True
+    assert factory_pg._candidate_requires_validation_readiness_before_dispatch(closing_report) is True
 
 
 def test_validation_readiness_allows_dependency_ready_documentation_recovery_with_historical_finalized_wording(fake_sql, monkeypatch):
@@ -1343,6 +1351,66 @@ def test_explicit_g1_recovery_phase_bypasses_validation_deadlock_with_historical
     assert not any("unresolved_validation_tasks" in statement for statement in fake_sql.statements)
 
 
+def test_explicit_g1_recovery_phase_bypasses_validation_deadlock_with_guardrail_scope_prose(fake_sql, monkeypatch):
+    g1_recovery = {
+        "project_id": "demo",
+        "lane_id": "lane-docs",
+        "task_id": "demo-r2f4-terminal-run-reconcile",
+        "status": "todo",
+        "phase": "g1_recovery",
+        "priority": 123,
+        "title": "R2f4 — repair terminal run reconcile after resolved G1 recovery cancellation",
+        "description": (
+            "Bounded same-project Factory control-plane technical rework. "
+            "The runtime must finalize the orphan run or permit exactly one eligible same-project "
+            "G1 recovery replacement to claim/spawn while G1 is red. "
+            "All normal product, Alpha Ledger, ALR, QA/security, delivery, deploy, messaging, "
+            "external runtime, broker, trading/risk, paper/live candidates must remain denied. "
+            "Scope only Factory control-plane tests and project-local evidence. "
+            "PR-first Zeus-signed agent:zeus candidate and independent exact-SHA quality review; "
+            "no direct SQL, merge, deployment, credential change, primary-checkout mutation, "
+            "external dispatch, product change, or external runtime."
+        ),
+        "owner_profile": "codex-builder",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {},
+    }
+    unresolved_security_review = {
+        "project_id": "demo",
+        "lane_id": "lane-review",
+        "task_id": "demo-alr-063-security-review",
+        "status": "todo",
+        "phase": "security_review",
+        "priority": 62,
+        "title": "ALR-063 independent security and no-egress review",
+        "description": "Review implementation after the product increment exists.",
+        "owner_profile": "security-reviewer",
+        "engine": "zeus",
+        "dependencies": [],
+        "metadata": {},
+    }
+    tasks = [g1_recovery, unresolved_security_review]
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: {"project_id": project_id, "metadata": {}})
+    monkeypatch.setattr(
+        factory_pg,
+        "_validation_task_readiness_findings",
+        lambda project_id: ["validation task demo-alr-063-security-review is not complete; status=todo"],
+    )
+    fake_sql.rows_results = [[g1_recovery, unresolved_security_review]]
+
+    selected = factory_pg._next_runnable_task(
+        "demo",
+        dispatch_preflight=(False, True, False, False),
+    )
+
+    assert selected is not None
+    assert selected["task_id"] == g1_recovery["task_id"]
+    assert not any("unresolved_validation_tasks" in statement for statement in fake_sql.statements)
+
+
 def test_docs_red_preflight_keeps_product_alr_qa_security_runtime_reporting_external_fail_closed():
     cases = [
         {
@@ -1373,6 +1441,13 @@ def test_docs_red_preflight_keeps_product_alr_qa_security_runtime_reporting_exte
             "title": "G1 documentation recovery with external execution",
             "owner_profile": "codex-builder",
             "metadata": {"documentation_recovery": True, "external_execution": True},
+        },
+        {
+            "task_id": "demo-broker",
+            "phase": "g1_recovery",
+            "title": "G1 documentation recovery for broker connector dispatch",
+            "owner_profile": "codex-builder",
+            "metadata": {"g1_recovery": True},
         },
         {
             "task_id": "demo-report",
