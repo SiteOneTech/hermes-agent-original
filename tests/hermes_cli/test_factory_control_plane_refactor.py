@@ -557,6 +557,43 @@ def test_dispatch_validation_readiness_does_not_deadlock_deploy_prerequisite():
     assert factory_pg._candidate_requires_validation_readiness_before_dispatch(final_report) is True
 
 
+def test_validation_readiness_exempts_explicit_g1_recovery_from_terminal_word_prose():
+    recovery = {
+        "task_id": "demo-r2f4-g1-recovery",
+        "phase": "g1_recovery",
+        "title": "Repair terminal run reconciliation after resolved G1 recovery cancellation",
+        "description": (
+            "Bounded same-project Factory control-plane technical rework. "
+            "The worker may finalize only the G1 recovery path; delivery remains "
+            "PR-first and no product work is authorized."
+        ),
+        "owner_profile": "codex-builder",
+        "reviewer_profile": "quality-reviewer",
+    }
+
+    assert factory_pg._candidate_requires_validation_readiness_before_dispatch(recovery) is False
+
+
+def test_validation_readiness_exempts_structured_documentation_reconciliation_from_terminal_word_prose():
+    docs_recovery = {
+        "task_id": "demo-reconcile-unvalidated-required-docs",
+        "phase": "documentation",
+        "title": "Reconcile required Factory docs",
+        "description": (
+            "Documentation reconciliation may record finalized G1 evidence, but "
+            "it is not a final delivery report or product validation task."
+        ),
+        "owner_profile": "factory-reporter",
+        "reviewer_profile": "factory-orchestrator",
+        "metadata": {
+            "factory_reconciliation_task": True,
+            "reconciliation_anomaly": "unvalidated_required_docs",
+        },
+    }
+
+    assert factory_pg._candidate_requires_validation_readiness_before_dispatch(docs_recovery) is False
+
+
 def test_status_attaches_document_status(fake_sql, monkeypatch):
     fake_sql.rows_results = [
         [{"project_id": "demo", "status": "active", "repo_path": None, "metadata": {}}],

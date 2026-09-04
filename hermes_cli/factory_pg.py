@@ -3529,6 +3529,65 @@ def _candidate_dependencies_integrated(project_id: str, candidate: dict[str, Any
     return False
 
 
+_G1_DOCUMENTATION_RECOVERY_PHASES = {
+    "g1_recovery",
+    "g1_documentation_recovery",
+    "g1_docs_recovery",
+    "documentation_reconciliation",
+    "docs_reconciliation",
+}
+_G1_DOCUMENTATION_RECOVERY_METADATA_VALUES = _G1_DOCUMENTATION_RECOVERY_PHASES | {
+    "documentation_recovery",
+    "docs_recovery",
+}
+_G1_DOCUMENTATION_RECOVERY_ANOMALIES = {
+    "missing_project_artifact_dir",
+    "missing_required_docs",
+    "docs_not_indexed",
+    "unvalidated_required_docs",
+    "uncommitted_project_artifacts",
+}
+
+
+def _metadata_string(metadata: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip().lower().replace("-", "_")
+    return ""
+
+
+def _has_explicit_g1_or_documentation_recovery_scope(candidate: dict[str, Any]) -> bool:
+    """Return True only for structured G1/docs recovery routing scope.
+
+    Validation-readiness protects final delivery/reporting from unresolved QA,
+    quality, and security rows.  It must not also become a prose trap for the
+    control-plane task that repairs red G1 itself.  This predicate intentionally
+    ignores title/description text: only phase and explicit metadata can identify
+    the narrow recovery path.
+    """
+
+    phase = str(candidate.get("phase") or "").strip().lower().replace("-", "_")
+    if phase in _G1_DOCUMENTATION_RECOVERY_PHASES:
+        return True
+
+    metadata = _metadata(candidate)
+    scope = _metadata_string(
+        metadata,
+        "factory_recovery_scope",
+        "recovery_scope",
+        "dispatch_recovery_scope",
+        "g1_recovery_scope",
+    )
+    if scope in _G1_DOCUMENTATION_RECOVERY_METADATA_VALUES:
+        return True
+
+    if phase not in {"documentation", "docs"}:
+        return False
+    anomaly = _metadata_string(metadata, "reconciliation_anomaly", "factory_reconciliation_anomaly")
+    return metadata.get("factory_reconciliation_task") is True and anomaly in _G1_DOCUMENTATION_RECOVERY_ANOMALIES
+
+
 def _candidate_requires_validation_readiness_before_dispatch(candidate: dict[str, Any]) -> bool:
     """Return True when a candidate must wait for QA/security validation tasks.
 
@@ -3539,6 +3598,8 @@ def _candidate_requires_validation_readiness_before_dispatch(candidate: dict[str
     """
 
     if _is_validation_task(candidate):
+        return False
+    if _has_explicit_g1_or_documentation_recovery_scope(candidate):
         return False
     phase = str(candidate.get("phase") or "").lower().replace("-", "_")
     text = _task_text(candidate)
