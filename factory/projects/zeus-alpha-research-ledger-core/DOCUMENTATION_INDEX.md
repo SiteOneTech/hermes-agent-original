@@ -34,6 +34,7 @@ Canonical G1 pack for the **private Zeus-side implementation** succeeding `zeus-
 - `REQUIREMENTS_TRACEABILITY.md` maps requirements to tasks/tests/reviews.
 - `DATABASE_AND_RUNTIME_CONTRACT.md` is binding for exact DB, runtime, no-egress and scheduler implementation behavior.
 - `G1_REVIEW.md` records independent review findings/remediation.
+- `R2F6_REPAIR_G1_DOCS_RECOVERY_PREFLIGHT.md` records the bounded Factory control-plane repair evidence for the G1/docs recovery candidate preflight classifier.
 
 ## Status semantics
 - `validated: yes` means the implementation-planner/local worker confirmed the file exists, is tracked, is indexed where required, and is internally consistent with this G1 contract.
