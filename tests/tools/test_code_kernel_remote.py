@@ -12,6 +12,7 @@ import json
 import os
 import sys
 import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -19,6 +20,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from tools.code_kernel_remote import (
     _REMOTE_KERNELS,
+    _REMOTE_KERNELS_LOCK,
     RemoteKernel,
     execute_in_remote_kernel,
     shutdown_all_remote_kernels,
@@ -317,6 +319,180 @@ class TestOwnershipIsolation(RemoteKernelBase):
 
         self.assertNotIn("owner-a", {key[0] for key in _REMOTE_KERNELS})
         self.assertIn("owner-b", {key[0] for key in _REMOTE_KERNELS})
+
+
+class TestIdleReapAndCapEviction(RemoteKernelBase):
+    """Unlike local session kernels, remote kernels had no idle-reap or
+    process-wide cap: _REMOTE_KERNELS grew one entry per distinct
+    (owner, env_type, task_env_id) that was never revisited, for the life
+    of the gateway process."""
+
+    def test_idle_expired_kernel_is_reaped_on_next_call(self):
+        env = ScriptedEnv(_spawn_ok_handlers([_cell(), _cell()]))
+        execute_in_remote_kernel(
+            "print(1)", env=env, env_type="ssh", task_env_id="stale",
+            sandbox_tools=frozenset(), timeout=10, max_tool_calls=5,
+            reset=False, idle_exit=1800,
+        )
+        self.assertEqual(len(_REMOTE_KERNELS), 1)
+        # Backdate the kernel's last_used past the idle window — simulates
+        # a key that is never revisited again.
+        for kernel in _REMOTE_KERNELS.values():
+            kernel.last_used -= 2000
+        # A call for a DIFFERENT key must reap the stale entry on entry,
+        # without ever touching or reviving it.
+        execute_in_remote_kernel(
+            "print(1)", env=env, env_type="ssh", task_env_id="fresh",
+            sandbox_tools=frozenset(), timeout=10, max_tool_calls=5,
+            reset=False, idle_exit=1800,
+        )
+        owners = {key[0] for key in _REMOTE_KERNELS}
+        self.assertNotIn("stale", owners)
+        self.assertIn("fresh", owners)
+
+    def test_over_cap_evicts_least_recently_used(self):
+        with patch("tools.code_kernel._lifecycle_limits", return_value=(2, 1800)):
+            env = ScriptedEnv(_spawn_ok_handlers([_cell() for _ in range(10)]))
+            for i in range(3):
+                execute_in_remote_kernel(
+                    "print(1)", env=env, env_type="ssh", task_env_id=f"owner-{i}",
+                    sandbox_tools=frozenset(), timeout=10, max_tool_calls=5,
+                    reset=False, idle_exit=1800,
+                )
+            self.assertEqual(len(_REMOTE_KERNELS), 2)
+            owners = {key[0] for key in _REMOTE_KERNELS}
+            self.assertNotIn("owner-0", owners)
+            self.assertIn("owner-1", owners)
+            self.assertIn("owner-2", owners)
+
+    def test_eviction_skips_kernels_with_a_running_cell(self):
+        """Cap eviction must never kill a kernel mid-cell (the local-kernel
+        race from hermes-agent#101861): a busy kernel stays put and a
+        settled one goes instead, even if the busy one is older."""
+        import threading
+
+        gate = threading.Event()
+        cell_is_running = threading.Event()
+
+        def slow_cat(command):
+            cell_is_running.set()
+            gate.wait(10)
+            return {"output": json.dumps(_cell()), "returncode": 0}
+
+        busy_env = ScriptedEnv([
+            ("nohup", lambda c: {"output": "PID:4242\n", "returncode": 0}),
+            ("kill -0", lambda c: {"output": "ALIVE\n", "returncode": 0}),
+            ("cat ", slow_cat),
+        ])
+        with patch("tools.code_kernel._lifecycle_limits", return_value=(1, 1800)):
+            worker = threading.Thread(target=_run, args=(busy_env,), kwargs={"task": "busy"})
+            worker.start()
+            self.assertTrue(cell_is_running.wait(2))
+            with _REMOTE_KERNELS_LOCK:
+                self.assertTrue(any(k.attached for k in _REMOTE_KERNELS.values()))
+            env = ScriptedEnv(_spawn_ok_handlers([_cell()]))
+            _run(env, task="settled")
+            owners = {key[0] for key in _REMOTE_KERNELS}
+            self.assertIn("busy", owners)
+            gate.set()
+            worker.join(10)
+        self.assertFalse(any("kill 4242" in c for c in busy_env.commands))
+
+    def test_new_kernel_is_attached_before_another_owner_can_evict_it(self):
+        """A freshly spawned kernel must not be evictable before its first
+        cell is attached by the owner that created it."""
+        busy_spawned = threading.Event()
+        busy_paused = threading.Event()
+        settled_reached_eviction = threading.Event()
+        release_busy = threading.Event()
+        busy_cell_started = threading.Event()
+        finish_busy_cell = threading.Event()
+        killed = []
+        real_monotonic = time.monotonic
+        locks = {}
+        lifecycle_calls = {"settled": 0}
+
+        busy_kernel = RemoteKernel(
+            env=ScriptedEnv([]), env_type="ssh", kernel_dir="/tmp/busy",
+            pid="101", rpc_token="busy", owner="busy", created=0, last_used=0,
+        )
+        settled_kernel = RemoteKernel(
+            env=ScriptedEnv([]), env_type="ssh", kernel_dir="/tmp/settled",
+            pid="202", rpc_token="settled", owner="settled", created=0, last_used=0,
+        )
+
+        def _spawn(_env, _env_type, owner, task_env_id, _tools, *, idle_exit):
+            if task_env_id == "busy":
+                busy_spawned.set()
+                return busy_kernel
+            return settled_kernel
+
+        def _clock():
+            if (
+                threading.current_thread().name == "busy-owner"
+                and busy_spawned.is_set()
+                and not busy_paused.is_set()
+            ):
+                busy_paused.set()
+                release_busy.wait(3)
+            return real_monotonic()
+
+        def _limits():
+            if threading.current_thread().name == "settled-owner":
+                lifecycle_calls["settled"] += 1
+                if lifecycle_calls["settled"] == 2:
+                    settled_reached_eviction.set()
+            return 1, 1800
+
+        def _release_after_old_interleaving():
+            # Before the fix, settled reaches eviction while busy is published
+            # but unattached. After the fix it waits on the registry lock until
+            # this watchdog releases busy, which is then non-evictable.
+            settled_reached_eviction.wait(1)
+            time.sleep(0.1)
+            release_busy.set()
+
+        def _run_cell(kernel, *_args, **_kwargs):
+            if kernel is busy_kernel:
+                busy_cell_started.set()
+                finish_busy_cell.wait(3)
+            return {"status": "success"}
+
+        results = []
+        with (
+            patch("tools.code_kernel._resolve_owner", side_effect=lambda task: task),
+            patch("tools.code_kernel._lifecycle_limits", side_effect=_limits),
+            patch("tools.code_kernel_remote._owner_lock", side_effect=lambda key: locks.setdefault(key, threading.Lock())),
+            patch("tools.code_kernel_remote._spawn_remote_kernel", side_effect=_spawn),
+            patch("tools.code_kernel_remote._run_remote_cell", side_effect=_run_cell),
+            patch("tools.code_kernel_remote._kill", side_effect=lambda kernel: killed.append(kernel.pid)),
+            patch("tools.code_kernel_remote.time.monotonic", side_effect=_clock),
+        ):
+            busy_worker = threading.Thread(
+                target=lambda: results.append(_run(ScriptedEnv([]), task="busy")),
+                name="busy-owner",
+            )
+            settled_worker = threading.Thread(
+                target=lambda: results.append(_run(ScriptedEnv([]), task="settled")),
+                name="settled-owner",
+            )
+            releaser = threading.Thread(target=_release_after_old_interleaving)
+            busy_worker.start()
+            self.assertTrue(busy_paused.wait(2))
+            settled_worker.start()
+            releaser.start()
+            settled_worker.join(5)
+            self.assertFalse(settled_worker.is_alive())
+            self.assertTrue(busy_cell_started.wait(2))
+            finish_busy_cell.set()
+            busy_worker.join(5)
+            releaser.join(2)
+
+        self.assertFalse(busy_worker.is_alive())
+        self.assertFalse(settled_worker.is_alive())
+        self.assertNotIn("101", killed)
+        self.assertEqual({key[0] for key in _REMOTE_KERNELS}, {"busy", "settled"})
+        self.assertEqual([result["status"] for result in results], ["success", "success"])
 
 
 class TestDispatchIntegration(unittest.TestCase):

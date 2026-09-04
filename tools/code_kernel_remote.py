@@ -165,6 +165,10 @@ class RemoteKernel:
     last_used: float = field(default_factory=time.monotonic)
     execution_count: int = 0
     cell_seq: int = 0
+    # Cells currently running on this kernel. Reap/evict skip attached
+    # kernels: killing one mid-cell tears the runner out from under a live
+    # poll loop (same guard as tools.code_kernel, hermes-agent#101861).
+    attached: int = 0
 
 
 def _kernel_key(owner: str, env_type: str, task_env_id: str) -> Tuple:
@@ -173,27 +177,6 @@ def _kernel_key(owner: str, env_type: str, task_env_id: str) -> Tuple:
 
 def _owner_lock(key: Tuple) -> threading.Lock:
     return _REMOTE_OWNER_LOCKS[hash(key) % len(_REMOTE_OWNER_LOCKS)]
-
-
-def _reap_idle_unlocked(idle_timeout: int) -> list[RemoteKernel]:
-    now = time.monotonic()
-    doomed = [
-        key
-        for key, kernel in _REMOTE_KERNELS.items()
-        if now - kernel.last_used > idle_timeout
-    ]
-    return [_REMOTE_KERNELS.pop(key) for key in doomed]
-
-
-def _evict_over_cap_unlocked(keep: Tuple, cap: int) -> list[RemoteKernel]:
-    if len(_REMOTE_KERNELS) <= cap:
-        return []
-    by_age = sorted(
-        (key for key in _REMOTE_KERNELS if key != keep),
-        key=lambda candidate: _REMOTE_KERNELS[candidate].last_used,
-    )
-    doomed = by_age[: len(_REMOTE_KERNELS) - cap]
-    return [_REMOTE_KERNELS.pop(key) for key in doomed]
 
 
 def _is_alive(kernel: RemoteKernel) -> bool:
@@ -281,6 +264,44 @@ def shutdown_remote_kernels_for_owner(owner: str) -> None:
         kernels = [_REMOTE_KERNELS.pop(k) for k in doomed]
     for kernel in kernels:
         _kill(kernel)
+
+
+def _reap_unlocked(idle_timeout: int) -> List["RemoteKernel"]:
+    """Pop idle-expired remote kernels; caller tears them down outside the lock.
+
+    Mirrors tools.code_kernel._reap_unlocked. The remote runner itself
+    self-exits after the same idle window (REMOTE_KERNEL_RUNNER_SOURCE's
+    IDLE_EXIT_SECONDS), so this only needs to clear the HOST-side
+    bookkeeping entry — without it, _REMOTE_KERNELS grows one entry per
+    distinct (owner, env_type, task_env_id) that is never revisited, for
+    the life of the gateway process.
+    """
+    now = time.monotonic()
+    doomed = [
+        key
+        for key, kernel in _REMOTE_KERNELS.items()
+        if kernel.attached == 0 and now - kernel.last_used > idle_timeout
+    ]
+    return [_REMOTE_KERNELS.pop(key) for key in doomed]
+
+
+def _evict_over_cap_unlocked(keep: Tuple) -> List["RemoteKernel"]:
+    """Pop least-recently-used remote kernels beyond the process-wide cap.
+
+    Mirrors tools.code_kernel._evict_over_cap_unlocked, reusing the same
+    max_session_kernels config as an independent bound on _REMOTE_KERNELS.
+    """
+    from tools.code_kernel import _lifecycle_limits
+
+    cap, _ = _lifecycle_limits()
+    if len(_REMOTE_KERNELS) <= cap:
+        return []
+    by_age = sorted(
+        (key for key in _REMOTE_KERNELS if key != keep and _REMOTE_KERNELS[key].attached == 0),
+        key=lambda key: _REMOTE_KERNELS[key].last_used,
+    )
+    doomed = by_age[: len(_REMOTE_KERNELS) - cap]
+    return [_REMOTE_KERNELS.pop(key) for key in doomed]
 
 
 atexit.register(shutdown_all_remote_kernels)
@@ -436,12 +457,7 @@ def _execute_in_remote_kernel_locked(
 ) -> Optional[Dict[str, Any]]:
     """Execute while the owner-key lock is held for the full cell lifecycle."""
     from tools.code_kernel import _lifecycle_limits
-    from tools.code_execution_tool import (
-        _rpc_poll_loop,
-        _ship_file_to_remote,
-    )
     from tools.interrupt import is_interrupted
-    from tools.thread_context import propagate_context_to_thread
 
     state_lost = False
     state_reset = False
@@ -450,7 +466,7 @@ def _execute_in_remote_kernel_locked(
 
     with _REMOTE_KERNELS_LOCK:
         had_current = key in _REMOTE_KERNELS
-        expired = _reap_idle_unlocked(idle_exit)
+        expired = _reap_unlocked(idle_exit)
         kernel = _REMOTE_KERNELS.get(key)
     if had_current and kernel is None:
         state_lost = True
@@ -483,6 +499,7 @@ def _execute_in_remote_kernel_locked(
             return _interrupted_result(reused=True)
 
     reused = kernel is not None
+    spawned = False
     if kernel is None:
         kernel = _spawn_remote_kernel(
             env, env_type, owner, task_env_id, sandbox_tools,
@@ -490,14 +507,53 @@ def _execute_in_remote_kernel_locked(
         )
         if kernel is None:
             return None  # fail open to per-call
-        with _REMOTE_KERNELS_LOCK:
-            _REMOTE_KERNELS[key] = kernel
+        spawned = True
 
-    kernel.last_used = time.monotonic()
+    # A newly created kernel is published and attached under one registry
+    # lock. Another owner can enforce the process-wide cap concurrently, so
+    # publishing it first would expose a brief but real eviction window before
+    # its first cell starts.
     with _REMOTE_KERNELS_LOCK:
-        evicted = _evict_over_cap_unlocked(key, cap)
+        kernel.attached += 1
+        if spawned:
+            _REMOTE_KERNELS[key] = kernel
+        kernel.last_used = time.monotonic()
+        evicted = _evict_over_cap_unlocked(keep=key)
     for doomed in evicted:
         _kill(doomed)
+    try:
+        return _run_remote_cell(
+            kernel, key, code, env=env, task_env_id=task_env_id,
+            sandbox_tools=sandbox_tools, timeout=timeout,
+            max_tool_calls=max_tool_calls, reused=reused,
+            state_reset=state_reset, state_lost=state_lost,
+        )
+    finally:
+        with _REMOTE_KERNELS_LOCK:
+            kernel.attached -= 1
+            kernel.last_used = time.monotonic()
+
+
+def _run_remote_cell(
+    kernel: RemoteKernel,
+    key: Tuple,
+    code: str,
+    *,
+    env,
+    task_env_id: str,
+    sandbox_tools: frozenset,
+    timeout: int,
+    max_tool_calls: int,
+    reused: bool,
+    state_reset: bool,
+    state_lost: bool,
+) -> Dict[str, Any]:
+    from tools.code_execution_tool import (
+        _rpc_poll_loop,
+        _ship_file_to_remote,
+    )
+    from tools.interrupt import is_interrupted
+    from tools.thread_context import propagate_context_to_thread
     kernel.cell_seq += 1
     seq = f"{kernel.cell_seq:06d}"
     q_cells = shlex.quote(f"{kernel.kernel_dir}/cells")

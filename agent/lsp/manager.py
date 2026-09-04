@@ -12,7 +12,10 @@ Design choices:
 
 - One client per ``(server_id, workspace_root)`` key.  Lazy spawn:
   the first request for a key spawns the client; subsequent requests
-  re-use it.
+  re-use it.  Servers flagged ``multi_root`` (pyright) get ONE client
+  per ``server_id``; further roots — typically sibling git worktrees —
+  are attached to the running process via
+  ``workspace/didChangeWorkspaceFolders`` instead of a new spawn.
 
 - A **broken-set** records ``(server_id, workspace_root)`` pairs that
   failed to spawn or initialize.  These are never retried for the
@@ -176,6 +179,10 @@ class LSPService:
         self._broken: set = set()
         self._spawning: Dict[Tuple[str, str], asyncio.Future] = {}
         self._last_used: Dict[Tuple[str, str], float] = {}
+        # Multi-root clients share one process key, but each attached root has
+        # its own activity horizon so an active worktree cannot pin stale
+        # sibling worktrees in a server's watcher/index set forever.
+        self._root_last_used: Dict[Tuple[str, str], float] = {}
         self._state_lock = threading.Lock()
         self._idle_reaper_task: Optional[asyncio.Task] = None
 
@@ -448,9 +455,13 @@ class LSPService:
         # cancelled future never reached the broken-set add inside
         # ``_get_or_spawn`` so the client may still be hanging in
         # ``_clients`` with a half-initialized state.
+        ckey = _client_key(srv, per_server_root)
         with self._state_lock:
-            client = self._clients.pop(key, None)
-            self._last_used.pop(key, None)
+            client = self._clients.pop(ckey, None)
+            self._last_used.pop(ckey, None)
+            if client is not None:
+                for root in client.workspace_folders:
+                    self._root_last_used.pop((client.server_id, root), None)
         if client is not None:
             try:
                 # Fire-and-forget shutdown — give it a second to cleanup,
@@ -527,7 +538,7 @@ class LSPService:
         if not (ws and gated and srv):
             return []
         with self._state_lock:
-            client = self._clients.get((srv.server_id, ws))
+            client = self._clients.get(_client_key(srv, ws))
         if client is None:
             return []
         return list(client.diagnostics_for(file_path, fresh_only=True))
@@ -550,21 +561,27 @@ class LSPService:
             )
             return None  # exclude marker hit, server gated off
 
-        key = (srv.server_id, per_server_root)
-        if key in self._broken:
+        if (srv.server_id, per_server_root) in self._broken:
             return None
+        key = _client_key(srv, per_server_root)
         with self._state_lock:
             client = self._clients.get(key)
             if client is not None and client.is_running:
                 self._last_used[key] = time.time()
                 eventlog.log_active(srv.server_id, per_server_root)
-                return client
+            else:
+                client = None
             spawning = self._spawning.get(key)
-        if spawning is not None:
+        if client is None and spawning is not None:
             try:
-                return await spawning
+                client = await spawning
             except Exception:  # noqa: BLE001
                 return None
+        if client is not None:
+            if srv.multi_root:
+                await client.add_workspace_folder(per_server_root)
+            self._touch(client, root=per_server_root)
+            return client
 
         # Begin spawn
         loop = asyncio.get_running_loop()
@@ -586,7 +603,7 @@ class LSPService:
                 # or install attempt failed).  Surface this once via
                 # the structured logger so the user can act on it.
                 eventlog.log_server_unavailable(srv.server_id, srv.server_id)
-                self._broken.add(key)
+                self._broken.add((srv.server_id, per_server_root))
                 spawn_future.set_result(None)
                 return None
             client = LSPClient(
@@ -602,12 +619,14 @@ class LSPService:
                 await client.start()
             except Exception as e:  # noqa: BLE001
                 eventlog.log_spawn_failed(srv.server_id, per_server_root, e)
-                self._broken.add(key)
+                self._broken.add((srv.server_id, per_server_root))
                 spawn_future.set_result(None)
                 return None
             with self._state_lock:
                 self._clients[key] = client
-                self._last_used[key] = time.time()
+                now = time.time()
+                self._last_used[key] = now
+                self._root_last_used[(srv.server_id, per_server_root)] = now
             eventlog.log_active(srv.server_id, per_server_root)
             spawn_future.set_result(client)
             return client
@@ -618,18 +637,19 @@ class LSPService:
     async def _start_idle_reaper(self) -> None:
         self._idle_reaper_task = asyncio.create_task(self._idle_reaper_loop())
 
-    def _touch(self, client: LSPClient) -> None:
-        """Refresh the last-used timestamp for a client we just used.
+    def _touch(self, client: LSPClient, *, root: Optional[str] = None) -> None:
+        """Refresh client activity and, for multi-root servers, root activity.
 
-        Guarded on membership so a reaped-mid-operation client can't
-        resurrect an orphan ``_last_used`` entry after the reaper popped
-        the key.  All writers and the reaper run on the background loop
-        thread; the lock keeps this consistent with the reader anyway.
+        ``root`` is resolved before the client cache lookup, so it remains the
+        concrete project root even when several roots share one process key.
         """
-        key = (client.server_id, client.workspace_root)
+        now = time.time()
         with self._state_lock:
-            if key in self._clients:
-                self._last_used[key] = time.time()
+            for key, c in self._clients.items():
+                if c is client:
+                    self._last_used[key] = now
+            if root is not None:
+                self._root_last_used[(client.server_id, root)] = now
 
     async def _idle_reaper_loop(self) -> None:
         interval = min(60.0, self._idle_timeout)
@@ -656,6 +676,36 @@ class LSPService:
             clients = [self._clients.pop(key) for key in idle_keys]
             for key in idle_keys:
                 self._last_used.pop(key, None)
+            for client in clients:
+                for root in client.workspace_folders:
+                    self._root_last_used.pop((client.server_id, root), None)
+
+            # A multi-root process can remain hot because one worktree is
+            # active while another was deleted or abandoned. Retire only idle
+            # secondary roots; the initialization root remains as the stable
+            # rootUri anchor for servers that require one.
+            stale_roots = []
+            for key, client in self._clients.items():
+                if key[1] != "":
+                    continue
+                for root in client.workspace_folders:
+                    if root == client.workspace_root:
+                        continue
+                    root_key = (client.server_id, root)
+                    if self._root_last_used.get(root_key, 0) < cutoff:
+                        self._root_last_used.pop(root_key, None)
+                        stale_roots.append((client, root))
+        if stale_roots:
+            removals = await asyncio.gather(
+                *(client.remove_workspace_folder(root) for client, root in stale_roots),
+                return_exceptions=True,
+            )
+            for (client, root), result in zip(stale_roots, removals):
+                if isinstance(result, Exception):
+                    logger.debug(
+                        "LSP workspace-folder removal failed for %s/%s: %s",
+                        client.server_id, root, result,
+                    )
         if clients:
             eventlog.log_reaped(
                 [(c.server_id, c.workspace_root) for c in clients],
@@ -677,6 +727,7 @@ class LSPService:
             self._clients.clear()
             self._broken.clear()
             self._last_used.clear()
+            self._root_last_used.clear()
         await asyncio.gather(
             *(c.shutdown() for c in clients),
             return_exceptions=True,
@@ -691,12 +742,13 @@ class LSPService:
         with self._state_lock:
             clients = [
                 {
-                    "server_id": k[0],
-                    "workspace_root": k[1],
+                    "server_id": c.server_id,
+                    "workspace_root": c.workspace_root,
+                    "workspace_folders": list(c.workspace_folders),
                     "state": c.state,
                     "running": c.is_running,
                 }
-                for k, c in self._clients.items()
+                for c in self._clients.values()
             ]
             broken = list(self._broken)
         return {
@@ -708,6 +760,15 @@ class LSPService:
             "broken": broken,
             "disabled_servers": sorted(self._disabled_servers),
         }
+
+
+def _client_key(srv, root: str) -> Tuple[str, str]:
+    """Cache key for the client serving ``root``.
+
+    Multi-root servers share one process per ``server_id``; everything
+    else is keyed per resolved project root.
+    """
+    return (srv.server_id, "" if srv.multi_root else root)
 
 
 def _diag_key(d: Dict[str, Any]) -> str:
