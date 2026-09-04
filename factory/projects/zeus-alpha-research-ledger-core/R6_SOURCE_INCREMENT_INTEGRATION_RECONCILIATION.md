@@ -5,15 +5,28 @@ phase: delivery
 status: validated
 validated: yes
 reviewed: pending
-origin_main_before_current_rerun: d818fb4a47a532f605c5af1fc7dcddce5d013080
-previous_run_id: run-1788403567-0d8e963b
-current_run_id: run-1788529083-85c1dcf2
+origin_main_before_current_rerun: bf4ca9145c850522e73ba4f1a7907fcb00abc481
+previous_run_id: run-1788529083-85c1dcf2
+current_run_id: run-1788531342-7df4c9b5
 ---
 
 # R6 source increment integration reconciliation
 
 ## Scope
 This artifact records the R6 reconciliation for the canonical `source_increment_not_integrated` anomaly. It is evidence-only for Factory source containment; it does not authorize deploy, runtime propagation, direct SQL, credential changes, product dispatch, trading/paper/live actions, or primary checkout mutation.
+
+## R6 rerun — 2026-09-04T14:21:21Z
+Current run `run-1788531342-7df4c9b5` re-inspected Agent Core Factory status from the assigned worktree after the reconciler reopened the same recurring `source_increment_not_integrated` projection:
+
+- Assigned worktree: `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/reconcile-source_increment_not_integrated`, branch `factory/zeus-alpha-research-ledger-core/reconcile-source_increment_not_integrated`.
+- Worktree/base synchronization: `git fetch origin main --prune` exited `0`; before this refreshed evidence edit, assigned branch `HEAD`, `origin/main`, merge-base, and GitHub API `refs/heads/main` all resolved to `bf4ca9145c850522e73ba4f1a7907fcb00abc481`. A separate unauthenticated `git ls-remote origin refs/heads/main` readback was rate-limited by GitHub HTTP `429` and is not used as positive evidence.
+- Sanctioned Factory status input: `/tmp/r6-status-initial-run-1788531342.json` (`5103879` bytes, `db_backend=agent_core_postgres`, `database=zeus_agent`, `factory_cli_source_root` and `factory_status_source_root` equal the assigned worktree, `factory_status_delegated=false`).
+- Current Agent Core project metadata still reports `reconciliation_anomalies=['source_increment_not_integrated']`, `reconciliation_required=True`, `reconciliation_projection_source=current_document_status`, `factory_auto_integration_forbidden=True`, and the reopened R6 task is `running` with `reopen_reason=canonical_anomaly_recurred`; its persisted finding lists `76` blocker rows.
+- Current project document rows are not the source of the recurrence: sanctioned status readback shows `22` document rows, `14/14` `g1_required` rows, `0` blocking rows, `readiness_source=configured_base_ref`, and `base_commit=bf4ca9145c850522e73ba4f1a7907fcb00abc481`.
+- Positive terminal source-bearing task audit output is `/tmp/r6-source-increment-audit-run-1788531342.tsv`; exact summary: `76` positive terminal source-bearing tasks, `76/76` commit objects present, `76/76` contained in `origin/main`, `76/76` `increment_base_commit_after` commits present, `76/76` source→base-after ancestry chains valid, `76/76` base-after→origin/main ancestry chains valid, `76/76` integration metadata valid, `0` failures, and `0` accepted source-containment waivers used. Summary output is `/tmp/r6-source-increment-audit-run-1788531342.summary.txt`.
+- Focused verification: `python3 factory/projects/zeus-alpha-research-ledger-core/validate_r2cy_r6_g1_readback.py /tmp/r6-status-initial-run-1788531342.json` passed; `HERMES_PYTHON=/home/jean/Projects/hermes-agent-original/venv/bin/python3 scripts/run_tests.sh tests/hermes_cli/test_factory_increment_integration.py -k source_increment` passed (`1` selected test). The first wrapper attempt without `HERMES_PYTHON` failed only because the assigned worktree has no local pytest venv; no dependency was installed.
+- Source-containment verdict: the current recurrence is still control-plane/projection drift, not missing Git containment; every audited immutable source commit is already an ancestor of current `origin/main` `bf4ca9145c850522e73ba4f1a7907fcb00abc481`.
+- The final immutable branch commit and resulting `origin/main` commit must be recorded in Factory gate notes and the worker final response after this refreshed evidence commit is pushed. A commit cannot self-embed its own final SHA before it exists.
 
 ## R6 rerun — 2026-09-04T13:38:04Z
 Current run `run-1788529083-85c1dcf2` re-inspected Agent Core Factory status from the assigned worktree after the task was reopened again by the recurring `source_increment_not_integrated` projection:
