@@ -532,7 +532,7 @@ def test_agent_created_skips_archive_and_hub_dirs(skills_home):
 
 def test_agent_created_excludes_external_dir_even_with_stale_agent_record(skills_home, monkeypatch):
     from tools.skill_usage import (
-        agent_created_report,
+        curated_report,
         is_agent_created,
         list_agent_created_skill_names,
         save_usage,
@@ -549,7 +549,7 @@ def test_agent_created_excludes_external_dir_even_with_stale_agent_record(skills
     )
 
     assert "external-skill" not in list_agent_created_skill_names()
-    assert "external-skill" not in {r["name"] for r in agent_created_report()}
+    assert "external-skill" not in {r["name"] for r in curated_report()}
     assert is_agent_created("external-skill") is False
 
 
@@ -757,14 +757,14 @@ def test_restore_prefers_timestamped_dupe_over_unrelated_sibling(skills_home):
 # ---------------------------------------------------------------------------
 
 def test_agent_created_report_includes_marked_skills_with_defaults(skills_home):
-    from tools.skill_usage import agent_created_report, bump_view, mark_agent_created
+    from tools.skill_usage import bump_view, curated_report, mark_agent_created
     skills_dir = skills_home / "skills"
     _write_skill(skills_dir, "a")
     _write_skill(skills_dir, "b")
     mark_agent_created("a")
     mark_agent_created("b")
     bump_view("a")
-    rows = agent_created_report()
+    rows = curated_report()
     by_name = {r["name"]: r for r in rows}
     assert "a" in by_name and "b" in by_name
     assert by_name["a"]["view_count"] == 1
@@ -774,18 +774,18 @@ def test_agent_created_report_includes_marked_skills_with_defaults(skills_home):
 
 
 def test_manual_skill_with_usage_is_not_curator_managed(skills_home):
-    from tools.skill_usage import agent_created_report, bump_view, list_agent_created_skill_names
+    from tools.skill_usage import bump_view, curated_report, list_agent_created_skill_names
     skills_dir = skills_home / "skills"
     _write_skill(skills_dir, "manual-skill")
 
     bump_view("manual-skill")
 
     assert "manual-skill" not in list_agent_created_skill_names()
-    assert "manual-skill" not in {r["name"] for r in agent_created_report()}
+    assert "manual-skill" not in {r["name"] for r in curated_report()}
 
 
 def test_agent_created_report_excludes_bundled_and_hub(skills_home):
-    from tools.skill_usage import agent_created_report, mark_agent_created
+    from tools.skill_usage import curated_report, mark_agent_created
     skills_dir = skills_home / "skills"
     _write_skill(skills_dir, "mine")
     _write_skill(skills_dir, "bundled")
@@ -797,7 +797,7 @@ def test_agent_created_report_excludes_bundled_and_hub(skills_home):
     (hub / "lock.json").write_text(
         json.dumps({"installed": {"hubbed": {}}}), encoding="utf-8",
     )
-    names = {r["name"] for r in agent_created_report()}
+    names = {r["name"] for r in curated_report()}
     assert "mine" in names
     assert "bundled" not in names
     assert "hubbed" not in names
@@ -808,19 +808,23 @@ def test_agent_created_report_derives_activity_from_view_and_patch(skills_home, 
 
     skills_dir = skills_home / "skills"
     _write_skill(skills_dir, "mine")
-    timestamps = iter([
-        "2026-04-30T10:00:00+00:00",
-        "2026-04-30T11:00:00+00:00",
-        "2026-04-30T12:00:00+00:00",
-        "2026-04-30T13:00:00+00:00",
-    ])
-    monkeypatch.setattr(skill_usage, "_now_iso", lambda: next(timestamps))
+    # A settable clock, not a fixed-length iterator: each mutation calls
+    # _now_iso() an implementation-defined number of times (record seeding
+    # backfills ``created_at`` too), so pinning "now" per step is the only
+    # seam that survives the real call pattern.
+    clock = {"now": "2026-04-30T10:00:00+00:00"}
+    monkeypatch.setattr(skill_usage, "_now_iso", lambda: clock["now"])
 
     skill_usage.mark_agent_created("mine")
+    clock["now"] = "2026-04-30T11:00:00+00:00"
     skill_usage.bump_view("mine")
+    clock["now"] = "2026-04-30T12:00:00+00:00"
     skill_usage.bump_patch("mine")
 
-    row = next(r for r in skill_usage.agent_created_report() if r["name"] == "mine")
+    # Reporting must derive activity from the persisted record only — a later
+    # "now" during backfill may not leak into the activity clock.
+    clock["now"] = "2026-04-30T13:00:00+00:00"
+    row = next(r for r in skill_usage.curated_report() if r["name"] == "mine")
     assert row["activity_count"] == 2
     assert row["last_activity_at"] == "2026-04-30T12:00:00+00:00"
 

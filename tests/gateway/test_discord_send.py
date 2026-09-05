@@ -47,6 +47,19 @@ _ensure_discord_mock()
 from plugins.platforms.discord.adapter import DiscordAdapter  # noqa: E402
 
 
+def _patch_discord_file(monkeypatch, discord_platform, factory):
+    """Inject the File constructor at the adapter's actual dependency seam.
+
+    The Discord package is optional in the hermetic test environment, so the
+    adapter may intentionally have ``discord is None`` at import time. The
+    attachment behavior is still unit-testable without the optional package.
+    """
+    if discord_platform.discord is None:
+        monkeypatch.setattr(discord_platform, "discord", SimpleNamespace(File=factory))
+    else:
+        monkeypatch.setattr(discord_platform.discord, "File", factory)
+
+
 @pytest.mark.asyncio
 async def test_send_rejects_whitespace_and_records_failed_final_reply(
     caplog, monkeypatch, tmp_path
@@ -295,7 +308,7 @@ async def test_send_video_uses_path_based_files_kwarg(tmp_path, monkeypatch):
             captured["fp"] = fp
             captured["filename"] = filename
 
-    monkeypatch.setattr(discord_platform.discord, "File", _FakeFile)
+    _patch_discord_file(monkeypatch, discord_platform, _FakeFile)
 
     adapter = DiscordAdapter(PlatformConfig(enabled=True, token="***"))
     sent_msg = SimpleNamespace(
@@ -332,9 +345,8 @@ async def test_send_video_fails_loud_when_message_has_no_attachments(tmp_path, m
     video = tmp_path / "clip.mp4"
     video.write_bytes(b"fake-mp4")
 
-    monkeypatch.setattr(
-        discord_platform.discord,
-        "File",
+    _patch_discord_file(
+        monkeypatch, discord_platform,
         lambda fp, filename=None, **kwargs: SimpleNamespace(fp=fp, filename=filename),
     )
 
@@ -385,9 +397,8 @@ async def test_send_file_attachment_forum_uses_files_kwarg(tmp_path, monkeypatch
     video = tmp_path / "clip.mp4"
     video.write_bytes(b"fake-mp4")
 
-    monkeypatch.setattr(
-        discord_platform.discord,
-        "File",
+    _patch_discord_file(
+        monkeypatch, discord_platform,
         lambda fp, filename=None, **kwargs: SimpleNamespace(fp=fp, filename=filename),
     )
 

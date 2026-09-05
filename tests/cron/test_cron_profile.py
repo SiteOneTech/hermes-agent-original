@@ -223,7 +223,8 @@ class TestRunJobProfileContext:
         monkeypatch.setattr(
             sched, "_build_job_prompt", lambda job, prerun_script=None, **_kwargs: "hi"
         )
-        monkeypatch.setattr(sched, "_resolve_origin", lambda job: None)
+        import cron.scheduler_delivery as sched_delivery
+        monkeypatch.setattr(sched_delivery, "_resolve_origin", lambda job: None)
         monkeypatch.setattr(sched, "_resolve_delivery_target", lambda job: None)
         monkeypatch.setattr(sched, "_resolve_cron_enabled_toolsets", lambda job, cfg: None)
         monkeypatch.setattr(sched, "_hermes_home", None)
@@ -461,3 +462,141 @@ class TestTickProfilePartition:
             assert seq_thread.startswith("cron-seq"), seq_thread
         par_thread = next(t for job_id, t in calls if job_id == "c")
         assert par_thread.startswith("cron-parallel"), par_thread
+
+
+@pytest.fixture()
+def routed_profile_homes(tmp_path, monkeypatch):
+    """Scheduler profile A (owns the cron store) plus profile B a job can route to.
+
+    Unlike ``isolated_cron_profile_home`` this deliberately leaves ``cron.jobs``' module constants
+    alone, so the store follows the ACTIVE Hermes home: a profile override leaking into a
+    persistence write would really move the write, which is what these tests pin.
+    """
+    root = tmp_path / "hermes-root"
+    (root / "cron").mkdir(parents=True)
+    (root / ".env").write_text(
+        "TELEGRAM_BOT_TOKEN=A-TOKEN\nTERMINAL_ENV=local\n", encoding="utf-8")
+    profile_home = root / "profiles" / "support"
+    profile_home.mkdir(parents=True)
+    (profile_home / ".env").write_text(
+        "TELEGRAM_BOT_TOKEN=B-TOKEN\nTERMINAL_ENV=docker\n", encoding="utf-8")
+
+    monkeypatch.setenv("HERMES_HOME", str(root))
+    monkeypatch.setattr("cron.scheduler._hermes_home", None)
+    return root, profile_home
+
+
+class TestRunOneJobRoutesExecutionAndDeliveryToJobProfile:
+    """A ``profile: B`` job scheduled by profile A must EXECUTE and DELIVER as B while its
+    persistence (job store, output, execution ledger) stays with A.
+
+    ``_run_one_job_body`` installs the secret/terminal scopes around ``run_job`` because they must
+    span delivery too — so building them from the scheduler's home ran the job with A's secrets and
+    terminal policy, and letting ``run_job``'s own profile context close before delivery sent B's
+    output through A's lane.
+    """
+
+    @staticmethod
+    def _observe(observed: dict, phase: str) -> None:
+        from agent.secret_scope import get_secret
+        from cron.jobs import _current_cron_store
+        from hermes_constants import get_hermes_home
+        from tools.terminal_scope import terminal_env
+
+        observed[f"{phase}_home"] = str(get_hermes_home())
+        observed[f"{phase}_token"] = get_secret("TELEGRAM_BOT_TOKEN")
+        observed[f"{phase}_terminal"] = terminal_env("TERMINAL_ENV")
+        observed[f"{phase}_store"] = str(_current_cron_store().jobs_file)
+
+    @staticmethod
+    def _assert_no_cron_store(profile_home) -> None:
+        """No cron data may land in the routed profile (loading its config.yaml legitimately
+        scaffolds the home's empty directories, so only the store artifacts are checked)."""
+        assert not (profile_home / "cron" / "jobs.json").exists()
+        assert not (profile_home / "cron" / "executions.db").exists()
+        assert not list((profile_home / "cron").glob("output/*"))
+
+    def _run(self, monkeypatch, *, profile, raise_in_run=False):
+        """Fire one job end-to-end through ``run_one_job`` with the agent + send stubbed out."""
+        import cron.scheduler as sched
+        from cron.jobs import create_job, get_job
+
+        created = create_job(
+            prompt="hi", schedule="every 1h", deliver="telegram:123", profile=profile)
+        observed: dict = {}
+
+        def fake_run_job(_job, **_kwargs):
+            self._observe(observed, "run")
+            if raise_in_run:
+                raise RuntimeError("provider exploded")
+            return True, "full output doc", "final response", None
+
+        def fake_deliver(_job, content, adapters=None, loop=None, **_kwargs):
+            self._observe(observed, "deliver")
+            observed["deliver_content"] = content
+            return None
+
+        monkeypatch.setattr(sched, "run_job", fake_run_job)
+        monkeypatch.setattr(sched, "_deliver_result", fake_deliver)
+
+        # A run that raises is still processed (failure recorded + alerted) but reports False.
+        assert sched.run_one_job(dict(get_job(created["id"]))) is not raise_in_run
+        return observed, get_job(created["id"])
+
+    def test_execution_and_delivery_use_profile_b_persistence_stays_a(
+        self, routed_profile_homes, monkeypatch
+    ):
+        import cron.scheduler as sched
+
+        root, profile_home = routed_profile_homes
+        observed, stored = self._run(monkeypatch, profile="support")
+
+        # Execution scopes are built from the ROUTED profile, not the scheduler's home.
+        assert observed["run_token"] == "B-TOKEN"
+        assert observed["run_terminal"] == "docker"
+        # ...and are still B's at final delivery, which also resolves B's home for its
+        # targets/config instead of the scheduler profile's.
+        assert observed["deliver_home"] == str(profile_home.resolve())
+        assert observed["deliver_token"] == "B-TOKEN"
+        assert observed["deliver_terminal"] == "docker"
+        assert observed["deliver_content"] == "final response"
+
+        # Persistence keeps belonging to the scheduler profile that owns the job.
+        assert observed["deliver_store"] == str(root / "cron" / "jobs.json")
+        assert stored["last_status"] == "ok"
+        assert (root / "cron" / "executions.db").exists()
+        assert list((root / "cron" / "output").glob("*"))
+        self._assert_no_cron_store(profile_home)
+
+        # Nothing leaks past the fire.
+        assert sched._get_hermes_home() == root
+        assert os.environ["HERMES_HOME"] == str(root)
+
+    def test_crash_alert_also_leaves_through_profile_b(
+        self, routed_profile_homes, monkeypatch
+    ):
+        """A run that raises delivers its failure notice through the routed profile too."""
+        root, profile_home = routed_profile_homes
+        observed, stored = self._run(monkeypatch, profile="support", raise_in_run=True)
+
+        assert observed["deliver_home"] == str(profile_home.resolve())
+        assert observed["deliver_token"] == "B-TOKEN"
+        assert "provider exploded" in observed["deliver_content"]
+        # The job/incident rows the alert is bookkept against remain profile A's.
+        assert observed["deliver_store"] == str(root / "cron" / "jobs.json")
+        assert stored["last_status"] == "error"
+        self._assert_no_cron_store(profile_home)
+
+    def test_job_without_profile_stays_on_the_scheduler_profile(
+        self, routed_profile_homes, monkeypatch
+    ):
+        """Control: no ``profile`` means execution AND delivery keep the scheduler's home."""
+        root, profile_home = routed_profile_homes
+        observed, _stored = self._run(monkeypatch, profile=None)
+
+        assert observed["run_token"] == "A-TOKEN"
+        assert observed["run_terminal"] == "local"
+        assert observed["deliver_home"] == str(root)
+        assert observed["deliver_token"] == "A-TOKEN"
+        assert observed["deliver_store"] == str(root / "cron" / "jobs.json")
+        assert not (profile_home / "cron").exists()

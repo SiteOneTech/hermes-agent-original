@@ -10,16 +10,14 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from tools.environments.local import _find_bash, _msys_to_windows_path, LocalEnvironment
+from agent.file_safety import is_write_denied as _is_write_denied
+from tools.file_operations_common import LintResult, SearchMatch
 from tools.file_operations import (
-    _is_write_denied,
     ReadResult,
     WriteResult,
     PatchResult,
     SearchResult,
-    SearchMatch,
-    LintResult,
     ShellFileOperations,
-    MAX_LINE_LENGTH,
     normalize_read_pagination,
     normalize_search_pagination,
 )

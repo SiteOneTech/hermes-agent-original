@@ -409,13 +409,13 @@ class TestFailureAttribution:
         # This unit fixture owns the entire pool.  Do not let a developer's
         # real Claude Code/Hermes OAuth singleton add an unrelated entry,
         # which would make single-entry rotation assertions non-hermetic.
-        import agent.anthropic_adapter as anthropic_adapter
+        import agent.anthropic_credentials as anthropic_credentials
 
         monkeypatch.setattr(
-            anthropic_adapter, "read_claude_code_credentials", lambda: None
+            anthropic_credentials, "read_claude_code_credentials", lambda: None
         )
         monkeypatch.setattr(
-            anthropic_adapter, "read_hermes_oauth_credentials", lambda: None
+            anthropic_credentials, "read_hermes_oauth_credentials", lambda: None
         )
         from agent.credential_pool import load_pool
 

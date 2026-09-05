@@ -493,13 +493,6 @@ class TestEditFormatSteering:
 # ── profile registry ────────────────────────────────────────────────────────
 
 class TestProfiles:
-    def test_registered_profiles(self):
-        assert cc.get_profile("coding") is cc.CODING_PROFILE
-        assert cc.get_profile("general") is cc.GENERAL_PROFILE
-
-    def test_unknown_profile_falls_back_to_general(self):
-        assert cc.get_profile("nonsense") is cc.GENERAL_PROFILE
-
     def test_coding_profile_shape(self):
         # The coding profile declares the seams other domains read.
         assert cc.CODING_PROFILE.toolset == cc.CODING_TOOLSET

@@ -360,6 +360,7 @@ class TestBuildSessionContextPrompt:
         from unittest.mock import patch
         from gateway.session import _slack_tools_loaded
         import tools.mcp_tool as _mcp_tool_mod
+        from tools import mcp_tool_registration as _mcp_registration
 
         # No native slack toolset / token configured.
         with patch.dict(_os.environ, {}, clear=False):
@@ -369,29 +370,29 @@ class TestBuildSessionContextPrompt:
             # registered a real tool, via the actual tracking function used
             # by the live registration path (tools/mcp_tool.py:_track_mcp_tool_server),
             # not a mock of the capability check.
-            _mcp_tool_mod._track_mcp_tool_server("mcp-company-slack_post_message", "company-slack")
+            _mcp_registration._track_mcp_tool_server("mcp-company-slack_post_message", "company-slack")
             try:
                 assert _slack_tools_loaded() is True, (
                     "A connected MCP server with 'slack' in its name and "
                     "registered tools must be detected as Slack capability"
                 )
             finally:
-                _mcp_tool_mod._forget_mcp_tool_server("mcp-company-slack_post_message")
+                _mcp_registration._forget_mcp_tool_server("mcp-company-slack_post_message")
 
     def test_slack_tools_loaded_false_when_no_matching_mcp_server(self):
         """An MCP server unrelated to Slack must not grant Slack capability."""
         import os as _os
         from unittest.mock import patch
         from gateway.session import _slack_tools_loaded
-        import tools.mcp_tool as _mcp_tool_mod
+        from tools import mcp_tool_registration as _mcp_registration
 
         with patch.dict(_os.environ, {}, clear=False):
             _os.environ.pop("SLACK_BOT_TOKEN", None)
-            _mcp_tool_mod._track_mcp_tool_server("mcp-github_create_issue", "github")
+            _mcp_registration._track_mcp_tool_server("mcp-github_create_issue", "github")
             try:
                 assert _slack_tools_loaded() is False
             finally:
-                _mcp_tool_mod._forget_mcp_tool_server("mcp-github_create_issue")
+                _mcp_registration._forget_mcp_tool_server("mcp-github_create_issue")
 
     def test_slack_prompt_includes_platform_notes(self):
         """Legacy: backward-compat alias -- no tools loaded shows disclaimer."""
@@ -2576,7 +2577,7 @@ class TestGatewaySessionDbRecovery:
     def test_transcript_reroute_migrates_remaining_backlog_to_child(self):
         import threading
         from types import SimpleNamespace
-        from hermes_state import CompressionSessionClosedError
+        from hermes_state_errors import CompressionSessionClosedError
 
         class FakeDb:
             def get_compression_tip(self, session_id):

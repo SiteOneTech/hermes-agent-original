@@ -21,6 +21,26 @@ from hermes_cli.config import (
     OPTIONAL_ENV_VARS,
     DEFAULT_CONFIG,
 )
+import gateway.status as _gw_status
+import hermes_cli.config as _cfg_mod
+import hermes_cli.web_routers.chat_ws as _rt_chat_ws
+import hermes_cli.models_pricing as _models_pricing
+import hermes_cli.web_routers.actions as _rt_actions
+import hermes_cli.web_routers.files as _rt_files
+import hermes_cli.web_routers.memory_providers as _rt_memory_providers
+import hermes_cli.web_routers.ops as _rt_ops
+import hermes_cli.web_routers.sessions as _rt_sessions
+import hermes_cli.web_routers.status as _rt_status
+import hermes_cli.web_server_chat as _web_server_chat
+import hermes_cli.web_server_config as _web_server_config
+import hermes_cli.web_server_dashboard as _web_server_dashboard
+import hermes_cli.web_server_files as _web_server_files
+import hermes_cli.web_server_gateway as _web_server_gateway
+import hermes_cli.web_server_lifecycle as _web_server_lifecycle
+import hermes_cli.web_server_memory as _web_server_memory
+import hermes_cli.web_server_messaging as _web_server_messaging
+import hermes_cli.web_server_profiles as _web_server_profiles
+import hermes_cli.web_server_sessions as _web_server_sessions
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +125,7 @@ def _install_example_plugin(_isolate_hermes_home):
     # route reorder below.
     web_server._dashboard_plugins_cache = None
     web_server._get_dashboard_plugins(force_rescan=True)
-    web_server._mount_plugin_api_routes()
+    _web_server_dashboard._mount_plugin_api_routes()
 
     # ``include_router`` appends the new routes to the END of
     # ``app.router.routes``. That works fine at import time — the SPA
@@ -304,7 +324,7 @@ class TestWebServerEndpoints:
         from hermes_constants import get_hermes_home
         from hermes_state import SessionDB
 
-        web_server._last_auto_archive_check.clear()
+        _web_server_sessions._last_auto_archive_check.clear()
         db_path = get_hermes_home() / "state.db"
         wal_path = Path(f"{db_path}-wal")
         writer = SessionDB(db_path=db_path)
@@ -364,7 +384,7 @@ class TestWebServerEndpoints:
         def boom(*_args, **_kwargs):
             raise sqlite3.OperationalError("disk I/O error")
 
-        monkeypatch.setattr(web_server, "_open_session_db_for_profile", boom)
+        monkeypatch.setattr(_web_server_sessions, "_open_session_db_for_profile", boom)
         assert self.client.get("/api/sessions?limit=1&offset=0").status_code == 503
 
     def test_get_sessions_non_transient_operational_error_is_500(self, monkeypatch):
@@ -375,7 +395,7 @@ class TestWebServerEndpoints:
         def boom(*_args, **_kwargs):
             raise sqlite3.OperationalError("no such table: sessions")
 
-        monkeypatch.setattr(web_server, "_open_session_db_for_profile", boom)
+        monkeypatch.setattr(_web_server_sessions, "_open_session_db_for_profile", boom)
         assert self.client.get("/api/sessions?limit=1&offset=0").status_code == 500
 
     def test_get_status_loads_gateway_config_off_event_loop(self, monkeypatch):
@@ -404,7 +424,7 @@ class TestWebServerEndpoints:
 
         async def _run():
             event_loop_thread = threading.get_ident()
-            await web_server.get_status()
+            await _rt_status.get_status()
             return event_loop_thread
 
         event_loop_thread = asyncio.run(_run())
@@ -438,7 +458,7 @@ class TestWebServerEndpoints:
             }
         )
         save_config(config)
-        web_server._last_auto_archive_check.clear()
+        _web_server_sessions._last_auto_archive_check.clear()
 
         response = self.client.get("/api/sessions?limit=50&offset=0")
 
@@ -570,7 +590,7 @@ class TestWebServerEndpoints:
         finally:
             legacy.close()
 
-        web_server._eager_reconcile_own_session_db()
+        _web_server_lifecycle._eager_reconcile_own_session_db()
 
         healed = sqlite3.connect(str(db_path))
         try:
@@ -602,7 +622,7 @@ class TestWebServerEndpoints:
 
         monkeypatch.setattr(hermes_state, "SessionDB", boom)
         # Must swallow — reads fall back to the per-poll probe heal.
-        web_server._eager_reconcile_own_session_db()
+        _web_server_lifecycle._eager_reconcile_own_session_db()
 
     def test_heal_gives_up_when_reconcile_cannot_fix_the_store(self, monkeypatch):
         """A probe failure reconciliation can't cure must not retry forever.
@@ -627,12 +647,12 @@ class TestWebServerEndpoints:
         # A column no SCHEMA_SQL declares: the heal's writable reconcile
         # cannot add it, so the re-probe keeps failing.
         monkeypatch.setattr(
-            web_server,
+            _web_server_sessions,
             "_session_db_read_probe_statements",
             lambda: ('SELECT "sessions"."not_a_real_column" FROM "sessions" LIMIT 0',),
         )
-        monkeypatch.setattr(web_server, "_session_db_heal_exhausted", set())
-        monkeypatch.setattr(web_server, "_session_db_heal_warned", set())
+        monkeypatch.setattr(_web_server_sessions, "_session_db_heal_exhausted", set())
+        monkeypatch.setattr(_web_server_sessions, "_session_db_heal_warned", set())
 
         writable_opens = []
 
@@ -651,16 +671,16 @@ class TestWebServerEndpoints:
 
         # First open: probe fails -> one writable heal -> re-probe fails ->
         # exhausted. Still returns a usable read-only handle.
-        db = web_server._open_session_db_for_profile(None, read_only=True)
+        db = _web_server_sessions._open_session_db_for_profile(None, read_only=True)
         try:
             assert db.list_sessions_rich(limit=10, compact_rows=True)
         finally:
             db.close()
         assert len(writable_opens) == 1
-        assert str(db_path) in web_server._session_db_heal_exhausted
+        assert str(db_path) in _web_server_sessions._session_db_heal_exhausted
 
         # Second open: probe skipped, NO further writable opens.
-        db = web_server._open_session_db_for_profile(None, read_only=True)
+        db = _web_server_sessions._open_session_db_for_profile(None, read_only=True)
         try:
             assert db.list_sessions_rich(limit=10, compact_rows=True)
         finally:
@@ -687,7 +707,7 @@ class TestWebServerEndpoints:
         monkeypatch.setattr(hermes_state, "SessionDB", corrupt_open)
 
         with pytest.raises(sqlite3.DatabaseError, match="disk image is malformed"):
-            web_server._open_session_db_at_path(db_path, read_only=True)
+            _web_server_sessions._open_session_db_at_path(db_path, read_only=True)
 
         assert opens == [True]
 
@@ -716,7 +736,7 @@ class TestWebServerEndpoints:
 
         monkeypatch.setattr(hermes_state, "SessionDB", scripted_open)
 
-        db = web_server._open_session_db_at_path(db_path, read_only=True)
+        db = _web_server_sessions._open_session_db_at_path(db_path, read_only=True)
 
         assert isinstance(db, _OkDB)
         assert opens == [True, False, True]
@@ -782,7 +802,7 @@ class TestWebServerEndpoints:
         monkeypatch.setattr("hermes_state.SessionDB", _FakeDB)
         monkeypatch.setattr(web_server.time, "time", lambda: 100)
 
-        assert web_server._count_status_active_sessions() == 1
+        assert _rt_status._count_status_active_sessions() == 1
         assert captured == {
             "read_only": True, "limit": 50, "compact_rows": True, "closed": True
         }
@@ -799,7 +819,7 @@ class TestWebServerEndpoints:
             raise AssertionError("SessionDB must not be constructed when db file is absent")
 
         monkeypatch.setattr("hermes_state.SessionDB", _boom)
-        assert web_server._count_status_active_sessions() == 0
+        assert _rt_status._count_status_active_sessions() == 0
 
     def test_get_status_degrades_when_active_session_count_fails(self, monkeypatch):
         import hermes_cli.web_server as web_server
@@ -807,7 +827,7 @@ class TestWebServerEndpoints:
         def _locked_count():
             raise TimeoutError("database is locked")
 
-        monkeypatch.setattr(web_server, "_count_status_active_sessions", _locked_count)
+        monkeypatch.setattr(_rt_status, "_count_status_active_sessions", _locked_count)
 
         resp = self.client.get("/api/status")
         assert resp.status_code == 200
@@ -822,7 +842,7 @@ class TestWebServerEndpoints:
             calls["get_running_pid_cached"] += 1
             return None
 
-        monkeypatch.setattr(web_server, "get_running_pid_cached", _cached_pid)
+        monkeypatch.setattr(_gw_status, "get_running_pid_cached", _cached_pid)
 
         resp = self.client.get("/api/status")
 
@@ -862,10 +882,10 @@ class TestWebServerEndpoints:
             seen["expected_home"] = expected_home
             return 4321
 
-        monkeypatch.setattr(web_server, "get_running_pid_cached", _pid)
-        monkeypatch.setattr(web_server, "read_runtime_status", _runtime)
+        monkeypatch.setattr(_gw_status, "get_running_pid_cached", _pid)
+        monkeypatch.setattr(_gw_status, "read_runtime_status", _runtime)
         monkeypatch.setattr(
-            web_server, "get_runtime_status_running_pid", _runtime_pid
+            _gw_status, "get_runtime_status_running_pid", _runtime_pid
         )
         monkeypatch.setattr(web_server, "_GATEWAY_HEALTH_URL", None)
 
@@ -898,15 +918,15 @@ class TestWebServerEndpoints:
 
         # No local PID and no local runtime state: only the health probe can
         # see the gateway, which is exactly the cross-container deployment.
-        monkeypatch.setattr(web_server, "get_running_pid_cached", lambda *a, **k: None)
-        monkeypatch.setattr(web_server, "get_running_pid", lambda *a, **k: None)
-        monkeypatch.setattr(web_server, "read_runtime_status", lambda *a, **k: None)
+        monkeypatch.setattr(_gw_status, "get_running_pid_cached", lambda *a, **k: None)
+        monkeypatch.setattr(_gw_status, "get_running_pid", lambda *a, **k: None)
+        monkeypatch.setattr(_gw_status, "read_runtime_status", lambda *a, **k: None)
         monkeypatch.setattr(
-            web_server, "get_runtime_status_running_pid", lambda *a, **k: None
+            _gw_status, "get_runtime_status_running_pid", lambda *a, **k: None
         )
         monkeypatch.setattr(web_server, "_GATEWAY_HEALTH_URL", "http://gw:8642")
         monkeypatch.setattr(
-            web_server,
+            _web_server_gateway,
             "_probe_gateway_health",
             lambda: (True, {"pid": 4321, "gateway_state": "running", "platforms": {}}),
         )
@@ -931,11 +951,11 @@ class TestWebServerEndpoints:
         """
         import hermes_cli.web_server as web_server
 
-        monkeypatch.setattr(web_server, "get_running_pid_cached", lambda *a, **k: None)
-        monkeypatch.setattr(web_server, "get_running_pid", lambda *a, **k: None)
-        monkeypatch.setattr(web_server, "read_runtime_status", lambda *a, **k: None)
+        monkeypatch.setattr(_gw_status, "get_running_pid_cached", lambda *a, **k: None)
+        monkeypatch.setattr(_gw_status, "get_running_pid", lambda *a, **k: None)
+        monkeypatch.setattr(_gw_status, "read_runtime_status", lambda *a, **k: None)
         monkeypatch.setattr(
-            web_server, "get_runtime_status_running_pid", lambda *a, **k: None
+            _gw_status, "get_runtime_status_running_pid", lambda *a, **k: None
         )
         monkeypatch.setattr(web_server, "_GATEWAY_HEALTH_URL", None)
 
@@ -976,10 +996,10 @@ class TestWebServerEndpoints:
             seen["expected_home"] = expected_home
             return None
 
-        monkeypatch.setattr(web_server, "get_running_pid_cached", _pid)
-        monkeypatch.setattr(web_server, "get_running_pid", _pid)
-        monkeypatch.setattr(web_server, "read_runtime_status", _runtime)
-        monkeypatch.setattr(web_server, "get_runtime_status_running_pid", _runtime_pid)
+        monkeypatch.setattr(_gw_status, "get_running_pid_cached", _pid)
+        monkeypatch.setattr(_gw_status, "get_running_pid", _pid)
+        monkeypatch.setattr(_gw_status, "read_runtime_status", _runtime)
+        monkeypatch.setattr(_gw_status, "get_runtime_status_running_pid", _runtime_pid)
         monkeypatch.setattr(web_server, "_GATEWAY_HEALTH_URL", None)
 
         resp = self.client.get("/api/messaging/platforms?profile=worker")
@@ -1065,7 +1085,7 @@ class TestWebServerEndpoints:
     def test_get_status_hides_update_capability_in_managed_runtime(self, monkeypatch):
         import hermes_cli.web_server as web_server
 
-        monkeypatch.setattr(web_server, "_dashboard_local_update_managed_externally", lambda: True)
+        monkeypatch.setattr(_web_server_files, "_dashboard_local_update_managed_externally", lambda: True)
 
         resp = self.client.get("/api/status")
         assert resp.status_code == 200
@@ -1077,9 +1097,9 @@ class TestWebServerEndpoints:
 
         monkeypatch.setattr(hermes_constants, "is_container", lambda: True)
         # A docker install inside a container should be managed externally.
-        monkeypatch.setattr(web_server, "detect_install_method", lambda _root: "docker")
+        monkeypatch.setattr(_cfg_mod, "detect_install_method", lambda _root: "docker")
 
-        assert web_server._dashboard_local_update_managed_externally() is True
+        assert _web_server_files._dashboard_local_update_managed_externally() is True
 
     def test_dashboard_update_capability_allows_git_in_container(self, monkeypatch):
         """A git checkout inside a container (e.g. bind-mounted in hermes-webui)
@@ -1088,9 +1108,9 @@ class TestWebServerEndpoints:
         import hermes_cli.web_server as web_server
 
         monkeypatch.setattr(hermes_constants, "is_container", lambda: True)
-        monkeypatch.setattr(web_server, "detect_install_method", lambda _root: "git")
+        monkeypatch.setattr(_cfg_mod, "detect_install_method", lambda _root: "git")
 
-        assert web_server._dashboard_local_update_managed_externally() is False
+        assert _web_server_files._dashboard_local_update_managed_externally() is False
 
     def test_dashboard_update_capability_blocks_pip_in_container(self, monkeypatch):
         """A pip install inside a container is still managed externally."""
@@ -1098,9 +1118,9 @@ class TestWebServerEndpoints:
         import hermes_cli.web_server as web_server
 
         monkeypatch.setattr(hermes_constants, "is_container", lambda: True)
-        monkeypatch.setattr(web_server, "detect_install_method", lambda _root: "pip")
+        monkeypatch.setattr(_cfg_mod, "detect_install_method", lambda _root: "pip")
 
-        assert web_server._dashboard_local_update_managed_externally() is True
+        assert _web_server_files._dashboard_local_update_managed_externally() is True
 
     @staticmethod
     def _provider_field_map(payload):
@@ -1223,7 +1243,7 @@ class TestWebServerEndpoints:
                     {"key": "baseUrl", "description": "Stub base URL"},
                 ]
 
-        monkeypatch.setattr(web_server, "_load_memory_provider", lambda name: _Stub())
+        monkeypatch.setattr(_rt_memory_providers, "_load_memory_provider", lambda name: _Stub())
 
         resp = self.client.get("/api/memory/providers/mem0/config")
 
@@ -1329,9 +1349,9 @@ class TestWebServerEndpoints:
         monkeypatch.setenv("HOME", str(tmp_path))
         import hermes_cli.web_server as web_server
 
-        original_dependency_importable = web_server._dependency_importable
+        original_dependency_importable = _web_server_memory._dependency_importable
         monkeypatch.setattr(
-            web_server,
+            _web_server_memory,
             "_dependency_importable",
             lambda dep: True if dep == "honcho-ai" else original_dependency_importable(dep),
         )
@@ -2204,7 +2224,7 @@ class TestWebServerEndpoints:
     def test_chat_image_upload_enforces_image_size_cap(self, monkeypatch):
         import hermes_cli.web_server as web_server
 
-        monkeypatch.setattr(web_server, "_CHAT_IMAGE_UPLOAD_MAX_BYTES", 4)
+        monkeypatch.setattr(_rt_files, "_CHAT_IMAGE_UPLOAD_MAX_BYTES", 4)
 
         resp = self.client.post(
             "/api/chat/image-upload",
@@ -2503,7 +2523,7 @@ class TestWebServerEndpoints:
     def test_import_sessions_endpoint_rejects_oversized_stream(self):
         import hermes_cli.web_server as web_server
 
-        payload = b'{"sessions":[]}' + b" " * web_server._SESSION_IMPORT_MAX_BYTES
+        payload = b'{"sessions":[]}' + b" " * _rt_sessions._SESSION_IMPORT_MAX_BYTES
         response = self.client.post(
             "/api/sessions/import",
             content=payload,
@@ -2662,7 +2682,7 @@ class TestWebServerEndpoints:
             db.close()
 
         # Reset the in-process throttle so the trigger actually evaluates config.
-        ws._last_auto_archive_check.clear()
+        _web_server_sessions._last_auto_archive_check.clear()
 
         # The helper imports load_config lazily from hermes_cli.config; patch there.
         cfg = {"sessions": {"auto_archive": True, "auto_archive_days": 3, "min_interval_hours": 0}}
@@ -2670,7 +2690,7 @@ class TestWebServerEndpoints:
             with patch("hermes_cli.config.load_config", return_value=cfg):
                 listed = self.client.get("/api/sessions").json()["sessions"]
         finally:
-            ws._last_auto_archive_check.clear()
+            _web_server_sessions._last_auto_archive_check.clear()
 
         assert all(s["id"] != "stale-serve" for s in listed)
 
@@ -3158,7 +3178,7 @@ class TestWebServerEndpoints:
     def test_elevenlabs_voices_unavailable_without_key(self, monkeypatch):
         import hermes_cli.web_server as web_server
 
-        monkeypatch.setattr(web_server, "load_env", lambda: {})
+        monkeypatch.setattr(_cfg_mod, "load_env", lambda: {})
         monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
 
         resp = self.client.get("/api/audio/elevenlabs/voices")
@@ -3205,16 +3225,16 @@ class TestWebServerEndpoints:
             raise AssertionError("docker update guard should not spawn hermes update")
 
         # Bypass the managed-externally gate so we reach the docker install check.
-        monkeypatch.setattr(web_server, "_dashboard_local_update_managed_externally", lambda: False)
+        monkeypatch.setattr(_web_server_files, "_dashboard_local_update_managed_externally", lambda: False)
         # The shared admission gate (#91277 Phase 3) resolves the install
         # method through hermes_cli.config directly.
         monkeypatch.setattr(
             "hermes_cli.config.detect_install_method", lambda *_a, **_k: "docker"
         )
-        monkeypatch.setattr(web_server, "detect_install_method", lambda _root: "docker")
-        monkeypatch.setattr(web_server, "_spawn_hermes_action", fail_spawn)
-        web_server._ACTION_PROCS.pop("hermes-update", None)
-        web_server._ACTION_RESULTS.pop("hermes-update", None)
+        monkeypatch.setattr(_cfg_mod, "detect_install_method", lambda _root: "docker")
+        monkeypatch.setattr(_web_server_gateway, "_spawn_hermes_action", fail_spawn)
+        _web_server_gateway._ACTION_PROCS.pop("hermes-update", None)
+        _web_server_gateway._ACTION_RESULTS.pop("hermes-update", None)
 
         resp = self.client.post("/api/hermes/update")
 
@@ -3241,16 +3261,16 @@ class TestWebServerEndpoints:
         def fail_spawn(*_args, **_kwargs):
             raise AssertionError("Nix update guard should not spawn hermes update")
 
-        monkeypatch.setattr(web_server, "_dashboard_local_update_managed_externally", lambda: False)
+        monkeypatch.setattr(_web_server_files, "_dashboard_local_update_managed_externally", lambda: False)
         # The shared admission gate resolves through hermes_cli.config; the
         # web_server alias only serves the update-check endpoint.
         monkeypatch.setattr(
             "hermes_cli.config.detect_install_method", lambda *_a, **_k: "nix"
         )
-        monkeypatch.setattr(web_server, "detect_install_method", lambda _root: "nix")
-        monkeypatch.setattr(web_server, "_spawn_hermes_action", fail_spawn)
-        web_server._ACTION_PROCS.pop("hermes-update", None)
-        web_server._ACTION_RESULTS.pop("hermes-update", None)
+        monkeypatch.setattr(_cfg_mod, "detect_install_method", lambda _root: "nix")
+        monkeypatch.setattr(_web_server_gateway, "_spawn_hermes_action", fail_spawn)
+        _web_server_gateway._ACTION_PROCS.pop("hermes-update", None)
+        _web_server_gateway._ACTION_RESULTS.pop("hermes-update", None)
 
         resp = self.client.post("/api/hermes/update")
 
@@ -3277,11 +3297,11 @@ class TestWebServerEndpoints:
             detected = True
             raise AssertionError("managed runtime update guard should not detect install method")
 
-        monkeypatch.setattr(web_server, "_dashboard_local_update_managed_externally", lambda: True)
-        monkeypatch.setattr(web_server, "detect_install_method", fail_detect)
-        monkeypatch.setattr(web_server, "_spawn_hermes_action", fail_spawn)
-        web_server._ACTION_PROCS.pop("hermes-update", None)
-        web_server._ACTION_RESULTS.pop("hermes-update", None)
+        monkeypatch.setattr(_web_server_files, "_dashboard_local_update_managed_externally", lambda: True)
+        monkeypatch.setattr(_cfg_mod, "detect_install_method", fail_detect)
+        monkeypatch.setattr(_web_server_gateway, "_spawn_hermes_action", fail_spawn)
+        _web_server_gateway._ACTION_PROCS.pop("hermes-update", None)
+        _web_server_gateway._ACTION_RESULTS.pop("hermes-update", None)
 
         resp = self.client.post("/api/hermes/update")
 
@@ -3313,17 +3333,17 @@ class TestWebServerEndpoints:
             spawned = True
             raise AssertionError("APT-managed update guard should not spawn hermes update")
 
-        monkeypatch.setattr(web_server, "_dashboard_local_update_managed_externally", lambda: False)
+        monkeypatch.setattr(_web_server_files, "_dashboard_local_update_managed_externally", lambda: False)
         # The shared admission gate (#91277 Phase 3) resolves the install
         # method through hermes_cli.config directly, so patch it there (the
         # web_server module alias only feeds the /update/check endpoint).
         monkeypatch.setattr(
             "hermes_cli.config.detect_install_method", lambda *_a, **_k: "apt"
         )
-        monkeypatch.setattr(web_server, "detect_install_method", lambda _root: "apt")
-        monkeypatch.setattr(web_server, "_spawn_hermes_action", fail_spawn)
-        web_server._ACTION_PROCS.pop("hermes-update", None)
-        web_server._ACTION_RESULTS.pop("hermes-update", None)
+        monkeypatch.setattr(_cfg_mod, "detect_install_method", lambda _root: "apt")
+        monkeypatch.setattr(_web_server_gateway, "_spawn_hermes_action", fail_spawn)
+        _web_server_gateway._ACTION_PROCS.pop("hermes-update", None)
+        _web_server_gateway._ACTION_RESULTS.pop("hermes-update", None)
 
         resp = self.client.post("/api/hermes/update")
 
@@ -3358,11 +3378,11 @@ class TestWebServerEndpoints:
             f"=== hermes-update completed {action_id} ===\n",
             encoding="utf-8",
         )
-        monkeypatch.setattr(web_server, "_ACTION_LOG_DIR", tmp_path)
-        monkeypatch.setattr(web_server, "_ACTION_PROCS", {})
-        monkeypatch.setattr(web_server, "_ACTION_RESULTS", {})
-        monkeypatch.setattr(web_server, "_ACTION_COMMANDS", {})
-        monkeypatch.setattr(web_server, "_ACTION_IDS", {})
+        monkeypatch.setattr(_web_server_gateway, "_ACTION_LOG_DIR", tmp_path)
+        monkeypatch.setattr(_web_server_gateway, "_ACTION_PROCS", {})
+        monkeypatch.setattr(_web_server_gateway, "_ACTION_RESULTS", {})
+        monkeypatch.setattr(_web_server_gateway, "_ACTION_COMMANDS", {})
+        monkeypatch.setattr(_web_server_gateway, "_ACTION_IDS", {})
 
         status = self.client.get("/api/actions/hermes-update/status?lines=2000")
 
@@ -3388,13 +3408,13 @@ class TestWebServerEndpoints:
             calls.append((subcommand, name, env_overrides))
             return Proc()
 
-        monkeypatch.setattr(web_server, "_dashboard_local_update_managed_externally", lambda: False)
-        monkeypatch.setattr(web_server, "detect_install_method", lambda _root: "git")
+        monkeypatch.setattr(_web_server_files, "_dashboard_local_update_managed_externally", lambda: False)
+        monkeypatch.setattr(_cfg_mod, "detect_install_method", lambda _root: "git")
         monkeypatch.setattr(web_server.secrets, "token_hex", lambda _size: "a" * 32)
-        monkeypatch.setattr(web_server, "_spawn_hermes_action", fake_spawn)
-        web_server._ACTION_PROCS.pop("hermes-update", None)
-        web_server._ACTION_RESULTS.pop("hermes-update", None)
-        web_server._ACTION_IDS.pop("hermes-update", None)
+        monkeypatch.setattr(_web_server_gateway, "_spawn_hermes_action", fake_spawn)
+        _web_server_gateway._ACTION_PROCS.pop("hermes-update", None)
+        _web_server_gateway._ACTION_RESULTS.pop("hermes-update", None)
+        _web_server_gateway._ACTION_IDS.pop("hermes-update", None)
 
         resp = self.client.post("/api/hermes/update")
 
@@ -3424,9 +3444,9 @@ class TestWebServerEndpoints:
                 waited["done"] = True
 
         proc = _Proc()
-        web_server._ACTION_PROCS.pop("hermes-update", None)
-        web_server._ACTION_RESULTS.pop("hermes-update", None)
-        web_server._ACTION_PROCS["hermes-update"] = proc
+        _web_server_gateway._ACTION_PROCS.pop("hermes-update", None)
+        _web_server_gateway._ACTION_RESULTS.pop("hermes-update", None)
+        _web_server_gateway._ACTION_PROCS["hermes-update"] = proc
 
         resp = self.client.get("/api/actions/hermes-update/status")
         assert resp.status_code == 200
@@ -3437,8 +3457,8 @@ class TestWebServerEndpoints:
 
         # Process should have been reaped and moved to results.
         assert waited["done"] is True
-        assert "hermes-update" not in web_server._ACTION_PROCS
-        assert web_server._ACTION_RESULTS["hermes-update"] == {
+        assert "hermes-update" not in _web_server_gateway._ACTION_PROCS
+        assert _web_server_gateway._ACTION_RESULTS["hermes-update"] == {
             "exit_code": 0,
             "pid": 42424,
         }
@@ -3456,17 +3476,17 @@ class TestWebServerEndpoints:
                 raise OSError("already reaped")
 
         proc = _Proc()
-        web_server._ACTION_PROCS.pop("hermes-update", None)
-        web_server._ACTION_RESULTS.pop("hermes-update", None)
-        web_server._ACTION_PROCS["hermes-update"] = proc
+        _web_server_gateway._ACTION_PROCS.pop("hermes-update", None)
+        _web_server_gateway._ACTION_RESULTS.pop("hermes-update", None)
+        _web_server_gateway._ACTION_PROCS["hermes-update"] = proc
 
         resp = self.client.get("/api/actions/hermes-update/status")
         assert resp.status_code == 200
         data = resp.json()
         assert data["exit_code"] == 1
         # Still reaped despite wait() raising.
-        assert "hermes-update" not in web_server._ACTION_PROCS
-        assert web_server._ACTION_RESULTS["hermes-update"] == {
+        assert "hermes-update" not in _web_server_gateway._ACTION_PROCS
+        assert _web_server_gateway._ACTION_RESULTS["hermes-update"] == {
             "exit_code": 1,
             "pid": 99,
         }
@@ -3474,18 +3494,18 @@ class TestWebServerEndpoints:
     def test_action_status_tails_large_log_without_read_text(self, tmp_path, monkeypatch):
         import hermes_cli.web_server as web_server
 
-        monkeypatch.setattr(web_server, "_ACTION_LOG_DIR", tmp_path)
-        web_server._ACTION_PROCS.pop("hermes-update", None)
-        web_server._ACTION_RESULTS.pop("hermes-update", None)
+        monkeypatch.setattr(_web_server_gateway, "_ACTION_LOG_DIR", tmp_path)
+        _web_server_gateway._ACTION_PROCS.pop("hermes-update", None)
+        _web_server_gateway._ACTION_RESULTS.pop("hermes-update", None)
 
-        log_path = tmp_path / web_server._ACTION_LOG_FILES["hermes-update"]
+        log_path = tmp_path / _web_server_gateway._ACTION_LOG_FILES["hermes-update"]
         log_path.write_text(
             "stale-start\n"
-            + ("x" * (web_server._ACTION_LOG_TAIL_MAX_BYTES + 1024))
+            + ("x" * (_rt_actions._ACTION_LOG_TAIL_MAX_BYTES + 1024))
             + "\ntail-one\ntail-two\n",
             encoding="utf-8",
         )
-        assert log_path.stat().st_size > web_server._ACTION_LOG_TAIL_MAX_BYTES
+        assert log_path.stat().st_size > _rt_actions._ACTION_LOG_TAIL_MAX_BYTES
 
         original_read_text = Path.read_text
 
@@ -3510,21 +3530,21 @@ class TestWebServerEndpoints:
             def poll(self):
                 return None
 
-        monkeypatch.setattr(web_server, "_dashboard_local_update_managed_externally", lambda: False)
-        monkeypatch.setattr(web_server, "detect_install_method", lambda _root: "git")
+        monkeypatch.setattr(_web_server_files, "_dashboard_local_update_managed_externally", lambda: False)
+        monkeypatch.setattr(_cfg_mod, "detect_install_method", lambda _root: "git")
         monkeypatch.setattr(
-            web_server,
+            _web_server_gateway,
             "_spawn_hermes_action",
             lambda *_args, **_kwargs: pytest.fail("must not spawn a duplicate update"),
         )
-        web_server._ACTION_PROCS["hermes-update"] = Proc()
-        web_server._ACTION_IDS["hermes-update"] = "b" * 32
+        _web_server_gateway._ACTION_PROCS["hermes-update"] = Proc()
+        _web_server_gateway._ACTION_IDS["hermes-update"] = "b" * 32
 
         try:
             resp = self.client.post("/api/hermes/update")
         finally:
-            web_server._ACTION_PROCS.pop("hermes-update", None)
-            web_server._ACTION_IDS.pop("hermes-update", None)
+            _web_server_gateway._ACTION_PROCS.pop("hermes-update", None)
+            _web_server_gateway._ACTION_IDS.pop("hermes-update", None)
 
         assert resp.status_code == 200
         assert resp.json() == {
@@ -3547,9 +3567,9 @@ class TestWebServerEndpoints:
             def get_connected_platforms(self):
                 return [_Platform("telegram")]
 
-        monkeypatch.setattr(web_server, "get_running_pid_cached", lambda: 1234)
+        monkeypatch.setattr(_gw_status, "get_running_pid_cached", lambda: 1234)
         monkeypatch.setattr(
-            web_server,
+            _gw_status,
             "read_runtime_status",
             lambda: {
                 "gateway_state": "running",
@@ -3561,7 +3581,7 @@ class TestWebServerEndpoints:
                 },
             },
         )
-        monkeypatch.setattr(web_server, "check_config_version", lambda: (1, 1))
+        monkeypatch.setattr(_cfg_mod, "check_config_version", lambda: (1, 1))
         monkeypatch.setattr(gateway_config, "load_gateway_config", lambda: _GatewayConfig())
 
         resp = self.client.get("/api/status")
@@ -3579,9 +3599,9 @@ class TestWebServerEndpoints:
             def get_connected_platforms(self):
                 return []
 
-        monkeypatch.setattr(web_server, "get_running_pid_cached", lambda: None)
+        monkeypatch.setattr(_gw_status, "get_running_pid_cached", lambda: None)
         monkeypatch.setattr(
-            web_server,
+            _gw_status,
             "read_runtime_status",
             lambda: {
                 "gateway_state": "startup_failed",
@@ -3592,7 +3612,7 @@ class TestWebServerEndpoints:
                 },
             },
         )
-        monkeypatch.setattr(web_server, "check_config_version", lambda: (1, 1))
+        monkeypatch.setattr(_cfg_mod, "check_config_version", lambda: (1, 1))
         monkeypatch.setattr(gateway_config, "load_gateway_config", lambda: _GatewayConfig())
 
         resp = self.client.get("/api/status")
@@ -3652,7 +3672,7 @@ class TestWebServerEndpoints:
         """A tts.providers.<name> command block appears in tts.provider options,
         appended AFTER the built-ins (original order preserved, no re-sort)."""
         from hermes_cli.config import load_config, save_config
-        from hermes_cli.web_server import CONFIG_SCHEMA
+        from hermes_cli.web_server_config import CONFIG_SCHEMA
 
         builtins = list(CONFIG_SCHEMA["tts.provider"]["options"])
 
@@ -3772,7 +3792,7 @@ class TestWebServerEndpoints:
         assert any(k.endswith("_API_KEY") or k.endswith("_TOKEN") for k in data.keys())
 
     def test_get_env_vars_marks_channel_managed_keys(self):
-        from hermes_cli.web_server import _channel_managed_env_keys
+        from hermes_cli.web_server_messaging import _channel_managed_env_keys
 
         data = self.client.get("/api/env").json()
         # Every entry carries the classification the Keys page relies on.
@@ -3850,11 +3870,7 @@ class TestWebServerEndpoints:
         the setup cards and handed back to Keys — see
         tests/hermes_cli/test_setup_hidden_env.py.
         """
-        from hermes_cli.web_server import (
-            _MESSAGING_KEYS_PAGE_KEYS,
-            _build_catalog_entry,
-            _channel_managed_env_keys,
-        )
+        from hermes_cli.web_server_messaging import _MESSAGING_KEYS_PAGE_KEYS, _build_catalog_entry, _channel_managed_env_keys
 
         discord = _build_catalog_entry("discord")
         assert "DISCORD_BOT_TOKEN" in discord["env_vars"]
@@ -3993,7 +4009,7 @@ class TestWebServerEndpoints:
             from types import SimpleNamespace as NS
             return NS(pid=12345)
 
-        monkeypatch.setattr(ws, "_spawn_hermes_action", fake_spawn)
+        monkeypatch.setattr(_web_server_gateway, "_spawn_hermes_action", fake_spawn)
 
         resp = self.client.post(
             "/api/ops/import", json={"archive": str(archive), "force": True},
@@ -4021,7 +4037,7 @@ class TestWebServerEndpoints:
             from types import SimpleNamespace as NS
             return NS(pid=12345)
 
-        monkeypatch.setattr(ws, "_spawn_hermes_action", fake_spawn)
+        monkeypatch.setattr(_web_server_gateway, "_spawn_hermes_action", fake_spawn)
 
         resp = self.client.post("/api/ops/backup", json={})
         assert resp.status_code == 200
@@ -4050,7 +4066,7 @@ class TestWebServerEndpoints:
             from types import SimpleNamespace as NS
             return NS(pid=12345)
 
-        monkeypatch.setattr(ws, "_spawn_hermes_action", fake_spawn)
+        monkeypatch.setattr(_web_server_gateway, "_spawn_hermes_action", fake_spawn)
 
         resp = self.client.post("/api/ops/backup", json={})
         assert resp.status_code == 200
@@ -4063,7 +4079,7 @@ class TestWebServerEndpoints:
     def test_ops_backup_download_streams_dashboard_backup(self, tmp_path):
         import hermes_cli.web_server as ws
 
-        backup_dir = ws._dashboard_backup_dir()
+        backup_dir = _rt_ops._dashboard_backup_dir()
         backup_dir.mkdir(parents=True, exist_ok=True)
         archive = backup_dir / "hermes-backup-test.zip"
         archive.write_bytes(b"zip bytes")
@@ -4102,7 +4118,7 @@ class TestWebServerEndpoints:
             from types import SimpleNamespace as NS
             return NS(pid=12345)
 
-        monkeypatch.setattr(ws, "_spawn_hermes_action", fake_spawn)
+        monkeypatch.setattr(_web_server_gateway, "_spawn_hermes_action", fake_spawn)
 
         resp = self.client.post(
             "/api/ops/import-upload",
@@ -4135,7 +4151,7 @@ class TestWebServerEndpoints:
         def fail_spawn(*_args):
             raise AssertionError("invalid uploads must not spawn import")
 
-        monkeypatch.setattr(ws, "_spawn_hermes_action", fail_spawn)
+        monkeypatch.setattr(_web_server_gateway, "_spawn_hermes_action", fail_spawn)
 
         resp = self.client.post(
             "/api/ops/import-upload",
@@ -4293,7 +4309,7 @@ class TestWebServerEndpoints:
         # plugin registry. The override must still supply a docs link so the
         # Channels page renders a working "Open setup guide" button instead of
         # an empty href (which resolves to the packaged app's own index.html).
-        from hermes_cli.web_server import _build_catalog_entry
+        from hermes_cli.web_server_messaging import _build_catalog_entry
 
         teams = _build_catalog_entry("teams")
         assert teams["docs_url"] == (
@@ -4305,7 +4321,7 @@ class TestWebServerEndpoints:
         # the plugin registry. The override must supply a docs link so the
         # Channels page renders a working "Open setup guide" button instead of
         # an empty href (which resolves to the packaged app's own index.html).
-        from hermes_cli.web_server import _build_catalog_entry
+        from hermes_cli.web_server_messaging import _build_catalog_entry
 
         google_chat = _build_catalog_entry("google_chat")
         assert google_chat["name"] == "Google Chat"
@@ -4528,7 +4544,7 @@ class TestWebServerEndpoints:
         monkeypatch.setattr(ws.urllib.request, "urlopen", fail_urlopen)
         monkeypatch.setattr(httpx, "Client", FakeHttpxClient)
 
-        payload = ws._telegram_onboarding_request_sync(
+        payload = _web_server_messaging._telegram_onboarding_request_sync(
             "POST",
             "/v1/telegram/pairings",
             body={"bot_name": "Hermes Agent"},
@@ -4553,7 +4569,7 @@ class TestWebServerEndpoints:
         monkeypatch.setenv("TELEGRAM_ONBOARDING_URL", "not a valid url")
 
         with pytest.raises(ws.HTTPException) as exc:
-            ws._telegram_onboarding_request_sync(
+            _web_server_messaging._telegram_onboarding_request_sync(
                 "POST",
                 "/v1/telegram/pairings",
                 body={"bot_name": "Hermes Agent"},
@@ -4568,8 +4584,8 @@ class TestWebServerEndpoints:
     def test_telegram_onboarding_start_strips_poll_token(self, monkeypatch):
         import hermes_cli.web_server as ws
 
-        with ws._telegram_onboarding_lock:
-            ws._telegram_onboarding_pairings.clear()
+        with _web_server_messaging._telegram_onboarding_lock:
+            _web_server_messaging._telegram_onboarding_pairings.clear()
 
         calls = []
 
@@ -4584,7 +4600,7 @@ class TestWebServerEndpoints:
                 "expires_at": "2027-05-18T00:00:00.000Z",
             }
 
-        monkeypatch.setattr(ws, "_telegram_onboarding_request_sync", fake_request)
+        monkeypatch.setattr(_web_server_messaging, "_telegram_onboarding_request_sync", fake_request)
 
         resp = self.client.post(
             "/api/messaging/telegram/onboarding/start",
@@ -4608,8 +4624,8 @@ class TestWebServerEndpoints:
         import hermes_cli.web_server as ws
         from hermes_cli.config import load_config, load_env
 
-        with ws._telegram_onboarding_lock:
-            ws._telegram_onboarding_pairings.clear()
+        with _web_server_messaging._telegram_onboarding_lock:
+            _web_server_messaging._telegram_onboarding_pairings.clear()
 
         def fake_request(method, path, *, body=None, bearer_token=None):
             if method == "POST":
@@ -4631,8 +4647,8 @@ class TestWebServerEndpoints:
                 "token": "123456:SECRET",
             }
 
-        monkeypatch.setattr(ws, "_telegram_onboarding_request_sync", fake_request)
-        ws._ACTION_PROCS.pop("gateway-restart", None)
+        monkeypatch.setattr(_web_server_messaging, "_telegram_onboarding_request_sync", fake_request)
+        _web_server_gateway._ACTION_PROCS.pop("gateway-restart", None)
         restart_calls = []
 
         class FakeRestartProc:
@@ -4642,7 +4658,7 @@ class TestWebServerEndpoints:
             restart_calls.append((subcommand, name))
             return FakeRestartProc()
 
-        monkeypatch.setattr(ws, "_spawn_hermes_action", fake_spawn_action)
+        monkeypatch.setattr(_web_server_gateway, "_spawn_hermes_action", fake_spawn_action)
 
         start = self.client.post("/api/messaging/telegram/onboarding/start", json={})
         assert start.status_code == 200
@@ -4681,8 +4697,8 @@ class TestWebServerEndpoints:
         import hermes_cli.web_server as ws
         from hermes_cli.config import load_config, load_env
 
-        with ws._telegram_onboarding_lock:
-            ws._telegram_onboarding_pairings.clear()
+        with _web_server_messaging._telegram_onboarding_lock:
+            _web_server_messaging._telegram_onboarding_pairings.clear()
 
         def fake_request(method, path, *, body=None, bearer_token=None):
             if method == "POST":
@@ -4704,8 +4720,8 @@ class TestWebServerEndpoints:
                 "token": "123456:SECRET",
             }
 
-        monkeypatch.setattr(ws, "_telegram_onboarding_request_sync", fake_request)
-        ws._ACTION_PROCS.pop("gateway-restart", None)
+        monkeypatch.setattr(_web_server_messaging, "_telegram_onboarding_request_sync", fake_request)
+        _web_server_gateway._ACTION_PROCS.pop("gateway-restart", None)
         monkeypatch.setattr(ws, "_LAST_GATEWAY_RESTART", None)
 
         def fail_spawn_action(subcommand, name):
@@ -4713,7 +4729,7 @@ class TestWebServerEndpoints:
             assert name == "gateway-restart"
             raise RuntimeError("supervisor unavailable")
 
-        monkeypatch.setattr(ws, "_spawn_hermes_action", fail_spawn_action)
+        monkeypatch.setattr(_web_server_gateway, "_spawn_hermes_action", fail_spawn_action)
 
         start = self.client.post("/api/messaging/telegram/onboarding/start", json={})
         assert start.status_code == 200
@@ -4746,8 +4762,8 @@ class TestWebServerEndpoints:
         cached frontend also fires its own restart call)."""
         import hermes_cli.web_server as ws
 
-        with ws._telegram_onboarding_lock:
-            ws._telegram_onboarding_pairings.clear()
+        with _web_server_messaging._telegram_onboarding_lock:
+            _web_server_messaging._telegram_onboarding_pairings.clear()
 
         def fake_request(method, path, *, body=None, bearer_token=None):
             if method == "POST":
@@ -4766,7 +4782,7 @@ class TestWebServerEndpoints:
                 "token": "123456:SECRET",
             }
 
-        monkeypatch.setattr(ws, "_telegram_onboarding_request_sync", fake_request)
+        monkeypatch.setattr(_web_server_messaging, "_telegram_onboarding_request_sync", fake_request)
 
         class FakeRunningProc:
             pid = 5151
@@ -4774,12 +4790,12 @@ class TestWebServerEndpoints:
             def poll(self):
                 return None  # still running
 
-        monkeypatch.setitem(ws._ACTION_PROCS, "gateway-restart", FakeRunningProc())
+        monkeypatch.setitem(_web_server_gateway._ACTION_PROCS, "gateway-restart", FakeRunningProc())
 
         def fail_spawn_action(subcommand, name):
             raise AssertionError("must not spawn a second concurrent restart")
 
-        monkeypatch.setattr(ws, "_spawn_hermes_action", fail_spawn_action)
+        monkeypatch.setattr(_web_server_gateway, "_spawn_hermes_action", fail_spawn_action)
 
         start = self.client.post("/api/messaging/telegram/onboarding/start", json={})
         assert start.status_code == 200
@@ -4800,8 +4816,8 @@ class TestWebServerEndpoints:
     def test_telegram_onboarding_apply_requires_ready_pairing(self, monkeypatch):
         import hermes_cli.web_server as ws
 
-        with ws._telegram_onboarding_lock:
-            ws._telegram_onboarding_pairings.clear()
+        with _web_server_messaging._telegram_onboarding_lock:
+            _web_server_messaging._telegram_onboarding_pairings.clear()
 
         def fake_request(method, path, *, body=None, bearer_token=None):
             return {
@@ -4813,7 +4829,7 @@ class TestWebServerEndpoints:
                 "expires_at": "2027-05-18T00:00:00.000Z",
             }
 
-        monkeypatch.setattr(ws, "_telegram_onboarding_request_sync", fake_request)
+        monkeypatch.setattr(_web_server_messaging, "_telegram_onboarding_request_sync", fake_request)
 
         start = self.client.post("/api/messaging/telegram/onboarding/start", json={})
         assert start.status_code == 200
@@ -4829,8 +4845,8 @@ class TestWebServerEndpoints:
     def test_telegram_onboarding_cancel_clears_local_session(self, monkeypatch):
         import hermes_cli.web_server as ws
 
-        with ws._telegram_onboarding_lock:
-            ws._telegram_onboarding_pairings.clear()
+        with _web_server_messaging._telegram_onboarding_lock:
+            _web_server_messaging._telegram_onboarding_pairings.clear()
 
         def fake_request(method, path, *, body=None, bearer_token=None):
             return {
@@ -4842,7 +4858,7 @@ class TestWebServerEndpoints:
                 "expires_at": "2027-05-18T00:00:00.000Z",
             }
 
-        monkeypatch.setattr(ws, "_telegram_onboarding_request_sync", fake_request)
+        monkeypatch.setattr(_web_server_messaging, "_telegram_onboarding_request_sync", fake_request)
 
         start = self.client.post("/api/messaging/telegram/onboarding/start", json={})
         assert start.status_code == 200
@@ -5023,7 +5039,7 @@ class TestWebServerEndpoints:
         it on same-provider re-assignment, and always drop a hardcoded
         context_length override. Both POST /api/model/set and profile-model
         writes route through this, so the contract is pinned here."""
-        from hermes_cli.web_server import _apply_main_model_assignment
+        from hermes_cli.web_server_config import _apply_main_model_assignment
 
         # Custom + base_url → persisted; stale context_length dropped.
         out = _apply_main_model_assignment(
@@ -5115,7 +5131,7 @@ class TestWebServerEndpoints:
     def test_parse_model_ids_handles_openai_and_bare_shapes(self):
         """Model discovery must tolerate the common /v1/models shapes and
         never raise (so a slightly non-standard local endpoint still works)."""
-        from hermes_cli.web_server import _parse_model_ids
+        from hermes_cli.web_server_profiles import _parse_model_ids
 
         class FakeResp:
             def __init__(self, payload, ok=True):
@@ -6359,7 +6375,7 @@ class TestWebServerEndpoints:
 
         monkeypatch.setattr(models_mod, "get_curated_nous_model_ids", lambda: ["paid/expensive", "free/cheap"])
         monkeypatch.setattr(
-            models_mod, "get_pricing_for_provider",
+            _models_pricing, "get_pricing_for_provider",
             lambda provider: {"paid/expensive": {"input": "1"}, "free/cheap": {"input": "0"}},
         )
         monkeypatch.setattr(models_mod, "check_nous_free_tier", lambda *, force_fresh=False: True)
@@ -6385,7 +6401,7 @@ class TestWebServerEndpoints:
         import hermes_cli.models as models_mod
 
         monkeypatch.setattr(models_mod, "get_curated_nous_model_ids", lambda: ["top/model", "other/model"])
-        monkeypatch.setattr(models_mod, "get_pricing_for_provider", lambda provider: {})
+        monkeypatch.setattr(_models_pricing, "get_pricing_for_provider", lambda provider: {})
         monkeypatch.setattr(models_mod, "check_nous_free_tier", lambda *, force_fresh=False: False)
         monkeypatch.setattr(
             models_mod, "union_with_portal_paid_recommendations",
@@ -6424,7 +6440,7 @@ class TestWebServerEndpoints:
         from tools import lazy_deps as ld
 
         # honcho declares pip_dependencies: [honcho-ai]; force it missing.
-        monkeypatch.setattr(web_server, "_dependency_importable", lambda dep: False)
+        monkeypatch.setattr(_web_server_memory, "_dependency_importable", lambda dep: False)
 
         installed = []
 
@@ -6466,18 +6482,18 @@ class TestWebServerEndpoints:
 
 class TestBuildSchemaFromConfig:
     def test_produces_expected_field_count(self):
-        from hermes_cli.web_server import CONFIG_SCHEMA
+        from hermes_cli.web_server_config import CONFIG_SCHEMA
         # DEFAULT_CONFIG has ~150+ leaf fields
         assert len(CONFIG_SCHEMA) > 100
 
     def test_schema_entries_have_required_fields(self):
-        from hermes_cli.web_server import CONFIG_SCHEMA
+        from hermes_cli.web_server_config import CONFIG_SCHEMA
         for key, entry in list(CONFIG_SCHEMA.items())[:10]:
             assert "type" in entry, f"Missing type for {key}"
             assert "category" in entry, f"Missing category for {key}"
 
     def test_overrides_applied(self):
-        from hermes_cli.web_server import CONFIG_SCHEMA
+        from hermes_cli.web_server_config import CONFIG_SCHEMA
         # terminal.backend should be a select with options
         if "terminal.backend" in CONFIG_SCHEMA:
             entry = CONFIG_SCHEMA["terminal.backend"]
@@ -6500,7 +6516,7 @@ class TestBuildSchemaFromConfig:
         key server-side, breaking Desktop's dropdown). The dashboard hides the
         field client-side instead.
         """
-        from hermes_cli.web_server import CONFIG_SCHEMA
+        from hermes_cli.web_server_config import CONFIG_SCHEMA
         entry = CONFIG_SCHEMA["memory.provider"]
         assert entry["type"] == "select"
         assert entry["category"] == "memory"
@@ -6514,7 +6530,7 @@ class TestBuildSchemaFromConfig:
 
     def test_memory_provider_options_cover_discovered_providers(self):
         """Every provider the /api/memory endpoint can activate is selectable."""
-        from hermes_cli.web_server import CONFIG_SCHEMA
+        from hermes_cli.web_server_config import CONFIG_SCHEMA
         from plugins.memory import list_memory_provider_names
 
         options = set(CONFIG_SCHEMA["memory.provider"]["options"])
@@ -6530,7 +6546,7 @@ class TestBuildSchemaFromConfig:
         blank entry server-side (the clear item is client-side via
         ``clearable``), and never empty even without tzdata (UTC fallback).
         """
-        from hermes_cli.web_server import CONFIG_SCHEMA, _timezone_options
+        from hermes_cli.web_server_config import CONFIG_SCHEMA, _timezone_options
 
         entry = CONFIG_SCHEMA["timezone"]
         assert entry["type"] == "select"
@@ -6553,19 +6569,19 @@ class TestBuildSchemaFromConfig:
         """
         from hermes_cli import web_server
 
-        monkeypatch.setattr(web_server, "load_config", lambda: {"memory": {"provider": "honcho"}})
+        monkeypatch.setattr(_cfg_mod, "load_config", lambda: {"memory": {"provider": "honcho"}})
         monkeypatch.setattr(
-            web_server,
+            _web_server_config,
             "_memory_provider_options",
             lambda: ["", "honcho", "hindsight", "freshly_installed"],
         )
 
-        fields = web_server._schema_with_dynamic_provider_options()
+        fields = _web_server_config._schema_with_dynamic_provider_options()
 
         assert "freshly_installed" in fields["memory.provider"]["options"]
         # The entry is copied, not mutated in place, and keeps its select type.
         assert fields["memory.provider"]["type"] == "select"
-        assert web_server.CONFIG_SCHEMA["memory.provider"] is not fields["memory.provider"]
+        assert _web_server_config.CONFIG_SCHEMA["memory.provider"] is not fields["memory.provider"]
 
     def test_dynamic_merge_preserves_configured_memory_provider(self, monkeypatch):
         """A configured-but-undiscovered provider stays visible as the selection.
@@ -6575,10 +6591,10 @@ class TestBuildSchemaFromConfig:
         """
         from hermes_cli import web_server
 
-        monkeypatch.setattr(web_server, "load_config", lambda: {"memory": {"provider": "gone_from_disk"}})
-        monkeypatch.setattr(web_server, "_memory_provider_options", lambda: ["", "honcho"])
+        monkeypatch.setattr(_cfg_mod, "load_config", lambda: {"memory": {"provider": "gone_from_disk"}})
+        monkeypatch.setattr(_web_server_config, "_memory_provider_options", lambda: ["", "honcho"])
 
-        fields = web_server._schema_with_dynamic_provider_options()
+        fields = _web_server_config._schema_with_dynamic_provider_options()
 
         assert "gone_from_disk" in fields["memory.provider"]["options"]
 
@@ -6590,7 +6606,7 @@ class TestBuildSchemaFromConfig:
         are 'manual', 'smart', and 'off' (see hermes_cli/config.py).
         'smart' was missing entirely, making it unreachable from the UI.
         """
-        from hermes_cli.web_server import CONFIG_SCHEMA
+        from hermes_cli.web_server_config import CONFIG_SCHEMA
         entry = CONFIG_SCHEMA["approvals.mode"]
         assert entry["type"] == "select"
         options = entry["options"]
@@ -6603,7 +6619,7 @@ class TestBuildSchemaFromConfig:
         assert "deny" not in options, "stale option 'deny' should not appear"
 
     def test_proxy_schema_warns_dashboard_users_about_lifecycle(self):
-        from hermes_cli.web_server import CONFIG_SCHEMA
+        from hermes_cli.web_server_config import CONFIG_SCHEMA
 
         entry = CONFIG_SCHEMA["proxy.enabled"]
         assert entry["category"] == "security"
@@ -6615,7 +6631,7 @@ class TestBuildSchemaFromConfig:
         assert source_entry["options"] == ["env", "bitwarden"]
 
     def test_empty_prefix_produces_correct_keys(self):
-        from hermes_cli.web_server import _build_schema_from_config
+        from hermes_cli.web_server_config import _build_schema_from_config
         test_config = {"model": "test", "nested": {"key": "val"}}
         schema = _build_schema_from_config(test_config)
         assert "model" in schema
@@ -6623,18 +6639,18 @@ class TestBuildSchemaFromConfig:
 
     def test_top_level_scalars_get_general_category(self):
         """Top-level scalar fields should be in 'general' category."""
-        from hermes_cli.web_server import CONFIG_SCHEMA
+        from hermes_cli.web_server_config import CONFIG_SCHEMA
         assert CONFIG_SCHEMA["model"]["category"] == "general"
 
     def test_nested_keys_get_parent_category(self):
         """Nested fields should use the top-level parent as their category."""
-        from hermes_cli.web_server import CONFIG_SCHEMA
+        from hermes_cli.web_server_config import CONFIG_SCHEMA
         if "agent.max_turns" in CONFIG_SCHEMA:
             assert CONFIG_SCHEMA["agent.max_turns"]["category"] == "agent"
 
     def test_category_merge_applied(self):
         """Small categories should be merged into larger ones."""
-        from hermes_cli.web_server import CONFIG_SCHEMA
+        from hermes_cli.web_server_config import CONFIG_SCHEMA
         categories = {e["category"] for e in CONFIG_SCHEMA.values()}
         # These should be merged away
         assert "privacy" not in categories  # merged into security
@@ -6642,7 +6658,7 @@ class TestBuildSchemaFromConfig:
 
     def test_no_single_field_categories(self):
         """After merging, no category should have just 1 field."""
-        from hermes_cli.web_server import CONFIG_SCHEMA
+        from hermes_cli.web_server_config import CONFIG_SCHEMA
         from collections import Counter
         cats = Counter(e["category"] for e in CONFIG_SCHEMA.values())
         for cat, count in cats.items():
@@ -7194,7 +7210,7 @@ class TestNewEndpoints:
             spawned.append((list(subcommand), name))
             return _FakeProc()
 
-        monkeypatch.setattr(web_server, "_spawn_hermes_action", fake_spawn)
+        monkeypatch.setattr(_web_server_gateway, "_spawn_hermes_action", fake_spawn)
 
         resp = self.client.post(
             "/api/profiles",
@@ -7222,7 +7238,7 @@ class TestNewEndpoints:
         assert spawned == [
             (
                 ["-p", "builder", "skills", "install", "someuser/some-skill", "--yes"],
-                web_server._hub_action_name("install", "someuser/some-skill"),
+                _web_server_profiles._hub_action_name("install", "someuser/some-skill"),
             )
         ]
 
@@ -7809,9 +7825,11 @@ class TestNewEndpoints:
             ),
         )
         # No xAI credentials → the Grok OAuth-backed row needs sign-in.
+        import hermes_cli.tools_config_post_setup as tools_config_post_setup
+
         monkeypatch.setattr(tools_config, "_xai_credentials_present", lambda: False)
         # Local TTS engines not installed → their rows need setup.
-        monkeypatch.setattr(tools_config, "_module_installed", lambda name: False)
+        monkeypatch.setattr(tools_config_post_setup, "_module_installed", lambda name: False)
         monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
 
         resp = self.client.get("/api/tools/toolsets/tts/config")
@@ -8112,7 +8130,7 @@ class TestNewEndpoints:
         """GET .../backends returns one row per backend; local is always ready."""
         import hermes_cli.web_server as web_server
 
-        monkeypatch.setattr(web_server.shutil, "which", lambda name: None)
+        monkeypatch.setattr(shutil, "which", lambda name: None)
 
         resp = self.client.get("/api/tools/terminal/backends")
         assert resp.status_code == 200
@@ -8136,7 +8154,7 @@ class TestNewEndpoints:
         """No docker binary on PATH -> needs_setup with install guidance."""
         import hermes_cli.web_server as web_server
 
-        monkeypatch.setattr(web_server.shutil, "which", lambda name: None)
+        monkeypatch.setattr(shutil, "which", lambda name: None)
 
         body = self.client.get("/api/tools/terminal/backends").json()
         docker = next(r for r in body["backends"] if r["name"] == "docker")
@@ -8149,7 +8167,7 @@ class TestNewEndpoints:
         import hermes_cli.web_server as web_server
 
         monkeypatch.setattr(
-            web_server.shutil,
+            shutil,
             "which",
             lambda name: "/usr/bin/docker" if name == "docker" else None,
         )
@@ -8170,7 +8188,7 @@ class TestNewEndpoints:
         import hermes_cli.web_server as web_server
 
         monkeypatch.setattr(
-            web_server.shutil,
+            shutil,
             "which",
             lambda name: "/usr/bin/docker" if name in {"docker", "singularity"} else None,
         )
@@ -8191,7 +8209,7 @@ class TestNewEndpoints:
         import hermes_cli.web_server as web_server
 
         monkeypatch.setattr(
-            web_server.shutil,
+            shutil,
             "which",
             lambda name: "/usr/bin/docker" if name == "docker" else None,
         )
@@ -8211,7 +8229,7 @@ class TestNewEndpoints:
         """SSH without host/user config lists the missing terminal.* keys."""
         import hermes_cli.web_server as web_server
 
-        monkeypatch.setattr(web_server.shutil, "which", lambda name: None)
+        monkeypatch.setattr(shutil, "which", lambda name: None)
 
         body = self.client.get("/api/tools/terminal/backends").json()
         ssh = next(r for r in body["backends"] if r["name"] == "ssh")
@@ -8223,7 +8241,7 @@ class TestNewEndpoints:
         import hermes_cli.web_server as web_server
         from hermes_cli.config import load_config, save_config
 
-        monkeypatch.setattr(web_server.shutil, "which", lambda name: None)
+        monkeypatch.setattr(shutil, "which", lambda name: None)
         config = load_config()
         config.setdefault("terminal", {})
         config["terminal"]["ssh_host"] = "devbox.example.com"
@@ -8239,7 +8257,7 @@ class TestNewEndpoints:
         """PUT .../backend writes terminal.backend and the list reflects it."""
         import hermes_cli.web_server as web_server
 
-        monkeypatch.setattr(web_server.shutil, "which", lambda name: None)
+        monkeypatch.setattr(shutil, "which", lambda name: None)
 
         resp = self.client.put(
             "/api/tools/terminal/backend", json={"backend": "docker"}
@@ -8597,7 +8615,7 @@ class TestModelContextLength:
 
     def test_normalize_extracts_context_length_from_dict(self):
         """normalize should surface context_length from model dict."""
-        from hermes_cli.web_server import _normalize_config_for_web
+        from hermes_cli.web_server_config import _normalize_config_for_web
 
         cfg = {
             "model": {
@@ -8612,7 +8630,7 @@ class TestModelContextLength:
 
     def test_normalize_bare_string_model_yields_zero(self):
         """normalize should set model_context_length=0 for bare string model."""
-        from hermes_cli.web_server import _normalize_config_for_web
+        from hermes_cli.web_server_config import _normalize_config_for_web
 
         result = _normalize_config_for_web({"model": "anthropic/claude-sonnet-4"})
         assert result["model"] == "anthropic/claude-sonnet-4"
@@ -8620,7 +8638,7 @@ class TestModelContextLength:
 
     def test_normalize_dict_without_context_length_yields_zero(self):
         """normalize should default to 0 when model dict has no context_length."""
-        from hermes_cli.web_server import _normalize_config_for_web
+        from hermes_cli.web_server_config import _normalize_config_for_web
 
         cfg = {"model": {"default": "test/model", "provider": "openrouter"}}
         result = _normalize_config_for_web(cfg)
@@ -8628,7 +8646,7 @@ class TestModelContextLength:
 
     def test_normalize_non_int_context_length_yields_zero(self):
         """normalize should coerce non-int context_length to 0."""
-        from hermes_cli.web_server import _normalize_config_for_web
+        from hermes_cli.web_server_config import _normalize_config_for_web
 
         cfg = {"model": {"default": "test/model", "context_length": "invalid"}}
         result = _normalize_config_for_web(cfg)
@@ -8636,7 +8654,7 @@ class TestModelContextLength:
 
     def test_denormalize_writes_context_length_into_model_dict(self):
         """denormalize should write model_context_length back into model dict."""
-        from hermes_cli.web_server import _denormalize_config_from_web
+        from hermes_cli.web_server_config import _denormalize_config_from_web
         from hermes_cli.config import save_config
 
         # Set up disk config with model as a dict
@@ -8656,7 +8674,7 @@ class TestModelContextLength:
         """The Settings autosave now sends a diff, not the full draft: editing
         only the Context Window control must not omit ``model`` and thereby
         drop the context_length edit on the floor (#89597 review)."""
-        from hermes_cli.web_server import _denormalize_config_from_web
+        from hermes_cli.web_server_config import _denormalize_config_from_web
         from hermes_cli.config import save_config
 
         save_config({
@@ -8671,7 +8689,7 @@ class TestModelContextLength:
 
     def test_denormalize_zero_removes_context_length(self):
         """denormalize with model_context_length=0 should remove context_length key."""
-        from hermes_cli.web_server import _denormalize_config_from_web
+        from hermes_cli.web_server_config import _denormalize_config_from_web
         from hermes_cli.config import save_config
 
         save_config({
@@ -8691,7 +8709,7 @@ class TestModelContextLength:
 
     def test_denormalize_upgrades_bare_string_to_dict(self):
         """denormalize should upgrade bare string model to dict when context_length set."""
-        from hermes_cli.web_server import _denormalize_config_from_web
+        from hermes_cli.web_server_config import _denormalize_config_from_web
         from hermes_cli.config import save_config
 
         # Disk has model as bare string
@@ -8707,7 +8725,7 @@ class TestModelContextLength:
 
     def test_denormalize_bare_string_stays_string_when_zero(self):
         """denormalize should keep bare string model as string when context_length=0."""
-        from hermes_cli.web_server import _denormalize_config_from_web
+        from hermes_cli.web_server_config import _denormalize_config_from_web
         from hermes_cli.config import save_config
 
         save_config({"model": "anthropic/claude-sonnet-4"})
@@ -8720,7 +8738,7 @@ class TestModelContextLength:
 
     def test_denormalize_coerces_string_context_length(self):
         """denormalize should handle string model_context_length from frontend."""
-        from hermes_cli.web_server import _denormalize_config_from_web
+        from hermes_cli.web_server_config import _denormalize_config_from_web
         from hermes_cli.config import save_config
 
         save_config({
@@ -8735,8 +8753,15 @@ class TestModelContextLength:
         assert result["model"]["context_length"] == 32000
 
     def test_denormalize_model_alone_preserves_context_length(self):
-        """Editing only the Model field retains an unrelated context override."""
-        from hermes_cli.web_server import _denormalize_config_from_web
+        """The mirror case: editing only the Model field must not silently
+        wipe an existing context_length override just because the diff omits
+        the unrelated model_context_length key (#89597 review).
+
+        No ``provider`` on disk here on purpose: that keeps this test isolated
+        to the diff-omission bug rather than the separate, pre-existing (and
+        intentional, see ``_apply_main_model_assignment``) behavior where a
+        real provider switch drops the context_length override."""
+        from hermes_cli.web_server_config import _denormalize_config_from_web
         from hermes_cli.config import save_config
 
         save_config({
@@ -8756,7 +8781,7 @@ class TestDenormalizeProviderSwitch:
     def test_vendor_slug_switches_off_non_aggregator_provider(self):
         """ollama-local + a vendor/model slug → switch to openrouter and drop
         the stale local base_url (the issue's exact repro)."""
-        from hermes_cli.web_server import _denormalize_config_from_web
+        from hermes_cli.web_server_config import _denormalize_config_from_web
         from hermes_cli.config import save_config
 
         save_config({
@@ -8778,7 +8803,7 @@ class TestDenormalizeProviderSwitch:
     def test_unchanged_model_preserves_provider_and_base_url(self):
         """Saving with the model unchanged must never re-detect/overwrite the
         provider — protects unrelated config saves and custom endpoints."""
-        from hermes_cli.web_server import _denormalize_config_from_web
+        from hermes_cli.web_server_config import _denormalize_config_from_web
         from hermes_cli.config import save_config
 
         save_config({
@@ -8797,7 +8822,7 @@ class TestDenormalizeProviderSwitch:
     def test_bare_model_name_change_keeps_local_provider(self):
         """A bare (non-slug) model name gives no provider signal — leave the
         existing provider alone rather than guessing."""
-        from hermes_cli.web_server import _denormalize_config_from_web
+        from hermes_cli.web_server_config import _denormalize_config_from_web
         from hermes_cli.config import save_config
 
         save_config({
@@ -8815,7 +8840,7 @@ class TestDenormalizeProviderSwitch:
 
     def test_same_aggregator_model_swap_keeps_provider(self):
         """Swapping models within an aggregator must not change the provider."""
-        from hermes_cli.web_server import _denormalize_config_from_web
+        from hermes_cli.web_server_config import _denormalize_config_from_web
         from hermes_cli.config import save_config
 
         save_config({
@@ -8830,7 +8855,7 @@ class TestDenormalizeProviderSwitch:
     def test_context_length_override_survives_provider_switch(self):
         """An explicit context-length override must persist alongside a
         provider switch."""
-        from hermes_cli.web_server import _denormalize_config_from_web
+        from hermes_cli.web_server_config import _denormalize_config_from_web
         from hermes_cli.config import save_config
 
         save_config({"model": {"default": "llama3.2", "provider": "ollama-local"}})
@@ -8848,18 +8873,18 @@ class TestModelContextLengthSchema:
     """Tests for model_context_length placement in CONFIG_SCHEMA."""
 
     def test_schema_has_model_context_length(self):
-        from hermes_cli.web_server import CONFIG_SCHEMA
+        from hermes_cli.web_server_config import CONFIG_SCHEMA
         assert "model_context_length" in CONFIG_SCHEMA
 
     def test_schema_model_context_length_after_model(self):
         """model_context_length should appear immediately after model in schema."""
-        from hermes_cli.web_server import CONFIG_SCHEMA
+        from hermes_cli.web_server_config import CONFIG_SCHEMA
         keys = list(CONFIG_SCHEMA.keys())
         model_idx = keys.index("model")
         assert keys[model_idx + 1] == "model_context_length"
 
     def test_schema_model_context_length_is_number(self):
-        from hermes_cli.web_server import CONFIG_SCHEMA
+        from hermes_cli.web_server_config import CONFIG_SCHEMA
         entry = CONFIG_SCHEMA["model_context_length"]
         assert entry["type"] == "number"
         assert "category" in entry
@@ -8891,7 +8916,7 @@ class TestModelInfoEndpoint:
     def test_model_info_with_dict_config(self, monkeypatch):
         import hermes_cli.web_server as ws
 
-        monkeypatch.setattr(ws, "load_config", lambda: {
+        monkeypatch.setattr(_cfg_mod, "load_config", lambda: {
             "model": {
                 "default": "anthropic/claude-opus-4.6",
                 "provider": "openrouter",
@@ -8912,7 +8937,7 @@ class TestModelInfoEndpoint:
     def test_model_info_auto_detect_when_no_override(self, monkeypatch):
         import hermes_cli.web_server as ws
 
-        monkeypatch.setattr(ws, "load_config", lambda: {
+        monkeypatch.setattr(_cfg_mod, "load_config", lambda: {
             "model": {"default": "anthropic/claude-opus-4.6", "provider": "openrouter"}
         })
 
@@ -8927,7 +8952,7 @@ class TestModelInfoEndpoint:
     def test_model_info_empty_model(self, monkeypatch):
         import hermes_cli.web_server as ws
 
-        monkeypatch.setattr(ws, "load_config", lambda: {"model": ""})
+        monkeypatch.setattr(_cfg_mod, "load_config", lambda: {"model": ""})
 
         resp = self.client.get("/api/model/info")
         data = resp.json()
@@ -8937,7 +8962,7 @@ class TestModelInfoEndpoint:
     def test_model_info_bare_string_model(self, monkeypatch):
         import hermes_cli.web_server as ws
 
-        monkeypatch.setattr(ws, "load_config", lambda: {
+        monkeypatch.setattr(_cfg_mod, "load_config", lambda: {
             "model": "anthropic/claude-sonnet-4"
         })
 
@@ -8953,7 +8978,7 @@ class TestModelInfoEndpoint:
     def test_model_info_capabilities(self, monkeypatch):
         import hermes_cli.web_server as ws
 
-        monkeypatch.setattr(ws, "load_config", lambda: {
+        monkeypatch.setattr(_cfg_mod, "load_config", lambda: {
             "model": {"default": "anthropic/claude-opus-4.6", "provider": "openrouter"}
         })
 
@@ -8980,7 +9005,7 @@ class TestModelInfoEndpoint:
         """Endpoint should return zeros on import/resolution errors, not 500."""
         import hermes_cli.web_server as ws
 
-        monkeypatch.setattr(ws, "load_config", lambda: {
+        monkeypatch.setattr(_cfg_mod, "load_config", lambda: {
             "model": "some/obscure-model"
         })
 
@@ -9004,7 +9029,7 @@ class TestProbeGatewayHealth:
         """When GATEWAY_HEALTH_URL is unset, the probe returns (False, None)."""
         import hermes_cli.web_server as ws
         monkeypatch.setattr(ws, "_GATEWAY_HEALTH_URL", None)
-        alive, body = ws._probe_gateway_health()
+        alive, body = _web_server_gateway._probe_gateway_health()
         assert alive is False
         assert body is None
 
@@ -9022,7 +9047,7 @@ class TestProbeGatewayHealth:
 
         monkeypatch.setattr(ws.urllib.request, "urlopen", mock_urlopen)
 
-        alive, body = ws._probe_gateway_health()
+        alive, body = _web_server_gateway._probe_gateway_health()
 
         assert alive is False
         assert body is None
@@ -9043,7 +9068,7 @@ class TestProbeGatewayHealth:
             raise ConnectionError("mock")
 
         monkeypatch.setattr(ws.urllib.request, "urlopen", mock_urlopen)
-        alive, body = ws._probe_gateway_health()
+        alive, body = _web_server_gateway._probe_gateway_health()
         assert alive is False
         assert "http://gw:8642/health/detailed" in calls
         assert "http://gw:8642/health" in calls
@@ -9060,7 +9085,7 @@ class TestProbeGatewayHealth:
             raise ConnectionError("mock")
 
         monkeypatch.setattr(ws.urllib.request, "urlopen", mock_urlopen)
-        ws._probe_gateway_health()
+        _web_server_gateway._probe_gateway_health()
         assert "http://gw:8642/health/detailed" in calls
         assert "http://gw:8642/health" in calls
 
@@ -9083,7 +9108,7 @@ class TestProbeGatewayHealth:
         mock_resp.__exit__ = MagicMock(return_value=False)
 
         monkeypatch.setattr(ws.urllib.request, "urlopen", lambda req, **kw: mock_resp)
-        alive, body = ws._probe_gateway_health()
+        alive, body = _web_server_gateway._probe_gateway_health()
         assert alive is True
         assert body["status"] == "ok"
         assert body["pid"] == 42
@@ -9108,7 +9133,7 @@ class TestProbeGatewayHealth:
             return mock_resp
 
         monkeypatch.setattr(ws.urllib.request, "urlopen", mock_urlopen)
-        alive, body = ws._probe_gateway_health()
+        alive, body = _web_server_gateway._probe_gateway_health()
         assert alive is True
         assert body["status"] == "ok"
         assert call_count[0] == 2
@@ -9132,10 +9157,10 @@ class TestStatusRemoteGateway:
         """When local PID check fails and remote probe succeeds, gateway shows running."""
         import hermes_cli.web_server as ws
 
-        monkeypatch.setattr(ws, "get_running_pid_cached", lambda: None)
-        monkeypatch.setattr(ws, "read_runtime_status", lambda: None)
+        monkeypatch.setattr(_gw_status, "get_running_pid_cached", lambda: None)
+        monkeypatch.setattr(_gw_status, "read_runtime_status", lambda: None)
         monkeypatch.setattr(ws, "_GATEWAY_HEALTH_URL", "http://gw:8642")
-        monkeypatch.setattr(ws, "_probe_gateway_health", lambda: (True, {
+        monkeypatch.setattr(_web_server_gateway, "_probe_gateway_health", lambda: (True, {
             "status": "ok",
             "gateway_state": "running",
             "platforms": {"telegram": {"state": "connected"}},
@@ -9161,11 +9186,11 @@ class TestStatusRemoteGateway:
             threading.Event().wait(timeout=0.1)
             return True, {"status": "ok", "pid": 999}
 
-        monkeypatch.setattr(ws, "get_running_pid_cached", lambda: None)
-        monkeypatch.setattr(ws, "read_runtime_status", lambda: None)
+        monkeypatch.setattr(_gw_status, "get_running_pid_cached", lambda: None)
+        monkeypatch.setattr(_gw_status, "read_runtime_status", lambda: None)
         monkeypatch.setattr(ws, "_GATEWAY_HEALTH_URL", "http://gw:8642")
-        monkeypatch.setattr(ws, "_GATEWAY_HEALTH_ROUTE_TIMEOUT", 0.02)
-        monkeypatch.setattr(ws, "_probe_gateway_health", slow_probe)
+        monkeypatch.setattr(_rt_status, "_GATEWAY_HEALTH_ROUTE_TIMEOUT", 0.02)
+        monkeypatch.setattr(_web_server_gateway, "_probe_gateway_health", slow_probe)
 
         resp = self.client.get("/api/status")
 
@@ -9177,20 +9202,20 @@ class TestStatusRemoteGateway:
         """When local PID check succeeds, the remote probe is never called."""
         import hermes_cli.web_server as ws
 
-        monkeypatch.setattr(ws, "get_running_pid_cached", lambda: 1234)
-        monkeypatch.setattr(ws, "read_runtime_status", lambda: {
+        monkeypatch.setattr(_gw_status, "get_running_pid_cached", lambda: 1234)
+        monkeypatch.setattr(_gw_status, "read_runtime_status", lambda: {
             "gateway_state": "running",
             "platforms": {},
         })
         monkeypatch.setattr(ws, "_GATEWAY_HEALTH_URL", "http://gw:8642")
         probe_called = [False]
-        original = ws._probe_gateway_health
+        original = _web_server_gateway._probe_gateway_health
 
         def track_probe():
             probe_called[0] = True
             return original()
 
-        monkeypatch.setattr(ws, "_probe_gateway_health", track_probe)
+        monkeypatch.setattr(_web_server_gateway, "_probe_gateway_health", track_probe)
 
         resp = self.client.get("/api/status")
         assert resp.status_code == 200
@@ -9200,8 +9225,8 @@ class TestStatusRemoteGateway:
         """When GATEWAY_HEALTH_URL is unset, no probe is attempted."""
         import hermes_cli.web_server as ws
 
-        monkeypatch.setattr(ws, "get_running_pid_cached", lambda: None)
-        monkeypatch.setattr(ws, "read_runtime_status", lambda: None)
+        monkeypatch.setattr(_gw_status, "get_running_pid_cached", lambda: None)
+        monkeypatch.setattr(_gw_status, "read_runtime_status", lambda: None)
         monkeypatch.setattr(ws, "_GATEWAY_HEALTH_URL", None)
 
         resp = self.client.get("/api/status")
@@ -9214,10 +9239,10 @@ class TestStatusRemoteGateway:
         """Remote gateway running but PID not in response — pid should be None."""
         import hermes_cli.web_server as ws
 
-        monkeypatch.setattr(ws, "get_running_pid_cached", lambda: None)
-        monkeypatch.setattr(ws, "read_runtime_status", lambda: None)
+        monkeypatch.setattr(_gw_status, "get_running_pid_cached", lambda: None)
+        monkeypatch.setattr(_gw_status, "read_runtime_status", lambda: None)
         monkeypatch.setattr(ws, "_GATEWAY_HEALTH_URL", "http://gw:8642")
-        monkeypatch.setattr(ws, "_probe_gateway_health", lambda: (True, {
+        monkeypatch.setattr(_web_server_gateway, "_probe_gateway_health", lambda: (True, {
             "status": "ok",
         }))
 
@@ -9259,8 +9284,8 @@ class TestStatusInstallId:
         import hermes_cli.web_server as ws
         from hermes_constants import get_default_hermes_root
 
-        monkeypatch.setattr(ws, "get_running_pid_cached", lambda: None)
-        monkeypatch.setattr(ws, "read_runtime_status", lambda: None)
+        monkeypatch.setattr(_gw_status, "get_running_pid_cached", lambda: None)
+        monkeypatch.setattr(_gw_status, "read_runtime_status", lambda: None)
 
         first = self.client.get("/api/status")
         assert first.status_code == 200
@@ -9345,8 +9370,8 @@ class TestGatewayBusyReadout:
         """gateway_busy is True iff running AND active_agents > 0."""
         import hermes_cli.web_server as ws
 
-        monkeypatch.setattr(ws, "get_running_pid_cached", lambda: 1234)
-        monkeypatch.setattr(ws, "read_runtime_status", lambda: {
+        monkeypatch.setattr(_gw_status, "get_running_pid_cached", lambda: 1234)
+        monkeypatch.setattr(_gw_status, "read_runtime_status", lambda: {
             "gateway_state": "running",
             "platforms": {},
             "active_agents": 2,
@@ -9363,8 +9388,8 @@ class TestGatewayBusyReadout:
         """A running gateway with zero in-flight turns is drainable, not busy."""
         import hermes_cli.web_server as ws
 
-        monkeypatch.setattr(ws, "get_running_pid_cached", lambda: 1234)
-        monkeypatch.setattr(ws, "read_runtime_status", lambda: {
+        monkeypatch.setattr(_gw_status, "get_running_pid_cached", lambda: 1234)
+        monkeypatch.setattr(_gw_status, "read_runtime_status", lambda: {
             "gateway_state": "running",
             "platforms": {},
             "active_agents": 0,
@@ -9381,8 +9406,8 @@ class TestGatewayBusyReadout:
         gate dominates."""
         import hermes_cli.web_server as ws
 
-        monkeypatch.setattr(ws, "get_running_pid_cached", lambda: 1234)
-        monkeypatch.setattr(ws, "read_runtime_status", lambda: {
+        monkeypatch.setattr(_gw_status, "get_running_pid_cached", lambda: 1234)
+        monkeypatch.setattr(_gw_status, "read_runtime_status", lambda: {
             "gateway_state": "draining",
             "platforms": {},
             "active_agents": 3,
@@ -9397,8 +9422,8 @@ class TestGatewayBusyReadout:
         active_agents 0 — never a spurious busy that would wedge NAS."""
         import hermes_cli.web_server as ws
 
-        monkeypatch.setattr(ws, "get_running_pid_cached", lambda: None)
-        monkeypatch.setattr(ws, "read_runtime_status", lambda: None)
+        monkeypatch.setattr(_gw_status, "get_running_pid_cached", lambda: None)
+        monkeypatch.setattr(_gw_status, "read_runtime_status", lambda: None)
         monkeypatch.setattr(ws, "_GATEWAY_HEALTH_URL", None)
 
         data = self.client.get("/api/status").json()
@@ -9413,12 +9438,12 @@ class TestGatewayBusyReadout:
         wins over the file."""
         import hermes_cli.web_server as ws
 
-        monkeypatch.setattr(ws, "get_running_pid_cached", lambda: None)
+        monkeypatch.setattr(_gw_status, "get_running_pid_cached", lambda: None)
         monkeypatch.setattr(ws, "_GATEWAY_HEALTH_URL", None)
         # File says running with active turns, but get_running_pid_cached()==None and
         # get_runtime_status_running_pid finds no live PID → gateway_running False.
-        monkeypatch.setattr(ws, "get_runtime_status_running_pid", lambda *_a, **_k: None)
-        monkeypatch.setattr(ws, "read_runtime_status", lambda: {
+        monkeypatch.setattr(_gw_status, "get_runtime_status_running_pid", lambda *_a, **_k: None)
+        monkeypatch.setattr(_gw_status, "read_runtime_status", lambda: {
             "gateway_state": "running",
             "platforms": {},
             "active_agents": 5,
@@ -9434,8 +9459,8 @@ class TestGatewayBusyReadout:
         float so NAS can size its poll deadline without out-of-band knowledge."""
         import hermes_cli.web_server as ws
 
-        monkeypatch.setattr(ws, "get_running_pid_cached", lambda: 1234)
-        monkeypatch.setattr(ws, "read_runtime_status", lambda: {
+        monkeypatch.setattr(_gw_status, "get_running_pid_cached", lambda: 1234)
+        monkeypatch.setattr(_gw_status, "read_runtime_status", lambda: {
             "gateway_state": "running",
             "platforms": {},
             "active_agents": 0,
@@ -9452,8 +9477,8 @@ class TestGatewayBusyReadout:
         produce a spurious busy — it degrades to 0/not-busy."""
         import hermes_cli.web_server as ws
 
-        monkeypatch.setattr(ws, "get_running_pid_cached", lambda: 1234)
-        monkeypatch.setattr(ws, "read_runtime_status", lambda: {
+        monkeypatch.setattr(_gw_status, "get_running_pid_cached", lambda: 1234)
+        monkeypatch.setattr(_gw_status, "read_runtime_status", lambda: {
             "gateway_state": "running",
             "platforms": {},
             "active_agents": "garbage",
@@ -9562,8 +9587,8 @@ class TestGatewayUpdatedAtContract:
     def test_local_runtime_updated_at_normalized(self, monkeypatch, updated_at):
         import hermes_cli.web_server as ws
 
-        monkeypatch.setattr(ws, "get_running_pid_cached", lambda: 1234)
-        monkeypatch.setattr(ws, "read_runtime_status", lambda: {
+        monkeypatch.setattr(_gw_status, "get_running_pid_cached", lambda: 1234)
+        monkeypatch.setattr(_gw_status, "read_runtime_status", lambda: {
             "gateway_state": "running",
             "platforms": {},
             "active_agents": 0,
@@ -9578,8 +9603,8 @@ class TestGatewayUpdatedAtContract:
         """Key missing entirely from the status file → null, not a crash."""
         import hermes_cli.web_server as ws
 
-        monkeypatch.setattr(ws, "get_running_pid_cached", lambda: 1234)
-        monkeypatch.setattr(ws, "read_runtime_status", lambda: {
+        monkeypatch.setattr(_gw_status, "get_running_pid_cached", lambda: 1234)
+        monkeypatch.setattr(_gw_status, "read_runtime_status", lambda: {
             "gateway_state": "running",
             "platforms": {},
             "active_agents": 0,
@@ -9594,8 +9619,8 @@ class TestGatewayUpdatedAtContract:
         import hermes_cli.web_server as ws
 
         epoch = 1750000000
-        monkeypatch.setattr(ws, "get_running_pid_cached", lambda: 1234)
-        monkeypatch.setattr(ws, "read_runtime_status", lambda: {
+        monkeypatch.setattr(_gw_status, "get_running_pid_cached", lambda: 1234)
+        monkeypatch.setattr(_gw_status, "read_runtime_status", lambda: {
             "gateway_state": "running",
             "platforms": {},
             "active_agents": 0,
@@ -9613,8 +9638,8 @@ class TestGatewayUpdatedAtContract:
         from datetime import datetime
         import hermes_cli.web_server as ws
 
-        monkeypatch.setattr(ws, "get_running_pid_cached", lambda: 1234)
-        monkeypatch.setattr(ws, "read_runtime_status", lambda: {
+        monkeypatch.setattr(_gw_status, "get_running_pid_cached", lambda: 1234)
+        monkeypatch.setattr(_gw_status, "read_runtime_status", lambda: {
             "gateway_state": "running",
             "platforms": {},
             "active_agents": 0,
@@ -9631,10 +9656,10 @@ class TestGatewayUpdatedAtContract:
         must still come out as string|null."""
         import hermes_cli.web_server as ws
 
-        monkeypatch.setattr(ws, "get_running_pid_cached", lambda: None)
-        monkeypatch.setattr(ws, "read_runtime_status", lambda: None)
+        monkeypatch.setattr(_gw_status, "get_running_pid_cached", lambda: None)
+        monkeypatch.setattr(_gw_status, "read_runtime_status", lambda: None)
         monkeypatch.setattr(ws, "_GATEWAY_HEALTH_URL", "http://gw:8642")
-        monkeypatch.setattr(ws, "_probe_gateway_health", lambda: (True, {
+        monkeypatch.setattr(_web_server_gateway, "_probe_gateway_health", lambda: (True, {
             "status": "ok",
             "gateway_state": "running",
             "platforms": {},
@@ -9654,10 +9679,10 @@ class TestGatewayUpdatedAtContract:
         """Remote body with unparseable updated_at → null, never verbatim."""
         import hermes_cli.web_server as ws
 
-        monkeypatch.setattr(ws, "get_running_pid_cached", lambda: None)
-        monkeypatch.setattr(ws, "read_runtime_status", lambda: None)
+        monkeypatch.setattr(_gw_status, "get_running_pid_cached", lambda: None)
+        monkeypatch.setattr(_gw_status, "read_runtime_status", lambda: None)
         monkeypatch.setattr(ws, "_GATEWAY_HEALTH_URL", "http://gw:8642")
-        monkeypatch.setattr(ws, "_probe_gateway_health", lambda: (True, {
+        monkeypatch.setattr(_web_server_gateway, "_probe_gateway_health", lambda: (True, {
             "status": "ok",
             "gateway_state": "running",
             "platforms": {},
@@ -9677,20 +9702,20 @@ class TestNormaliseThemeDefinition:
     """Tests for _normalise_theme_definition() — parses YAML theme files."""
 
     def test_rejects_missing_name(self):
-        from hermes_cli.web_server import _normalise_theme_definition
+        from hermes_cli.web_server_dashboard import _normalise_theme_definition
         assert _normalise_theme_definition({}) is None
         assert _normalise_theme_definition({"name": ""}) is None
         assert _normalise_theme_definition({"name": "   "}) is None
 
     def test_rejects_non_dict(self):
-        from hermes_cli.web_server import _normalise_theme_definition
+        from hermes_cli.web_server_dashboard import _normalise_theme_definition
         assert _normalise_theme_definition("string") is None
         assert _normalise_theme_definition(None) is None
         assert _normalise_theme_definition([1, 2, 3]) is None
 
     def test_loose_colors_shorthand(self):
         """Bare hex strings under `colors` parse as {hex, alpha=1.0}."""
-        from hermes_cli.web_server import _normalise_theme_definition
+        from hermes_cli.web_server_dashboard import _normalise_theme_definition
         result = _normalise_theme_definition({
             "name": "loose",
             "colors": {"background": "#000000", "midground": "#ffffff"},
@@ -9703,7 +9728,7 @@ class TestNormaliseThemeDefinition:
         assert result["palette"]["foreground"]["alpha"] == 0.0
 
     def test_full_palette_form(self):
-        from hermes_cli.web_server import _normalise_theme_definition
+        from hermes_cli.web_server_dashboard import _normalise_theme_definition
         result = _normalise_theme_definition({
             "name": "full",
             "palette": {
@@ -9719,7 +9744,7 @@ class TestNormaliseThemeDefinition:
         assert result["palette"]["noiseOpacity"] == 0.5
 
     def test_default_typography_applied_when_missing(self):
-        from hermes_cli.web_server import _normalise_theme_definition
+        from hermes_cli.web_server_dashboard import _normalise_theme_definition
         result = _normalise_theme_definition({"name": "minimal"})
         typo = result["typography"]
         assert "fontSans" in typo
@@ -9729,7 +9754,7 @@ class TestNormaliseThemeDefinition:
         assert typo["letterSpacing"] == "0"
 
     def test_partial_typography_merges_with_defaults(self):
-        from hermes_cli.web_server import _normalise_theme_definition
+        from hermes_cli.web_server_dashboard import _normalise_theme_definition
         result = _normalise_theme_definition({
             "name": "partial",
             "typography": {
@@ -9743,13 +9768,13 @@ class TestNormaliseThemeDefinition:
         assert "monospace" in result["typography"]["fontMono"]
 
     def test_layout_defaults(self):
-        from hermes_cli.web_server import _normalise_theme_definition
+        from hermes_cli.web_server_dashboard import _normalise_theme_definition
         result = _normalise_theme_definition({"name": "minimal"})
         assert result["layout"]["radius"] == "0.5rem"
         assert result["layout"]["density"] == "comfortable"
 
     def test_invalid_density_falls_back(self):
-        from hermes_cli.web_server import _normalise_theme_definition
+        from hermes_cli.web_server_dashboard import _normalise_theme_definition
         result = _normalise_theme_definition({
             "name": "bad",
             "layout": {"density": "ultra-spacious"},
@@ -9757,13 +9782,13 @@ class TestNormaliseThemeDefinition:
         assert result["layout"]["density"] == "comfortable"
 
     def test_valid_densities_accepted(self):
-        from hermes_cli.web_server import _normalise_theme_definition
+        from hermes_cli.web_server_dashboard import _normalise_theme_definition
         for d in ("compact", "comfortable", "spacious"):
             r = _normalise_theme_definition({"name": "x", "layout": {"density": d}})
             assert r["layout"]["density"] == d
 
     def test_color_overrides_filter_unknown_keys(self):
-        from hermes_cli.web_server import _normalise_theme_definition
+        from hermes_cli.web_server_dashboard import _normalise_theme_definition
         result = _normalise_theme_definition({
             "name": "o",
             "colorOverrides": {
@@ -9779,12 +9804,12 @@ class TestNormaliseThemeDefinition:
         }
 
     def test_color_overrides_omitted_when_empty(self):
-        from hermes_cli.web_server import _normalise_theme_definition
+        from hermes_cli.web_server_dashboard import _normalise_theme_definition
         result = _normalise_theme_definition({"name": "x"})
         assert "colorOverrides" not in result
 
     def test_alpha_clamped_to_unit_range(self):
-        from hermes_cli.web_server import _normalise_theme_definition
+        from hermes_cli.web_server_dashboard import _normalise_theme_definition
         r = _normalise_theme_definition({
             "name": "c",
             "palette": {"background": {"hex": "#000", "alpha": 99.5}},
@@ -9797,7 +9822,7 @@ class TestNormaliseThemeDefinition:
         assert r2["palette"]["background"]["alpha"] == 0.0
 
     def test_invalid_alpha_uses_default(self):
-        from hermes_cli.web_server import _normalise_theme_definition
+        from hermes_cli.web_server_dashboard import _normalise_theme_definition
         r = _normalise_theme_definition({
             "name": "c",
             "palette": {"background": {"hex": "#000", "alpha": "not a number"}},
@@ -9811,7 +9836,7 @@ class TestDiscoverUserThemes:
     def test_returns_empty_when_dir_missing(self, tmp_path, monkeypatch):
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
         from hermes_cli import web_server
-        assert web_server._discover_user_themes() == []
+        assert _web_server_dashboard._discover_user_themes() == []
 
     def test_loads_and_normalises_yaml(self, tmp_path, monkeypatch):
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
@@ -9828,7 +9853,7 @@ class TestDiscoverUserThemes:
             "  density: spacious\n"
         )
         from hermes_cli import web_server
-        results = web_server._discover_user_themes()
+        results = _web_server_dashboard._discover_user_themes()
         assert len(results) == 1
         assert results[0]["name"] == "ocean"
         assert results[0]["label"] == "Ocean"
@@ -9845,7 +9870,7 @@ class TestDiscoverUserThemes:
         (themes_dir / "nameless.yaml").write_text("label: No Name Here\n")
         (themes_dir / "ok.yaml").write_text("name: ok\n")
         from hermes_cli import web_server
-        results = web_server._discover_user_themes()
+        results = _web_server_dashboard._discover_user_themes()
         names = [r["name"] for r in results]
         assert "ok" in names
         assert "bad" not in names  # malformed YAML
@@ -9868,7 +9893,7 @@ class TestDiscoverUserThemes:
 
         token = set_hermes_home_override(str(other))
         try:
-            results = web_server._discover_user_themes()
+            results = _web_server_dashboard._discover_user_themes()
         finally:
             reset_hermes_home_override(token)
 
@@ -9905,9 +9930,9 @@ class TestThemeBootstrapCSS:
         self._write_theme(tmp_path)
         from hermes_cli import web_server
         monkeypatch.setattr(
-            web_server, "load_config", lambda: {"dashboard": {"theme": "ocean"}}
+            _cfg_mod, "load_config", lambda: {"dashboard": {"theme": "ocean"}}
         )
-        css = web_server._render_active_theme_bootstrap_css()
+        css = _web_server_dashboard._render_active_theme_bootstrap_css()
         assert css.startswith('<style id="hermes-theme-bootstrap">')
         assert css.endswith("</style>")
         # Real bundle tokens (web/src/themes/context.tsx + index.css).
@@ -9932,27 +9957,27 @@ class TestThemeBootstrapCSS:
         from hermes_cli import web_server
         for builtin in ("default", "midnight", "cyberpunk"):
             monkeypatch.setattr(
-                web_server, "load_config",
+                _cfg_mod, "load_config",
                 lambda b=builtin: {"dashboard": {"theme": b}},
             )
-            assert web_server._render_active_theme_bootstrap_css() == ""
+            assert _web_server_dashboard._render_active_theme_bootstrap_css() == ""
 
     def test_unknown_theme_renders_nothing(self, tmp_path, monkeypatch):
         """Configured theme has no YAML on disk → empty string, no crash."""
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
         from hermes_cli import web_server
         monkeypatch.setattr(
-            web_server, "load_config", lambda: {"dashboard": {"theme": "ghost"}}
+            _cfg_mod, "load_config", lambda: {"dashboard": {"theme": "ghost"}}
         )
-        assert web_server._render_active_theme_bootstrap_css() == ""
+        assert _web_server_dashboard._render_active_theme_bootstrap_css() == ""
 
     def test_non_string_theme_renders_nothing(self, tmp_path, monkeypatch):
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
         from hermes_cli import web_server
         monkeypatch.setattr(
-            web_server, "load_config", lambda: {"dashboard": {"theme": 42}}
+            _cfg_mod, "load_config", lambda: {"dashboard": {"theme": 42}}
         )
-        assert web_server._render_active_theme_bootstrap_css() == ""
+        assert _web_server_dashboard._render_active_theme_bootstrap_css() == ""
 
     def test_malformed_theme_yaml_no_crash(self, tmp_path, monkeypatch):
         """A garbage YAML for the active theme name must not crash — the
@@ -9965,9 +9990,9 @@ class TestThemeBootstrapCSS:
         )
         from hermes_cli import web_server
         monkeypatch.setattr(
-            web_server, "load_config", lambda: {"dashboard": {"theme": "broken"}}
+            _cfg_mod, "load_config", lambda: {"dashboard": {"theme": "broken"}}
         )
-        assert web_server._render_active_theme_bootstrap_css() == ""
+        assert _web_server_dashboard._render_active_theme_bootstrap_css() == ""
 
     def test_load_config_exception_no_crash(self, monkeypatch):
         from hermes_cli import web_server
@@ -9975,8 +10000,8 @@ class TestThemeBootstrapCSS:
         def boom():
             raise RuntimeError("config unreadable")
 
-        monkeypatch.setattr(web_server, "load_config", boom)
-        assert web_server._render_active_theme_bootstrap_css() == ""
+        monkeypatch.setattr(_cfg_mod, "load_config", boom)
+        assert _web_server_dashboard._render_active_theme_bootstrap_css() == ""
 
     def test_style_escape_defends_style_breakout(self, tmp_path, monkeypatch):
         """`</style>` in a theme value cannot break out of the block."""
@@ -9991,9 +10016,9 @@ class TestThemeBootstrapCSS:
         )
         from hermes_cli import web_server
         monkeypatch.setattr(
-            web_server, "load_config", lambda: {"dashboard": {"theme": "sneaky"}}
+            _cfg_mod, "load_config", lambda: {"dashboard": {"theme": "sneaky"}}
         )
-        css = web_server._render_active_theme_bootstrap_css()
+        css = _web_server_dashboard._render_active_theme_bootstrap_css()
         assert css.count("</style>") == 1  # only the legitimate closer
         assert "<\\/style>" in css  # payload was escaped, not emitted raw
 
@@ -10011,7 +10036,7 @@ class TestThemeBootstrapCSS:
         )
         monkeypatch.setattr(ws, "WEB_DIST", dist)
         spa_app = FastAPI()
-        ws.mount_spa(spa_app)
+        _web_server_dashboard.mount_spa(spa_app)
         return TestClient(spa_app)
 
     def test_serve_index_injects_bootstrap_for_user_theme(self, tmp_path, monkeypatch):
@@ -10019,7 +10044,7 @@ class TestThemeBootstrapCSS:
         self._write_theme(tmp_path)
         import hermes_cli.web_server as ws
         monkeypatch.setattr(
-            ws, "load_config", lambda: {"dashboard": {"theme": "ocean"}}
+            _cfg_mod, "load_config", lambda: {"dashboard": {"theme": "ocean"}}
         )
         client = self._mount_spa_client(tmp_path, monkeypatch)
         resp = client.get("/chat")
@@ -10034,7 +10059,7 @@ class TestThemeBootstrapCSS:
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
         import hermes_cli.web_server as ws
         monkeypatch.setattr(
-            ws, "load_config", lambda: {"dashboard": {"theme": "default"}}
+            _cfg_mod, "load_config", lambda: {"dashboard": {"theme": "default"}}
         )
         client = self._mount_spa_client(tmp_path, monkeypatch)
         resp = client.get("/chat")
@@ -10050,7 +10075,7 @@ class TestThemeBootstrapCSS:
         def boom():
             raise RuntimeError("boom")
 
-        monkeypatch.setattr(ws, "load_config", boom)
+        monkeypatch.setattr(_cfg_mod, "load_config", boom)
         client = self._mount_spa_client(tmp_path, monkeypatch)
         resp = client.get("/chat")
         assert resp.status_code == 200
@@ -10064,25 +10089,25 @@ class TestNormaliseThemeExtensions:
     the dashboard without shipping code."""
 
     def test_layout_variant_defaults_to_standard(self):
-        from hermes_cli.web_server import _normalise_theme_definition
+        from hermes_cli.web_server_dashboard import _normalise_theme_definition
         result = _normalise_theme_definition({"name": "t"})
         assert result["layoutVariant"] == "standard"
 
     def test_layout_variant_accepts_known_values(self):
-        from hermes_cli.web_server import _normalise_theme_definition
+        from hermes_cli.web_server_dashboard import _normalise_theme_definition
         for variant in ("standard", "cockpit", "tiled"):
             r = _normalise_theme_definition({"name": "t", "layoutVariant": variant})
             assert r["layoutVariant"] == variant
 
     def test_layout_variant_rejects_unknown(self):
-        from hermes_cli.web_server import _normalise_theme_definition
+        from hermes_cli.web_server_dashboard import _normalise_theme_definition
         r = _normalise_theme_definition({"name": "t", "layoutVariant": "warship"})
         assert r["layoutVariant"] == "standard"
         r2 = _normalise_theme_definition({"name": "t", "layoutVariant": 12})
         assert r2["layoutVariant"] == "standard"
 
     def test_assets_named_slots_passthrough(self):
-        from hermes_cli.web_server import _normalise_theme_definition
+        from hermes_cli.web_server_dashboard import _normalise_theme_definition
         r = _normalise_theme_definition({
             "name": "t",
             "assets": {
@@ -10100,7 +10125,7 @@ class TestNormaliseThemeExtensions:
         assert "notAKnownKey" not in r["assets"]  # unknown slot ignored
 
     def test_assets_custom_block(self):
-        from hermes_cli.web_server import _normalise_theme_definition
+        from hermes_cli.web_server_dashboard import _normalise_theme_definition
         r = _normalise_theme_definition({
             "name": "t",
             "assets": {
@@ -10118,12 +10143,12 @@ class TestNormaliseThemeExtensions:
         }
 
     def test_assets_absent_means_no_field(self):
-        from hermes_cli.web_server import _normalise_theme_definition
+        from hermes_cli.web_server_dashboard import _normalise_theme_definition
         r = _normalise_theme_definition({"name": "t"})
         assert "assets" not in r
 
     def test_custom_css_passthrough_and_capped(self):
-        from hermes_cli.web_server import _normalise_theme_definition
+        from hermes_cli.web_server_dashboard import _normalise_theme_definition
         # Small CSS passes through verbatim.
         r = _normalise_theme_definition({
             "name": "t",
@@ -10137,13 +10162,13 @@ class TestNormaliseThemeExtensions:
         assert len(r2["customCSS"]) <= 32 * 1024
 
     def test_custom_css_empty_dropped(self):
-        from hermes_cli.web_server import _normalise_theme_definition
+        from hermes_cli.web_server_dashboard import _normalise_theme_definition
         for val in ("", "   \n\t", None):
             r = _normalise_theme_definition({"name": "t", "customCSS": val})
             assert "customCSS" not in r
 
     def test_component_styles_per_bucket(self):
-        from hermes_cli.web_server import _normalise_theme_definition
+        from hermes_cli.web_server_dashboard import _normalise_theme_definition
         r = _normalise_theme_definition({
             "name": "t",
             "componentStyles": {
@@ -10164,7 +10189,7 @@ class TestNormaliseThemeExtensions:
         assert "rogueBucket" not in r["componentStyles"]
 
     def test_component_styles_empty_buckets_dropped(self):
-        from hermes_cli.web_server import _normalise_theme_definition
+        from hermes_cli.web_server_dashboard import _normalise_theme_definition
         r = _normalise_theme_definition({
             "name": "t",
             "componentStyles": {
@@ -10179,7 +10204,7 @@ class TestNormaliseThemeExtensions:
 
     def test_component_styles_accepts_numeric_values(self):
         """Numeric values (e.g. opacity: 0.8) are coerced to strings."""
-        from hermes_cli.web_server import _normalise_theme_definition
+        from hermes_cli.web_server_dashboard import _normalise_theme_definition
         r = _normalise_theme_definition({
             "name": "t",
             "componentStyles": {"card": {"opacity": 0.8, "zIndex": 5}},
@@ -10696,7 +10721,7 @@ class TestDashboardPluginManifestExtensions:
         from hermes_cli import web_server
         token = set_hermes_home_override(str(other))
         try:
-            plugins = web_server._discover_dashboard_plugins()
+            plugins = _web_server_dashboard._discover_dashboard_plugins()
         finally:
             reset_hermes_home_override(token)
         assert any(p["name"] == "skin-home" for p in plugins)
@@ -10730,7 +10755,7 @@ class TestDashboardPluginManifestExtensions:
 
         monkeypatch.setenv("HERMES_HOME", str(profile_home))
         from hermes_cli import web_server
-        plugins = web_server._discover_dashboard_plugins()
+        plugins = _web_server_dashboard._discover_dashboard_plugins()
         assert any(p["name"] == "meeting-intelligence" for p in plugins)
 
     def test_profile_local_plugin_wins_over_root_plugin(self, tmp_path, monkeypatch):
@@ -10754,7 +10779,7 @@ class TestDashboardPluginManifestExtensions:
 
         monkeypatch.setenv("HERMES_HOME", str(profile_home))
         from hermes_cli import web_server
-        plugins = web_server._discover_dashboard_plugins()
+        plugins = _web_server_dashboard._discover_dashboard_plugins()
         entries = [p for p in plugins if p["name"] == "dupe"]
         assert len(entries) == 1
         assert entries[0]["tab"]["path"] == "/from-profile"
@@ -10842,6 +10867,7 @@ class TestDashboardPluginManifestExtensions:
 # ---------------------------------------------------------------------------
 
 import sys
+from hermes_cli import main_tui_launch
 
 
 skip_on_windows = pytest.mark.skipif(
@@ -10858,7 +10884,7 @@ class TestPtyWebSocket:
         import hermes_cli.web_server as ws
 
         # Avoid exec'ing the actual TUI in tests: every test below installs
-        # its own fake argv via ``ws._resolve_chat_argv``.
+        # its own fake argv via ``web_server_chat._resolve_chat_argv``.
         self.ws_module = ws
         monkeypatch.setattr(ws, "_DASHBOARD_EMBEDDED_CHAT_ENABLED", True)
         ws.app.state.pty_active_session_files = {}
@@ -10879,12 +10905,12 @@ class TestPtyWebSocket:
         import hermes_cli.main as main_mod
 
         monkeypatch.setattr(
-            main_mod,
+            main_tui_launch,
             "_make_tui_argv",
             lambda project_root, tui_dev=False: (["node", "dist/entry.js"], "/tmp/ui-tui"),
         )
 
-        _argv, _cwd, env = self.ws_module._resolve_chat_argv()
+        _argv, _cwd, env = _web_server_chat._resolve_chat_argv()
 
         assert env["HERMES_TUI_DASHBOARD"] == "1"
         assert env["HERMES_TUI_INLINE"] == "1"
@@ -10898,13 +10924,13 @@ class TestPtyWebSocket:
         import hermes_cli.main as main_mod
 
         monkeypatch.setattr(
-            main_mod,
+            main_tui_launch,
             "_make_tui_argv",
             lambda project_root, tui_dev=False: (["node", "dist/entry.js"], "/tmp/ui-tui"),
         )
         monkeypatch.delenv("COLORTERM", raising=False)
 
-        _argv, _cwd, env = self.ws_module._resolve_chat_argv()
+        _argv, _cwd, env = _web_server_chat._resolve_chat_argv()
 
         assert env["COLORTERM"] == "truecolor"
 
@@ -10913,13 +10939,13 @@ class TestPtyWebSocket:
         import hermes_cli.main as main_mod
 
         monkeypatch.setattr(
-            main_mod,
+            main_tui_launch,
             "_make_tui_argv",
             lambda project_root, tui_dev=False: (["node", "dist/entry.js"], "/tmp/ui-tui"),
         )
         monkeypatch.setenv("COLORTERM", "24bit")
 
-        _argv, _cwd, env = self.ws_module._resolve_chat_argv()
+        _argv, _cwd, env = _web_server_chat._resolve_chat_argv()
 
         assert env["COLORTERM"] == "24bit"
 
@@ -10931,12 +10957,12 @@ class TestPtyWebSocket:
         monkeypatch.delenv("HERMES_PYTHON", raising=False)
         monkeypatch.delenv("HERMES_CWD", raising=False)
         monkeypatch.setattr(
-            main_mod,
+            main_tui_launch,
             "_make_tui_argv",
             lambda project_root, tui_dev=False: (["node", "dist/entry.js"], "/tmp/ui-tui"),
         )
 
-        _argv, _cwd, env = self.ws_module._resolve_chat_argv()
+        _argv, _cwd, env = _web_server_chat._resolve_chat_argv()
 
         assert env is not None
         assert env["HERMES_PYTHON_SRC_ROOT"] == str(main_mod.PROJECT_ROOT)
@@ -10951,12 +10977,12 @@ class TestPtyWebSocket:
         monkeypatch.setenv("HERMES_PYTHON", "/definitely/missing/python")
         monkeypatch.setenv("HERMES_CWD", "/definitely/missing/cwd")
         monkeypatch.setattr(
-            main_mod,
+            main_tui_launch,
             "_make_tui_argv",
             lambda project_root, tui_dev=False: (["node", "dist/entry.js"], "/tmp/ui-tui"),
         )
 
-        _argv, _cwd, env = self.ws_module._resolve_chat_argv()
+        _argv, _cwd, env = _web_server_chat._resolve_chat_argv()
 
         assert env is not None
         assert env["HERMES_PYTHON_SRC_ROOT"] == str(main_mod.PROJECT_ROOT)
@@ -10979,12 +11005,12 @@ class TestPtyWebSocket:
         monkeypatch.setenv("HERMES_CWD", str(tmp_path))
         monkeypatch.setenv("HERMES_PYTHON", str(relative_python))
         monkeypatch.setattr(
-            main_mod,
+            main_tui_launch,
             "_make_tui_argv",
             lambda project_root, tui_dev=False: (["node", "dist/entry.js"], "/tmp/ui-tui"),
         )
 
-        _argv, _cwd, env = self.ws_module._resolve_chat_argv()
+        _argv, _cwd, env = _web_server_chat._resolve_chat_argv()
 
         assert env is not None
         assert env["HERMES_PYTHON"] == str(relative_python)
@@ -11006,7 +11032,7 @@ class TestPtyWebSocket:
             "PATH": str(bin_dir),
         }
 
-        main_mod._apply_tui_python_env(env)
+        main_tui_launch._apply_tui_python_env(env)
 
         assert env["HERMES_PYTHON"] == command
 
@@ -11018,12 +11044,12 @@ class TestPtyWebSocket:
         monkeypatch.setenv("PWD", str(tmp_path))
         monkeypatch.setattr(main_mod.os, "getcwd", lambda: (_ for _ in ()).throw(FileNotFoundError()))
         monkeypatch.setattr(
-            main_mod,
+            main_tui_launch,
             "_make_tui_argv",
             lambda project_root, tui_dev=False: (["node", "dist/entry.js"], "/tmp/ui-tui"),
         )
 
-        _argv, _cwd, env = self.ws_module._resolve_chat_argv()
+        _argv, _cwd, env = _web_server_chat._resolve_chat_argv()
 
         assert env is not None
         assert env["HERMES_CWD"] == str(tmp_path)
@@ -11050,12 +11076,12 @@ class TestPtyWebSocket:
         monkeypatch.delenv("TERMINAL_DOCKER_IMAGE", raising=False)
         monkeypatch.delenv("TERMINAL_DOCKER_EXTRA_ARGS", raising=False)
         monkeypatch.setattr(
-            main_mod,
+            main_tui_launch,
             "_make_tui_argv",
             lambda project_root, tui_dev=False: (["node", "dist/entry.js"], "/tmp/ui-tui"),
         )
 
-        _argv, _cwd, env = self.ws_module._resolve_chat_argv()
+        _argv, _cwd, env = _web_server_chat._resolve_chat_argv()
 
         assert env["TERMINAL_ENV"] == "docker"
         assert env["TERMINAL_DOCKER_IMAGE"] == "example/hermes-tools:latest"
@@ -11072,7 +11098,7 @@ class TestPtyWebSocket:
 
     def test_rejects_missing_token(self, monkeypatch):
         monkeypatch.setattr(
-            self.ws_module,
+            _web_server_chat,
             "_resolve_chat_argv",
             lambda resume=None, sidecar_url=None, profile=None: (["/bin/cat"], None, None),
         )
@@ -11085,7 +11111,7 @@ class TestPtyWebSocket:
 
     def test_rejects_bad_token(self, monkeypatch):
         monkeypatch.setattr(
-            self.ws_module,
+            _web_server_chat,
             "_resolve_chat_argv",
             lambda resume=None, sidecar_url=None, profile=None: (["/bin/cat"], None, None),
         )
@@ -11111,11 +11137,11 @@ class TestPtyWebSocket:
             captured["thread_kwargs"] = kwargs
             return fn(*args, **kwargs)
 
-        monkeypatch.setattr(self.ws_module, "_resolve_chat_argv", fake_resolve)
-        monkeypatch.setattr(self.ws_module.asyncio, "to_thread", fake_to_thread)
+        monkeypatch.setattr(_web_server_chat, "_resolve_chat_argv", fake_resolve)
+        monkeypatch.setattr(_web_server_chat.asyncio, "to_thread", fake_to_thread)
 
         argv, cwd, env = asyncio.run(
-            self.ws_module._resolve_chat_argv_async(
+            _web_server_chat._resolve_chat_argv_async(
                 resume="sess-42",
                 sidecar_url="ws://127.0.0.1:9119/api/pub?channel=abc",
                 profile="worker",
@@ -11145,7 +11171,7 @@ class TestPtyWebSocket:
             captured["profile"] = profile
             return (["/bin/sh", "-c", "printf async-resolve-ok"], None, None)
 
-        monkeypatch.setattr(self.ws_module, "_resolve_chat_argv_async", fake_resolve_async)
+        monkeypatch.setattr(_web_server_chat, "_resolve_chat_argv_async", fake_resolve_async)
 
         with self.client.websocket_connect(self._url(resume="sess-99")) as conn:
             try:
@@ -11164,7 +11190,7 @@ class TestPtyWebSocket:
         from starlette.websockets import WebSocketDisconnect
 
         # Patch the REAL resolver so the whole wrapper/to_thread/lock chain runs.
-        monkeypatch.setattr(self.ws_module, "_resolve_chat_argv", raising_resolver)
+        monkeypatch.setattr(_web_server_chat, "_resolve_chat_argv", raising_resolver)
 
         url = self._url(profile=profile) if profile else self._url()
         with self.client.websocket_connect(url) as conn:
@@ -11199,7 +11225,7 @@ class TestPtyWebSocket:
 
     def test_streams_child_stdout_to_client(self, monkeypatch):
         monkeypatch.setattr(
-            self.ws_module,
+            _web_server_chat,
             "_resolve_chat_argv",
             lambda resume=None, sidecar_url=None, profile=None: (
                 ["/bin/sh", "-c", "printf hermes-ws-ok"],
@@ -11229,7 +11255,7 @@ class TestPtyWebSocket:
         # ``cat`` echoes stdin back, so a write → read round-trip proves
         # the full duplex path.
         monkeypatch.setattr(
-            self.ws_module,
+            _web_server_chat,
             "_resolve_chat_argv",
             lambda resume=None, sidecar_url=None, profile=None: (["/bin/cat"], None, None),
         )
@@ -11261,7 +11287,7 @@ class TestPtyWebSocket:
             "print(cols); print(rows)"
         )
         monkeypatch.setattr(
-            self.ws_module,
+            _web_server_chat,
             "_resolve_chat_argv",
             # sleep gives the test time to push the resize before the child reads the ioctl.
             lambda resume=None, sidecar_url=None, profile=None: (
@@ -11298,14 +11324,12 @@ class TestPtyWebSocket:
             raise PtyUnavailableError("pty missing for tests")
 
         monkeypatch.setattr(
-            self.ws_module,
+            _web_server_chat,
             "_resolve_chat_argv",
             lambda resume=None, sidecar_url=None, profile=None: (["/bin/cat"], None, None),
         )
-        # Patch PtyBridge.spawn at the web_server module's binding.
-        import hermes_cli.web_server as ws_mod
-
-        monkeypatch.setattr(ws_mod.PtyBridge, "spawn", classmethod(lambda cls, *a, **k: _raise(*a, **k)))
+        # Patch PtyBridge.spawn at the web_server_chat module's binding.
+        monkeypatch.setattr(_web_server_chat.PtyBridge, "spawn", classmethod(lambda cls, *a, **k: _raise(*a, **k)))
 
         with self.client.websocket_connect(self._url()) as conn:
             # Expect a final text frame with the error message, then close.
@@ -11319,7 +11343,7 @@ class TestPtyWebSocket:
             captured["resume"] = resume
             return (["/bin/sh", "-c", "printf resume-arg-ok"], None, None)
 
-        monkeypatch.setattr(self.ws_module, "_resolve_chat_argv", fake_resolve)
+        monkeypatch.setattr(_web_server_chat, "_resolve_chat_argv", fake_resolve)
 
         with self.client.websocket_connect(self._url(resume="sess-42")) as conn:
             # Drain briefly so the handler actually invokes the resolver.
@@ -11340,7 +11364,7 @@ class TestPtyWebSocket:
             captured["active_session_file"] = active_session_file
             return (["/bin/sh", "-c", "printf sidecar-ok"], None, None)
 
-        monkeypatch.setattr(self.ws_module, "_resolve_chat_argv", fake_resolve)
+        monkeypatch.setattr(_web_server_chat, "_resolve_chat_argv", fake_resolve)
         monkeypatch.setattr(
             self.ws_module.app.state, "bound_host", "127.0.0.1", raising=False
         )
@@ -11395,7 +11419,7 @@ class TestPtyWebSocket:
             sub_other = _FakeSub()
             frame = '{"type":"tool.start","payload":{"tool_id":"t1"}}'
 
-            event_channels, event_lock = ws_mod._get_event_state(app)
+            event_channels, event_lock = _rt_chat_ws._get_event_state(app)
             # Register two subscribers on the target channel and one on a
             # different channel, exactly as the /api/events handler does.
             async with event_lock:
@@ -11404,7 +11428,7 @@ class TestPtyWebSocket:
                 )
                 event_channels.setdefault("other-channel", set()).add(sub_other)
             try:
-                await ws_mod._broadcast_event(app, "broadcast-test", frame)
+                await _rt_chat_ws._broadcast_event(app, "broadcast-test", frame)
             finally:
                 async with event_lock:
                     event_channels.pop("broadcast-test", None)
@@ -11432,18 +11456,18 @@ class TestPtyWebSocket:
 
 
 def test_resolve_chat_argv_injects_gateway_ws_url(monkeypatch):
-    import hermes_cli.main as cli_main
+    import hermes_cli.main_tui_launch as tui_launch
     import hermes_cli.web_server as ws
 
     monkeypatch.setattr(
-        cli_main,
+        tui_launch,
         "_make_tui_argv",
         lambda *_args, **_kwargs: (["node", "fake-tui.js"], Path("/tmp")),
     )
     monkeypatch.setattr(ws.app.state, "bound_host", "127.0.0.1", raising=False)
     monkeypatch.setattr(ws.app.state, "bound_port", 9119, raising=False)
 
-    _argv, _cwd, env = ws._resolve_chat_argv()
+    _argv, _cwd, env = _web_server_chat._resolve_chat_argv()
 
     assert env is not None
     gateway_url = env.get("HERMES_TUI_GATEWAY_URL", "")
@@ -11808,7 +11832,7 @@ class TestServeIndexMissingIndex:
         monkeypatch.setattr(ws, "WEB_DIST", dist)
         monkeypatch.delenv("HERMES_SERVE_HEADLESS", raising=False)
         spa_app = FastAPI()
-        ws.mount_spa(spa_app)
+        _web_server_dashboard.mount_spa(spa_app)
         return TestClient(spa_app), dist
 
     def test_missing_index_inside_existing_dist_returns_json_404(
@@ -11861,7 +11885,7 @@ class TestHeadlessServeTokenPage:
         monkeypatch.setenv("HERMES_SERVE_HEADLESS", "1")
         spa_app = FastAPI()
         spa_app.state.auth_required = gated
-        ws.mount_spa(spa_app)
+        _web_server_dashboard.mount_spa(spa_app)
         return TestClient(spa_app), ws
 
     def test_root_serves_token_page_when_not_gated(self, monkeypatch):
@@ -11929,7 +11953,7 @@ class TestHashedAssetCacheHeaders:
         monkeypatch.setattr(ws, "WEB_DIST", dist)
         monkeypatch.delenv("HERMES_SERVE_HEADLESS", raising=False)
         spa_app = FastAPI()
-        ws.mount_spa(spa_app)
+        _web_server_dashboard.mount_spa(spa_app)
         return TestClient(spa_app)
 
     def test_hashed_js_asset_is_immutable(self, tmp_path, monkeypatch):
@@ -12255,7 +12279,7 @@ def test_mount_spa_dynamic_web_dist_recheck(tmp_path, monkeypatch):
     dist = tmp_path / "web_dist"
     monkeypatch.setattr(web_server, "WEB_DIST", dist)
 
-    web_server.mount_spa(app)
+    _web_server_dashboard.mount_spa(app)
     client = TestClient(app)
 
     # 1. missing build -> 404
