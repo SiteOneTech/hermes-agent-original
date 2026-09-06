@@ -175,8 +175,10 @@ class RemoteKernel:
             return False
 
 
-def _kernel_key(owner: str, env_type: str, task_env_id: str) -> Tuple:
-    return (owner, "remote", env_type, task_env_id)
+def _kernel_key(owner: str, env_type: str, task_env_id: str, sandbox_tools: frozenset) -> Tuple:
+    """The hermes_tools stub module is generated from ``sandbox_tools`` once, at spawn, so a kernel
+    is only reusable by calls with the SAME tool set; a different set gets its own kernel."""
+    return (owner, "remote", env_type, task_env_id, tuple(sorted(sandbox_tools)))
 
 
 def _owner_lock(key: Tuple) -> threading.Lock:
@@ -345,7 +347,11 @@ def execute_in_remote_kernel(
     from tools.code_kernel import _resolve_owner
 
     owner = _resolve_owner(task_env_id)
-    key = _kernel_key(owner, env_type, task_env_id)
+    # The generated hermes_tools.py is fixed at spawn time, so its capability
+    # set is part of both the registry and owner-lock identity.  A later cell
+    # with a different tool set must get fresh stubs rather than reuse the
+    # previous kernel under the same owner/task coordinates.
+    key = _kernel_key(owner, env_type, task_env_id, sandbox_tools)
     with _owner_lock(key):
         return _execute_in_remote_kernel_locked(
             code,
