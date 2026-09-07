@@ -46,6 +46,106 @@ def test_generated_server_document_action_policy_and_private_recipient(tmp_path)
     assert server._document_action_recipient(token)["target"] == "+130****0000"
 
 
+def test_generated_server_rejects_cancelled_workspace_manifest(tmp_path):
+    server = _server_module(tmp_path)
+    token = "C" * 24
+    workspace = server.PUBLIC_DIR / "w" / token
+    workspace.mkdir(parents=True)
+    (workspace / "workspace.json").write_text(
+        json.dumps({"deliverable_id": "quote-closed", "status": "cancelled"}),
+        encoding="utf-8",
+    )
+
+    assert server._workspace_matches_token(token, "quote-closed", {"quote_id": "quote-closed"}) is True
+    assert server._workspace_closed_status(token) == "cancelled"
+
+
+def test_generated_server_generic_events_reject_closed_manifests_before_audit(tmp_path):
+    server = _server_module(tmp_path)
+    for status, token in (("cancelled", "G" * 24), ("expired", "E" * 24)):
+        workspace = server.PUBLIC_DIR / "w" / token
+        workspace.mkdir(parents=True)
+        document_id = f"quote-{status}"
+        (workspace / "workspace.json").write_text(
+            json.dumps({"deliverable_id": document_id, "status": status}),
+            encoding="utf-8",
+        )
+        handler = _FakeJsonPostHandler(
+            {
+                "token": token,
+                "deliverable_id": document_id,
+                "event_type": "commented",
+                "metadata": {"quote_id": document_id},
+            }
+        )
+        server.Handler.do_POST(handler)
+
+        assert handler.status == 409
+        response = json.loads(handler.wfile.getvalue().split(b"\r\n\r\n")[-1])
+        assert response == {"ok": False, "error": "terminal_document_status", "status": status}
+    assert not server._audit_path().exists()
+
+
+def test_generated_server_terminal_specific_status_overrides_active_status_before_audit(tmp_path):
+    server = _server_module(tmp_path)
+    manifests = (
+        ("expired", "D" * 24, {"status": "active", "document_status": "expired"}),
+        ("cancelled", "N" * 24, {"status": "active", "metadata": {"signature_status": "cancelled"}}),
+    )
+    for expected_status, token, manifest_status in manifests:
+        document_id = f"quote-conflicting-{expected_status}"
+        workspace = server.PUBLIC_DIR / "w" / token
+        workspace.mkdir(parents=True)
+        (workspace / "workspace.json").write_text(
+            json.dumps({"deliverable_id": document_id, **manifest_status}),
+            encoding="utf-8",
+        )
+        handler = _FakeJsonPostHandler(
+            {
+                "token": token,
+                "deliverable_id": document_id,
+                "event_type": "commented",
+                "metadata": {"quote_id": document_id},
+            }
+        )
+
+        server.Handler.do_POST(handler)
+
+        assert handler.status == 409
+        response = json.loads(handler.wfile.getvalue().split(b"\r\n\r\n")[-1])
+        assert response == {"ok": False, "error": "terminal_document_status", "status": expected_status}
+    assert not server._audit_path().exists()
+
+
+def test_generated_server_accepts_active_generic_event_and_audits_once(tmp_path):
+    server = _server_module(tmp_path)
+    token = "A" * 24
+    document_id = "quote-active"
+    workspace = server.PUBLIC_DIR / "w" / token
+    workspace.mkdir(parents=True)
+    (workspace / "workspace.json").write_text(
+        json.dumps({"deliverable_id": document_id, "status": "active"}),
+        encoding="utf-8",
+    )
+    handler = _FakeJsonPostHandler(
+        {
+            "token": token,
+            "deliverable_id": document_id,
+            "event_type": "commented",
+            "metadata": {"quote_id": document_id},
+        }
+    )
+
+    server.Handler.do_POST(handler)
+
+    assert handler.status == 202
+    response = json.loads(handler.wfile.getvalue().split(b"\r\n\r\n")[-1])
+    assert response == {"ok": True, "event_id": "queued", "status": "pending_agent_ingest"}
+    events = server._audit_path().read_text(encoding="utf-8").splitlines()
+    assert len(events) == 1
+    assert json.loads(events[0])["deliverable_id"] == document_id
+
+
 def test_generated_server_rejects_signed_action_without_otp_session(tmp_path):
     server = _server_module(tmp_path)
     token = "S" * 24
@@ -297,6 +397,8 @@ class _FakeGetHandler:
 
 
 class _FakeJsonPostHandler:
+    path = "/api/events"
+
     def __init__(self, payload: dict):
         raw = json.dumps(payload).encode("utf-8")
         self.headers = {"Content-Length": str(len(raw)), "Content-Type": "application/json", "Host": "example.test", "User-Agent": "pytest"}

@@ -132,6 +132,7 @@ from delivery_document_actions import (
 )
 
 TERMINAL_DOCUMENT_STATUSES = {"completed", "cancelled", "expired", "declined"}
+WITHDRAWN_DOCUMENT_STATUSES = {"cancelled", "expired"}
 TERMINAL_GATED_DOCUMENT_EVENT_TYPES = {"approved", "rejected", "signed"}
 
 EVENT_DIR = Path(os.environ.get("EVENT_DIR", "/data/events"))
@@ -423,6 +424,23 @@ def _workspace_matches_token(token: str, deliverable_id: str, metadata: dict[str
         if value and str(value) != deliverable_id:
             return False
     return True
+
+
+def _workspace_closed_status(token: str) -> str | None:
+    """Return the terminal withdrawal status recorded in a public manifest."""
+    manifest = _workspace_manifest(token)
+    if not isinstance(manifest, dict):
+        return None
+    metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
+    for source in (manifest, metadata):
+        # Match the authoritative document-action resolver's field precedence,
+        # but inspect each field so an active generic status cannot mask a
+        # terminal document-specific status.
+        for key in ("request_status", "document_status", "signature_status", "status"):
+            status = str(source.get(key) or "").strip().lower()
+            if status in WITHDRAWN_DOCUMENT_STATUSES:
+                return status
+    return None
 
 
 def _document_action_recipient(token: str) -> dict[str, str] | None:
@@ -1692,6 +1710,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not _workspace_matches_token(token, deliverable_id, metadata):
             _json_response(self, 403, {"ok": False, "error": "invalid_token_scope"})
+            return
+        closed_status = _workspace_closed_status(token)
+        if closed_status:
+            _json_response(self, 409, {"ok": False, "error": "terminal_document_status", "status": closed_status})
             return
         if event_type in OTP_REQUIRED_DOCUMENT_EVENT_TYPES:
             _json_response(self, 401, {"ok": False, "error": "otp_required", "request_otp": "/api/document-actions/request-otp", "verify_otp": "/api/document-actions/verify-otp"})
