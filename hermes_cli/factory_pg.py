@@ -7784,7 +7784,10 @@ def _recover_false_terminalized_review_runs(project_id: str, *, project: dict[st
     reviewer output is empty/provider-failed or when no same-task review gate was
     recorded. A long-lived monitor may still be running older code when a fix is
     first delivered, so reconcile/resolve-state must also repair any already
-    persisted false terminal states before dispatching later work.
+    persisted false terminal states before dispatching later work.  The same
+    repair applies when the review run itself is already failed: a terminal task
+    with only a failed review runtime and no task-bound passed review gate cannot
+    be treated as reviewed.
     """
 
     pid = str(project_id or "").strip()
@@ -7808,6 +7811,8 @@ def _recover_false_terminalized_review_runs(project_id: str, *, project: dict[st
                    t.worktree_path,
                    t.metadata->>'increment_base_commit_after' AS increment_base_commit_after,
                    t.metadata->>'false_review_terminalization_run_id' AS recovered_run_id,
+                   r.status AS review_run_status,
+                   r.exit_code AS review_exit_code,
                    r.output_summary,
                    EXISTS (
                        SELECT 1
@@ -7820,8 +7825,20 @@ def _recover_false_terminalized_review_runs(project_id: str, *, project: dict[st
             JOIN factory.tasks t ON t.task_id=r.task_id AND t.project_id=r.project_id
             WHERE r.project_id={_q(pid)}
               AND COALESCE(r.metadata->>'run_type', 'implementation')='review'
-              AND r.status='succeeded'
-              AND COALESCE(r.exit_code, 0)=0
+              AND (
+                  (r.status='succeeded' AND COALESCE(r.exit_code, 0)=0)
+                  OR (
+                      r.status='failed'
+                      AND COALESCE(r.exit_code, 1)<>0
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM factory.gates failed_review_gate
+                          WHERE failed_review_gate.task_id=r.task_id
+                            AND failed_review_gate.status='passed'
+                            AND failed_review_gate.gate_type IN ({gate_types})
+                      )
+                  )
+              )
               AND t.status IN ({positive_statuses})
               AND (
                   COALESCE((t.metadata->>'false_review_terminalization_recovered')::boolean, false) IS NOT TRUE
@@ -7850,7 +7867,19 @@ def _recover_false_terminalized_review_runs(project_id: str, *, project: dict[st
         )
         if not recovery_scope:
             continue
-        reason = _review_terminal_success_blocker(str(row.get("output_summary") or ""), has_task_bound_passed_gate=has_gate)
+        output_summary = str(row.get("output_summary") or "")
+        review_run_status = str(row.get("review_run_status") or "").strip().lower()
+        review_exit_code = row.get("review_exit_code")
+        try:
+            normalized_review_exit_code = int(review_exit_code) if review_exit_code is not None else 0
+        except (TypeError, ValueError):
+            normalized_review_exit_code = 0
+        review_failed = review_run_status == "failed" or normalized_review_exit_code != 0
+        reason = (
+            _review_runtime_failure_reason(output_summary)
+            if review_failed
+            else _review_terminal_success_blocker(output_summary, has_task_bound_passed_gate=has_gate)
+        )
         if not reason:
             continue
         previous_status = str(row.get("task_status") or "").strip() or "unknown"
@@ -7859,7 +7888,7 @@ def _recover_false_terminalized_review_runs(project_id: str, *, project: dict[st
             + reason
             + ". Review reset to review_ready; a retry must produce a task-bound passed Factory review gate before source acceptance."
         )
-        existing_summary = str(row.get("output_summary") or "")
+        existing_summary = output_summary
         recovered_summary = (existing_summary.rstrip() + "\n\n" if existing_summary.strip() else "") + note
         metadata = {
             "false_review_terminalization_recovered": True,
