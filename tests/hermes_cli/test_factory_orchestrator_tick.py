@@ -275,6 +275,7 @@ def test_project_tick_prefers_configured_base_source_when_invoked_from_stale_pri
     primary, current_worktree, stale_sha, current_sha = _make_stale_primary_with_configured_base_worktree(tmp_path)
     monkeypatch.chdir(primary)
     monkeypatch.setattr(factory, "__file__", str(primary / "hermes_cli" / "factory.py"))
+    monkeypatch.setenv("HERMES_PYTHON_SRC_ROOT", str(primary))
     assert _git(primary, "rev-parse", "HEAD") == stale_sha
     assert _git(primary, "rev-parse", "origin/main") == current_sha
 
@@ -309,6 +310,7 @@ def test_project_tick_prefers_configured_base_source_when_invoked_from_stale_pri
     env = captured["kwargs"]["env"]
     assert env["FACTORY_TICK_PROJECT_ID"] == "demo-project"
     assert env["PYTHONPATH"].split(os.pathsep)[0] == str(current_worktree)
+    assert env["HERMES_PYTHON_SRC_ROOT"] == str(current_worktree)
 
 
 def test_project_tick_fails_closed_when_configured_base_source_is_dirty(monkeypatch, tmp_path):
@@ -912,6 +914,10 @@ def test_spawn_worker_uses_current_python_module_not_path_hermes(monkeypatch, tm
     module = _load_orchestrator_module()
 
     monkeypatch.setattr(module, "_home", lambda: tmp_path)
+    stale_primary = tmp_path / "stale-primary"
+    stale_primary.mkdir()
+    monkeypatch.setenv("PYTHONPATH", str(stale_primary))
+    monkeypatch.setenv("HERMES_PYTHON_SRC_ROOT", str(stale_primary))
     monkeypatch.setattr(
         module,
         "_prepare_worktree",
@@ -979,9 +985,19 @@ def test_spawn_worker_uses_current_python_module_not_path_hermes(monkeypatch, tm
     assert "['hermes'" not in wrapper
     assert "--profile" in wrapper
     assert "implementation-planner" in wrapper
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    worker_env = kwargs["env"]
+    assert isinstance(worker_env, dict)
+    assert worker_env["PYTHONPATH"].split(os.pathsep)[0] == str(tmp_path)
+    assert worker_env["HERMES_PYTHON_SRC_ROOT"] == str(tmp_path)
+    assert worker_env["HERMES_FACTORY_SOURCE_DELEGATED"] == "1"
     assert result["pid"] == 12345
     assert captured["mark_run_spawned"]["process_id"] == 12345
-    assert captured["metadata"]["worker_cwd"] == str(tmp_path)
+    metadata = captured["metadata"]
+    assert isinstance(metadata, dict)
+    assert metadata["worker_cwd"] == str(tmp_path)
+    assert metadata["worker_source_root"] == str(tmp_path)
 
 
 

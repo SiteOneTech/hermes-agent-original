@@ -1,0 +1,23 @@
+Command:
+HERMES_PYTHON=/home/jean/Projects/hermes-agent-original/venv/bin/python3 scripts/run_tests.sh tests/hermes_cli/test_factory_orchestrator_tick.py -k 'project_tick_prefers_configured_base_source_when_invoked_from_stale_primary_root or spawn_worker_uses_current_python_module_not_path_hermes' -v --tb=short
+
+Mode:
+Production repair temporarily reversed with the new test assertions intact.
+
+Result:
+exit_code=1
+2 selected tests failed; 22 tests deselected.
+
+Observed failures:
+- tests/hermes_cli/test_factory_orchestrator_tick.py::test_project_tick_prefers_configured_base_source_when_invoked_from_stale_primary_root
+  AssertionError: HERMES_PYTHON_SRC_ROOT remained the stale primary root instead of the configured/current source worktree.
+  Expected current source: configured-base-source
+  Observed stale source: primary-root
+- tests/hermes_cli/test_factory_orchestrator_tick.py::test_spawn_worker_uses_current_python_module_not_path_hermes
+  KeyError: 'env'
+  Meaning: subprocess.Popen for the nested dispatcher wrapper had no explicit env, so the child inherited ambient/stale source routing.
+
+Harness:
+- scripts/run_tests.sh
+- Python: /home/jean/Projects/hermes-agent-original/venv/bin/python3
+- rootdir: /home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-126-r2f8-current-source-tick-route

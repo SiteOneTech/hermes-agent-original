@@ -1,0 +1,32 @@
+{
+  "action": "tick",
+  "job": "factory_orchestrator_tick",
+  "factory_cli_source_root": "/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-126-r2f8-current-source-tick-route",
+  "factory_project_action_source_root": "/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-126-r2f8-current-source-tick-route",
+  "factory_project_action_delegated": false,
+  "factory_orchestrator_script": "/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-126-r2f8-current-source-tick-route/scripts/factory/factory_orchestrator_tick.py",
+  "claimed": null,
+  "spawned_worker": null,
+  "counts": {
+    "active_runs": 1,
+    "projects": 25,
+    "tasks": 566
+  },
+  "alerts": [
+    {
+      "alert_key": "factory:zeus-alpha-research-ledger-core:hq-37645c9db3285626:human-question-pending",
+      "alert_type": "human_question_pending",
+      "jean_question": "Jean debe decidir: HOLD / REJECTED",
+      "message": "Jean debe decidir: HOLD / REJECTED",
+      "options": [
+        "HOLD",
+        "REJECTED"
+      ],
+      "project_id": "zeus-alpha-research-ledger-core",
+      "question_id": "hq-37645c9db3285626",
+      "requires_human": true,
+      "severity": "high",
+      "task_id": "zeus-alpha-research-ledger-core-r2df-r10-current-source-g1-reviewed-stat"
+    }
+  ]
+}
