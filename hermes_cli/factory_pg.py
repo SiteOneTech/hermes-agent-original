@@ -5058,6 +5058,14 @@ def _is_explicit_g1_recovery_task(task: dict[str, Any]) -> bool:
     return not _has_positive_product_or_runtime_dispatch_scope(task)
 
 
+def _is_explicit_g1_or_documentation_recovery_task(task: dict[str, Any]) -> bool:
+    if _is_validation_task(task) or _is_reporting_dispatch_task(task):
+        return False
+    if not _has_explicit_g1_or_documentation_recovery_scope(task):
+        return False
+    return not _has_positive_product_or_runtime_dispatch_scope(task)
+
+
 def _is_docs_first_repair_dispatch_task(task: dict[str, Any]) -> bool:
     if _is_reconciliation_task(task) or _is_runtime_bootstrap_repair_task(task):
         return True
@@ -5067,10 +5075,7 @@ def _is_docs_first_repair_dispatch_task(task: dict[str, Any]) -> bool:
         return False
     if _is_explicit_g1_recovery_task(task):
         return True
-    return _has_docs_first_repair_terms(task) and (
-        _has_explicit_g1_or_documentation_recovery_scope(task)
-        and not _has_positive_product_or_runtime_dispatch_scope(task)
-    )
+    return _is_explicit_g1_or_documentation_recovery_task(task)
 
 
 def _has_dependency_ready_docs_first_repair_task(tasks: list[dict[str, Any]]) -> bool:
