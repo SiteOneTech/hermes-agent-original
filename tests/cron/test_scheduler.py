@@ -1714,6 +1714,7 @@ class TestRunJobSessionPersistence:
             success, *_ = run_job(job)
 
         assert success is True
+        mock_agent.close.assert_called_once()
         assert fake_db.end_session.call_count == 1
         assert calls_after_close == []
 

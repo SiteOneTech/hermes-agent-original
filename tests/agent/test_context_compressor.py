@@ -309,7 +309,8 @@ class TestPreflightDeferral:
 
     def test_never_defers_when_real_usage_cannot_arrive_or_is_already_over(self, compressor):
         """Deferral is one request, never a disable: a provider that omits usage, a real reading
-        already over threshold, or a rough figure past the whole window all compress now."""
+        already over threshold, or a rough figure past the whole window all compress now. A fresh
+        native-compaction checkpoint is the deliberate exception: it re-anchors once first."""
         compressor.context_length = 100_000
         compressor.threshold_tokens = 85_000
         compressor.last_real_prompt_tokens = 90_000
@@ -326,6 +327,7 @@ class TestPreflightDeferral:
         the stale pre-compression value (above threshold). The awaiting flag
         must force deferral so preflight doesn't fire a SECOND compaction before
         real post-compaction usage arrives."""
+        compressor.context_length = 200_000
         compressor.threshold_tokens = 85_000
         compressor.last_real_prompt_tokens = 120_000
         compressor.awaiting_real_usage_after_compression = True
@@ -333,6 +335,7 @@ class TestPreflightDeferral:
 
     def test_resumes_normal_deferral_after_flag_cleared(self, compressor):
         """Once usage clears the awaiting flag, stale high usage cannot defer forever."""
+        compressor.context_length = 200_000
         compressor.threshold_tokens = 85_000
         compressor.last_real_prompt_tokens = 120_000
         compressor.awaiting_real_usage_after_compression = False
