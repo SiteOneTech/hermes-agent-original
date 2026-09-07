@@ -4909,7 +4909,13 @@ def _candidate_phase_signals(task: dict[str, Any]) -> list[str]:
 
 
 def _phase_allows_g1_or_documentation_recovery(phase: str) -> bool:
-    return phase.startswith(("g0", "g1")) or phase in {"documentation", "docs", "planning"}
+    return phase.startswith(("g0", "g1")) or phase in {
+        "documentation",
+        "documentation_recovery",
+        "documentation_review",
+        "docs",
+        "planning",
+    }
 
 
 def _metadata_scope_key(key: Any) -> str:
