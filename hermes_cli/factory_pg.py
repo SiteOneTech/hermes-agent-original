@@ -2625,6 +2625,64 @@ def _metadata_contains_stale_g1_projection(metadata: dict[str, Any]) -> bool:
     return "unvalidated_required_docs" in projection_text or "g1_documentation_checkout" in projection_text
 
 
+def _metadata_status_value_is_false(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value is False
+    if isinstance(value, str):
+        normalized = _normalized_document_status_value(value)
+        return normalized in _DOCUMENT_STATUS_FALSE_VALUES or any(
+            normalized.startswith(prefix)
+            for prefix in ("pending", "todo", "tbd", "unvalidated", "unreviewed")
+        )
+    return False
+
+
+def _metadata_document_projection_rows(value: Any) -> list[tuple[str, dict[str, Any]]]:
+    if isinstance(value, dict):
+        rows: list[tuple[str, dict[str, Any]]] = []
+        for raw_name, row in value.items():
+            if isinstance(row, dict):
+                rows.append((str(raw_name or ""), row))
+            else:
+                rows.append((str(raw_name or ""), {"file_name": str(raw_name or ""), "reviewed": row}))
+        return rows
+    if isinstance(value, list):
+        return [
+            (str(row.get("file_name") or row.get("name") or row.get("path") or ""), row)
+            for row in value
+            if isinstance(row, dict)
+        ]
+    return []
+
+
+def _metadata_document_projection_has_stale_g1_rows(value: Any) -> bool:
+    g1_names = set(G1_BLOCKING_DOCUMENTS)
+    for raw_name, row in _metadata_document_projection_rows(value):
+        file_name = Path(str(row.get("file_name") or row.get("name") or row.get("path") or raw_name)).name
+        if file_name not in g1_names:
+            continue
+        if row.get("blocking") is True:
+            return True
+        missing = row.get("missing") or row.get("missing_fields") or row.get("missing_status")
+        if isinstance(missing, list) and any(
+            str(item or "").strip().lower() in {"validated", "reviewed"} for item in missing
+        ):
+            return True
+        if isinstance(missing, str) and any(flag in missing.lower() for flag in ("validated", "reviewed")):
+            return True
+        if any(_metadata_status_value_is_false(row.get(flag)) for flag in ("validated", "reviewed")):
+            return True
+    return False
+
+
+def _stale_g1_document_projection_metadata_keys(metadata: dict[str, Any]) -> list[str]:
+    return [
+        key
+        for key in ("document_status", "documents", "factory_documents")
+        if key in metadata and _metadata_document_projection_has_stale_g1_rows(metadata.get(key))
+    ]
+
+
 def _stale_g1_projection_metadata_keys(project: dict[str, Any], finding_codes: list[str], metadata: dict[str, Any] | None = None) -> list[str]:
     """Project metadata keys that must stop driving G1 dispatch once rows are green."""
 
@@ -2634,6 +2692,7 @@ def _stale_g1_projection_metadata_keys(project: dict[str, Any], finding_codes: l
     if not _current_g1_required_documents_ready(project, project_metadata):
         return []
     stale_keys = [key for key in ("g1_documentation_checkout",) if key in project_metadata]
+    stale_keys.extend(_stale_g1_document_projection_metadata_keys(project_metadata))
     if _metadata_contains_stale_g1_projection(project_metadata):
         stale_keys.append("stale_reconciliation_projection")
     return stale_keys
@@ -2674,6 +2733,7 @@ def _project_status_effective_reconciliation_projection(project: dict[str, Any])
     cleaned_anomalies = [code for code in anomalies if code != "unvalidated_required_docs"]
     stale_unvalidated = cleaned_anomalies != anomalies
     stale_keys = [key for key in ("g1_documentation_checkout",) if key in metadata]
+    stale_keys.extend(_stale_g1_document_projection_metadata_keys(metadata))
     stale_projection_key = _metadata_contains_stale_g1_projection(metadata)
     if not stale_unvalidated and not stale_keys and not stale_projection_key:
         return

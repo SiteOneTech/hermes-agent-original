@@ -740,6 +740,49 @@ def test_document_status_resolves_frontmatter_reviewed_index_from_configured_ori
     assert by_name["DOCUMENTATION_INDEX.md"]["reviewed"] is True
 
 
+def test_status_projection_discards_persisted_stale_g1_rows_when_current_origin_reviewed(tmp_path):
+    repo, stale_sha, reviewed_sha = _make_stale_primary_with_reviewed_origin(tmp_path)
+    stale_rows = {
+        name: {"file_name": name, "category": "g1_required", "validated": True, "reviewed": False, "blocking": True}
+        for name in factory_pg.G1_BLOCKING_DOCUMENTS
+    }
+    project = {
+        "project_id": "demo",
+        "repo_path": str(repo),
+        "base_branch": "main",
+        "metadata": {
+            "artifact_dir": "factory/projects/demo",
+            "repo_strategy": {"primary_repo_path": str(repo), "base_branch": "main"},
+            "reconciliation_anomalies": ["unvalidated_required_docs"],
+            "document_status": stale_rows,
+            "documents": stale_rows,
+            "factory_documents": stale_rows,
+        },
+    }
+
+    assert set(factory_pg._stale_g1_projection_metadata_keys(project, [], project["metadata"])) >= {
+        "document_status",
+        "documents",
+        "factory_documents",
+    }
+    project["document_status"] = factory_pg.project_document_status(project)
+    factory_pg._project_status_effective_reconciliation_projection(project)
+
+    g1_rows = [row for row in project["document_status"] if row["category"] == "g1_required"]
+    metadata = project["metadata"]
+    assert _git(repo, "rev-parse", "HEAD") == stale_sha
+    assert g1_rows
+    assert not any(row["blocking"] for row in g1_rows)
+    assert {row["reviewed"] for row in g1_rows} == {True}
+    assert {row["readiness_source"] for row in g1_rows} == {"configured_base_ref"}
+    assert {row["base_commit"] for row in g1_rows} == {reviewed_sha}
+    assert metadata["reconciliation_anomalies"] == []
+    assert "document_status" not in metadata
+    assert "documents" not in metadata
+    assert "factory_documents" not in metadata
+    assert set(metadata["cleared_project_metadata_keys"]) >= {"document_status", "documents", "factory_documents"}
+
+
 def test_document_status_rejects_stale_primary_even_when_primary_docs_are_ready(tmp_path):
     repo, reviewed_sha, pending_sha = _make_reviewed_primary_with_pending_origin(tmp_path)
 
