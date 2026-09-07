@@ -1820,6 +1820,120 @@ def test_force_tick_uses_explicit_g1_recovery_metadata_before_review_when_docs_r
     assert "dispatch_preflight_denied" not in joined
 
 
+def test_force_tick_routes_structured_documentation_phase_before_review_preflight(fake_sql, monkeypatch):
+    product_review = {
+        "project_id": "demo",
+        "lane_id": "lane-review",
+        "task_id": "demo-r2cy-r1-independent-exact-sha-quality-re",
+        "status": "review_ready",
+        "phase": "quality_review",
+        "priority": 17,
+        "title": "R2cy-R1 — independent exact-SHA quality review",
+        "description": "Product quality review must wait for green G1 document rows.",
+        "owner_profile": "quality-reviewer",
+        "reviewer_profile": "security-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {},
+    }
+    product = {
+        "project_id": "demo",
+        "lane_id": "lane-product",
+        "task_id": "demo-alr-020-product",
+        "status": "ready",
+        "phase": "implementation",
+        "priority": 18,
+        "title": "ALR-020 product implementation",
+        "description": "Normal product work remains docs-first gated while G1 rows are red.",
+        "owner_profile": "claude-builder",
+        "engine": "claude_code",
+        "dependencies": [],
+        "metadata": {},
+    }
+    structured_documentation_recovery = {
+        "project_id": "demo",
+        "lane_id": "lane-docs",
+        "task_id": "demo-structured-phase-candidate",
+        "status": "todo",
+        "phase": "documentation",
+        "priority": 19,
+        "title": "Structured phase candidate",
+        "description": (
+            "Final gate closure wording is historical evidence only; select this "
+            "same-project Factory control-plane candidate from structured state and phase."
+        ),
+        "owner_profile": "codex-builder",
+        "reviewer_profile": "quality-reviewer",
+        "engine": "codex",
+        "dependencies": [],
+        "metadata": {"repo_strategy_status": "passed"},
+    }
+    document_status = [{"file_name": "PRD.md", "category": "g1_required", "blocking": True}]
+    project = {
+        "project_id": "demo",
+        "status": "active",
+        "autonomous_enabled": True,
+        "metadata": {"reconciliation_anomalies": ["unvalidated_required_docs"]},
+        "document_status": document_status,
+    }
+    tasks = [product_review, product, structured_documentation_recovery]
+    payload = {"projects": [project], "tasks": tasks, "task_runs": []}
+    assert factory_pg._payload_project_docs_ready(project) is False
+    assert factory_pg._payload_docs_first_repair_should_preempt_review(payload, project_id="demo") is True
+
+    monkeypatch.setattr(factory_pg, "acquire_global_control_plane_lease", lambda *_, **__: {"acquired": True})
+    monkeypatch.setattr(factory_pg, "release_global_control_plane_lease", lambda *_: None)
+    monkeypatch.setattr(factory_pg, "monitor_runs", lambda: {})
+    monkeypatch.setattr(factory_pg, "supervisor_health_check", lambda *_, **__: {"violations": [], "repairs": []})
+    monkeypatch.setattr(factory_pg, "clear_resolved_blockers", lambda project_id: {"project_id": project_id, "reopened": []})
+    monkeypatch.setattr(factory_pg, "status", lambda project_id=None: payload)
+    monkeypatch.setattr(factory_pg, "classify_factory_blockers", lambda *_, **__: [])
+    monkeypatch.setattr(factory_pg, "record_factory_blocker_actions", lambda *_, **__: [])
+    monkeypatch.setattr(factory_pg, "_tasks", lambda project_id: tasks)
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_project_docs_notion_preflight", lambda *_, **__: (False, True, False, False))
+    monkeypatch.setattr(
+        factory_pg,
+        "_validation_task_readiness_findings",
+        lambda project_id: ["validation task demo-r2cy-r1-independent-exact-sha-quality-re is not complete; status=review_ready"],
+    )
+
+    def rows(sql_text, *, user=None, **_):
+        fake_sql.statements.append(sql_text)
+        if "FROM factory.projects p" in sql_text:
+            return [{"project_id": "demo"}]
+        if "t.status='review_ready'" in sql_text:
+            return [product_review]
+        if "status IN ('todo', 'ready')" in sql_text:
+            return [product, structured_documentation_recovery]
+        return []
+
+    def statement_one(sql_text, *, user=None, **_):
+        fake_sql.statements.append(sql_text)
+        if "SET status='review_running'" in sql_text:
+            return {**product_review, "status": "review_running"}
+        if "SET status='claimed'" in sql_text and structured_documentation_recovery["task_id"] in sql_text:
+            return {**structured_documentation_recovery, "status": "claimed"}
+        if "SET status='claimed'" in sql_text and product["task_id"] in sql_text:
+            return {**product, "status": "claimed"}
+        return None
+
+    monkeypatch.setattr(fake_sql, "rows", rows)
+    monkeypatch.setattr(fake_sql, "statement_one", statement_one)
+
+    tick = factory_pg.force_tick("demo")
+
+    assert tick["claimed"] is not None
+    assert tick["claimed"]["task"]["task_id"] == structured_documentation_recovery["task_id"]
+    joined = "\n".join(fake_sql.statements)
+    assert f"Task {structured_documentation_recovery['task_id']} claimed" in joined
+    assert f"Task {product_review['task_id']} claimed for review" not in joined
+    assert f"Task {product['task_id']} claimed" not in joined
+    assert "dispatch_preflight_denied" not in joined
+
+
 def test_claim_next_task_allows_metadata_documentation_recovery_past_validation_readiness(fake_sql, monkeypatch):
     product = {
         "project_id": "demo",

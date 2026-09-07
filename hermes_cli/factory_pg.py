@@ -5047,6 +5047,27 @@ def _is_reporting_dispatch_task(task: dict[str, Any]) -> bool:
     }
 
 
+def _is_structured_g1_or_documentation_recovery_task(task: dict[str, Any]) -> bool:
+    """Return True for same-project G0/G1/documentation recovery by structured fields.
+
+    During a red G1/docs state, scheduler preemption must come from durable task
+    state: phase and explicit metadata.  Free-form task prose may contain quoted
+    final-gate/review failure evidence from the bug being repaired, so prose can
+    only fail closed for product/runtime scope, never be required to grant the
+    recovery bypass.
+    """
+
+    if _is_validation_task(task) or _is_reporting_dispatch_task(task):
+        return False
+    if _has_positive_product_or_runtime_dispatch_scope(task):
+        return False
+    return (
+        any(_phase_allows_g1_or_documentation_recovery(phase) for phase in _candidate_phase_signals(task))
+        or _metadata_marks_g1_recovery(task)
+        or _metadata_marks_documentation_recovery(task)
+    )
+
+
 def _is_explicit_g1_recovery_task(task: dict[str, Any]) -> bool:
     phases = _candidate_phase_signals(task)
     metadata_marks_recovery = _metadata_marks_g1_recovery(task) or _metadata_marks_documentation_recovery(task)
@@ -5065,6 +5086,8 @@ def _is_docs_first_repair_dispatch_task(task: dict[str, Any]) -> bool:
         return True
     if _is_validation_task(task) or _is_reporting_dispatch_task(task):
         return False
+    if _is_structured_g1_or_documentation_recovery_task(task):
+        return True
     if _is_explicit_g1_recovery_task(task):
         return True
     return _has_docs_first_repair_terms(task) and (
