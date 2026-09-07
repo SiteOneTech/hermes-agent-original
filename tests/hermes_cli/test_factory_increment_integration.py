@@ -2222,6 +2222,122 @@ def test_claimed_null_predicate_sees_docs_repair_as_claimable():
     assert factory_pg._claimed_null_alert_expected(payload, project_id="demo") is True
 
 
+def test_cancel_resolved_reconciliation_ignores_text_only_g1_review_recovery(fake_sql):
+    completed_review_recovery = {
+        "project_id": "demo",
+        "lane_id": "lane-review",
+        "task_id": "demo-r2ed-route-red-g1-independent-review-rec",
+        "status": "review_ready",
+        "phase": "g1_recovery",
+        "title": "R2ed — route red-G1 independent-review recovery before product preflight",
+        "description": (
+            "The review repaired the reconciliation loop for anomaly "
+            "unvalidated_required_docs, then no active run remained."
+        ),
+        "result_summary": "Completed review; reconciliation anomaly unvalidated_required_docs resolved.",
+        "metadata": {"source": "factory_task_create"},
+    }
+
+    cancelled = factory_pg.cancel_resolved_reconciliation_tasks(
+        {"project_id": "demo", "metadata": {}},
+        findings=[],
+        tasks=[completed_review_recovery],
+    )
+
+    assert cancelled == []
+    joined = "\n".join(fake_sql.statements)
+    assert "resolved_reconciliation_task_cancelled" not in joined
+    assert "SET status='cancelled'" not in joined
+
+
+def test_reconcile_reopens_cancelled_structured_g1_reconciliation_despite_stale_blocked_metadata(
+    fake_sql,
+    monkeypatch,
+):
+    stale_blocked_history = {
+        "project_id": "demo",
+        "lane_id": "lane-stale",
+        "task_id": "demo-r2ae-bounded-canonical-g1-validation-and",
+        "status": "blocked",
+        "phase": "documentation",
+        "priority": 19,
+        "title": "R2ae — bounded canonical G1 validation and review recovery",
+        "description": "Historical blocked G1 document recovery; not claimable for the current tick.",
+        "metadata": {"reconciliation_anomaly": "unvalidated_required_docs"},
+    }
+    cancelled_structured_reconciliation = {
+        "project_id": "demo",
+        "lane_id": "lane-docs",
+        "task_id": "demo-reconcile-unvalidated-required-docs",
+        "status": "cancelled",
+        "phase": "documentation",
+        "priority": 36,
+        "title": "R2c — Reconciliation: validate and independently review required Factory docs",
+        "description": "Canonical structured reconciliation task for red G1 documents.",
+        "metadata": {
+            "factory_reconciliation_task": True,
+            "reconciliation_anomaly": "unvalidated_required_docs",
+            "cancel_reason": "resolved_reconciliation_anomaly",
+        },
+    }
+    ready_review = {
+        "project_id": "demo",
+        "lane_id": "lane-review",
+        "task_id": "demo-r2cy-r1-independent-exact-sha-quality-re",
+        "status": "ready",
+        "phase": "quality_review",
+        "priority": 17,
+        "title": "R2cy-R1 — independent exact-SHA quality review of PR #99",
+        "description": "Normal review must stay docs-first gated while G1 is red.",
+        "owner_profile": "quality-reviewer",
+        "metadata": {},
+    }
+    tasks_before = [stale_blocked_history, cancelled_structured_reconciliation, ready_review]
+    reopened_reconciliation = {**cancelled_structured_reconciliation, "status": "todo"}
+    tasks_after = [stale_blocked_history, reopened_reconciliation, ready_review]
+    task_snapshots = [tasks_before, tasks_after]
+    project = {
+        "project_id": "demo",
+        "status": "active",
+        "autonomous_enabled": True,
+        "risk_level": "medium",
+        "metadata": {"reconciliation_anomalies": ["unvalidated_required_docs"]},
+    }
+
+    def tasks(_project_id):
+        return task_snapshots.pop(0) if task_snapshots else tasks_after
+
+    monkeypatch.setattr(factory_pg, "_project", lambda project_id: project)
+    monkeypatch.setattr(factory_pg, "_tasks", tasks)
+    monkeypatch.setattr(factory_pg, "_active_pending_gates", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_latest_gate_rows", lambda project_id: [])
+    monkeypatch.setattr(factory_pg, "_recover_false_terminalized_review_runs", lambda *args, **kwargs: [])
+    monkeypatch.setattr(factory_pg, "_scope_unscoped_current_false_review_terminalization_recoveries", lambda *args, **kwargs: [])
+    monkeypatch.setattr(factory_pg, "_revoke_unscoped_false_review_terminalization_recoveries", lambda *args, **kwargs: [])
+    monkeypatch.setattr(factory_pg, "_stale_g1_projection_metadata_keys", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        factory_pg,
+        "reconciliation_findings",
+        lambda *args, **kwargs: [
+            {
+                "code": "unvalidated_required_docs",
+                "message": "Required Factory methodology documents are present but not fully validated/reviewed",
+                "metadata": {},
+            }
+        ],
+    )
+    fake_sql.rows_results = [[]]
+
+    result = _ORIGINAL_RECONCILE_PROJECT("demo")
+
+    assert result["reconciliation_tasks_created"] == 1
+    assert result["anomalies"] == ["unvalidated_required_docs"]
+    joined = "\n".join(fake_sql.statements)
+    assert "demo-reconcile-unvalidated-required-docs" in joined
+    assert "reopen_reason" in joined
+    assert "reconciliation_task_ensured" in joined
+
+
 def test_monitor_recovers_expired_unspawned_queued_run_as_non_active(fake_sql):
     fake_sql.rows_results = [[]]
     fake_sql.json_query_results = [
