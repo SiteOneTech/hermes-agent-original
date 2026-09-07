@@ -30,6 +30,7 @@ Bounded Factory scheduler/control-plane repair only. This candidate changes Fact
 - Assigned branch: `factory/zeus-alpha-research-ledger-core/inc-104-g1-red-structured-recovery-candi`.
 - Assigned worktree: `/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-104-g1-red-structured-recovery-candi`.
 - Base/pre-edit source SHA: `d0cdd5c2a7e3c5a18107d4b0e965477b5a183f1c` (`origin/main` at claim time in this worktree).
+- Candidate code/test commit SHA: `95673c02acd88f1341153f2305afa54ca889de13` (first Zeus-signed commit containing the production repair, hermetic RED/GREEN test, and project-local evidence artifact; a later evidence-only commit may become the final PR head because a commit cannot contain its own final SHA).
 - Canonical status command used: `/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory status zeus-alpha-research-ledger-core --json` from the assigned worktree.
 - Status snapshots: `/tmp/inc104-status-before.json` and `/tmp/inc104-status-after-code.json`; summaries: `/tmp/inc104-status-before.summary.txt` and `/tmp/inc104-status-after-code.summary.txt`.
 - Status readback summary: `db_backend=agent_core_postgres`, `database=zeus_agent`, `factory_cli_source_root` and `factory_status_source_root` both equal the assigned worktree, `factory_status_delegated=False`, project `status=active`, `autonomous_enabled=True`, active run `run-1788791249-bcb83e47` on task `zeus-alpha-research-ledger-core-g1-red-structured-recovery-candidate-ord`, and active task count `ACTIVE_RUNS=1` while this worker is running.
@@ -70,4 +71,4 @@ Commands run from the assigned worktree:
 
 ## PR-first handoff
 
-This artifact is candidate evidence only. The final pushed candidate commit SHA, PR URL, and Factory gate record are recorded after commit/push because a commit cannot contain its own final SHA. Independent exact-SHA quality review by a separate reviewer remains required before merge or downstream dispatch relies on this repair.
+This artifact is candidate evidence only. It records the exact code/test candidate SHA above; the final pushed PR-head SHA, PR URL, and Factory gate record are recorded after the evidence-only follow-up commit/push because a commit cannot contain its own final SHA. Independent exact-SHA quality review by a separate reviewer remains required before merge or downstream dispatch relies on this repair.
