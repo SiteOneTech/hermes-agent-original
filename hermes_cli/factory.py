@@ -557,6 +557,7 @@ def _source_env(source_root: Path, *, project_id: str | None = None) -> dict[str
     if env.get("PYTHONPATH"):
         pythonpath = f"{pythonpath}{os.pathsep}{env['PYTHONPATH']}"
     env["PYTHONPATH"] = pythonpath
+    env["HERMES_PYTHON_SRC_ROOT"] = str(source_root)
     if project_id:
         env["FACTORY_TICK_PROJECT_ID"] = project_id
     return env

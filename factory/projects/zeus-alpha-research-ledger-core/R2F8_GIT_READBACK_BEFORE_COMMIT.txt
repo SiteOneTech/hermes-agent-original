@@ -1,0 +1,18 @@
+branch=factory/zeus-alpha-research-ledger-core/inc-126-r2f8-current-source-tick-route
+head_before_commit=d0cdd5c2a7e3c5a18107d4b0e965477b5a183f1c
+origin_main=d0cdd5c2a7e3c5a18107d4b0e965477b5a183f1c
+merge_base=d0cdd5c2a7e3c5a18107d4b0e965477b5a183f1c
+remote=https://github.com/SiteOneTech/hermes-agent-original.git
+status=## factory/zeus-alpha-research-ledger-core/inc-126-r2f8-current-source-tick-route...origin/main
+ M hermes_cli/factory.py
+ M scripts/factory/factory_orchestrator_tick.py
+ M tests/hermes_cli/test_factory_orchestrator_tick.py
+?? factory/projects/zeus-alpha-research-ledger-core/R2F8_FINAL_STATUS_READBACK_SUMMARY.json
+?? factory/projects/zeus-alpha-research-ledger-core/R2F8_GIT_DIFF_CHECK_OUTPUT.txt
+?? factory/projects/zeus-alpha-research-ledger-core/R2F8_GIT_READBACK_BEFORE_COMMIT.txt
+?? factory/projects/zeus-alpha-research-ledger-core/R2F8_GREEN_FOCUSED_TEST_OUTPUT.txt
+?? factory/projects/zeus-alpha-research-ledger-core/R2F8_GREEN_TARGETED_TEST_OUTPUT.txt
+?? factory/projects/zeus-alpha-research-ledger-core/R2F8_RED_TEST_OUTPUT.txt
+?? factory/projects/zeus-alpha-research-ledger-core/R2F8_RESOLVE_STATE_READBACK_SUMMARY.json
+?? factory/projects/zeus-alpha-research-ledger-core/R2F8_STATUS_READBACK_SUMMARY.json
+?? factory/projects/zeus-alpha-research-ledger-core/R2F8_TICK_READBACK_SUMMARY.json

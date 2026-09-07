@@ -373,6 +373,18 @@ def _terminate_unregistered_worker(proc: subprocess.Popen[Any]) -> None:
         return
 
 
+def _worker_source_env(source_root: Path) -> dict[str, str]:
+    env = {**os.environ}
+    source_entry = str(source_root)
+    pythonpath = source_entry
+    if env.get("PYTHONPATH"):
+        pythonpath = f"{source_entry}{os.pathsep}{env['PYTHONPATH']}"
+    env["PYTHONPATH"] = pythonpath
+    env["HERMES_PYTHON_SRC_ROOT"] = source_entry
+    env["HERMES_FACTORY_SOURCE_DELEGATED"] = "1"
+    return env
+
+
 def _spawn_worker(db: Any, payload: dict[str, Any], claim: dict[str, Any]) -> dict[str, Any]:
     run_id = claim["run_id"]
     worker = str(claim.get("worker_profile") or "factory-orchestrator")
@@ -451,22 +463,42 @@ def _spawn_worker(db: Any, payload: dict[str, Any], claim: dict[str, Any]) -> di
     # time out even though the parent script already returned.
     cwd_value = worktree_state.get("cwd") if isinstance(worktree_state, dict) else None
     cwd_path = str(cwd_value) if cwd_value and Path(str(cwd_value)).exists() else None
+    worker_env = _worker_source_env(Path(cwd_path)) if cwd_path else None
     proc = subprocess.Popen(
         [sys.executable, "-c", wrapper],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         cwd=cwd_path,
+        env=worker_env,
         start_new_session=True,
         close_fds=True,
     )
     try:
         db.mark_run_spawned(run_id, process_id=proc.pid, log_path=str(log_path), prompt_path=str(prompt_path))
-        db.update_run_metadata(run_id, {"exit_path": str(exit_path), "spawned_by": "factory_orchestrator_tick", "worktree_preparation": worktree_state, "worker_cwd": cwd_path})
+        db.update_run_metadata(
+            run_id,
+            {
+                "exit_path": str(exit_path),
+                "spawned_by": "factory_orchestrator_tick",
+                "worktree_preparation": worktree_state,
+                "worker_cwd": cwd_path,
+                "worker_source_root": cwd_path,
+            },
+        )
     except Exception:
         _terminate_unregistered_worker(proc)
         raise
-    return {"run_id": run_id, "worker_profile": worker, "pid": proc.pid, "log_path": str(log_path), "prompt_path": str(prompt_path), "worktree_preparation": worktree_state, "worker_cwd": cwd_path}
+    return {
+        "run_id": run_id,
+        "worker_profile": worker,
+        "pid": proc.pid,
+        "log_path": str(log_path),
+        "prompt_path": str(prompt_path),
+        "worktree_preparation": worktree_state,
+        "worker_cwd": cwd_path,
+        "worker_source_root": cwd_path,
+    }
 
 
 def main() -> None:
