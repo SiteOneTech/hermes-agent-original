@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from hermes_cli import web_server
+from hermes_cli.web_routers import files as web_files
 
 pytest.importorskip("starlette.testclient")
 from starlette.testclient import TestClient
@@ -66,8 +67,8 @@ def test_fs_list_missing_path_returns_structured_error(client, tmp_path):
 
 
 def test_fs_read_text_matches_preview_shape_and_truncates(client, tmp_path, monkeypatch):
-    monkeypatch.setattr(web_server, "_FS_TEXT_SOURCE_MAX_BYTES", 32)
-    monkeypatch.setattr(web_server, "_FS_TEXT_PREVIEW_MAX_BYTES", 5)
+    monkeypatch.setattr(web_files, "_FS_TEXT_SOURCE_MAX_BYTES", 32)
+    monkeypatch.setattr(web_files, "_FS_TEXT_PREVIEW_MAX_BYTES", 5)
     target = tmp_path / "sample.py"
     target.write_text("print('hello')")
 
@@ -86,7 +87,7 @@ def test_fs_read_text_matches_preview_shape_and_truncates(client, tmp_path, monk
 
 
 def test_fs_read_text_rejects_source_over_cap(client, tmp_path, monkeypatch):
-    monkeypatch.setattr(web_server, "_FS_TEXT_SOURCE_MAX_BYTES", 4)
+    monkeypatch.setattr(web_files, "_FS_TEXT_SOURCE_MAX_BYTES", 4)
     target = tmp_path / "large.txt"
     target.write_text("12345")
 
@@ -150,10 +151,10 @@ def test_fs_git_root_returns_null_outside_repo(client, tmp_path):
 
 
 def test_fs_default_cwd_prefers_existing_terminal_cwd(client, tmp_path, monkeypatch):
-    monkeypatch.setattr(web_server, "load_config", lambda: {"terminal": {"cwd": str(tmp_path)}})
+    monkeypatch.setattr(web_files, "load_config", lambda: {"terminal": {"cwd": str(tmp_path)}})
     monkeypatch.setenv("TERMINAL_CWD", str(tmp_path / "env"))
-    monkeypatch.setattr(web_server.Path, "cwd", lambda: tmp_path / "process")
-    monkeypatch.setattr(web_server, "_fs_git_branch", lambda cwd: "main")
+    monkeypatch.setattr(web_files.Path, "cwd", lambda: tmp_path / "process")
+    monkeypatch.setattr(web_files, "_fs_git_branch", lambda cwd: "main")
 
     response = client.get("/api/fs/default-cwd")
 
@@ -164,10 +165,10 @@ def test_fs_default_cwd_prefers_existing_terminal_cwd(client, tmp_path, monkeypa
 def test_fs_default_cwd_falls_back_when_terminal_cwd_is_invalid(client, tmp_path, monkeypatch):
     fallback = tmp_path / "backend"
     fallback.mkdir()
-    monkeypatch.setattr(web_server, "load_config", lambda: {"terminal": {"cwd": "/client/missing"}})
+    monkeypatch.setattr(web_files, "load_config", lambda: {"terminal": {"cwd": "/client/missing"}})
     monkeypatch.setenv("TERMINAL_CWD", "/client/missing")
-    monkeypatch.setattr(web_server.Path, "cwd", lambda: fallback)
-    monkeypatch.setattr(web_server, "_fs_git_branch", lambda cwd: "")
+    monkeypatch.setattr(web_files.Path, "cwd", lambda: fallback)
+    monkeypatch.setattr(web_files, "_fs_git_branch", lambda cwd: "")
 
     response = client.get("/api/fs/default-cwd")
 

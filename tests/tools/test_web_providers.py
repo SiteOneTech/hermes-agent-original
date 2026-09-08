@@ -177,17 +177,18 @@ class TestPerCapabilityBackendSelection:
         monkeypatch.setenv("PARALLEL_API_KEY", "test-key")
         assert web_tools._get_extract_backend() == "parallel"
 
-    def test_search_backend_ignored_when_not_available(self, monkeypatch):
+    def test_search_backend_is_strict_when_explicitly_configured(self, monkeypatch):
         from tools import web_tools
 
         monkeypatch.setattr(web_tools, "_load_web_config", lambda: {
             "backend": "firecrawl",
-            "search_backend": "exa",  # set but no EXA_API_KEY
+            "search_backend": "exa",  # explicit selection, no EXA_API_KEY
         })
         monkeypatch.delenv("EXA_API_KEY", raising=False)
         monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-key")
-        # Should fall back to firecrawl since exa isn't configured
-        assert web_tools._get_search_backend() == "firecrawl"
+        # Explicit config is not silently rerouted based on process environment;
+        # provider availability is validated by the selected provider itself.
+        assert web_tools._get_search_backend() == "exa"
 
     def test_fully_backward_compatible_with_web_backend_only(self, monkeypatch):
         from tools import web_tools

@@ -1,7 +1,10 @@
 ---
 name: agent-crm-core
-description: "Operate Zeus/SitioUno Agent CRM Core: companies, contacts, relationships, opportunities, products, quotes, invoices, interactions, follow-ups, and customer timeline."
+description: "Operate Agent CRM Core: contacts, deals, quotes, invoices."
 version: 1.0.0
+author: Zeus / SitioUno
+license: MIT
+platforms: [linux, macos, windows]
 category: productivity
 metadata:
   hermes:

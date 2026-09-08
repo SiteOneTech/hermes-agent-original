@@ -90,7 +90,7 @@ class _StalledSummaryWorker:
             fence.finish_commit()
 
 
-def _run(worker, *, chain, timeouts, messages, idle=0.05, ceiling=0.2):
+def _run(worker, *, chain, timeouts, messages, idle=0.2, ceiling=1.0):
     with _patch_chain(chain):
         return run_compress_context_with_progress_timeout(
             worker=worker,

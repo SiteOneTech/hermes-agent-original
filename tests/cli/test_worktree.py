@@ -1147,12 +1147,12 @@ class TestWorktreeLockPredicate:
     def test_live_pid_returns_live(self, git_repo):
         import cli
         p = self._mk_locked(git_repo, "hermes-live", f"hermes pid={os.getpid()}")
-        assert cli._worktree_lock_is_live(str(git_repo), str(p)) == "live"
+        assert worktree_ops._worktree_lock_is_live(str(git_repo), str(p)) == "live"
 
     def test_dead_pid_returns_dead(self, git_repo):
         import cli
         p = self._mk_locked(git_repo, "hermes-dead", "hermes pid=999999")
-        assert cli._worktree_lock_is_live(str(git_repo), str(p)) == "dead"
+        assert worktree_ops._worktree_lock_is_live(str(git_repo), str(p)) == "dead"
 
     def test_foreign_lock_reason_returns_dead(self, git_repo):
         import cli
@@ -1290,17 +1290,17 @@ class TestWidenedPruner:
         import cli
         wt, sha = self._mk(git_repo, "hermes-eq", commit=True)
         self._merge_upstream(git_repo, sha)
-        assert cli._worktree_commits_all_merged_upstream(str(wt)) is True
+        assert worktree_ops._worktree_commits_all_merged_upstream(str(wt)) is True
 
     def test_merged_predicate_false_on_unique_work(self, git_repo):
         import cli
         wt, _ = self._mk(git_repo, "hermes-uniq", commit=True)
-        assert cli._worktree_commits_all_merged_upstream(str(wt)) is False
+        assert worktree_ops._worktree_commits_all_merged_upstream(str(wt)) is False
 
     def test_merged_predicate_true_at_zero_ahead(self, git_repo):
         import cli
         wt, _ = self._mk(git_repo, "hermes-zero")
-        assert cli._worktree_commits_all_merged_upstream(str(wt)) is True
+        assert worktree_ops._worktree_commits_all_merged_upstream(str(wt)) is True
 
     def test_merged_predicate_fails_safe_without_upstream(self, git_repo_no_remote):
         import cli
@@ -1316,7 +1316,7 @@ class TestWidenedPruner:
     def test_merged_predicate_fails_safe_on_stale_base(self, git_repo):
         import cli
         wt, _ = self._mk(git_repo, "hermes-manyahead", commit=True)
-        assert cli._worktree_commits_all_merged_upstream(str(wt), max_ahead=0) is False
+        assert worktree_ops._worktree_commits_all_merged_upstream(str(wt), max_ahead=0) is False
 
     # -- preserved-work warning ----------------------------------------------
 
@@ -1376,8 +1376,8 @@ class TestMergeVerdictCache:
         import cli
         wt, _ = self._mk(git_repo, "hermes-cacheneg", commit=True)
         cache = {}
-        assert cli._worktree_commits_all_merged_upstream(str(wt), cache=cache) is False
-        assert cli._worktree_commits_all_merged_upstream(str(wt), cache=cache) is False
+        assert worktree_ops._worktree_commits_all_merged_upstream(str(wt), cache=cache) is False
+        assert worktree_ops._worktree_commits_all_merged_upstream(str(wt), cache=cache) is False
         assert set(cache.values()) == {False}
 
     def test_new_commit_invalidates_cached_verdict(self, git_repo):
@@ -1428,12 +1428,12 @@ class TestMergeVerdictCache:
         import cli
         bad = tmp_path / "worktree_merge_verdicts.json"
         bad.write_text("{not json at all")
-        monkeypatch.setattr(cli, "_worktree_merge_cache_path", lambda: bad)
-        assert cli._load_worktree_merge_cache() == {}
+        monkeypatch.setattr(worktree_ops, "_worktree_merge_cache_path", lambda: bad)
+        assert worktree_ops._load_worktree_merge_cache() == {}
 
         # Non-bool verdicts must be dropped rather than fed into the decision.
         bad.write_text(json.dumps({"version": 1, "verdicts": {"a..b:20": "yes"}}))
-        assert cli._load_worktree_merge_cache() == {}
+        assert worktree_ops._load_worktree_merge_cache() == {}
 
         wt, _ = self._mk(git_repo, "hermes-corrupt", commit=True)
         cli._prune_stale_worktrees(str(git_repo))

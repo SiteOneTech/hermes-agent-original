@@ -1,6 +1,6 @@
 ---
 name: factory-sandbox-kidu
-description: Use when checking, restarting, or deploying previews to the SitioUno Factory Sandbox Kidu VM behind kidu.app.
+description: Check, restart, or deploy previews to the Kidu sandbox VM.
 version: 1.0.0
 author: Zeus / SitioUno
 license: MIT
@@ -8,7 +8,7 @@ platforms: [linux]
 metadata:
   hermes:
     tags: [factory, sandbox, gcp, tailscale, caddy, docker, kidu]
-    related_skills: [software-factory-orchestration, hermes-agent]
+    related_skills: [hermes-agent]
 ---
 
 # Factory Sandbox Kidu

@@ -96,16 +96,13 @@ class TestWorkerTeardownOnCeiling:
             return (original, "late")
 
         fence = CompressionCommitFence()
-        # This intentionally exercises the total-ceiling path, but it must
-        # leave a realistic scheduling budget for a cooperative worker on a
-        # loaded CI host. A sub-second wall-clock ceiling races thread startup
-        # rather than testing the bounded-grace join contract.
         msgs, prompt = run_compress_context_with_progress_timeout(
             worker=cooperative_worker,
             messages=original,
             system_prompt_fallback="fallback",
-            idle_timeout_seconds=0.1,
-            total_ceiling_seconds=2.0,
+            # Keep idle expiry out of this total-ceiling test under runner load.
+            idle_timeout_seconds=2.0,
+            total_ceiling_seconds=0.2,
             fence=fence,
             stall_fallback=False,
         )

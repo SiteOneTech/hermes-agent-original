@@ -1194,14 +1194,14 @@ class TestHermesHomeIsolation:
 
     def test_get_hermes_home_fallback(self):
         """Without HERMES_HOME set, falls back to the active OS home."""
-        from tools.tirith_security import _get_hermes_home
+        from tools.tirith_security import get_hermes_home
         with patch.dict(os.environ, {}, clear=True):
             # Remove HERMES_HOME entirely. With HOME also absent, expanduser
             # falls back to the account database; compute expected under the
             # same environment instead of after patch.dict restores HOME.
             os.environ.pop("HERMES_HOME", None)
             expected = os.path.join(os.path.expanduser("~"), ".hermes")
-            result = _get_hermes_home()
+            result = str(get_hermes_home())
         assert result == expected
 
 
@@ -1264,7 +1264,8 @@ class TestSpawnWarningDedup:
             "tirith_enabled": True, "tirith_path": "tirith",
             "tirith_timeout": 5, "tirith_fail_open": True,
         }
-        _tirith_mod._reset_spawn_warning_state()
+        with _tirith_mod._warned_lock:
+            _tirith_mod._warned_messages.clear()
 
         with caplog.at_level("WARNING", logger="tools.tirith_security"):
             mock_run.side_effect = FileNotFoundError("[WinError 2]")
@@ -1294,7 +1295,8 @@ class TestSpawnWarningDedup:
             "tirith_timeout": 5, "tirith_fail_open": True,
         }
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="tirith", timeout=5)
-        _tirith_mod._reset_spawn_warning_state()
+        with _tirith_mod._warned_lock:
+            _tirith_mod._warned_messages.clear()
 
         with caplog.at_level("WARNING", logger="tools.tirith_security"):
             for _ in range(10):
@@ -1316,7 +1318,8 @@ class TestSpawnWarningDedup:
             "tirith_enabled": True, "tirith_path": "tirith",
             "tirith_timeout": 5, "tirith_fail_open": True,
         }
-        _tirith_mod._reset_spawn_warning_state()
+        with _tirith_mod._warned_lock:
+            _tirith_mod._warned_messages.clear()
 
         with patch(
             "tools.tirith_security._resolve_tirith_path", return_value=None

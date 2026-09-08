@@ -91,11 +91,18 @@ def _stub_uvicorn_run(monkeypatch):
     """Replace uvicorn.Config/Server with no-op fakes so start_server
     returns immediately (rather than blocking on the event loop). Returns the dict
     that will capture the keyword args.
+
+    Also disables the #93608 port-conflict preflight (``_port_bind_conflict``,
+    looked up through ``web_server``): these tests never bind a socket, and a
+    real ``hermes dashboard`` on :9119 must not turn an auth-gate assertion
+    into ``SystemExit(PORT_IN_USE_EXIT_CODE)``.
     """
     import asyncio
     import contextlib
     import uvicorn
     captured: dict = {"kwargs": {}}
+
+    monkeypatch.setattr(web_server, "_port_bind_conflict", lambda host, port: False)
 
     class _FakeConfig:
         loaded = True

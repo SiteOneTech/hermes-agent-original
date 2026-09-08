@@ -140,7 +140,7 @@ def test_create_openai_client_no_proxy_when_env_unset(mock_openai, monkeypatch):
     http_client.close()
 
 
-@patch("run_agent.OpenAI")
+@patch("agent.process_bootstrap.OpenAI")
 def test_create_openai_client_uses_plain_httpx_client_for_copilot(mock_openai, monkeypatch):
     """All providers now use a standard httpx.Client (no custom socket-options
     transport) so Copilot Claude chat-completions works without a host bypass."""
@@ -205,7 +205,7 @@ def test_get_proxy_for_base_url_returns_none_when_proxy_unset(monkeypatch):
     assert _get_proxy_for_base_url("https://api.openai.com/v1") is None
 
 
-@patch("run_agent.OpenAI")
+@patch("agent.process_bootstrap.OpenAI")
 def test_create_openai_client_bypasses_proxy_for_no_proxy_host(mock_openai, monkeypatch):
     """E2E: with HTTPS_PROXY + NO_PROXY=localhost, a local base_url gets a
     keepalive client with NO HTTPProxy mount."""

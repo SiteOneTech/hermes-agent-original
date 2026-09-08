@@ -1,6 +1,6 @@
 ---
 name: video-intel-pipeline
-description: "Descarga y transcribe videos (YouTube y miles de sitios) con yt-dlp + ffmpeg + faster-whisper, con búsqueda híbrida keyword + semántica."
+description: "Descarga y transcribe videos con yt-dlp y faster-whisper."
 version: 1.0.0
 author: Hermes Agent
 license: MIT

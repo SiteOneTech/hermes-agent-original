@@ -5,6 +5,10 @@ Covers:
 - ``_check_lint()`` robustness against file paths containing curly braces
 """
 
+import base64
+import json
+import re
+
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -202,18 +206,30 @@ class TestPaginationBounds:
         env = MagicMock()
         env.cwd = "/tmp"
         ops = ShellFileOperations(env)
-        expected = ReadResult(content="1|line1", total_lines=2, file_size=12)
-        # An unparsable compound response reaches the retained sequential
-        # fallback; this asserts normalized pagination at the current seam.
-        with patch.object(ops, "_exec", return_value=MagicMock(exit_code=0, stdout="garbled")), \
-             patch.object(ops, "_read_file_sequential", return_value=expected) as safe_reader:
+        commands = []
+
+        def fake_exec(command, *args, **kwargs):
+            # Every shell-backed read is ONE python snippet whose parameters
+            # travel as literals; answer it with the safe reader's wire format.
+            commands.append(command)
+            marker = re.search(r"__HERMES_SR_[0-9a-f]{32}__", command).group(0)
+            payload = {
+                "state": "regular", "file_size": 12, "total_lines": 2,
+                "sample": base64.b64encode(b"line1\nline2\n").decode("ascii"),
+                "page": base64.b64encode(b"line1\n").decode("ascii"),
+            }
+            return MagicMock(exit_code=0, stdout=marker + json.dumps(payload) + marker + "\n")
+
+        with patch.object(ops, "_exec", side_effect=fake_exec):
             result = ops.read_file("notes.txt", offset=0, limit=0)
 
         assert result.error is None
         assert "1|line1" in result.content
-        # Pagination is clamped (0/0 -> 1/1) before it reaches the safe
-        # reader's fallback path.
-        safe_reader.assert_called_once_with("notes.txt", 1, 1)
+        # Pagination is clamped (0/0 -> 1/1) before it reaches the safe reader:
+        # the snippet asked for lines 1..1 of the file, nothing else ran.
+        assert len(commands) == 1 and commands[0].startswith("python3 -c ")
+        assert "\noffset = 1\n" in commands[0]
+        assert "\nend_line = 1\n" in commands[0]
 
     def test_search_clamps_offset_and_limit_before_building_head_pipeline(self):
         env = MagicMock()

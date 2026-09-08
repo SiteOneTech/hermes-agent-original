@@ -1,7 +1,9 @@
 ---
 name: kanban-orchestrator
-description: Decomposition playbook + anti-temptation rules for an orchestrator profile routing work through Kanban. The "don't do the work yourself" rule and the basic lifecycle are auto-injected into every kanban worker's system prompt; this skill is the deeper playbook when you're specifically playing the orchestrator role.
+description: Decomposition playbook for the Kanban orchestrator role.
 version: 3.0.0
+author: Teknium (teknium1), Hermes Agent
+license: MIT
 platforms: [linux, macos, windows]
 environments: [kanban]
 metadata:

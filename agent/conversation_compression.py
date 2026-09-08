@@ -2307,7 +2307,10 @@ class _CompressionLease:
         # start; serialize with the release path so no refresher starts on a freed lock.
         with self._release_guard:
             if not self._released:
-                self._refresher = candidate.start()
+                # Publish the candidate before starting it: if thread startup raises,
+                # release_holder_only() still owns and stops the partial refresher.
+                self._refresher = candidate
+                candidate.start()
 
     def release_holder_only(self) -> None:
         """Stop this holder's refresher and release only its durable lock.

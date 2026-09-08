@@ -76,8 +76,18 @@ def test_runtime_status_running_pid_validates_live_gateway_record(monkeypatch):
     }
     monkeypatch.setattr(status_mod, "_pid_exists", lambda pid: pid == 12345)
     monkeypatch.setattr(status_mod, "_get_process_start_time", lambda pid: None)
-    monkeypatch.setattr(status_mod, "_looks_like_gateway_process", lambda pid: False)
+    # Live cmdline unreadable (Windows / EACCES): identity falls back to the persisted
+    # record's own kind+argv. Never read /proc for the fixture PID -- on a dev box 12345
+    # can be any real process.
+    monkeypatch.setattr(status_mod, "_read_process_cmdline", lambda pid: None)
 
     assert status_mod.get_runtime_status_running_pid(runtime) == 12345
+
+    # A readable live cmdline wins over the record: a recycled PID now running something
+    # else must not be reported as this gateway.
+    monkeypatch.setattr(
+        status_mod, "_read_process_cmdline", lambda pid: "/usr/bin/python3 /srv/webui/server.py"
+    )
+    assert status_mod.get_runtime_status_running_pid(runtime) is None
 
 

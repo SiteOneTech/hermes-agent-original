@@ -105,8 +105,14 @@ class CopilotACPClientSafetyTests(unittest.TestCase):
     def test_timeout_object_is_coerced_for_streaming_requests(self) -> None:
         captured: dict[str, float] = {}
 
-        def fake_run_prompt(prompt_text: str, *, timeout_seconds: float) -> tuple[str, str]:
+        def fake_run_prompt(
+            prompt_text: str,
+            *,
+            timeout_seconds: float,
+            model: str | None = None,
+        ) -> tuple[str, str]:
             captured["timeout"] = timeout_seconds
+            captured["model"] = model
             return "ok", ""
 
         timeout = type(
@@ -126,6 +132,7 @@ class CopilotACPClientSafetyTests(unittest.TestCase):
             )
 
         self.assertEqual(captured["timeout"], 12.0)
+        self.assertEqual(captured["model"], "copilot-acp")
 
     def _dispatch(self, message: dict, *, cwd: str) -> dict:
         process = _FakeProcess()

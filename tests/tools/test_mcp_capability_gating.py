@@ -251,18 +251,18 @@ class TestMethodNotFoundDetection:
         assert _is_method_not_found_error(_mcp_error(-32601)) is True
 
     def test_other_mcp_error_code_is_not_match(self):
-        from tools.mcp_tool import _is_method_not_found_error
+        from tools.mcp_tool_errors import _is_method_not_found_error
         # Invalid params (-32602) is a real error, NOT "ping unsupported".
         assert _is_method_not_found_error(_mcp_error(-32602)) is False
 
     def test_substring_fallback(self):
-        from tools.mcp_tool import _is_method_not_found_error
+        from tools.mcp_tool_errors import _is_method_not_found_error
         assert _is_method_not_found_error(Exception("Method not found")) is True
 
     def test_unknown_method_phrasing_is_match(self):
         # agentmemory's MCP server surfaces method-not-found as a plain
         # "Unknown method: ping" string with no structural -32601 code (#50028).
-        from tools.mcp_tool import _is_method_not_found_error
+        from tools.mcp_tool_errors import _is_method_not_found_error
         assert _is_method_not_found_error(Exception("Unknown method: ping")) is True
 
     def test_unrelated_exception_is_not_match(self):

@@ -1,13 +1,14 @@
 ---
 name: factory-agent-operating-canon
-description: Use when any Hermes profile participates in the SitioUno Software Factory as planner, builder, reviewer, QA, reporter, release agent, or orchestrator. Defines the shared company-style operating methodology, source-of-truth hierarchy, G0/G1 gates, worktree discipline, evidence rules, and handoff contract every Factory agent must follow in addition to its role-specific skills.
+description: Use when acting as any SitioUno Software Factory agent role.
 version: 1.0.0
 author: Zeus / SitioUno
 license: MIT
+platforms: [linux, macos, windows]
 metadata:
   hermes:
     tags: [software-factory, factory-agents, methodology, g0-g1-gates, documentation, agent-operations]
-    related_skills: [software-factory-orchestration, programming-delegation-engines, test-driven-development, requesting-code-review]
+    related_skills: [test-driven-development, requesting-code-review]
     created_by: agent
 ---
 

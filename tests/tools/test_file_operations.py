@@ -23,24 +23,49 @@ from tools.file_operations import (
 )
 
 
-def _compound_read_output(command: str, content: bytes) -> str:
-    """Emulate the current one-round-trip safe read protocol."""
-    match = re.search(r"(__HERMES_RF_[0-9a-f]{32}__)", command)
+_SR_MARKER_RE = re.compile(r"__HERMES_SR_[0-9a-f]{32}__")
+
+
+def _snippet_param(command: str, name: str):
+    """Value of one ``name = <literal>`` parameter line of the safe-reader snippet."""
+    match = re.search(rf"^{name} = (.+)$", command, re.M)
+    assert match, (name, command)
+    return eval(match.group(1))  # int / None / bool literals only
+
+
+def _safe_read_payload(command: str, content: bytes) -> dict:
+    """The JSON the safe reader (``_read_regular_file_page``) prints for ``content``,
+    honouring the ``offset``/``end_line``/``clamp``/``metadata_only`` literals that
+    ``command`` carries: ``total_lines`` counts newlines plus a final unterminated
+    line; ``page`` holds the selected lines exactly as stored, each clamped."""
+    if _snippet_param(command, "metadata_only"):
+        return {"state": "regular", "file_size": len(content)}
+    offset = _snippet_param(command, "offset")
+    end_line = _snippet_param(command, "end_line")
+    clamp = _snippet_param(command, "clamp")
+    lines = content.split(b"\n")
+    partial = lines.pop() if lines else b""
+    total = len(lines) + (1 if partial else 0)
+    stored = [line + b"\n" for line in lines] + ([partial] if partial else [])
+    page = b"".join(
+        (line[:clamp] + (b"\n" if line.endswith(b"\n") else b"")) if clamp is not None else line
+        for line in stored[offset - 1:end_line])
+    return {
+        "state": "regular", "file_size": len(content), "total_lines": total,
+        "sample": base64.b64encode(content[:1000]).decode("ascii"),
+        "page": base64.b64encode(page).decode("ascii"),
+    }
+
+
+def _safe_read_output(command: str, content: bytes, payload: dict = None) -> str:
+    """Emulate the current one-round-trip safe read protocol: one
+    ``<marker>{json}<marker>`` line keyed by the per-call ``__HERMES_SR_`` marker."""
+    match = _SR_MARKER_RE.search(command)
     assert match, command
-    sentinel = match.group(1)
-    page = content.decode("utf-8", "replace")
-    if page and not page.endswith("\n"):
-        # The ``cut`` stage newline-terminates an unterminated final line.
-        page += "\n"
-    segments = (
-        str(len(content)),
-        base64.b64encode(content[:1000]).decode("ascii"),
-        page,
-        str(content.count(b"\n")),
-        "1" if content.endswith(b"\n") else "0",
-        "0 0",
-    )
-    return (sentinel + "\n").join(segments)
+    marker = match.group(0)
+    if payload is None:
+        payload = _safe_read_payload(command, content)
+    return marker + json.dumps(payload, separators=(",", ":")) + marker + "\n"
 
 
 # =========================================================================
@@ -337,14 +362,15 @@ class TestShellFileOpsHelpers:
 
     @pytest.mark.windows_only
     def test_read_file_uses_bash_safe_windows_paths(self, mock_env):
-        """The compound safe-read backend still receives the MSYS path form."""
+        """The safe reader receives the path as a forward-slash literal for the
+        backend's Python (``_python_path``), never a backslash form bash would eat."""
         commands = []
 
         def side_effect(command, **kwargs):
             commands.append(command)
-            if "__HERMES_RF_" in command:
+            if _SR_MARKER_RE.search(command):
                 return {
-                    "output": _compound_read_output(command, b"hello"),
+                    "output": _safe_read_output(command, b"hello"),
                     "returncode": 0,
                 }
             return {"output": "", "returncode": 0}
@@ -355,8 +381,9 @@ class TestShellFileOpsHelpers:
 
         assert result.error is None
         assert len(commands) == 1
-        assert commands[0].startswith("if [ -f ")
-        assert "'/c/Users/alice/notes.txt'" in commands[0]
+        assert commands[0].startswith("python3 -c ")
+        assert "Users/alice/notes.txt" in commands[0]
+        assert "\\" not in commands[0]
 
     def test_is_likely_binary_by_extension(self, file_ops):
         assert file_ops._is_likely_binary("photo.png") is True
@@ -372,10 +399,10 @@ class TestShellFileOpsHelpers:
 
     def test_read_file_strips_leaked_terminal_fence_markers(self, mock_env):
         def side_effect(command, **kwargs):
-            if "__HERMES_RF_" in command:
+            if _SR_MARKER_RE.search(command):
                 leaked = (
                     "'\x07\x1b]0;safe-read\x07\n"
-                    + _compound_read_output(command, b"print('ok')\n")
+                    + _safe_read_output(command, b"print('ok')\n")
                     + "\n\x07'\n"
                 )
                 return {"output": leaked, "returncode": 0}
@@ -392,19 +419,16 @@ class TestShellFileOpsHelpers:
         assert "1|print('ok')" in result.content
 
     def test_read_file_raw_strips_leaked_terminal_fence_markers(self, mock_env):
-        leaked = (
-            "'\x1b]0;safe-read\x07\nalpha\n\x1b]0;safe-read\x07\n"
-        )
+        commands = []
 
         def side_effect(command, **kwargs):
-            if command.startswith("if [ -f "):
-                return {"output": "6\n", "returncode": 0}
-            if command.startswith("head -c 1000"):
-                return {
-                    "output": base64.b64encode(b"alpha\n").decode("ascii"),
-                    "returncode": 0,
-                }
-            if command.startswith("cat "):
+            commands.append(command)
+            if _SR_MARKER_RE.search(command):
+                leaked = (
+                    "'\x1b]0;safe-read\x07\n"
+                    + _safe_read_output(command, b"alpha\n")
+                    + "\x1b]0;safe-read\x07\n"
+                )
                 return {"output": leaked, "returncode": 0}
             return {"output": "", "returncode": 0}
 
@@ -414,6 +438,23 @@ class TestShellFileOpsHelpers:
 
         assert result.error is None
         assert result.content == "alpha\n"
+        # Whole file through the same single validated descriptor as read_file.
+        assert len(commands) == 1 and "\noffset = 1\n" in commands[0]
+
+    def test_read_file_raw_content_survives_fence_marker_lookalike_in_file(self, mock_env):
+        """File bytes travel base64-encoded inside the JSON, so a fence marker or
+        OSC sequence stored IN the file is content, not wrapper, and reads intact."""
+        body = "keep __HERMES_FENCE_x__ and \x1b]0;t\x07 verbatim\n".encode("utf-8")
+
+        def side_effect(command, **kwargs):
+            if _SR_MARKER_RE.search(command):
+                return {"output": _safe_read_output(command, body), "returncode": 0}
+            return {"output": "", "returncode": 0}
+
+        mock_env.execute.side_effect = side_effect
+        result = ShellFileOperations(mock_env).read_file_raw("/tmp/test/a.txt")
+        assert result.error is None
+        assert result.content == body.decode("utf-8")
 
 
 class TestSearchPathValidation:
@@ -765,35 +806,73 @@ class TestByteLayerBinaryDetection:
         # Error near the end but the prefix itself is not clean UTF-8.
         assert file_ops._is_likely_binary_bytes(b"\xff\xfe" + b"a" * 10 + b"\xe4") is True
 
-    # --- transport: _sample_file_bytes ------------------------------------
+    # --- transport: the safe reader's base64 sample/page --------------------
+
+    @staticmethod
+    def _answer(payload_for):
+        def side_effect(command, **kwargs):
+            if _SR_MARKER_RE.search(command):
+                return {"output": _safe_read_output(command, b"", payload_for(command)),
+                        "returncode": 0}
+            return {"output": "", "returncode": 0}
+        return side_effect
 
     def test_sample_decodes_base64_transport(self, mock_env):
-        import base64 as b64
-        payload = ("汉字" * 400).encode("utf-8")[:1000]
-        mock_env.execute.return_value = {
-            "output": b64.b64encode(payload).decode() + "\n",
-            "returncode": 0,
-        }
+        """The 1000-byte sample and the page arrive base64 inside the marker-delimited
+        JSON; a CJK sample cut mid-character decodes to the exact bytes and is text."""
+        content = ("汉字" * 400).encode("utf-8")
+        mock_env.execute.side_effect = self._answer(
+            lambda command: _safe_read_payload(command, content))
         ops = ShellFileOperations(mock_env)
-        assert ops._sample_file_bytes("/tmp/x.txt") == payload
+        result = ops.read_file_bytes("/tmp/x.txt")
+        assert result.error is None and result.is_binary is True
+        assert base64.b64decode(result.base64_content) == content
+        assert result.file_size == len(content)
+        assert ops.read_file("/tmp/x.txt").error is None  # sample[:1000] is not "binary"
 
     def test_sample_falls_back_on_non_base64_output(self, mock_env):
-        mock_env.execute.return_value = {"output": "not base64 at all!!", "returncode": 0}
-        ops = ShellFileOperations(mock_env)
-        assert ops._sample_file_bytes("/tmp/x.txt") is None
+        """A sample that is not clean base64 is a broken payload, never decoded
+        leniently into bytes and never retried through a shell probe."""
+        commands = []
+
+        def payload(command):
+            return {"state": "regular", "file_size": 5, "total_lines": 1,
+                    "sample": "not base64 at all!!", "page": base64.b64encode(b"hello").decode()}
+
+        answer = self._answer(payload)
+
+        def side_effect(command, **kwargs):
+            commands.append(command)
+            return answer(command)
+
+        mock_env.execute.side_effect = side_effect
+        result = ShellFileOperations(mock_env).read_file("/tmp/x.txt")
+        assert result.error and "invalid encoded data" in result.error
+        assert not result.content
+        assert len(commands) == 1 and commands[0].startswith("python3 -c ")
 
     def test_sample_falls_back_on_nonzero_exit(self, mock_env):
-        mock_env.execute.return_value = {"output": "", "returncode": 127}
-        ops = ShellFileOperations(mock_env)
-        assert ops._sample_file_bytes("/tmp/x.txt") is None
+        """No interpreter (exit 127) fails closed: ``python`` is retried once, then
+        the read is refused; no ``[ -f ]``/``wc``/``head``/``sed``/``cat`` fallback."""
+        commands = []
+
+        def side_effect(command, **kwargs):
+            commands.append(command)
+            return {"output": "sh: python3: not found\n", "returncode": 127}
+
+        mock_env.execute.side_effect = side_effect
+        result = ShellFileOperations(mock_env).read_file("/tmp/x.txt")
+        assert result.error and "requires Python" in result.error
+        assert "File not found" not in result.error
+        assert [c.split(" ", 1)[0] for c in commands] == ["python3", "python"]
 
     # --- integration: read_file over the mocked terminal ------------------
 
     def _dispatch(self, cjk_bytes):
         def side_effect(command, **kwargs):
-            if "__HERMES_RF_" in command:
+            if _SR_MARKER_RE.search(command):
                 return {
-                    "output": _compound_read_output(command, cjk_bytes),
+                    "output": _safe_read_output(command, cjk_bytes),
                     "returncode": 0,
                 }
             return {"output": "", "returncode": 0}

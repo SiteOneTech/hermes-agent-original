@@ -1712,10 +1712,15 @@ class TestWebServerEndpoints:
         assert resp.status_code == 422
         assert "aggregator" in resp.json()["detail"]
 
-    def test_put_moa_models_round_trips_fanout_and_reference_max_tokens(self):
+    def test_put_moa_models_round_trips_fanout(self):
         """GET → PUT round-trip must not erase newer per-preset knobs. The old
-        Pydantic payload didn't declare fanout / reference_max_tokens, so any
-        client save silently wiped hand-set values back to defaults."""
+        Pydantic payload didn't declare fanout, so any client save silently
+        wiped hand-set values back to defaults.
+
+        ``reference_max_tokens`` was retired from the MoA preset schema
+        (``_MOA_PRESET_FIELDS`` / ``moa_config._FLAT_PRESET_KEYS`` no longer
+        carry it), so the PUT must tolerate a stale client still sending it
+        without persisting it."""
         from hermes_cli.config import load_config
 
         payload = {
@@ -1724,6 +1729,7 @@ class TestWebServerEndpoints:
                     "reference_models": [{"provider": "openrouter", "model": "deepseek/deepseek-v4-pro"}],
                     "aggregator": {"provider": "openrouter", "model": "anthropic/claude-opus-4.8"},
                     "fanout": "user_turn",
+                    # Retired knob: accepted on the wire, dropped on save.
                     "reference_max_tokens": 600,
                 }
             }
@@ -1734,12 +1740,12 @@ class TestWebServerEndpoints:
 
         saved = load_config()["moa"]["presets"]["default"]
         assert saved["fanout"] == "user_turn"
-        assert saved["reference_max_tokens"] == 600
+        assert "reference_max_tokens" not in saved
 
-        # And the GET view carries them back to the client.
+        # And the GET view carries fanout back to the client.
         fetched = self.client.get("/api/model/moa").json()
         assert fetched["presets"]["default"]["fanout"] == "user_turn"
-        assert fetched["presets"]["default"]["reference_max_tokens"] == 600
+        assert "reference_max_tokens" not in fetched["presets"]["default"]
     # ── Memory provider config (Honcho host-block backend) ──────────────
 
     @pytest.fixture(autouse=True)

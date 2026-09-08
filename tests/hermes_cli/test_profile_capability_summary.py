@@ -73,7 +73,7 @@ def test_profile_capabilities_fall_back_to_platform_toolsets(tmp_path):
 
 def test_profile_to_dict_surfaces_capability_arrays(tmp_path):
     from hermes_cli.profiles import ProfileInfo
-    from hermes_cli.web_server import _profile_to_dict
+    from hermes_cli.web_routers.profiles import _profile_to_dict
 
     info = ProfileInfo(
         name="profile-su",

@@ -1,7 +1,10 @@
 ---
 name: twenty-crm-adapter
-description: "Use Twenty CRM as the first external adapter for Zeus/SitioUno Agent CRM Core."
+description: "Use Twenty CRM as the external adapter for Agent CRM Core."
 version: 1.0.0
+author: Zeus / SitioUno
+license: MIT
+platforms: [linux, macos, windows]
 category: productivity
 metadata:
   hermes:

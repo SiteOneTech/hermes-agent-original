@@ -1,7 +1,10 @@
 import json
 import os
 import socket
+import stat
 import threading
+import time
+import zipfile
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -11,6 +14,7 @@ import plugins.memory.openviking as openviking_module
 from hermes_cli import __version__ as _HERMES_VERSION
 from plugins.memory.openviking import (
     OpenVikingMemoryProvider,
+    _DEFERRED_COMMIT_TIMEOUT,
     _VikingClient,
 )
 
@@ -159,14 +163,25 @@ def test_openviking_env_writer_strips_newlines_when_updating_existing_key(tmp_pa
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX file modes")
-def test_ovcli_config_writer_restricts_file_permissions(tmp_path):
-    config_path = tmp_path / "ovcli.conf"
+def test_ovcli_config_writer_restricts_file_permissions(tmp_path, monkeypatch):
+    # The wizard's ovcli.conf.<name> writer now lives in ``_setup`` (it hands the
+    # data to ``atomic_json_write(mode=0o600)``); the secret-bearing profile must
+    # never be left world-readable.
+    _clear_openviking_env(monkeypatch)
+    monkeypatch.setattr(openviking_module.Path, "home", staticmethod(lambda: tmp_path))
 
-    openviking_module._write_ovcli_config(
-        config_path,
-        {"endpoint": "http://remote.example", "api_key": "secret"},
+    config_path = openviking_module._setup._mirror_manual_config_to_openviking_store(
+        prompt=_prompt_from_values({"OpenViking profile name": "remote"}),
+        select=lambda *args, **kwargs: pytest.fail("a fresh profile name must not open a menu"),
+        cancelled=-1,
+        values={"endpoint": "http://remote.example", "api_key": "secret"},
     )
 
+    assert config_path == tmp_path / ".openviking" / "ovcli.conf.remote"
+    assert json.loads(config_path.read_text(encoding="utf-8")) == {
+        "url": "http://remote.example",
+        "api_key": "secret",
+    }
     assert stat.S_IMODE(config_path.stat().st_mode) == 0o600
 
 
@@ -180,7 +195,7 @@ def test_secret_permission_restriction_logs_chmod_failure(tmp_path, monkeypatch,
     monkeypatch.setattr(type(env_path), "chmod", fail_chmod)
 
     with caplog.at_level("DEBUG", logger=openviking_module.__name__):
-        openviking_module._restrict_secret_file_permissions(env_path)
+        openviking_module._secure_secret_file(env_path)
 
     assert "Could not restrict permissions" in caplog.text
     assert "read-only filesystem" in caplog.text
@@ -395,8 +410,29 @@ def test_discover_ovcli_profiles_lists_saved_profiles_without_active_label(tmp_p
         ("saved", "VPS", openviking_home / "ovcli.conf.VPS"),
     ]
     assert profiles[1].is_active is True
-    assert openviking_module._profile_display_name(profiles[1]) == "VPS"
-    assert "active" not in openviking_module._profile_description(profiles[1]).lower()
+    assert openviking_module._setup._profile_display_name(profiles[1]) == "VPS"
+
+    # The per-profile description was folded into the profile picker menu; the
+    # saved profile must not be tagged "active" there even though it matches ovcli.conf.
+    menus = []
+
+    def select(title, options, **kwargs):
+        menus.append((title, options))
+        return -1
+
+    result = openviking_module._setup._run_existing_profile_setup(
+        profiles=profiles,
+        select=select,
+        cancelled=-1,
+        config={"memory": {}},
+        provider_config={},
+        env_path=tmp_path / ".env",
+    )
+
+    assert result is openviking_module._setup._SETUP_CANCELLED
+    labels = [label for label, _description in menus[0][1]]
+    assert labels == ["OPENVIKING_CLI_CONFIG_FILE", "VPS"]
+    assert "active" not in menus[0][1][1][1].lower()
 
 
 def test_link_ovcli_profile_removes_stale_inline_config(tmp_path):
@@ -506,12 +542,15 @@ def test_post_setup_create_remote_user_profile_can_mirror_to_openviking_store(tm
     monkeypatch.setattr(
         memory_setup,
         "_prompt",
-        _prompt_from_values({
-            "OpenViking server URL": "https://openviking.example",
-            "OpenViking user API key": "user-secret",
-            "Hermes peer ID in OpenViking": "hermes",
-            "OpenViking profile name": "VPS",
-        }),
+        _prompt_from_values(
+            {
+                "OpenViking server URL": "https://openviking.example",
+                "OpenViking user API key": "user-secret",
+                "OpenViking profile name": "VPS",
+            },
+            # New connections use user memory by default: no peer prompt, no implicit peer.
+            forbidden={"Hermes peer ID in OpenViking"},
+        ),
     )
     config = {"memory": {}}
 
@@ -522,7 +561,6 @@ def test_post_setup_create_remote_user_profile_can_mirror_to_openviking_store(tm
     assert json.loads(mirrored_path.read_text(encoding="utf-8")) == {
         "url": "https://openviking.example",
         "api_key": "user-secret",
-        "actor_peer_id": "hermes",
     }
     assert config["memory"]["provider"] == "openviking"
     assert config["memory"]["openviking"] == {
@@ -548,11 +586,13 @@ def test_post_setup_create_remote_user_can_keep_hermes_only(tmp_path, monkeypatc
     monkeypatch.setattr(
         memory_setup,
         "_prompt",
-        _prompt_from_values({
-            "OpenViking server URL": "https://openviking.example",
-            "OpenViking user API key": "user-secret",
-            "Hermes peer ID in OpenViking": "agent",
-        }),
+        _prompt_from_values(
+            {
+                "OpenViking server URL": "https://openviking.example",
+                "OpenViking user API key": "user-secret",
+            },
+            forbidden={"Hermes peer ID in OpenViking"},
+        ),
     )
     config = {"memory": {}}
 
@@ -563,7 +603,7 @@ def test_post_setup_create_remote_user_can_keep_hermes_only(tmp_path, monkeypatc
     env_text = (hermes_home / ".env").read_text(encoding="utf-8")
     assert "OPENVIKING_ENDPOINT=https://openviking.example" in env_text
     assert "OPENVIKING_API_KEY=user-secret" in env_text
-    assert "OPENVIKING_AGENT=agent" in env_text
+    assert "OPENVIKING_AGENT" not in env_text
     assert not (tmp_path / "home" / ".openviking").exists()
 
 
@@ -595,9 +635,13 @@ def test_post_setup_create_openviking_service_validates_after_api_key(tmp_path, 
         _prompt_from_values(
             {
                 "OpenViking API key": "service-secret",
-                "Hermes peer ID in OpenViking": "agent",
             },
-            forbidden={"OpenViking server URL", "OpenViking user API key", "OpenViking root API key"},
+            forbidden={
+                "OpenViking server URL",
+                "OpenViking user API key",
+                "OpenViking root API key",
+                "Hermes peer ID in OpenViking",
+            },
         ),
     )
     config = {"memory": {}}
@@ -611,7 +655,7 @@ def test_post_setup_create_openviking_service_validates_after_api_key(tmp_path, 
             "root_api_key": "",
             "account": "",
             "user": "",
-            "agent": "agent",
+            "agent": "",
             "api_key_type": "user",
         },
         True,
@@ -619,7 +663,7 @@ def test_post_setup_create_openviking_service_validates_after_api_key(tmp_path, 
     env_text = (hermes_home / ".env").read_text(encoding="utf-8")
     assert "OPENVIKING_ENDPOINT=https://api.vikingdb.cn-beijing.volces.com/openviking" in env_text
     assert "OPENVIKING_API_KEY=service-secret" in env_text
-    assert "OPENVIKING_AGENT=agent" in env_text
+    assert "OPENVIKING_AGENT" not in env_text
 
 
 def test_post_setup_remote_blank_api_key_cancels_without_saving(tmp_path, monkeypatch):
@@ -680,7 +724,6 @@ def test_post_setup_user_key_path_can_route_detected_root_key_to_root_setup(tmp_
             "OpenViking user API key": "root-secret",
             "OpenViking account": "acct",
             "OpenViking user": "alice",
-            "Hermes peer ID in OpenViking": "agent",
         }
         return values.get(label, default or "")
 
@@ -689,12 +732,15 @@ def test_post_setup_user_key_path_can_route_detected_root_key_to_root_setup(tmp_
 
     OpenVikingMemoryProvider().post_setup(str(hermes_home), config)
 
-    assert prompt_events.count("Hermes peer ID in OpenViking") == 1
+    # The peer question was retired from new-connection setup (user memory by default).
+    assert prompt_events.count("Hermes peer ID in OpenViking") == 0
+    assert prompt_events.count("OpenViking account") == 1
+    assert prompt_events.count("OpenViking user") == 1
     env_text = (hermes_home / ".env").read_text(encoding="utf-8")
     assert "OPENVIKING_API_KEY=root-secret" in env_text
     assert "OPENVIKING_ACCOUNT=acct" in env_text
     assert "OPENVIKING_USER=alice" in env_text
-    assert "OPENVIKING_AGENT=agent" in env_text
+    assert "OPENVIKING_AGENT" not in env_text
 
 
 def test_post_setup_root_key_path_can_route_detected_user_key_to_user_setup(tmp_path, monkeypatch):
@@ -720,9 +766,13 @@ def test_post_setup_root_key_path_can_route_detected_user_key_to_user_setup(tmp_
             {
                 "OpenViking server URL": "https://openviking.example",
                 "OpenViking root API key": "user-secret",
-                "Hermes peer ID in OpenViking": "agent",
             },
-            forbidden={"OpenViking user API key", "OpenViking account", "OpenViking user"},
+            forbidden={
+                "OpenViking user API key",
+                "OpenViking account",
+                "OpenViking user",
+                "Hermes peer ID in OpenViking",
+            },
         ),
     )
     config = {"memory": {}}
@@ -731,7 +781,7 @@ def test_post_setup_root_key_path_can_route_detected_user_key_to_user_setup(tmp_
 
     env_text = (hermes_home / ".env").read_text(encoding="utf-8")
     assert "OPENVIKING_API_KEY=user-secret" in env_text
-    assert "OPENVIKING_AGENT=agent" in env_text
+    assert "OPENVIKING_AGENT" not in env_text
     assert "OPENVIKING_ACCOUNT" not in env_text
     assert "OPENVIKING_USER" not in env_text
 
@@ -750,7 +800,7 @@ def test_manual_root_key_flow_prints_validation_progress(monkeypatch, capsys):
     monkeypatch.setattr(openviking_module, "_validate_openviking_setup_values", validate_values)
     choices = iter([1])
 
-    values = openviking_module._prompt_manual_connection_values(
+    values = openviking_module._setup._prompt_manual_connection_values(
         _prompt_from_values({
             "OpenViking server URL": "https://openviking.example",
             "OpenViking root API key": "root-secret",
@@ -1082,7 +1132,7 @@ def test_handle_unreachable_endpoint_does_not_wait_when_autostart_command_missin
         MagicMock(side_effect=AssertionError("should not wait when server did not start")),
     )
 
-    result = openviking_module._handle_unreachable_endpoint(
+    result = openviking_module._setup._handle_unreachable_endpoint(
         "http://127.0.0.1:1934",
         "OpenViking server is not reachable.",
         lambda *args, **kwargs: 0,
@@ -1149,13 +1199,13 @@ def test_manual_setup_does_not_offer_autostart_when_local_server_is_unhealthy(mo
         MagicMock(side_effect=AssertionError("unhealthy local server should not offer auto-start")),
     )
 
-    result = openviking_module._prompt_manual_connection_values(
+    result = openviking_module._setup._prompt_manual_connection_values(
         _prompt_from_values({"OpenViking server URL": "localhost"}),
         select,
         -1,
     )
 
-    assert result is openviking_module._SETUP_CANCELLED
+    assert result is openviking_module._setup._SETUP_CANCELLED
     assert select_calls == [(
         "  OpenViking server unhealthy",
         [
@@ -2732,7 +2782,26 @@ def test_validate_openviking_reachability_uses_health_only(monkeypatch):
 
 
 def test_validate_openviking_auth_uses_status_without_health(monkeypatch):
+    # ``_validate_openviking_auth`` was folded into ``_validate_openviking_setup_values``;
+    # the authenticated probe itself is ``_VikingClient.validate_auth`` and must hit
+    # /api/v1/system/status only -- never the anonymous /health identity probe.
     events = []
+    client = _VikingClient("https://openviking.example", "test-key", account="acct", user="alice", agent="hermes")
+    monkeypatch.setattr(client, "get", lambda path, **kwargs: events.append(path) or {"status": "ok"})
+    monkeypatch.setattr(
+        client, "health_payload", MagicMock(side_effect=AssertionError("auth validation must not probe /health"))
+    )
+    monkeypatch.setattr(
+        client, "_anonymous_json", MagicMock(side_effect=AssertionError("auth validation must not probe anonymously"))
+    )
+
+    assert client.validate_auth() == {"status": "ok"}
+    assert events == ["/api/v1/system/status"]
+    assert client._headers()["X-API-Key"] == "test-key"
+
+    # The setup-values validator still hands the full identity (including the
+    # peer) to the client before calling the status probe.
+    calls = []
 
     class FakeVikingClient:
         def __init__(self, endpoint, api_key="", account="", user="", agent=""):
@@ -2742,13 +2811,20 @@ def test_validate_openviking_auth_uses_status_without_health(monkeypatch):
             assert user == "alice"
             assert agent == "hermes"
 
+        def health_payload(self):
+            return {"status": "ok", "healthy": True, "version": "0.2.10"}
+
         def validate_auth(self):
-            events.append("status")
+            calls.append("status")
             return {"status": "ok"}
+
+        def validate_root_access(self):
+            calls.append("admin")
+            raise openviking_module._OpenVikingHTTPError("forbidden", 403)
 
     monkeypatch.setattr(openviking_module, "_VikingClient", FakeVikingClient)
 
-    ok, message = openviking_module._validate_openviking_auth({
+    ok, message, role = openviking_module._validate_openviking_setup_values({
         "endpoint": "https://openviking.example",
         "api_key": "test-key",
         "account": "acct",
@@ -2758,34 +2834,27 @@ def test_validate_openviking_auth_uses_status_without_health(monkeypatch):
 
     assert ok is True
     assert message == ""
-    assert events == ["status"]
+    assert role == "user"
+    assert calls == ["status", "admin"]
 
 
 def test_validate_openviking_root_access_uses_admin_endpoint(monkeypatch):
+    # ``_validate_openviking_root_access`` was folded into ``_validate_openviking_setup_values``;
+    # the ROOT probe itself is ``_VikingClient.validate_root_access`` and must use the
+    # read-only admin endpoint only (no /health, no mutation).
     events = []
+    client = _VikingClient("https://openviking.example", "root-key", agent="hermes")
+    monkeypatch.setattr(client, "get", lambda path, **kwargs: events.append(path) or {"status": "ok"})
+    monkeypatch.setattr(
+        client, "health_payload", MagicMock(side_effect=AssertionError("root validation must not probe /health"))
+    )
+    monkeypatch.setattr(
+        client, "post", MagicMock(side_effect=AssertionError("root validation must be read-only"))
+    )
 
-    class FakeVikingClient:
-        def __init__(self, endpoint, api_key="", account="", user="", agent=""):
-            assert endpoint == "https://openviking.example"
-            assert api_key == "root-key"
-            assert account == ""
-            assert user == ""
-            assert agent == "hermes"
-
-        def validate_root_access(self):
-            events.append("admin")
-            return {"status": "ok"}
-
-    monkeypatch.setattr(openviking_module, "_VikingClient", FakeVikingClient)
-
-    ok, message = openviking_module._validate_openviking_root_access({
-        "endpoint": "https://openviking.example",
-        "api_key": "root-key",
-    })
-
-    assert ok is True
-    assert message == ""
-    assert events == ["admin"]
+    assert client.validate_root_access() == {"status": "ok"}
+    assert events == ["/api/v1/admin/accounts"]
+    assert client._headers()["X-API-Key"] == "root-key"
 
 
 def test_validate_openviking_setup_values_blocks_remote_without_api_key(monkeypatch):

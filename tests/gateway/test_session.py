@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 from hermes_state import SessionDB
 from gateway.config import Platform, HomeChannel, GatewayConfig, PlatformConfig
-from gateway.platforms.base import MessageEvent
+from gateway.platforms.event import MessageEvent
 from gateway.session import (
     SessionEntry,
     SessionSource,
@@ -2886,15 +2886,21 @@ class TestGatewaySessionDbRecovery:
         fresh = reset_store.get_or_create_session(source)
         assert fresh.session_id != entry.session_id
 
-    def test_resume_pending_still_honors_idle_reset_policy(self, tmp_path):
-        from datetime import datetime, timedelta
-        from gateway.config import SessionResetPolicy
+    def test_resume_pending_still_honors_suspension_reset(self, tmp_path):
+        """``resume_pending`` must not short-circuit the reset check on next access.
 
-        config = GatewayConfig(default_reset_policy=SessionResetPolicy(mode="idle", idle_minutes=1))
+        Time-based (idle/daily) auto-resets were retired upstream: only an explicit
+        suspension (``/stop``) replaces a routed conversation. A suspended session that
+        is also flagged ``resume_pending`` must therefore still be reset, not resumed.
+        """
+        from datetime import datetime, timedelta
+
+        config = GatewayConfig()
         store = SessionStore(sessions_dir=tmp_path, config=config)
         source = SessionSource(platform=Platform.TELEGRAM, chat_id="chat-1", user_id="user-1")
         entry = store.get_or_create_session(source)
         entry.resume_pending = True
+        entry.suspended = True
         entry.updated_at = datetime.now() - timedelta(minutes=5)
         store._save()
 
@@ -2902,7 +2908,8 @@ class TestGatewaySessionDbRecovery:
 
         assert reset.session_id != entry.session_id
         assert reset.was_auto_reset is True
-        assert reset.auto_reset_reason == "idle"
+        assert reset.auto_reset_reason == "suspended"
+        assert reset.resume_pending is False
 
 
 class TestGatewayRoutingTable:

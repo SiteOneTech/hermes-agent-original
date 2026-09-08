@@ -116,16 +116,37 @@ def _patch_update_deps(monkeypatch, tmp_path, run_side_effect):
     # Keep the (now surfaced — #78574) gateway auto-restart phase away from
     # this machine's real gateways: discovery returns nothing, systemd is
     # unsupported, so the phase is a clean no-op for both snapshots.
+    #
+    # The restart phase first evicts every cached Hermes module
+    # (_purge_stale_hermes_modules) and re-imports hermes_cli.gateway from
+    # disk, which would silently discard the discovery stubs below and hand
+    # the phase this machine's REAL gateway PIDs (the conftest live-system
+    # guard then blocks os.kill and the fail-closed contract exits 1). The
+    # purge is unrelated to the HEAD-moved gate, so no-op it on both owners
+    # (mirrors test_update_fleet_restart_pending._patch_update_deps).
+    monkeypatch.setattr(update_cmd, "_purge_stale_hermes_modules", lambda: None)
+    monkeypatch.setattr(hermes_main, "_purge_stale_hermes_modules", lambda: None)
     import hermes_cli.gateway as hermes_gateway
 
     monkeypatch.setattr(
-        hermes_gateway, "find_gateway_pids", lambda all_profiles=False: []
+        hermes_gateway, "find_gateway_pids", lambda **_kwargs: []
     )
     monkeypatch.setattr(
         hermes_gateway, "supports_systemd_services", lambda: False
     )
     monkeypatch.setattr(
         hermes_gateway, "find_profile_gateway_processes", lambda *a, **k: []
+    )
+    # Fleet verification (#91277/#93406) must see neither a pre-update plan
+    # inventoried from this machine's real profiles nor live fleet rows: an
+    # empty plan and an empty version matrix make the post-restart check a
+    # clean pass, so the only exit-1 path left is the HEAD-moved gate itself.
+    monkeypatch.setattr(
+        "hermes_cli.update_inventory.collect_runtime_inventory",
+        lambda: SimpleNamespace(runtimes=[], to_dict=lambda: {}),
+    )
+    monkeypatch.setattr(
+        "hermes_cli.update_receipt.collect_fleet_versions", lambda **k: []
     )
 
 

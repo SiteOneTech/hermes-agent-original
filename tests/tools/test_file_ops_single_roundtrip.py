@@ -1,13 +1,16 @@
 """``read_file`` / ``write_file`` cost one shell round-trip, not four.
 
 Real ``LocalEnvironment`` against ``tmp_path`` (no mocks), with a spy on
-``env.execute`` counting round-trips. The cases below are exactly the ones
-that used to need their own probe (existence, size, binary sample, page,
-line count, trailing newline), so each proves the compound reply carries
-that answer.
+``env.execute`` counting round-trips. Every shell-backed read is ONE
+``python3 -c`` snippet (``_read_regular_file_page``) that opens with
+O_NONBLOCK, fstat()s that descriptor and answers existence, kind, size,
+binary sample, page and line count in a single ``<marker>{json}<marker>``
+line keyed by a per-call ``__HERMES_SR_`` marker. The cases below are exactly
+the ones that used to need their own probe, so each proves the one reply
+carries that answer; the last class proves an unusable reply is refused
+rather than retried through a pathname shell fallback.
 """
 
-import logging
 import os
 import sys
 import threading
@@ -20,7 +23,13 @@ from tools.file_operations import ExecuteResult, ShellFileOperations
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell probes")
 
-READ_PROBE_MARK = "__HERMES_RF_"
+READ_PROBE_MARK = "__HERMES_SR_"
+# Pathname shell probes the safe reader replaced; none may run for a read.
+LEGACY_READ_PROBES = ("if [ -f", "wc -l", "wc -c", "head -c", "sed -n", "cat ", "base64 ")
+
+
+def _shell_probes(calls):
+    return [c for c in calls if any(c.startswith(p) for p in LEGACY_READ_PROBES)]
 
 
 @pytest.fixture(scope="module")
@@ -74,6 +83,7 @@ class TestReadFileOneRoundTrip:
         p = _write(tmp_path, "a.txt", b"one\ntwo\nthree\n")
         r = ops.read_file(p)
         assert len(calls) == 1 and READ_PROBE_MARK in calls[0]
+        assert calls[0].startswith("python3 -c ") and "O_NONBLOCK" in calls[0]
         assert r.error is None
         # ``_add_line_numbers`` numbers the empty tail after the final
         # newline: long-standing behaviour, preserved byte for byte.
@@ -85,10 +95,11 @@ class TestReadFileOneRoundTrip:
         p = _write(tmp_path, "b.txt", b"a\nb")
         r = ops.read_file(p)
         assert len(calls) == 1
-        # ``cut`` newline-terminates the last line; the artifact is stripped
-        # from the same reply that used to need a fifth ``tail -c 1`` call.
+        # The page holds the lines exactly as stored (no ``cut`` newline
+        # artifact to strip), and the same reply carries the line count.
         assert r.content == "1|a\n2|b"
-        assert r.total_lines == 1  # wc -l semantics, unchanged
+        # Logical lines: newlines plus the unterminated final line (not wc -l's 1).
+        assert r.total_lines == 2
 
     def test_pagination_window_and_hint(self, shell, tmp_path):
         ops, calls = shell
@@ -141,7 +152,7 @@ class TestReadFileOneRoundTrip:
 
     def test_sentinel_lookalike_in_content_reads_intact(self, shell, tmp_path):
         ops, calls = shell
-        lookalike = "__HERMES_RF_" + "ab" * 16 + "__"
+        lookalike = READ_PROBE_MARK + "ab" * 16 + "__"
         p = _write(tmp_path, "s.txt", f"x\n{lookalike}\ny\n".encode("utf-8"))
         r = ops.read_file(p)
         assert r.error is None and r.total_lines == 3
@@ -185,11 +196,16 @@ class TestReadFileNonTextPaths:
         assert r.is_binary is True and r.error
         # Only the UTF-16 rescue may add round-trips, never a second sample.
         assert not any("head -c 1000" in c for c in calls[1:])
+        assert all("HERMES_UTF16" in c for c in calls[1:])
+        assert not _shell_probes(calls)
 
-    def test_image_extension_stops_at_size_probe(self, shell, tmp_path):
+    def test_image_extension_stops_at_metadata(self, shell, tmp_path):
+        """An image still gets the descriptor validated (one snippet), but only
+        its size crosses the transport: no sample, no page."""
         ops, calls = shell
         r = ops.read_file(_write(tmp_path, "p.png", b"\x89PNG\r\n"))
-        assert len(calls) == 1 and READ_PROBE_MARK not in calls[0]
+        assert len(calls) == 1 and READ_PROBE_MARK in calls[0]
+        assert "metadata_only = True" in calls[0]
         assert r.is_image is True and r.file_size == 6
 
     @pytest.mark.linux_only
@@ -208,8 +224,8 @@ class TestReadFileNonTextPaths:
         t.start()
         t.join(20)
         assert not t.is_alive(), "read_file blocked on a writer-less FIFO"
-        assert "not a regular file" in box["r"].error
-        assert len(calls) == 1
+        assert "not a regular file" in box["r"].error and "FIFO" in box["r"].error
+        assert len(calls) == 1 and READ_PROBE_MARK in calls[0]
 
 
 class TestWriteFileRoundTrips:
@@ -343,10 +359,11 @@ class TestNativeRead:
         assert calls == []
 
 
-# The native reader scans 1 MiB chunks and clamps each page line to
-# ``4 * get_max_line_length() + 1`` bytes (8001 by default), exactly as
-# ``sed | cut -b1-N`` does. These shapes put a newline, a line, the clamp
-# point, a CRLF pair and EOF precisely on those chunk boundaries.
+# Both readers scan 1 MiB chunks and clamp each page line to
+# ``4 * get_max_line_length() + 1`` bytes (8001 by default); the shell path's
+# snippet mirrors ``_read_file_native`` byte for byte. These shapes put a
+# newline, a line, the clamp point, a CRLF pair and EOF precisely on those
+# chunk boundaries.
 _CHUNK = 1 << 20
 _CLAMP = 8001
 
@@ -390,7 +407,7 @@ PARITY_CASES = [
     ("past_eof", b"".join(b"l%d\n" % i for i in range(1, 6)), {"offset": 50}),
     ("nul_binary", b"\x00\x01\x02" * 20, {}),
     ("latin1_tail", b"caf\xe9\n", {}),
-    ("sentinel_lookalike", b"x\n__HERMES_RF_" + b"ab" * 16 + b"__\ny\n", {}),
+    ("sentinel_lookalike", b"x\n__HERMES_SR_" + b"ab" * 16 + b"__\ny\n", {}),
 ]
 
 
@@ -436,39 +453,70 @@ class TestNativeReadParity:
             assert not any(READ_PROBE_MARK in c for c in calls), p
 
 
-class TestCompoundFallback:
-    def test_unparseable_reply_falls_back_to_sequential_probes(self, shell, tmp_path):
+class TestNoShellFallback:
+    """An unusable safe-reader reply is refused, never retried through the
+    pathname probes (``[ -f ]`` + ``wc``/``head``/``sed``/``cat``) it replaced:
+    those re-resolve the path (TOCTOU) and block on a FIFO or device."""
+
+    @staticmethod
+    def _garble(ops, reply):
+        real_exec = ops._exec
+
+        def garbled(command, *args, **kwargs):
+            if READ_PROBE_MARK in command:
+                return reply
+            return real_exec(command, *args, **kwargs)
+
+        return garbled
+
+    def test_unparseable_reply_is_environment_unavailable_not_retried(self, shell, tmp_path):
         ops, calls = shell
         p = _write(tmp_path, "a.txt", b"one\ntwo\n")
-        real_exec = ops._exec
-
-        def garbled(command, *args, **kwargs):
-            if READ_PROBE_MARK in command:
-                return ExecuteResult(stdout="[Command timed out after 1s]\n", exit_code=124)
-            return real_exec(command, *args, **kwargs)
-
-        with patch.object(ops, "_exec", side_effect=garbled):
+        reply = ExecuteResult(stdout="[Command timed out after 1s]\n", exit_code=124)
+        with patch.object(ops, "_exec", side_effect=self._garble(ops, reply)):
             r = ops.read_file(p)
-        assert r.error is None and r.content == "1|one\n2|two\n3|"
-        assert r.total_lines == 2
+        assert r.error and "environment unavailable" in r.error.lower()
+        assert "File not found" not in r.error and not r.content
+        assert not _shell_probes(calls)
 
-    def test_fallback_is_logged_at_debug(self, shell, tmp_path, caplog):
-        """A backend that keeps falling back shows up in debug logs."""
+    def test_garbage_reply_is_environment_unavailable_not_retried(self, shell, tmp_path):
         ops, calls = shell
         p = _write(tmp_path, "a.txt", b"one\n")
+        reply = ExecuteResult(stdout="garbage\n", exit_code=0)
+        with patch.object(ops, "_exec", side_effect=self._garble(ops, reply)):
+            r = ops.read_file(p)
+        assert r.error and "environment unavailable" in r.error.lower()
+        assert not r.content and not _shell_probes(calls)
+
+    def test_missing_interpreter_fails_closed(self, shell, tmp_path):
+        """No python3/python on the backend: the read is refused with a clear
+        reason; the file exists but is never touched by a shell probe."""
+        ops, calls = shell
+        p = _write(tmp_path, "a.txt", b"one\n")
+        seen = []
         real_exec = ops._exec
 
-        def garbled(command, *args, **kwargs):
+        def no_python(command, *args, **kwargs):
             if READ_PROBE_MARK in command:
-                return ExecuteResult(stdout="garbage\n", exit_code=0)
+                seen.append(command.split(" ", 1)[0])
+                return ExecuteResult(stdout=f"bash: {seen[-1]}: command not found\n", exit_code=127)
             return real_exec(command, *args, **kwargs)
 
-        with caplog.at_level(logging.DEBUG, logger="tools.file_operations"), \
-             patch.object(ops, "_exec", side_effect=garbled):
+        with patch.object(ops, "_exec", side_effect=no_python):
             r = ops.read_file(p)
-        assert r.error is None and r.content == "1|one\n2|"
-        assert any(
-            "falling back to sequential probes" in rec.getMessage()
-            and str(p) in rec.getMessage()
-            for rec in caplog.records
-        )
+        assert r.error and "requires Python" in r.error
+        assert "File not found" not in r.error and not r.content
+        assert seen == ["python3", "python"]
+        assert not _shell_probes(calls)
+
+    def test_marker_only_matches_its_own_call(self, shell, tmp_path):
+        """A well-formed reply under a DIFFERENT marker (a stale or replayed line)
+        is not this call's answer: the per-call random marker is the key."""
+        ops, calls = shell
+        p = _write(tmp_path, "a.txt", b"one\n")
+        stale = READ_PROBE_MARK + "cd" * 16 + "__"
+        reply = ExecuteResult(stdout=stale + '{"state":"missing"}' + stale + "\n", exit_code=0)
+        with patch.object(ops, "_exec", side_effect=self._garble(ops, reply)):
+            r = ops.read_file(p)
+        assert r.error and "environment unavailable" in r.error.lower()
+        assert "File not found" not in r.error

@@ -11,6 +11,7 @@ import base64
 import binascii
 import os
 import re
+import stat
 import sys
 import difflib
 import hashlib
@@ -138,18 +139,117 @@ class FileOperations(ABC):
 # Image extensions (subset of binary that we can return as base64)
 IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico'}
 
-# Echoed by the size probe when the path exists but is not a regular file.
-# `wc -c` prints only digits, so this can never collide with a real size.
-NOT_REGULAR_SENTINEL = "__hermes_not_regular__"
-
-# Echoed by the compound read/write probes when the path does not exist. A
-# compound command only reports its *last* exit status, so the missing-file
-# signal that ``_probe_regular_file`` carries in ``exit 1`` travels in-band.
+# Echoed by the compound write probe when the path does not exist. A compound
+# command only reports its *last* exit status, so the missing-file signal
+# travels in-band.
 MISSING_SENTINEL = "__hermes_missing__"
 
-_READ_SENTINEL_PREFIX = "__HERMES_RF_"
 _WRITE_SENTINEL_PREFIX = "__HERMES_WF_"
 
+# Safe reader (``_read_regular_file_page``). Every shell-backed read runs ONE Python
+# snippet in the target environment that opens with O_NONBLOCK, fstat()s the
+# descriptor it just opened and reads through that same descriptor. Without an
+# interpreter the read fails closed: a ``[ -f ]`` check followed by ``wc``/``head``/
+# ``sed``/``cat`` re-resolves the pathname (TOCTOU) and blocks on a FIFO or device.
+_SAFE_FILE_READER_PYTHON_ERROR = (
+    "Safe file reader requires Python in the target environment; "
+    "no insecure shell fallback was used.")
+_SAFE_READER_BAD_PAYLOAD = "Safe file reader returned invalid encoded data."
+_SAFE_READ_MARKER_PREFIX = "__HERMES_SR_"
+_SAMPLE_BYTES = 1000          # leading bytes that drive binary detection
+_THROUGH_EOF = 2**31 - 1      # ``end_line`` meaning "every line"
+
+# Body of the safe-reader snippet; ``_read_regular_file_page`` prepends the
+# parameters (``m``, ``p``, ``offset``, ``end_line``, ``max_bytes``, ``metadata_only``,
+# ``clamp``, ``SAMPLE``) as Python literals. ``scan`` mirrors ``_read_file_native``
+# byte for byte: 1 MiB chunks, each selected line clamped to ``clamp`` bytes before
+# its newline, ``total`` counting newlines plus a final unterminated line. Output is
+# a single ``<m>{json}<m>`` line; file bytes travel only base64-encoded inside it.
+_SAFE_READ_SNIPPET = r'''
+import base64, errno, json, os, stat
+def kind(mode):
+    for test, name in ((stat.S_ISDIR, 'directory'), (stat.S_ISFIFO, 'FIFO'), (stat.S_ISSOCK, 'socket'),
+                       (stat.S_ISCHR, 'character device'), (stat.S_ISBLK, 'block device')):
+        if test(mode):
+            return name
+    return 'special file'
+def scan(f):
+    page, total, lineno, kept, partial = [], 0, 1, 0, False
+    while True:
+        chunk = f.read(1 << 20)
+        if not chunk:
+            break
+        if lineno > end_line:
+            total += chunk.count(b'\n')
+            partial = chunk[-1:] != b'\n'
+            continue
+        pos, n = 0, len(chunk)
+        while pos < n:
+            nl = chunk.find(b'\n', pos)
+            end = n if nl < 0 else nl
+            wanted = offset <= lineno <= end_line
+            if wanted:
+                room = end - pos if clamp is None else min(end - pos, max(clamp - kept, 0))
+                if room:
+                    page.append(chunk[pos:pos + room])
+                kept += end - pos
+            if nl < 0:
+                partial = True
+                break
+            if wanted:
+                page.append(b'\n')
+            total, lineno, kept, partial, pos = total + 1, lineno + 1, 0, False, nl + 1
+    return b''.join(page), total + (1 if partial else 0)
+flags = os.O_RDONLY | getattr(os, 'O_NONBLOCK', 0) | getattr(os, 'O_NOCTTY', 0) | getattr(os, 'O_BINARY', 0)
+try:
+    fd = os.open(p, flags)
+except OSError as exc:
+    if exc.errno in (errno.ENOENT, errno.ENOTDIR):
+        out = {'state': 'missing'}
+    elif exc.errno == errno.ENXIO:
+        try:
+            what = kind(os.stat(p).st_mode)  # naming only: the open was refused, nothing is read
+        except OSError:
+            what = 'socket or device'
+        out = {'state': 'not_regular', 'kind': what}
+    else:
+        out = {'state': 'error', 'message': str(exc)}
+else:
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            out = {'state': 'not_regular', 'kind': kind(st.st_mode)}
+        elif max_bytes is not None and st.st_size > max_bytes:
+            out = {'state': 'too_large', 'file_size': st.st_size}
+        elif metadata_only:
+            out = {'state': 'regular', 'file_size': st.st_size}
+        else:
+            f = os.fdopen(fd, 'rb')
+            fd = None
+            with f:
+                sample = f.read(SAMPLE)
+                f.seek(0)
+                page, total = scan(f) if offset <= end_line else (b'', 0)
+            out = {'state': 'regular', 'file_size': st.st_size, 'total_lines': total,
+                   'sample': base64.b64encode(sample).decode('ascii'),
+                   'page': base64.b64encode(page).decode('ascii')}
+    except Exception as exc:
+        out = {'state': 'error', 'message': str(exc)}
+    finally:
+        if fd is not None:
+            os.close(fd)
+print(m + json.dumps(out, separators=(',', ':')) + m)
+'''
+
+
+def _file_kind(mode: int) -> str:
+    """Human name for a non-regular ``st_mode`` (same wording as the snippet's ``kind``)."""
+    for test, name in ((stat.S_ISDIR, "directory"), (stat.S_ISFIFO, "FIFO"),
+                       (stat.S_ISSOCK, "socket"), (stat.S_ISCHR, "character device"),
+                       (stat.S_ISBLK, "block device")):
+        if test(mode):
+            return name
+    return "special file"
 
 def _new_sentinel(prefix: str) -> str:
     """Per-call separator line for a compound shell probe. 128 random bits make a
@@ -175,6 +275,10 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
     terminal tool is picked up immediately; the init-time ``self.cwd`` is only a
     fallback for envs that don't track cwd (using it for every call once made
     patches "succeed" with a plausible diff while landing in the wrong directory).
+
+    Reads need ``python3`` (or ``python``) in the target environment: the descriptor-
+    level O_NONBLOCK/fstat/S_ISREG validation of ``_read_regular_file_page`` cannot be
+    replaced by a pathname shell fallback, so without an interpreter reads fail closed.
     """
 
     def __init__(self, terminal_env, cwd: str = None):
@@ -225,33 +329,34 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         return self._exec(f"head -c {nbytes} {self._escape_shell_arg(path)} 2>/dev/null")
 
     def _run_python_snippet(self, snippet: str) -> ExecuteResult:
-        """Run ``snippet`` via the backend's ``python3``, retrying with ``python``
-        when only that name exists (Windows / older systems)."""
+        """Run ``snippet`` via the backend's ``python3``, retrying with ``python`` when
+        the ``python3`` name never reached an interpreter (Windows / older systems)."""
         result = self._exec(f"python3 -c {self._escape_shell_arg(snippet)}")
-        if result.exit_code != 0 and "python3" in (result.stdout or ""):
+        if result.exit_code != 0 and self._interpreter_missing(result):
             result = self._exec(f"python -c {self._escape_shell_arg(snippet)}")
         return result
 
-    def _sample_file_bytes(self, path: str, length: int = 1000):
-        """First ``length`` raw bytes, base64-wrapped so they survive the terminal
-        transport (which decodes stdout with ``errors="replace"`` and manufactures
-        U+FFFD for every undecodable byte, including a multibyte char cut in half
-        by ``head -c``). None when no clean base64 came back (no ``base64`` binary);
-        callers then fall back to the text heuristic.
+    @staticmethod
+    def _interpreter_missing(result: ExecuteResult) -> bool:
+        """Whether a ``python* -c`` attempt never ran an interpreter: the shell's 127,
+        its wording (``command not found`` / ``not found`` / Windows' ``not recognized``)
+        or the interpreter name echoed back in the complaint."""
+        text = (result.stdout or "").lower()
+        return (result.exit_code == 127 or "not found" in text
+                or "not recognized" in text or "python3" in text)
 
-        Wrapping the sample in base64 lets the original bytes survive the transport, so binary detection can
-        happen at the byte layer where it is well-defined (#80308 and friends).
-        """
-        result = self._exec(f"head -c {length} {self._escape_shell_arg(path)} 2>/dev/null | base64")
-        if result.exit_code != 0:
-            return None
-        return self._decode_base64_sample(result.stdout)
+    @staticmethod
+    def _python_path(path: str) -> str:
+        """``path`` as the backend's Python (a native binary) sees it: on Windows the
+        Git Bash ``/c/Users/x`` form becomes ``C:/Users/x``; identical elsewhere."""
+        from tools.environments.local import _IS_WINDOWS, _msys_to_windows_path
+        return _msys_to_windows_path(path).replace("\\", "/") if _IS_WINDOWS and path else path
 
     @staticmethod
     def _decode_base64_sample(text: str) -> Optional[bytes]:
-        """Decode one ``head -c N | base64`` sample. Whitespace-joins the whole text
-        first (``base64`` wraps at 76 columns), so callers hand over exactly one
-        segment; anything else fails validation → None (legacy text heuristic)."""
+        """Decode one base64 segment of the compound write probe (``head -c 3 | base64``).
+        Whitespace-joins the text first (``base64`` wraps at 76 columns); anything that
+        is not clean base64 fails validation → None (no ``base64`` binary)."""
         encoded = "".join(_strip_terminal_fence_leaks(text).split())
         if not encoded:
             return b""
@@ -428,51 +533,111 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
     # --- READ ---------------------------------------------------------------
 
     @staticmethod
-    def _not_regular_error(path: str) -> ReadResult:
-        """Error for a path that exists but would block if read."""
+    def _not_regular_error(path: str, kind: Optional[str] = None) -> ReadResult:
+        """Error for a path that exists but is not a regular file (``kind`` names what
+        it is when known). Reading it could block indefinitely, so nothing did."""
+        what = f"it is a {kind}" if kind else "directory, FIFO, socket, or device"
         return ReadResult(error=(
-            f"Cannot read '{path}': not a regular file (directory, FIFO, "
-            "socket, or device). Reading it could block indefinitely."))
-
-    def _probe_regular_file(self, path: str) -> tuple[int, str]:
-        """Byte size of a REGULAR file: ``(file_size, status)`` with status ``"ok"``,
-        ``"missing"``, ``"not_regular"`` or ``"bad_size"`` (unparseable ``wc``).
-        ``wc -c <`` on a writer-less FIFO/socket//dev/zero blocks forever and a
-        name-based blocklist can't cover a FIFO (a file TYPE at any path); ``[ -f ]``
-        is a stat (symlinks followed) so it answers without touching content."""
-        arg = self._escape_shell_arg(path)
-        # A missing path ECHOES its sentinel: a non-zero exit with no sentinel means the shell itself did
-        # not run (container still starting, removed out-of-band, transport down) — not a missing file.
-        # Reporting that as "File not found" made the model trust a false negative for the whole session.
-        stat_result = self._exec(
-            f"if [ -f {arg} ]; then wc -c < {arg} 2>/dev/null; "
-            f"elif [ -e {arg} ]; then echo {NOT_REGULAR_SENTINEL}; "
-            f"else echo {MISSING_SENTINEL}; fi")
-        stat_output = _strip_terminal_fence_leaks(stat_result.stdout).strip()
-        if stat_output == MISSING_SENTINEL:
-            return 0, "missing"
-        if stat_output == NOT_REGULAR_SENTINEL:
-            return 0, "not_regular"
-        if stat_result.exit_code != 0:
-            return 0, "env_unavailable"
-        try:
-            return int(stat_output), "ok"
-        except ValueError:
-            return 0, "bad_size"
+            f"Cannot read '{path}': not a regular file ({what}). "
+            "Reading it could block indefinitely."))
 
     def _env_unavailable_error(self, path: str) -> ReadResult:
         return ReadResult(error=(f"Terminal environment unavailable: could not stat {path} "
                                  "(the sandbox may still be starting or was removed). Retry shortly."))
 
-    def _detect_binary(self, path: str) -> tuple[bool, Optional[bytes]]:
-        """``(is_binary, sample_bytes)`` — byte-layer detection when the transport
-        allows (base64 sample), else the legacy text heuristic (sample is None)."""
-        sample_bytes = self._sample_file_bytes(path)
-        if sample_bytes is not None:
-            ext_binary = os.path.splitext(path)[1].lower() in BINARY_EXTENSIONS
-            return ext_binary or self._is_likely_binary_bytes(sample_bytes), sample_bytes
-        sample_output = _strip_terminal_fence_leaks(self._head(path, 1000).stdout)
-        return self._is_likely_binary(path, sample_output), None
+    def _read_regular_file_page(self, path: str, offset: int, end_line: int, *,
+                                max_bytes: Optional[int] = None, metadata_only: bool = False,
+                                line_clamp_bytes: Optional[int] = None) -> dict:
+        """Read lines ``offset..end_line`` of ``path`` through ONE descriptor in the
+        target environment. The backend may be a container or a remote host, so no
+        host-side ``os.stat`` can protect it: the snippet opens with ``O_NONBLOCK`` (a
+        writer-less FIFO or a device cannot stall the open), ``fstat``s the descriptor
+        it just opened, accepts only ``S_ISREG`` and reads through that same descriptor;
+        no pathname is re-resolved between the check and the read.
+
+        States: ``{"state": "regular", "file_size", "total_lines", "sample", "page"}``
+        (``sample``/``page`` base64; ``page`` holds the selected lines exactly as stored,
+        each clamped to ``line_clamp_bytes`` before its newline; ``end_line < offset``
+        requests no page and skips the line scan), ``regular`` with only ``file_size``
+        when ``metadata_only``, ``too_large`` (+``file_size``, before any byte is
+        exported) when the file exceeds ``max_bytes``, ``not_regular`` (+``kind``),
+        ``missing``, ``error`` (+``message``) and, when no reply came back at all,
+        ``no_python`` or ``env_unavailable``.
+
+        Wire protocol: one ``<marker>{json}<marker>`` line with a per-call random
+        marker. Anything else the backend prints (banners, fence leaks, an echoed
+        command) is ignored, and file bytes only travel base64-encoded inside the JSON,
+        so no raw content ever reaches the shell or the parser."""
+        marker = _new_sentinel(_SAFE_READ_MARKER_PREFIX)
+        snippet = (
+            f"m = {marker!r}\n"
+            f"p = {self._python_path(path)!r}\n"
+            f"offset = {int(offset)}\n"
+            f"end_line = {int(end_line)}\n"
+            f"max_bytes = {None if max_bytes is None else int(max_bytes)!r}\n"
+            f"metadata_only = {bool(metadata_only)!r}\n"
+            f"clamp = {None if line_clamp_bytes is None else int(line_clamp_bytes)!r}\n"
+            f"SAMPLE = {_SAMPLE_BYTES}\n"
+        ) + _SAFE_READ_SNIPPET
+        result = self._run_python_snippet(snippet)
+        stdout = _strip_terminal_fence_leaks(result.stdout or "")
+        for match in re.finditer(re.escape(marker) + r"(\{.*?\})" + re.escape(marker), stdout):
+            try:
+                payload = json.loads(match.group(1))
+            except ValueError:
+                continue
+            if isinstance(payload, dict) and isinstance(payload.get("state"), str):
+                return payload
+        if self._interpreter_missing(result):
+            return {"state": "no_python"}
+        return {"state": "env_unavailable"}
+
+    def _page_for_text_read(self, path: str, offset: int, end_line: int,
+                            line_clamp_bytes: Optional[int] = None) -> tuple[dict, bool, bool]:
+        """``(page, is_image, ext_binary)`` for a text read. Images and known-binary
+        extensions never inline content: the descriptor is still validated, but only
+        metadata (images) or the magic-byte sample (binaries) crosses the transport."""
+        is_image = self._is_image(path)
+        ext_binary = os.path.splitext(path)[1].lower() in BINARY_EXTENSIONS
+        if is_image:
+            page = self._read_regular_file_page(path, 1, 0, metadata_only=True)
+        elif ext_binary:
+            page = self._read_regular_file_page(path, 1, 0)  # sample only, no line scan
+        else:
+            page = self._read_regular_file_page(
+                path, offset, end_line, line_clamp_bytes=line_clamp_bytes)
+        return page, is_image, ext_binary
+
+    def _page_error(self, path: str, page: dict) -> Optional[ReadResult]:
+        """ReadResult for a safe-reader state no reader can proceed from (interpreter
+        missing, environment unavailable, non-regular file, OS error); None for
+        ``regular``/``missing``/``too_large``, which each reader handles itself."""
+        state = page.get("state")
+        if state == "no_python":
+            return ReadResult(error=_SAFE_FILE_READER_PYTHON_ERROR)
+        if state == "env_unavailable":
+            return self._env_unavailable_error(path)
+        if state == "not_regular":
+            return self._not_regular_error(path, page.get("kind"))
+        if state == "error":
+            return ReadResult(error=f"Failed to read file: {page.get('message', 'unknown error')}")
+        return None
+
+    @staticmethod
+    def _page_int(page: dict, key: str) -> int:
+        value = page.get(key, 0)
+        return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+    @staticmethod
+    def _page_bytes(page: dict, key: str) -> Optional[bytes]:
+        """Decode one base64 field of a safe-reader page; None when malformed."""
+        value = page.get(key, "")
+        if not isinstance(value, str):
+            return None
+        try:
+            return base64.b64decode(value, validate=True)
+        except (ValueError, binascii.Error):
+            return None
 
     # UTF-16 rescue: trust a BOM first, then zero-byte PARITY (not density, so
     # mixed Latin/CJK still detects): zeros at odd indices → UTF-16 LE, at even
@@ -489,21 +654,24 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
                         file_size: int) -> "Optional[ReadResult]":
         """Read ``path`` as UTF-16 transcoded to UTF-8, or None (caller falls back
         to the binary-file error). Skips known-binary extensions and files over
-        10 MiB. ``path`` must already be expanded."""
+        10 MiB. ``path`` must already be expanded. Same descriptor discipline as
+        ``_read_regular_file_page``: open O_NONBLOCK, fstat, S_ISREG, then read that fd."""
         if os.path.splitext(path)[1].lower() in BINARY_EXTENSIONS or file_size > self._UTF16_MAX_BYTES:
             return None
         snippet = (
-            "import sys, json, os\n"
-            f"p = {path!r}\n"
+            "import sys, json, os, stat\n"
+            f"p = {self._python_path(path)!r}\n"
             f"offset = {int(offset)}\n"
             f"limit = {int(limit)}\n"
             f"MAX = {self._UTF16_MAX_BYTES}\n"
             f"SAMPLE = {self._UTF16_SAMPLE_BYTES}\n"
             "try:\n"
-            "    size = os.path.getsize(p)\n"
-            "    if size > MAX:\n"
-            "        print('HERMES_UTF16:NO'); sys.exit(0)\n"
-            "    with open(p, 'rb') as f:\n"
+            "    fd = os.open(p, os.O_RDONLY | getattr(os, 'O_NONBLOCK', 0)"
+            " | getattr(os, 'O_NOCTTY', 0) | getattr(os, 'O_BINARY', 0))\n"
+            "    with os.fdopen(fd, 'rb') as f:\n"
+            "        st = os.fstat(f.fileno())\n"
+            "        if not stat.S_ISREG(st.st_mode) or st.st_size > MAX:\n"
+            "            print('HERMES_UTF16:NO'); sys.exit(0)\n"
             "        data = f.read()\n"
             "    sample = data[:SAMPLE]\n"
             "    enc = None\n"
@@ -562,92 +730,46 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         """Read a file with pagination, binary detection, and line numbers.
 
         ``offset`` is 1-indexed; ``limit`` is clamped by ``normalize_read_pagination``.
-        One shell round-trip answers every question the read needs (existence, size,
-        binary sample, page, line count, trailing newline; see ``_read_probe_cmd``).
-        An unparseable reply falls back to ``_read_file_sequential`` (one probe per
-        question), so an exotic shell can never do worse than before. On a local
-        POSIX environment the read never touches the shell (``_read_file_native``).
+        On a local POSIX environment the read never touches the shell
+        (``_read_file_native``); everywhere else one Python snippet in the target
+        environment answers every question the read needs through a single validated
+        descriptor (``_read_file_shell``). Both paths produce identical results.
         """
         path = self._expand_path(path)  # before shell escaping: ~ doesn't expand in quotes
         offset, limit = normalize_read_pagination(offset, limit)
-
         if self._native_read_enabled():
             return self._read_file_native(path, offset, limit)
+        return self._read_file_shell(path, offset, limit)
 
-        # Images / known-binary extensions never inline content; the sequential
-        # path stops at the probes for them, so don't stream their bytes.
-        if self._is_image(path) or os.path.splitext(path)[1].lower() in BINARY_EXTENSIONS:
-            return self._read_file_sequential(path, offset, limit)
-
+    def _read_file_shell(self, path: str, offset: int, limit: int) -> ReadResult:
+        """``read_file`` over the backend's Python (``path`` expanded, pagination
+        normalized): one ``_read_regular_file_page`` round-trip, then the shared
+        binary / UTF-16 / assembly steps."""
         from tools.tool_output_limits import get_max_line_length
-        line_clamp_bytes = 4 * get_max_line_length() + 1
         end_line = offset + limit - 1
-        sentinel = _new_sentinel(_READ_SENTINEL_PREFIX)
-        probe = self._exec(self._read_probe_cmd(path, offset, end_line, line_clamp_bytes, sentinel))
-        output = probe.stdout or ""
-
-        if sentinel not in output:
-            # Single-line replies: the path is missing or not a regular file.
-            marker = _strip_terminal_fence_leaks(output).strip()
-            if marker == MISSING_SENTINEL:
-                return self._read_file_missing(path, offset, limit)
-            if marker == NOT_REGULAR_SENTINEL:
-                return self._not_regular_error(path)
-            logger.debug(
-                "read_file: compound probe reply for %s has no sentinel "
-                "(exit %s, %d chars); falling back to sequential probes",
-                path, probe.exit_code, len(output))
-            return self._read_file_sequential(path, offset, limit)
-
-        segments = _split_segments(output, sentinel)
-        if probe.exit_code != 0 or len(segments) != 6:
-            logger.debug(
-                "read_file: compound probe for %s returned exit %s with %d "
-                "segments (want 6); falling back to sequential probes",
-                path, probe.exit_code, len(segments))
-            return self._read_file_sequential(path, offset, limit)
-        size_seg, sample_seg, page_seg, wc_seg, tail_seg, status_seg = segments
-
-        status = _strip_terminal_fence_leaks(status_seg).split()
-        try:
-            sample_rc, read_rc = int(status[0]), int(status[1])
-        except (IndexError, ValueError):
-            logger.debug(
-                "read_file: compound probe for %s has unparseable status %r; "
-                "falling back to sequential probes", path, status_seg[-40:])
-            return self._read_file_sequential(path, offset, limit)
-
-        try:
-            file_size = int(_strip_terminal_fence_leaks(size_seg).strip())
-        except ValueError:
-            file_size = 0
-
-        # Byte-layer binary detection when base64 was available, else the legacy
-        # text heuristic over a plain sample (one extra round-trip, shells without base64).
-        sample_bytes = self._decode_base64_sample(sample_seg) if sample_rc == 0 else None
-        if sample_bytes is not None:
-            is_binary = self._is_likely_binary_bytes(sample_bytes)
-        else:
-            logger.debug(
-                "read_file: no usable base64 sample for %s (base64 exit %s); "
-                "paying one extra round-trip for the text heuristic", path, sample_rc)
-            sample_output = _strip_terminal_fence_leaks(self._head(path, 1000).stdout)
-            is_binary = self._is_likely_binary(path, sample_output)
-        if is_binary:
+        page, is_image, ext_binary = self._page_for_text_read(
+            path, offset, end_line, line_clamp_bytes=4 * get_max_line_length() + 1)
+        failure = self._page_error(path, page)
+        if failure is not None:
+            return failure
+        if page["state"] == "missing":
+            return self._read_file_missing(path, offset, limit)
+        file_size = self._page_int(page, "file_size")
+        if is_image:
+            return self._image_redirect_result(file_size)
+        sample_bytes = self._page_bytes(page, "sample")
+        page_bytes = self._page_bytes(page, "page")
+        if sample_bytes is None or page_bytes is None:
+            return ReadResult(error=_SAFE_READER_BAD_PAYLOAD)
+        if ext_binary or self._is_likely_binary_bytes(sample_bytes):
             return self._read_binary_file(path, offset, limit, file_size, sample_bytes)
-
-        if read_rc != 0:
-            return ReadResult(error=f"Failed to read file: {_strip_terminal_fence_leaks(page_seg)}")
-        read_output = _strip_terminal_fence_leaks(page_seg)
-        try:
-            total_lines = int(_strip_terminal_fence_leaks(wc_seg).strip())
-        except ValueError:
-            total_lines = 0
-        tail_flag = _strip_terminal_fence_leaks(tail_seg).strip()
-        file_ends_with_newline = tail_flag == "1" if tail_flag in ("0", "1") else None
+        # The page holds the lines exactly as stored (no ``cut`` newline artifact),
+        # so there is nothing for ``file_ends_with_newline`` to correct.
+        read_output = _strip_terminal_fence_leaks(page_bytes.decode("utf-8", errors="replace"))
         return self._assemble_read_result(
-            read_output, offset=offset, end_line=end_line, total_lines=total_lines,
-            file_size=file_size, file_ends_with_newline=file_ends_with_newline)
+            read_output, offset=offset, end_line=end_line,
+            total_lines=self._page_int(page, "total_lines"), file_size=file_size,
+            file_ends_with_newline=None)
 
     def _native_read_enabled(self) -> bool:
         """Whether ``read_file`` and ``search_files`` may bypass the shell: only POSIX + ``LocalEnvironment``
@@ -675,30 +797,38 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
 
         full = path if os.path.isabs(path) else os.path.join(
             getattr(self.env, "cwd", None) or self.cwd, path)
+        flags = (os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+                 | getattr(os, "O_NOCTTY", 0) | getattr(os, "O_BINARY", 0))
         try:
-            st = os.stat(full)
+            fd = os.open(full, flags)
         except (FileNotFoundError, NotADirectoryError):
             return self._read_file_missing(path, offset, limit)
         except OSError:
-            return self._read_file_sequential(path, offset, limit)
-        if not _stat.S_ISREG(st.st_mode):
-            return self._not_regular_error(path)
-        file_size = st.st_size
-        if self._is_image(path):
-            return self._image_redirect_result(file_size)
+            return self._read_file_shell(path, offset, limit)
 
-        from tools.tool_output_limits import get_max_line_length
-        clamp = 4 * get_max_line_length() + 1
-        end_line = offset + limit - 1
-
-        page: list[bytes] = []
-        total_lines = 0
-        lineno = 1              # the line currently being scanned
-        kept = bytearray()      # first ``clamp`` bytes of that line
-        have_partial = False    # that line has bytes but no newline yet
-        last_byte = b""
         try:
-            with open(full, "rb") as fh:
+            # Validate the exact descriptor that will be read. A separate stat(path)
+            # followed by open(path) lets an attacker swap a regular file for a FIFO
+            # or device in-between; O_NONBLOCK keeps even that open from stalling.
+            st = os.fstat(fd)
+            if not _stat.S_ISREG(st.st_mode):
+                return self._not_regular_error(path, _file_kind(st.st_mode))
+            file_size = st.st_size
+            if self._is_image(path):
+                return self._image_redirect_result(file_size)
+
+            from tools.tool_output_limits import get_max_line_length
+            clamp = 4 * get_max_line_length() + 1
+            end_line = offset + limit - 1
+
+            page: list[bytes] = []
+            total_lines = 0
+            lineno = 1              # the line currently being scanned
+            kept = bytearray()      # first ``clamp`` bytes of that line
+            have_partial = False    # that line has bytes but no newline yet
+            last_byte = b""
+            with os.fdopen(fd, "rb") as fh:
+                fd = None  # fh owns the descriptor from this point.
                 sample = fh.read(1000)
                 ext_binary = os.path.splitext(path)[1].lower() in BINARY_EXTENSIONS
                 if ext_binary or self._is_likely_binary_bytes(sample):
@@ -734,10 +864,20 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
                         lineno += 1
                         pos = nl + 1
         except OSError:
-            return self._read_file_sequential(path, offset, limit)
-        if have_partial and offset <= lineno <= end_line:
-            # ``sed`` prints a final line that lacks a newline; ``cut`` adds one.
-            page.append(bytes(kept) + b"\n")
+            return self._read_file_shell(path, offset, limit)
+        finally:
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+        if have_partial:
+            # ``wc -l`` counts separators, not a final unterminated line. Keep
+            # pagination/hints aligned with what `sed` exposes to the caller.
+            total_lines += 1
+            if offset <= lineno <= end_line:
+                # ``sed`` prints a final line that lacks a newline; ``cut`` adds one.
+                page.append(bytes(kept) + b"\n")
 
         read_output = _strip_terminal_fence_leaks(b"".join(page).decode("utf-8", errors="replace"))
         return self._assemble_read_result(
@@ -752,31 +892,6 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
             hint=(
                 "Image file detected. Automatically redirected to vision_analyze tool. "
                 "Use vision_analyze with this file path to inspect the image contents."))
-
-    def _read_probe_cmd(self, path: str, offset: int, end_line: int,
-                        line_clamp_bytes: int, sentinel: str) -> str:
-        """One shell command answering every question ``read_file`` asks: six
-        segments each closed by a ``sentinel`` line — byte size, base64 of the first
-        1000 bytes, the ``sed | cut`` page, ``wc -l``, whether the last byte is a
-        newline, then the base64 and page pipeline statuses. Probes run only inside
-        ``[ -f ]`` (stat-not-open, like ``_probe_regular_file``) so a FIFO/device never
-        reaches ``head``/``sed``. A missing path echoes ``MISSING_SENTINEL`` (a compound
-        command only reports its last status). Every stage silences stderr: the local
-        backend merges stderr into stdout and a stray diagnostic would land inside a
-        segment. The byte clamp is ``4 * max_line_length + 1``; see ``_read_file_sequential``."""
-        arg = self._escape_shell_arg(path)
-        mark = f"echo {sentinel}"
-        return (
-            f"if [ -f {arg} ]; then "
-            f"wc -c < {arg} 2>/dev/null; {mark}; "
-            f"head -c 1000 {arg} 2>/dev/null | base64 2>/dev/null; __hs=$?; {mark}; "
-            f"sed -n '{offset},{end_line}p' {arg} 2>/dev/null"
-            f" | cut -b1-{line_clamp_bytes} 2>/dev/null; __hr=$?; {mark}; "
-            f"wc -l < {arg} 2>/dev/null; {mark}; "
-            f"tail -c 1 {arg} 2>/dev/null | wc -l; {mark}; "
-            f'echo "$__hs $__hr"; '
-            f"elif [ -e {arg} ]; then echo {NOT_REGULAR_SENTINEL}; "
-            f"else echo {MISSING_SENTINEL}; fi")
 
     def _read_file_missing(self, path: str, offset: int, limit: int) -> ReadResult:
         """Not-found recovery shared by every read path. Unicode-equivalent spellings
@@ -811,56 +926,6 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         return ReadResult(
             is_binary=True, file_size=file_size,
             error=describe_binary_file(sample_bytes, file_size))
-
-    def _read_file_sequential(self, path: str, offset: int, limit: int) -> ReadResult:
-        """One-probe-per-call read: the pre-compound form, kept as fallback for
-        image / known-binary extensions and unparseable compound replies. ``path`` is
-        already expanded and ``offset``/``limit`` normalized."""
-        file_size, status = self._probe_regular_file(path)
-        if status == "missing":
-            return self._read_file_missing(path, offset, limit)
-        if status == "not_regular":
-            return self._not_regular_error(path)
-        if status == "env_unavailable":
-            return self._env_unavailable_error(path)
-        if self._is_image(path):  # never inlined — redirect to the vision tool
-            return self._image_redirect_result(file_size)
-        is_binary, sample_bytes = self._detect_binary(path)
-        if is_binary:
-            return self._read_binary_file(path, offset, limit, file_size, sample_bytes)
-
-        # Clamp each line to a byte budget IN THE SHELL so a 400MB single-line file
-        # never crosses the exec transport. 4*max+1 BYTES (not max+1): ``cut -b`` can
-        # split a multibyte codepoint, and a tighter byte clamp would yield fewer
-        # CHARS than max so the Python clamp in _add_line_numbers would never fire
-        # (silent truncation). UTF-8 codepoints are ≤4 bytes, so every over-long
-        # line still trips the char clamp, which also drops a boundary-split U+FFFD.
-        from tools.tool_output_limits import get_max_line_length
-        line_clamp_bytes = 4 * get_max_line_length() + 1
-        end_line = offset + limit - 1
-        read_result = self._exec(
-            f"sed -n '{offset},{end_line}p' {self._escape_shell_arg(path)}"
-            f" | cut -b1-{line_clamp_bytes}")
-        if read_result.exit_code != 0:
-            return ReadResult(error=f"Failed to read file: {read_result.stdout}")
-        read_output = _strip_terminal_fence_leaks(read_result.stdout)
-
-        wc_result = self._exec(f"wc -l < {self._escape_shell_arg(path)}")
-        try:
-            total_lines = int(_strip_terminal_fence_leaks(wc_result.stdout).strip())
-        except ValueError:
-            total_lines = 0
-
-        # Only the page reaching the file's final line can carry the ``cut`` newline
-        # artifact (see _assemble_read_result); probe the last byte just for that case.
-        file_ends_with_newline: Optional[bool] = None
-        if not total_lines > end_line and read_output.endswith('\n'):
-            tail_result = self._exec(f"tail -c 1 {self._escape_shell_arg(path)} | wc -l")
-            if tail_result.exit_code == 0:
-                file_ends_with_newline = _strip_terminal_fence_leaks(tail_result.stdout).strip() != "0"
-        return self._assemble_read_result(
-            read_output, offset=offset, end_line=end_line, total_lines=total_lines,
-            file_size=file_size, file_ends_with_newline=file_ends_with_newline)
 
     def _assemble_read_result(self, read_output: str, *, offset: int, end_line: int,
                               total_lines: int, file_size: int,
@@ -968,53 +1033,48 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         return ReadResult(error=f"File not found: {path}", similar_files=[fp for _, fp in scored[:5]])
 
     def read_file_raw(self, path: str) -> ReadResult:
-        """Whole file as a plain string (no pagination/line numbers/clamping)."""
+        """Whole file as a plain string (no pagination/line numbers/clamping) through
+        the same validated descriptor as ``read_file``; patch/V4A rely on it."""
         path = self._expand_path(path)
-        file_size, status = self._probe_regular_file(path)
-        if status == "missing":
+        page, is_image, ext_binary = self._page_for_text_read(path, 1, _THROUGH_EOF)
+        failure = self._page_error(path, page)
+        if failure is not None:
+            return failure
+        if page["state"] == "missing":
             return self._suggest_similar_files(path)
-        if status == "not_regular":
-            return self._not_regular_error(path)
-        if status == "env_unavailable":
-            return self._env_unavailable_error(path)
-        if self._is_image(path):
+        file_size = self._page_int(page, "file_size")
+        if is_image:
             return ReadResult(is_image=True, is_binary=True, file_size=file_size)
-        is_binary, sample_bytes = self._detect_binary(path)
-        if is_binary:
-            return ReadResult(is_binary=True, file_size=file_size, error=describe_binary_file(sample_bytes, file_size))
-        cat_result = self._exec(f"cat {self._escape_shell_arg(path)}")
-        if cat_result.exit_code != 0:
-            return ReadResult(error=f"Failed to read file: {cat_result.stdout}")
+        sample_bytes = self._page_bytes(page, "sample")
+        content_bytes = self._page_bytes(page, "page")
+        if sample_bytes is None or content_bytes is None:
+            return ReadResult(error=_SAFE_READER_BAD_PAYLOAD)
+        if ext_binary or self._is_likely_binary_bytes(sample_bytes):
+            return ReadResult(is_binary=True, file_size=file_size,
+                              error=describe_binary_file(sample_bytes, file_size))
         # Strip a leading BOM (a phantom U+FEFF defeats an exact first-line match);
         # write_file re-probes disk and restores it.
-        raw_content, _ = _strip_bom(_strip_terminal_fence_leaks(cat_result.stdout))
+        raw_content, _ = _strip_bom(content_bytes.decode("utf-8", errors="replace"))
         return ReadResult(content=raw_content, file_size=file_size)
 
     def read_file_bytes(self, path: str, max_bytes: Optional[int] = None) -> ReadResult:
-        """Read binary-safe bytes (as base64) from any shell-backed environment."""
+        """Binary-safe bytes (as base64) through one validated descriptor. ``max_bytes``
+        is enforced against the descriptor's size before any byte is exported."""
         path = self._expand_path(path)
-        file_size, status = self._probe_regular_file(path)
-        if status == "missing":
+        page = self._read_regular_file_page(path, 1, _THROUGH_EOF, max_bytes=max_bytes)
+        failure = self._page_error(path, page)
+        if failure is not None:
+            return failure
+        if page["state"] == "missing":
             return ReadResult(error=f"File not found: {path}")
-        if status == "not_regular":
-            return self._not_regular_error(path)
-        if status == "env_unavailable":
-            return self._env_unavailable_error(path)
-        if status == "bad_size":
-            return ReadResult(error=f"Could not determine file size: {path}")
-        if max_bytes is not None and file_size > max_bytes:
+        file_size = self._page_int(page, "file_size")
+        if page["state"] == "too_large":
             return ReadResult(
                 file_size=file_size,
                 error=f"File is too large ({file_size:,} bytes, limit is {max_bytes:,})")
-        encoded = self._exec(f"base64 < {self._escape_shell_arg(path)}")
-        if encoded.exit_code != 0:
-            return ReadResult(error=f"Failed to read binary file: {encoded.stdout}")
-        compact = "".join(_strip_terminal_fence_leaks(encoded.stdout).split())
-        try:
-            base64.b64decode(compact, validate=True)
-        except (ValueError, base64.binascii.Error):
+        if self._page_bytes(page, "page") is None:
             return ReadResult(error=f"Backend returned invalid binary data for: {path}")
-        return ReadResult(base64_content=compact, file_size=file_size, is_binary=True)
+        return ReadResult(base64_content=page["page"], file_size=file_size, is_binary=True)
 
     def delete_file(self, path: str) -> WriteResult:
         """Delete a single file (directories rejected) via the backend's ``python -c``

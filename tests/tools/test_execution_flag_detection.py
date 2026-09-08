@@ -506,7 +506,7 @@ def _time_benign_segments(count):
 
 
 def test_command_start_reconstruction_copies_each_input_span_once(monkeypatch):
-    import tools.approval as approval
+    import tools.approval_detection as approval_detection
 
     class SliceCountingString(str):
         sliced_characters = 0
@@ -522,12 +522,12 @@ def test_command_start_reconstruction_copies_each_input_span_once(monkeypatch):
     segment_count = 4_000
     command = SliceCountingString(";".join(["true"] * segment_count))
     monkeypatch.setattr(
-        approval,
+        approval_detection,
         "_iter_shell_command_starts",
         lambda _command: range(5, len(command), 5),
     )
 
-    marked = approval._mark_command_starts(command)
+    marked = approval_detection._mark_command_starts(command)
 
     assert marked.count("\n") == segment_count - 1
     assert command.slices == segment_count

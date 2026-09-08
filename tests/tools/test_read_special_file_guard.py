@@ -9,9 +9,11 @@ import json
 import os
 import socket
 import subprocess
+import threading
 
 import pytest
 
+from tools.environments.local import LocalEnvironment
 from tools.file_operations import ShellFileOperations
 from tools.file_tools import _special_file_kind, read_file_tool
 
@@ -161,6 +163,29 @@ class TestShellFileOperationsSpecialFileGuard:
 
         assert result.error is not None
         assert "FIFO" in result.error
+
+    @pytest.mark.linux_only
+    def test_native_backend_rejects_fifo_before_blocking_open(self, tmp_path):
+        """The LocalEnvironment fast path must verify the fd it opens too.
+
+        A `stat(path)` followed by `open(path)` leaves a TOCTOU window where a
+        regular file can become a FIFO. Opening O_NONBLOCK then fstat'ing that
+        descriptor keeps the native and remote safety boundaries equivalent.
+        """
+        fifo = tmp_path / "native.pipe"
+        os.mkfifo(fifo)
+        ops = ShellFileOperations(LocalEnvironment(cwd=str(tmp_path)))
+        result_box = {}
+
+        thread = threading.Thread(
+            target=lambda: result_box.setdefault("result", ops.read_file(str(fifo))),
+            daemon=True,
+        )
+        thread.start()
+        thread.join(timeout=5)
+
+        assert not thread.is_alive(), "native reader blocked opening a FIFO"
+        assert "FIFO" in result_box["result"].error
 
     def test_safe_reader_rejects_oversized_bytes_before_export(self, tmp_path):
         payload = tmp_path / "large.bin"

@@ -82,6 +82,23 @@ def _service() -> LSPService:
     )
 
 
+def _wait_for_folder_event(folders_log: Path, field: str, expected_uri: str) -> list[dict]:
+    """Wait for the mock LSP process to consume an async folder notification."""
+    deadline = time.monotonic() + 3.0
+    events: list[dict] = []
+    while time.monotonic() < deadline:
+        if folders_log.exists():
+            events = [json.loads(line) for line in folders_log.read_text(encoding="utf-8").splitlines()]
+            if any(
+                folder["uri"] == expected_uri
+                for event in events
+                for folder in event["event"][field]
+            ):
+                return events
+        time.sleep(0.02)
+    return events
+
+
 def test_multi_root_server_shares_one_client_across_roots(two_repos, mock_pyright, monkeypatch):
     repo_a, repo_b = two_repos
     spawns, folders_log, install = mock_pyright
@@ -98,9 +115,10 @@ def test_multi_root_server_shares_one_client_across_roots(two_repos, mock_pyrigh
         assert len(svc._clients) == 1
         client = next(iter(svc._clients.values()))
         assert client.workspace_folders == [str(repo_a), str(repo_b)]
-        events = [json.loads(line) for line in folders_log.read_text(encoding="utf-8").splitlines()]
+        expected_added_uri = Path(repo_b).as_uri()
+        events = _wait_for_folder_event(folders_log, "added", expected_added_uri)
         assert [f["uri"] for e in events for f in e["event"]["added"]] == [
-            Path(repo_b).as_uri()
+            expected_added_uri
         ]
         # Diagnostics still resolve per file in both folders.
         assert len(diags_a) == 1 and len(diags_b) == 1
@@ -148,9 +166,10 @@ def test_multi_root_retires_an_idle_secondary_workspace(two_repos, mock_pyright,
 
         client = next(iter(svc._clients.values()))
         assert client.workspace_folders == [str(repo_a)]
-        events = [json.loads(line) for line in folders_log.read_text(encoding="utf-8").splitlines()]
+        expected_removed_uri = Path(repo_b).as_uri()
+        events = _wait_for_folder_event(folders_log, "removed", expected_removed_uri)
         assert [f["uri"] for event in events for f in event["event"]["removed"]] == [
-            Path(repo_b).as_uri()
+            expected_removed_uri
         ]
     finally:
         svc.shutdown()

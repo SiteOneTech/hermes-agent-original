@@ -1,7 +1,9 @@
 ---
 name: kanban-worker
-description: Pitfalls, examples, and edge cases for Hermes Kanban workers. The lifecycle itself is auto-injected into every worker's system prompt as KANBAN_GUIDANCE (from agent/prompt_builder.py); this skill is what you load when you want deeper detail on specific scenarios.
+description: Pitfalls and edge cases for Hermes Kanban workers.
 version: 2.0.0
+author: Teknium (teknium1), Hermes Agent
+license: MIT
 platforms: [linux, macos, windows]
 environments: [kanban]
 metadata:
