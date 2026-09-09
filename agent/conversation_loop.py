@@ -127,8 +127,13 @@ def _maybe_inject_run_budget_wrapup(agent: Any, messages: List[Dict[str, Any]]) 
         (time.time() - started) < 0.8 * float(budget)
     ):
         return False
+    from agent.context_compressor import _DB_PERSISTED_MARKER
     for msg in reversed(messages):
         if isinstance(msg, dict) and msg.get("role") == "tool":
+            # Only the current tool-result tail is mutable; an older turn may already be
+            # cached (same contract as _maybe_inject_iteration_budget_warning).
+            if msg.get(_DB_PERSISTED_MARKER):
+                return False
             existing = msg.get("content", "")
             if isinstance(existing, str):
                 msg["content"] = existing + f"\n\n{RUN_BUDGET_WRAPUP_NOTICE}"
@@ -1407,7 +1412,7 @@ def _run_api_retry_loop(agent, s: _LoopState) -> Optional[Dict[str, Any]]:
     return None
 
 
-def run_conversation(
+def _run_conversation_turn(
     agent,
     user_message: Any,
     system_message: str = None,
@@ -1553,6 +1558,46 @@ def run_conversation(
         # future input can move to a clean session (#98722).
         result.update(error=_COMPRESSION_TIMEOUT_FINAL_RESPONSE, partial=True, compression_exhausted=True)
     return result
+
+
+def run_conversation(
+    agent,
+    user_message: Any,
+    system_message: str = None,
+    conversation_history: List[Dict[str, Any]] = None,
+    task_id: str = None,
+    stream_callback: Optional[callable] = None,
+    persist_user_message: Optional[Any] = None,
+    persist_user_timestamp: Optional[float] = None,
+    persist_user_display_kind: Optional[str] = None,
+    persist_user_display_metadata: Optional[Dict[str, Any]] = None,
+    persist_user_platform_id: Optional[str] = None,
+    moa_config: Optional[dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Run one turn (see ``_run_conversation_turn``) and export the current-turn boundary.
+
+    Every envelope that leaves the loop — success, partial/error, interrupt, retry-exhausted,
+    tool-limit, preflight timeout, codex runtime — passes through here, so the
+    ``{turn_id, current_turn_user_idx}`` pair is stamped beside the exact ``messages`` it
+    addresses, after every history rewrite including post-turn micro-compaction.
+    """
+    from agent.turn_context import export_current_turn_boundary
+
+    result = _run_conversation_turn(
+        agent,
+        user_message,
+        system_message=system_message,
+        conversation_history=conversation_history,
+        task_id=task_id,
+        stream_callback=stream_callback,
+        persist_user_message=persist_user_message,
+        persist_user_timestamp=persist_user_timestamp,
+        persist_user_display_kind=persist_user_display_kind,
+        persist_user_display_metadata=persist_user_display_metadata,
+        persist_user_platform_id=persist_user_platform_id,
+        moa_config=moa_config,
+    )
+    return export_current_turn_boundary(agent, result, user_message)
 
 
 __all__ = ["run_conversation"]
