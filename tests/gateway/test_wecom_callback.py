@@ -10,6 +10,16 @@ from plugins.platforms.wecom import callback_adapter as wecom_callback_adapter
 from plugins.platforms.wecom.callback_adapter import WecomCallbackAdapter
 from plugins.platforms.wecom.wecom_crypto import WXBizMsgCrypt
 
+# ``_build_event`` parses inbound XML with defusedxml, which ships with the
+# ``wecom`` extra (and transitively with ``youtube``, hence ``[all]`` in CI). A
+# dev venv without either extra cannot exercise the parser; the crypto,
+# routing, token-refresh and body-size tests below do not touch it and run
+# regardless. This is a dependency gate, not a host-OS gate.
+requires_defusedxml = pytest.mark.skipif(
+    not wecom_callback_adapter.DEFUSEDXML_AVAILABLE,
+    reason="defusedxml not installed (uv sync --extra wecom)",
+)
+
 
 def _app(name="test-app", corp_id="ww1234567890", agent_id="1000002"):
     return {
@@ -55,10 +65,7 @@ class TestWecomCrypto:
             crypt.decrypt("bad-sig", "1", "n", root.findtext("Encrypt", default=""))
 
 
-@pytest.mark.skipif(
-    not wecom_callback_adapter.DEFUSEDXML_AVAILABLE,
-    reason="WeCom callback XML parsing requires the optional wecom/defusedxml extra",
-)
+@requires_defusedxml
 class TestWecomCallbackEventConstruction:
     def test_build_event_extracts_text_message(self):
         adapter = WecomCallbackAdapter(_config())
@@ -283,11 +290,8 @@ class TestWecomCallbackSendTokenRefresh:
 
 
 class TestWecomCallbackPollLoop:
+    @requires_defusedxml
     @pytest.mark.asyncio
-    @pytest.mark.skipif(
-        not wecom_callback_adapter.DEFUSEDXML_AVAILABLE,
-        reason="WeCom callback XML parsing requires the optional wecom/defusedxml extra",
-    )
     async def test_poll_loop_dispatches_handle_message(self, monkeypatch):
         adapter = WecomCallbackAdapter(_config())
         calls = []

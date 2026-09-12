@@ -994,7 +994,15 @@ class TestDeletePaste:
         from hermes_cli.debug import delete_paste
 
         with pytest.raises(ValueError, match="only paste.rs"):
-            delete_paste("https://dpaste.com/something")
+            delete_paste("https://pastebin.com/something")
+
+    def test_dpaste_url_error_explains_no_delete(self):
+        """dpaste.com pastes have no owner token, so the user must be told the
+        paste cannot be deleted and will expire on its own (#106164)."""
+        from hermes_cli.debug import delete_paste
+
+        with pytest.raises(ValueError, match="cannot be deleted.*expire on their own"):
+            delete_paste("https://dpaste.com/ABC123")
 
 
 class TestScheduleAutoDelete:
@@ -1365,6 +1373,29 @@ class TestShareIncludesAutoDelete:
         out = capsys.readouterr().out
         assert "PUBLIC paste service" not in out
 
+    def test_share_output_warns_on_dpaste_fallback(self, hermes_home, capsys):
+        """With dpaste.com URLs the output must not promise 6-hour auto-delete
+        or a working `hermes debug delete` (#106164)."""
+        from hermes_cli.debug import run_debug_share
+
+        args = MagicMock()
+        args.lines = 50
+        args.expire = 1
+        args.local = False
+        args.nous = False
+
+        with patch("hermes_cli.dump.run_dump"), \
+             patch("hermes_cli.debug.upload_to_pastebin",
+                    return_value="https://dpaste.com/TEST"), \
+             patch("hermes_cli.debug._schedule_auto_delete"):
+            run_debug_share(args)
+
+        out = capsys.readouterr().out
+        assert "fell back to dpaste.com" in out
+        assert "CANNOT be deleted" in out
+        assert "To delete now" not in out
+        assert "paste.rs pastes will auto-delete in 6 hours" in out
+
 
 # ---------------------------------------------------------------------------
 # build_debug_share — structured core used by the dashboard endpoint
@@ -1471,7 +1502,6 @@ class TestBuildDebugShare:
         ), patch("hermes_cli.debug._schedule_auto_delete"):
             with pytest.raises(RuntimeError, match="all paste services down"):
                 build_debug_share(log_lines=50, redact=True)
-
 
 # ---------------------------------------------------------------------------
 # Shared bundle collection + Nous-S3 path
