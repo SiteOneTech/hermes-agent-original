@@ -804,7 +804,7 @@ def write_runtime_status(
     active_agents: Any = _UNSET, platform: Any = _UNSET, platform_state: Any = _UNSET,
     error_code: Any = _UNSET, error_message: Any = _UNSET, needs_attention: Any = _UNSET,
     retrying_since: Any = _UNSET, served_profiles: Any = _UNSET, session_store: Any = _UNSET,
-    clear_profile_platforms: bool = False,
+    ingress_url: Any = _UNSET, clear_profile_platforms: bool = False,
 ) -> None:
     """Persist gateway runtime health information for diagnostics/status."""
     path = _get_runtime_status_path()
@@ -842,6 +842,8 @@ def write_runtime_status(
             ("needs_attention", needs_attention, bool),
             # ISO start of the current retry episode; None clears it.
             ("retrying_since", retrying_since, None),
+            # Shared-listener secondaries: the /p/<profile>/ callback URL the vendor console must target.
+            ("ingress_url", ingress_url, None),
         ))
         # Per-entry writer provenance: top-level pid/start_time only identify the most recent
         # writer; /api/status tells "live" from "preserved" by exact (pid, start_time) equality.
@@ -1012,14 +1014,17 @@ def resolve_gateway_liveness(
             running=True, pid=runtime_pid, source="runtime_status", health_body=health_body
         )
     # (4) A named profile served by the live default multiplexer: no identity files of its own, but
-    # the multiplexer IS its gateway (mirrors `hermes -p X status` / `gateway list`).
-    if scoped:
-        served = guarded(multiplexer_liveness_for_profile, profile_dir)
-        if served is not None:
-            mux_pid, mux_runtime = served
-            return GatewayLiveness(
-                running=True, pid=mux_pid, source="multiplexer", health_body=health_body, runtime=mux_runtime
-            )
+    # the multiplexer IS its gateway (mirrors `hermes -p X status` / `gateway list`). Unscoped, the
+    # question is about the process's OWN home — which is a named profile inside a pooled
+    # `hermes --profile X serve` (the Desktop's per-profile backend answers its REST without
+    # `?profile=`), so it takes the same rung instead of reporting the served profile stopped.
+    own_home = profile_dir if scoped else _get_process_hermes_home()
+    served = guarded(multiplexer_liveness_for_profile, own_home)
+    if served is not None:
+        mux_pid, mux_runtime = served
+        return GatewayLiveness(
+            running=True, pid=mux_pid, source="multiplexer", health_body=health_body, runtime=mux_runtime
+        )
     return GatewayLiveness(
         running=False, pid=None, source="none", health_body=health_body, probe_error=probe_error
     )
