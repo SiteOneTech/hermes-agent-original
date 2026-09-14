@@ -339,11 +339,19 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
     @staticmethod
     def _interpreter_missing(result: ExecuteResult) -> bool:
         """Whether a ``python* -c`` attempt never ran an interpreter: the shell's 127,
-        its wording (``command not found`` / ``not found`` / Windows' ``not recognized``)
-        or the interpreter name echoed back in the complaint."""
+        its unambiguous wording (``command not found`` / ``python*: not found`` /
+        Windows' ``python* is not recognized``)."""
         text = (result.stdout or "").lower()
-        return (result.exit_code == 127 or "not found" in text
-                or "not recognized" in text or "python3" in text)
+        return result.exit_code == 127 or any(
+            phrase in text
+            for phrase in (
+                "command not found",
+                "python3: not found",
+                "python: not found",
+                "python3 is not recognized",
+                "python is not recognized",
+            )
+        )
 
     @staticmethod
     def _python_path(path: str) -> str:
@@ -417,6 +425,13 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         A/B, while dropping numbers regressed line-referencing."""
         from tools.tool_output_limits import get_max_line_length
         max_line_length = get_max_line_length()
+        # A trailing newline terminates the final line — it does not start a new,
+        # empty one. Splitting without dropping it rendered a phantom "<N+1>|"
+        # gutter line on every newline-terminated file (`cat -n` semantics).
+        # Exactly ONE terminator is dropped, so a genuinely selected trailing
+        # blank line in a page keeps its own number.
+        if content.endswith('\n'):
+            content = content[:-1]
         return '\n'.join(
             f"{i}|{line if len(line) <= max_line_length else line[:max_line_length] + '... [truncated]'}"
             for i, line in enumerate(content.split('\n'), start=start_line))

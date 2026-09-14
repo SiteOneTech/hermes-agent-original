@@ -1011,15 +1011,17 @@ class TestWebServerEndpoints:
         seen = {}
 
         def _pid(pid_path=None, **kw):
-            seen["pid_path"] = pid_path
+            # The served-profile probe also verifies the DEFAULT home's gateway identity; the
+            # contract here is that the worker's OWN pid file is what the scoped rung reads.
+            seen.setdefault("pid_paths", []).append(pid_path)
             return None
 
         def _runtime(path=None):
-            seen["status_path"] = path
+            seen.setdefault("status_paths", []).append(path)
             return None
 
         def _runtime_pid(runtime=None, *, expected_home=None):
-            seen["expected_home"] = expected_home
+            seen.setdefault("expected_homes", []).append(expected_home)
             return None
 
         monkeypatch.setattr(_gw_status, "get_running_pid_cached", _pid)
@@ -1031,9 +1033,9 @@ class TestWebServerEndpoints:
         resp = self.client.get("/api/messaging/platforms?profile=worker")
 
         assert resp.status_code == 200
-        assert seen["pid_path"] == worker_home / "gateway.pid"
-        assert seen["status_path"] == worker_home / "gateway_state.json"
-        assert seen["expected_home"] == worker_home
+        assert worker_home / "gateway.pid" in seen["pid_paths"]
+        assert worker_home / "gateway_state.json" in seen["status_paths"]
+        assert worker_home in seen["expected_homes"]
 
     def test_get_status_unknown_profile_404s(self):
         resp = self.client.get("/api/status?profile=no-such-profile")
@@ -3915,9 +3917,16 @@ class TestWebServerEndpoints:
         assert "GATEWAY_PROXY_URL" in _MESSAGING_KEYS_PAGE_KEYS
 
     def test_model_set_requires_confirmation_for_expensive_model(self, monkeypatch):
+        from hermes_cli.model_switch import ModelSwitchResult
+
         monkeypatch.setattr(
             "hermes_cli.model_cost_guard.expensive_model_warning",
             lambda *_args, **_kwargs: SimpleNamespace(message="EXPENSIVE MODEL WARNING"),
+        )
+        monkeypatch.setattr(
+            "hermes_cli.model_switch.switch_model",
+            lambda **kw: ModelSwitchResult(
+                success=True, target_provider=kw["explicit_provider"], new_model=kw["raw_input"]),
         )
 
         resp = self.client.post(
@@ -5023,6 +5032,7 @@ class TestWebServerEndpoints:
         (mirroring the CLI's post-model-selection Tool Gateway routing) and
         surfaces the routed tools in the response."""
         import hermes_cli.nous_subscription as ns
+        from hermes_cli.model_switch import ModelSwitchResult
 
         called = {}
 
@@ -5035,6 +5045,11 @@ class TestWebServerEndpoints:
             return {"web"}
 
         monkeypatch.setattr(ns, "apply_nous_managed_defaults", fake_apply)
+        monkeypatch.setattr(
+            "hermes_cli.model_switch.switch_model",
+            lambda **kw: ModelSwitchResult(
+                success=True, target_provider=kw["explicit_provider"], new_model=kw["raw_input"]),
+        )
 
         resp = self.client.post(
             "/api/model/set",
@@ -5065,100 +5080,51 @@ class TestWebServerEndpoints:
         assert data["ok"] is True
         assert data.get("gateway_tools", []) == []
 
-    def test_apply_main_model_assignment_base_url_and_context_reconcile(self):
-        """The shared main-slot assignment helper must persist a supplied
-        base_url, clear a stale base_url only when switching providers, preserve
-        it on same-provider re-assignment, and always drop a hardcoded
-        context_length override. Both POST /api/model/set and profile-model
-        writes route through this, so the contract is pinned here."""
+    def test_apply_main_model_assignment_applies_resolved_route_and_submitted_custom_key(self):
+        """Dashboard persistence follows the resolved ``/model`` route, never stale endpoint data."""
+        from hermes_cli.model_switch import ModelSwitchResult
         from hermes_cli.web_server_config import _apply_main_model_assignment
 
-        # Custom + base_url → persisted; stale context_length dropped.
+        # A changed resolved custom route clears an incompatible context pin.
         out = _apply_main_model_assignment(
-            {"context_length": 8192}, "custom", "llama-3.1-8b", "http://127.0.0.1:8000/v1"
+            {
+                "provider": "custom", "default": "old-model", "base_url": "http://127.0.0.1:7000/v1",
+                "context_length": 8192,
+            },
+            ModelSwitchResult(
+                success=True, target_provider="custom", new_model="llama-3.1-8b",
+                base_url="http://127.0.0.1:8000/v1", api_mode="chat_completions"),
         )
         assert out["provider"] == "custom"
         assert out["default"] == "llama-3.1-8b"
         assert out["base_url"] == "http://127.0.0.1:8000/v1"
         assert "context_length" not in out
 
-        # Switching providers (custom → openrouter) → stale base_url cleared.
+        # Hosted providers use their resolved endpoint, not the previous custom endpoint/key.
         out = _apply_main_model_assignment(
-            {"provider": "custom", "base_url": "http://127.0.0.1:8000/v1"},
-            "openrouter",
-            "anthropic/claude-opus-4.8",
+            {"provider": "custom", "base_url": "http://127.0.0.1:8000/v1", "api_key": "old"},
+            ModelSwitchResult(
+                success=True, target_provider="openrouter", new_model="anthropic/claude-opus-4.8",
+                base_url="https://openrouter.ai/api/v1", api_mode="chat_completions"),
         )
         assert out["provider"] == "openrouter"
-        assert out["base_url"] == ""
+        assert out["base_url"] == "https://openrouter.ai/api/v1"
+        assert "api_key" not in out
 
-        # Same provider, no new base_url → existing custom endpoint preserved.
-        # Regression: picking a different MiMo model under xiaomi must NOT wipe a
-        # Token Plan base_url (https://token-plan-*.xiaomimimo.com/v1).
-        out = _apply_main_model_assignment(
-            {"provider": "xiaomi", "base_url": "https://token-plan-ams.xiaomimimo.com/v1"},
-            "xiaomi",
-            "mimo-v2.5-pro",
-        )
-        assert out["provider"] == "xiaomi"
-        assert out["default"] == "mimo-v2.5-pro"
-        assert out["base_url"] == "https://token-plan-ams.xiaomimimo.com/v1"
-
-        # A supplied base_url is honored for any provider, not just custom.
-        out = _apply_main_model_assignment(
-            {"provider": "xiaomi"},
-            "xiaomi",
-            "mimo-v2.5",
-            "https://token-plan-cn.xiaomimimo.com/v1",
-        )
-        assert out["base_url"] == "https://token-plan-cn.xiaomimimo.com/v1"
-
-        # Switching providers without a base_url → don't invent one, clear stale.
-        out = _apply_main_model_assignment(
-            {"provider": "openrouter", "base_url": "http://stale:1/v1"}, "custom", "m"
-        )
-        assert out["base_url"] == ""
-
-        # Non-dict input is coerced to a fresh dict (never raises).
-        out = _apply_main_model_assignment("not-a-dict", "custom", "m", "http://x/v1")
-        assert out == {"provider": "custom", "default": "m", "base_url": "http://x/v1"}
-
-        # api_key follows the same lifecycle as base_url:
-        # supplied → persisted.
-        out = _apply_main_model_assignment(
-            {"api": "sk-legacy-old"}, "custom", "m", "http://x/v1", "sk-secret"
-        )
-        assert out["api_key"] == "sk-secret"
-        assert "api" not in out
-
-        # same provider, no new key → existing key preserved (re-picking a model
-        # on the same custom endpoint must not wipe the saved key).
+        # A same custom route keeps its endpoint credential.
         out = _apply_main_model_assignment(
             {"provider": "custom", "base_url": "http://x/v1", "api_key": "sk-keep"},
-            "custom",
-            "m2",
+            ModelSwitchResult(success=True, target_provider="custom", new_model="m2", base_url="http://x/v1"),
         )
         assert out["api_key"] == "sk-keep"
 
-        # switching providers without a new key → stale key cleared.
+        # An explicit dashboard key supersedes the resolved/custom-route key.
         out = _apply_main_model_assignment(
-            {"provider": "custom", "api_key": "sk-old", "api_mode": "anthropic_messages"},
-            "openrouter",
-            "m",
+            {"provider": "custom", "base_url": "http://x/v1", "api_key": "old"},
+            ModelSwitchResult(success=True, target_provider="custom", new_model="m3", base_url="http://x/v1"),
+            "sk-submitted",
         )
-        assert "api_key" not in out
-        assert "api_mode" not in out
-
-        # switching providers when the stale secret lives under the legacy
-        # ``api`` alias only (no api_key) → it must be cleared too. The resolver
-        # reads ``model.api`` as a key, so leaving it behind keeps a secret in
-        # config.yaml that contaminates the next custom resolution.
-        out = _apply_main_model_assignment(
-            {"provider": "custom", "api": "sk-legacy-stale", "base_url": "http://endpoint-a/v1"},
-            "openrouter",
-            "m",
-        )
-        assert "api" not in out
-        assert "api_key" not in out
+        assert out["api_key"] == "sk-submitted"
 
     def test_parse_model_ids_handles_openai_and_bare_shapes(self):
         """Model discovery must tolerate the common /v1/models shapes and
@@ -5255,9 +5221,8 @@ class TestWebServerEndpoints:
             for e in custom
         )
 
-    def test_set_model_main_non_custom_clears_stale_base_url(self):
-        """Switching to a hosted provider must clear a stale base_url so the
-        resolver picks that provider's own default endpoint."""
+    def test_set_model_main_non_custom_replaces_stale_base_url(self):
+        """Switching to a hosted provider replaces a stale custom endpoint with its resolved route."""
         from hermes_cli.config import load_config, save_config
 
         cfg = load_config()
@@ -5273,14 +5238,17 @@ class TestWebServerEndpoints:
             json={"scope": "main", "provider": "openrouter", "model": "anthropic/claude-opus-4.8"},
         )
         assert resp.status_code == 200
-        assert resp.json()["base_url"] == ""
+        data = resp.json()
+        assert data["base_url"] != "http://127.0.0.1:8000/v1"
+        assert load_config()["model"]["base_url"] == data["base_url"]
 
-    def test_set_model_main_same_provider_preserves_base_url(self):
+    def test_set_model_main_same_provider_preserves_base_url(self, monkeypatch):
         """Re-picking a model under the SAME provider must NOT wipe a configured
         base_url. Regression for the desktop bug where selecting a Xiaomi MiMo
         model reset a Token Plan endpoint back to the registry default, breaking
         Token Plan keys (https://token-plan-*.xiaomimimo.com/v1)."""
         from hermes_cli.config import load_config, save_config
+        from hermes_cli.model_switch import ModelSwitchResult
 
         cfg = load_config()
         cfg["model"] = {
@@ -5289,6 +5257,12 @@ class TestWebServerEndpoints:
             "base_url": "https://token-plan-ams.xiaomimimo.com/v1",
         }
         save_config(cfg)
+        monkeypatch.setattr(
+            "hermes_cli.model_switch.switch_model",
+            lambda **kw: ModelSwitchResult(
+                success=True, target_provider=kw["explicit_provider"], new_model=kw["raw_input"],
+                base_url=kw["current_base_url"]),
+        )
 
         # Desktop model picker sends provider+model only (no base_url).
         resp = self.client.post(
@@ -5353,11 +5327,12 @@ class TestWebServerEndpoints:
             json={"scope": "main", "provider": "openrouter", "model": "anthropic/claude-opus-4.8"},
         )
         assert resp.status_code == 200
-        assert resp.json()["stale_aux"] == []
+        data = resp.json()
+        assert data["stale_aux"] == []
 
         model_cfg = load_config().get("model")
         assert model_cfg["provider"] == "openrouter"
-        assert model_cfg.get("base_url", "") == ""
+        assert model_cfg.get("base_url") == data["base_url"]
 
     def test_custom_endpoints_list_includes_direct_custom_config(self):
         """A bare model.provider=custom config should show up in Desktop even
@@ -6385,11 +6360,17 @@ class TestWebServerEndpoints:
     def test_set_model_main_gateway_failure_does_not_block_save(self, monkeypatch):
         """A Portal/gateway hiccup must never prevent saving the model."""
         import hermes_cli.nous_subscription as ns
+        from hermes_cli.model_switch import ModelSwitchResult
 
         def boom(*args, **kwargs):
             raise RuntimeError("portal unreachable")
 
         monkeypatch.setattr(ns, "apply_nous_managed_defaults", boom)
+        monkeypatch.setattr(
+            "hermes_cli.model_switch.switch_model",
+            lambda **kw: ModelSwitchResult(
+                success=True, target_provider=kw["explicit_provider"], new_model=kw["raw_input"]),
+        )
 
         resp = self.client.post(
             "/api/model/set",
@@ -8831,8 +8812,9 @@ class TestDenormalizeProviderSwitch:
         model = result["model"]
         assert model["provider"] == "openrouter"
         assert model["default"] == "google/gemini-2.5-flash"
-        # The old ollama-local endpoint must not carry over to openrouter.
-        assert not model.get("base_url")
+        # The old ollama-local endpoint must not carry over to openrouter (the switch resolves
+        # the aggregator's own endpoint instead of leaving the field blank or stale).
+        assert model.get("base_url") != "http://localhost:11434/v1"
 
     def test_unchanged_model_preserves_provider_and_base_url(self):
         """Saving with the model unchanged must never re-detect/overwrite the
@@ -8903,6 +8885,38 @@ class TestDenormalizeProviderSwitch:
         model = result["model"]
         assert model["provider"] == "openrouter"
         assert model["context_length"] == 128000
+
+    def test_rejected_switch_is_400_and_leaves_the_model_block_byte_identical(self, monkeypatch):
+        """``switch_model`` rejecting the inferred provider must surface as 400 from
+        ``PUT /api/config`` — not fall back to the flat string, which the deep-merge would
+        write OVER the on-disk ``model:`` dict (provider/base_url/api_mode/slots destroyed)."""
+        from starlette.testclient import TestClient
+        from hermes_constants import get_hermes_home
+        from hermes_cli.model_switch import ModelSwitchResult
+        from hermes_cli.web_server import app, _SESSION_HEADER_NAME, _SESSION_TOKEN
+
+        cfg_path = get_hermes_home() / "config.yaml"
+        cfg_path.write_text(
+            "model:\n"
+            "  default: llama3.2\n"
+            "  provider: ollama-local\n"
+            "  base_url: http://localhost:11434/v1\n"
+            "  api_mode: chat_completions\n"
+            "  context_length: 32000\n"
+            "  model_slots:\n"
+            "    fast: qwen3\n",
+            encoding="utf-8")
+        before = cfg_path.read_bytes()
+        monkeypatch.setattr("hermes_cli.models_detect.provider_has_credentials", lambda p: p == "openrouter")
+        monkeypatch.setattr("hermes_cli.model_switch.switch_model",
+                            lambda **_kw: ModelSwitchResult(success=False, error_message="models.dev offline"))
+
+        client = TestClient(app)
+        client.headers[_SESSION_HEADER_NAME] = _SESSION_TOKEN
+        resp = client.put("/api/config", json={"config": {"model": "openai/gpt-5.5-zzz"}})
+
+        assert resp.status_code == 400 and "models.dev offline" in resp.json()["detail"]
+        assert cfg_path.read_bytes() == before
 
 
 class TestModelContextLengthSchema:
