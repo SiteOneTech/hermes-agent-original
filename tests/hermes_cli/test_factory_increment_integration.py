@@ -4,7 +4,7 @@ import subprocess
 
 import pytest
 
-from hermes_cli import factory_pg
+from hermes_cli import agent_core_sql, factory_pg
 
 _ORIGINAL_RECONCILE_PROJECT = factory_pg.reconcile_project
 _BASE_CURRENT = "a" * 40
@@ -62,6 +62,27 @@ def fake_sql(monkeypatch):
     monkeypatch.setattr(factory_pg, "reconcile_project", lambda pid: {"project_id": pid, "status": "active"})
     monkeypatch.setattr(factory_pg, "notion_workflow_enabled", lambda: False)
     return fake
+
+
+def test_task_bound_passed_review_gate_uses_one_limit_when_wrapped_by_agent_core_sql(monkeypatch):
+    submitted_sql: list[str] = []
+
+    def capture_psql(query: str, **_kwargs):
+        submitted_sql.append(query)
+        return subprocess.CompletedProcess(
+            args=["psql"],
+            returncode=0,
+            stdout='[{"gate_id": 1244, "gate_type": "quality"}]',
+            stderr="",
+        )
+
+    monkeypatch.setattr(agent_core_sql, "psql", capture_psql)
+
+    gate = factory_pg._task_bound_passed_review_gate("empleado-uno-sales-operator-core-i9-g1")
+
+    assert gate == {"gate_id": 1244, "gate_type": "quality", "metadata": {}}
+    assert len(submitted_sql) == 1
+    assert submitted_sql[0].upper().count("LIMIT 1") == 1
 
 
 def test_close_task_integrates_increment_before_terminal_status(fake_sql, monkeypatch):

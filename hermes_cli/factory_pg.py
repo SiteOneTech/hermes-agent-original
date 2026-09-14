@@ -7701,7 +7701,6 @@ def _task_bound_passed_review_gate(task_id: str) -> dict[str, Any] | None:
           AND status='passed'
           AND gate_type IN ({gate_types})
         ORDER BY timestamp DESC, gate_id DESC
-        LIMIT 1
         """,
         user=_user(),
     )
