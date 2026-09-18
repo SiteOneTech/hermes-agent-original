@@ -601,6 +601,54 @@ self-approve, merge, mutate task status, write direct SQL, change credentials,
 touch primary checkout, perform external runtime/provider/messaging/deploy
 operations, or authorize ALR-020/product dispatch.
 
+## Review round 23 — R2ae bounded canonical G1 validation and PR provenance repair
+
+**Current-base identity:** R2ae is bounded to assigned branch/worktree
+`factory/zeus-alpha-research-ledger-core/inc-019-r2ae-bounded-canonical-g1-valida`
+/
+`/home/jean/Projects/.worktrees/zeus-alpha-research-ledger-core/inc-019-r2ae-bounded-canonical-g1-valida`.
+Read-only Git evidence before the repair recorded local assigned HEAD
+`bb8495a61611cfd9501c00f7a48fda42cfaee61f`, remote assigned branch
+`d2b1ebad4dd54f45e0e55bf55fae653aee6509a0`, current `origin/main`
+`e289e007fa6b9590f0dd2c3b8d75d308bd595d2c`, and local merge-base
+`1b6bc0f65d3ad49845d20e056203e3b3702ac2a7`. The old local/remote branch
+state is not used as approval.
+
+**Canonical G1 inventory:** the sanctioned Factory status command
+`/home/jean/Projects/hermes-agent-original/venv/bin/python3 -m hermes_cli.main factory status zeus-alpha-research-ledger-core --json`
+reported Agent Core Postgres project state at `origin/main`
+`e289e007fa6b9590f0dd2c3b8d75d308bd595d2c`. It found exactly one active
+required-G1 blocker, `DOCUMENTATION_INDEX.md` with
+`exists/committed/indexed/validated=true`, `reviewed=false`, `blocking=true`
+(status log lines 22791-22808). The other thirteen required documents were
+`reviewed=true`, `blocking=false` (status log lines 22582-22790 and
+22810-22847). Historical ten/eleven-document blocker sets, stale R2ai/R2ae task
+metadata, and stale gate snapshots remain audit/projection evidence unless the
+current configured-base row set reproduces them.
+
+**PR provenance:** GitHub PR #44 readback before the repair showed an open,
+non-draft PR against `main`, labeled `agent:zeus`, but with stale head
+`d2b1ebad4dd54f45e0e55bf55fae653aee6509a0` and
+`mergeable=CONFLICTING` / `mergeStateStatus=DIRTY`. This repair keeps the
+same assigned branch/PR, updates only project-local documentation/provenance,
+and requires final PR #44 head SHA plus Factory gate notes after push. It does
+not self-approve or reuse stale, merged, conflicting, different-branch, or
+different-SHA PR evidence.
+
+**Correction:** `R2AE_BOUNDED_CANONICAL_G1_VALIDATION.md` records the exact
+current active blocker and adds an early machine-readable
+`DOCUMENTATION_INDEX.md validated: yes; reviewed: yes` guard before narrative
+index mentions so first-line status parsers bind the index document to the
+existing PR #36 / Factory gate 794 review chain. Full canonical status green is
+not possible before the authorized PR merge because `factory status` reads
+`origin/main`, not this unmerged candidate branch. This is a bounded technical
+cause, not a human interpretation request.
+
+This R2ae candidate remains pending independent exact-SHA quality review. It
+performs no base merge, deploy, direct SQL, primary checkout mutation, task
+status mutation, credential change, messaging/connector activation, external
+runtime/product operation, ALR-020 dispatch, or trading/risk/paper/live action.
+
 ## Local documentary verification — non-approval
 
 At `2026-08-10T04:50:09-04:00`, the implementation-planner worker verified the project-local pack from the assigned worktree only. `git ls-files --error-unmatch` confirmed the 14 required G1 documents plus `G0_REPOSITORY_STRATEGY.md`, `REQUIREMENTS_TRACEABILITY.md`, `DATABASE_AND_RUNTIME_CONTRACT.md`, and `G1_REVIEW.md` are tracked. `DOCUMENTATION_INDEX.md` indexes required documents and records explicit validated/reviewed status. `G0_REPOSITORY_STRATEGY.md` records the Zeus-only source repo, `origin/main` reference, assigned branch/worktree policy, PR-first delivery, and predecessor linkage. This is implementation evidence, not an independent specification/security PASS.
