@@ -230,15 +230,13 @@ class TestRunJobProfileContext:
         monkeypatch.setattr(sched, "_hermes_home", None)
         monkeypatch.setenv("HERMES_CRON_TIMEOUT", "0")
 
-        import dotenv
         from hermes_cli import env_loader
 
-        def fake_load_dotenv(dotenv_path=None, *_a, **_kw):
+        def fake_load_dotenv(dotenv_path, **_kw):
             observed.setdefault("dotenv_paths", []).append(str(dotenv_path))
             return True
 
-        monkeypatch.setattr(dotenv, "load_dotenv", fake_load_dotenv)
-        monkeypatch.setattr(env_loader, "load_dotenv", fake_load_dotenv)
+        monkeypatch.setattr(env_loader, "_load_dotenv_with_fallback", fake_load_dotenv)
 
     def test_run_job_sets_and_restores_profile_home(
         self, isolated_cron_profile_home, monkeypatch
@@ -273,7 +271,6 @@ class TestRunJobProfileContext:
     def test_profile_dotenv_environment_is_restored(
         self, isolated_cron_profile_home, monkeypatch
     ):
-        import dotenv
         from hermes_cli import env_loader
         import cron.scheduler as sched
 
@@ -283,15 +280,14 @@ class TestRunJobProfileContext:
         monkeypatch.setenv("HERMES_PROFILE_TEST_SHARED", "outer")
         monkeypatch.delenv("HERMES_PROFILE_TEST_ONLY", raising=False)
 
-        def fake_load_dotenv(dotenv_path=None, *_a, **_kw):
+        def fake_load_dotenv(dotenv_path, **_kw):
             observed.setdefault("dotenv_paths", []).append(str(dotenv_path))
             os.environ["HERMES_PROFILE_TEST_SHARED"] = "profile-value"
             os.environ["HERMES_PROFILE_TEST_ONLY"] = "profile-only"
             os.environ["HERMES_CRON_TIMEOUT"] = "123"
             return True
 
-        monkeypatch.setattr(dotenv, "load_dotenv", fake_load_dotenv)
-        monkeypatch.setattr(env_loader, "load_dotenv", fake_load_dotenv)
+        monkeypatch.setattr(env_loader, "_load_dotenv_with_fallback", fake_load_dotenv)
 
         job = {
             "id": "env-profile",

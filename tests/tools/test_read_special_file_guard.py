@@ -234,6 +234,40 @@ class TestShellFileOperationsSpecialFileGuard:
         assert result.file_size == 32
         assert result.error == "File is too large (32 bytes, limit is 8)"
 
+    def test_bytes_read_rejects_file_that_grows_after_descriptor_validation(self, tmp_path, monkeypatch):
+        """A post-fstat append cannot make the descriptor reader export past its cap."""
+        from tools import file_operations as file_operations_mod
+
+        payload = tmp_path / "growing.bin"
+        payload.write_bytes(b"x" * 8)
+        hook = "        st = os.fstat(fd)\n"
+        injected = (
+            hook
+            + "        with open(p, 'ab') as writer:\n"
+            + "            writer.write(b'y')\n"
+        )
+        monkeypatch.setattr(
+            file_operations_mod,
+            "_SAFE_READ_SNIPPET",
+            file_operations_mod._SAFE_READ_SNIPPET.replace(hook, injected, 1),
+        )
+
+        class RemoteLikeEnv:
+            cwd = str(tmp_path)
+
+            def execute(self, command, **_kwargs):
+                completed = subprocess.run(
+                    command, shell=True, cwd=self.cwd, text=True,
+                    capture_output=True, timeout=5,
+                )
+                return {"output": completed.stdout, "returncode": completed.returncode}
+
+        result = ShellFileOperations(RemoteLikeEnv()).read_file_bytes(str(payload), max_bytes=8)
+
+        assert result.base64_content is None
+        assert result.file_size == 9
+        assert result.error == "File is too large (9 bytes, limit is 8)"
+
     def test_safe_reader_returns_metadata_without_exporting_binary_content(self, tmp_path):
         payload = tmp_path / "large.png"
         payload.write_bytes(b"\x89PNG\r\n\x1a\n" + b"x" * 65_536)

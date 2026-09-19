@@ -47,6 +47,24 @@ def test_profile_capabilities_read_toolsets_assigned_and_enabled_skills(tmp_path
     ]
 
 
+def test_profile_capabilities_honor_serialized_disabled_skills(tmp_path):
+    """Dashboard capability summaries match runtime skill-list normalization."""
+    from hermes_cli.profiles import _read_profile_capabilities
+
+    profile_dir = tmp_path / "profiles" / "profile-su"
+    profile_dir.mkdir(parents=True)
+    (profile_dir / "config.yaml").write_text(
+        "skills:\n  disabled: '[\"disabled-skill\"]'\n",
+        encoding="utf-8",
+    )
+    _write_skill(profile_dir, "enabled-skill")
+    _write_skill(profile_dir, "disabled-skill")
+
+    capabilities = _read_profile_capabilities(profile_dir)
+
+    assert capabilities["skill_names"] == ["enabled-skill"]
+
+
 def test_profile_capabilities_fall_back_to_platform_toolsets(tmp_path):
     from hermes_cli.profiles import _read_profile_capabilities
 

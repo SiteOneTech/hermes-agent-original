@@ -19,6 +19,7 @@ PROFILE_META_EMPTY = {
     "avatar_path": "",
     "engine_label": "",
     "engine_model": "",
+    "bot_title": "",
 }
 
 

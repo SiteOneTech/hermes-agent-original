@@ -889,6 +889,7 @@ class TestWebServerEndpoints:
 
         worker_home = profiles_mod.get_profile_dir("worker")
         worker_home.mkdir(parents=True)
+        (worker_home / "config.yaml").touch()  # identity marker: bare dirs are not profiles
 
         seen = {}
 
@@ -1007,6 +1008,7 @@ class TestWebServerEndpoints:
 
         worker_home = profiles_mod.get_profile_dir("worker")
         worker_home.mkdir(parents=True)
+        (worker_home / "config.yaml").touch()  # identity marker: bare dirs are not profiles
 
         seen = {}
 
@@ -2069,6 +2071,7 @@ class TestWebServerEndpoints:
 
         worker_home = get_profile_dir("worker")
         worker_home.mkdir(parents=True, exist_ok=True)
+        (worker_home / "config.yaml").touch()  # identity marker: bare dirs are not profiles
         worker_cfg = worker_home / "honcho.json"
         worker_cfg.write_text(json.dumps({"hosts": {"hermes_worker": {"workspace": "kept"}}}), encoding="utf-8")
 
@@ -2213,6 +2216,7 @@ class TestWebServerEndpoints:
 
         worker_home = profiles_mod.get_profile_dir("worker")
         worker_home.mkdir(parents=True)
+        (worker_home / "config.yaml").touch()  # identity marker: bare dirs are not profiles
 
         resp = self.client.post(
             "/api/chat/image-upload?profile=worker",
@@ -4032,11 +4036,41 @@ class TestWebServerEndpoints:
         assert data["provider"] == "openrouter"
         assert data["model"] == "anthropic/claude-sonnet-4.6"
 
+    def test_model_set_flips_a_stale_setup_record(self, monkeypatch):
+        """POST /api/model/set landed a provider on disk; the serve process's boot record
+        (``provider_configured: false`` since a failed boot-time mint) must follow at once, with
+        the ``setup.ready`` broadcast, or the web chat stays gated on "need setup" until a restart
+        (setup.status answers from the record)."""
+        from hermes_cli import free_tier_bootstrap as fb
+
+        fb.reset_for_tests()
+        monkeypatch.setattr("hermes_cli.model_cost_guard.expensive_model_warning", lambda *_a, **_k: None)
+        monkeypatch.setattr("agent.bedrock_adapter.has_aws_credentials", lambda: False)
+        broadcasts = []
+        monkeypatch.setattr(fb, "_broadcast", broadcasts.append)
+        with fb._lock:
+            fb._record = fb.SetupRecord(provider_configured=False, inference_provider="", free_tier=False,
+                                        has_identity=False, other_providers=False)
+            fb._started = True
+            fb._done.set()
+        try:
+            resp = self.client.post(
+                "/api/model/set",
+                json={"scope": "main", "provider": "custom", "model": "local-model",
+                      "base_url": "http://127.0.0.1:8081/v1", "api_key": "sk-local"},
+            )
+            assert resp.status_code == 200 and resp.json()["ok"] is True
+            record = fb.current_record()
+            assert record.provider_configured is True and record.other_providers is True
+            assert record.inference_provider == "custom"
+            assert broadcasts == [record]
+        finally:
+            fb.reset_for_tests()
+
+
     def test_ops_import_passes_force_flag(self, tmp_path, monkeypatch):
         """force=True must append --force so the spawned non-interactive
         `hermes import` doesn't auto-abort at the overwrite prompt."""
-        import hermes_cli.web_server as ws
-
         archive = tmp_path / "backup.zip"
         import zipfile
         with zipfile.ZipFile(archive, "w") as zf:
@@ -5698,6 +5732,79 @@ class TestWebServerEndpoints:
         assert 2070 not in providers
         assert "2070" not in providers
 
+    def test_punctuated_provider_key_round_trips_through_activate_edit_and_delete(self):
+        """A stored ``providers.<key>`` with dots/colons or mixed case is what the
+        list route returns as ``id``; the same spelling must reach the entry on
+        activate, save (edit) and delete instead of being slugified into a
+        non-existent twin (404 / duplicate row), and delete must still clear
+        the model mirror ``switch_model`` wrote for it.
+        """
+        from urllib.parse import quote
+
+        from hermes_cli.config import get_config_path, load_config
+
+        get_config_path().write_text(
+            "model:\n"
+            "  provider: openrouter\n"
+            "  default: some/model\n"
+            "providers:\n"
+            "  local-127.0.0.1:8283:\n"
+            "    name: Local (127.0.0.1:8283)\n"
+            "    base_url: http://127.0.0.1:8283/v1\n"
+            "    model: Qwen.gguf\n"
+            "  EXllamav3:\n"
+            "    name: EXllamav3\n"
+            "    base_url: http://127.0.0.1:8290/v1\n"
+            "    model: Qwen3-27B\n",
+            encoding="utf-8",
+        )
+        dotted = "local-127.0.0.1:8283"
+        listed = [e["id"] for e in self.client.get("/api/providers/custom-endpoints").json()["endpoints"]]
+        assert dotted in listed and "EXllamav3" in listed
+
+        # Edit by the listed id updates the entry in place — no slugged twin.
+        saved = self.client.post(
+            "/api/providers/custom-endpoints",
+            json={"id": dotted, "name": "Local (127.0.0.1:8283)",
+                  "base_url": "http://127.0.0.1:8283/v1", "model": "Qwen2.gguf"},
+        )
+        assert saved.status_code == 200, saved.text
+        providers = load_config()["providers"]
+        assert providers[dotted]["model"] == "Qwen2.gguf"
+        assert "local-127-0-0-1-8283" not in providers
+
+        for key in (dotted, "EXllamav3"):
+            path = f"/api/providers/custom-endpoints/{quote(key, safe='')}"
+            activate = self.client.post(f"{path}/activate", json={})
+            assert activate.status_code == 200, activate.text
+            assert load_config()["model"].get("base_url"), key
+            current = [e["id"] for e in self.client.get("/api/providers/custom-endpoints").json()["endpoints"]
+                       if e["is_current"]]
+            assert current == [key], f"{key}: list does not mark the endpoint just activated as current: {current}"
+            deleted = self.client.request("DELETE", path)
+            assert deleted.status_code == 200, deleted.text
+            cfg = load_config()
+            assert key not in (cfg.get("providers") or {})
+            assert not cfg["model"].get("base_url"), f"{key}: deleted endpoint's host still routed to"
+            assert not cfg["model"].get("provider"), key
+
+    def test_unslugged_display_name_still_resolves_to_its_slug_key(self):
+        """Compatibility fallback: a caller sending the display name reaches the
+        dashboard-minted slug key; an unknown id is still a 404."""
+        from hermes_cli.config import get_config_path, load_config
+
+        get_config_path().write_text(
+            "providers:\n"
+            "  local-8000:\n"
+            "    name: Local 8000\n"
+            "    base_url: http://127.0.0.1:8000/v1\n"
+            "    model: m\n",
+            encoding="utf-8",
+        )
+        assert self.client.request("DELETE", "/api/providers/custom-endpoints/nope.nope").status_code == 404
+        assert self.client.request("DELETE", "/api/providers/custom-endpoints/Local%208000").status_code == 200
+        assert "local-8000" not in (load_config().get("providers") or {})
+
 
     def test_custom_endpoint_save_scopes_to_the_requested_profile(self):
         """``?profile=<name>`` must write into that profile's config.yaml.
@@ -5716,6 +5823,7 @@ class TestWebServerEndpoints:
         default_home = get_hermes_home()
         worker_home = profiles_mod.get_profile_dir("worker")
         worker_home.mkdir(parents=True)
+        (worker_home / "config.yaml").touch()  # identity marker: bare dirs are not profiles
 
         assert self.client.post(
             "/api/providers/custom-endpoints?profile=worker",
@@ -5967,6 +6075,53 @@ class TestWebServerEndpoints:
         self.client.post("/api/providers/custom-endpoints/legacy/activate", json={})
         model_cfg = load_config()["model"]
         assert model_cfg["api_key"] == "sk-legacy"
+
+    def test_legacy_custom_providers_entries_get_a_row_and_can_be_deleted(self):
+        """A post-migration ``custom_providers:`` list entry is still routed by the
+        runtime (``get_compatible_custom_providers``), so Custom Endpoints must show
+        it — and Delete must remove it from the legacy list, not 404 (#114471)."""
+        from hermes_cli.config import load_config, save_config
+
+        cfg = load_config()
+        cfg["providers"] = {
+            "modern": {"name": "Modern", "base_url": "https://llm.modern.com/v1", "model": "m"},
+        }
+        cfg["custom_providers"] = [
+            {"name": "Old Box", "base_url": "http://10.0.0.5:8080/v1", "model": "qwen"},
+        ]
+        save_config(cfg)
+
+        rows = {e["id"]: e for e in self.client.get("/api/providers/custom-endpoints").json()["endpoints"]}
+        assert set(rows) == {"modern", "old-box"}
+        assert rows["old-box"]["source"] == "custom_providers"
+        assert rows["old-box"]["base_url"] == "http://10.0.0.5:8080/v1"
+        assert rows["old-box"]["model"] == "qwen"
+
+        deleted = self.client.request("DELETE", "/api/providers/custom-endpoints/old-box")
+        assert deleted.status_code == 200, deleted.text
+        assert [e["id"] for e in deleted.json()["endpoints"]] == ["modern"]
+        cfg = load_config()
+        assert cfg.get("custom_providers") == []
+        assert "modern" in cfg["providers"]
+
+    def test_activating_a_legacy_custom_providers_entry_promotes_it(self):
+        """Use on a legacy row moves the entry under ``providers:`` (the v12+ shape the
+        main slot names by key) instead of 404ing on a row the list just rendered."""
+        from hermes_cli.config import load_config, save_config
+
+        cfg = load_config()
+        cfg["custom_providers"] = [
+            {"name": "Old Box", "base_url": "http://10.0.0.5:8080/v1", "model": "qwen", "api_key": "sk-old"},
+        ]
+        save_config(cfg)
+
+        activated = self.client.post("/api/providers/custom-endpoints/old-box/activate", json={})
+        assert activated.status_code == 200, activated.text
+        cfg = load_config()
+        assert cfg.get("custom_providers") == []
+        assert cfg["providers"]["old-box"]["api"] == "http://10.0.0.5:8080/v1"
+        assert cfg["model"]["provider"] == "old-box"
+        assert cfg["model"]["default"] == "qwen"
 
     def test_get_sessions_rejects_negative_limit(self):
         """limit=-1 must be rejected (422), not passed through to SQLite as
@@ -7003,6 +7158,7 @@ class TestNewEndpoints:
         )
         named = hermes_home / "profiles" / "multi-agent"
         named.mkdir(parents=True)
+        (named / "config.yaml").write_text("{}\n", encoding="utf-8")
         (named / ".env").write_text("EXAMPLE=1\n", encoding="utf-8")
         (named / "skills" / "demo").mkdir(parents=True)
         (named / "skills" / "demo" / "SKILL.md").write_text("---\nname: demo\n---\n", encoding="utf-8")
@@ -7049,7 +7205,9 @@ class TestNewEndpoints:
     def test_profile_setup_command_uses_named_profile_wrapper(self):
         from hermes_constants import get_hermes_home
 
-        (get_hermes_home() / "profiles" / "coder").mkdir(parents=True)
+        coder_home = get_hermes_home() / "profiles" / "coder"
+        coder_home.mkdir(parents=True)
+        (coder_home / "config.yaml").touch()  # identity marker: bare dirs are not profiles
 
         resp = self.client.get("/api/profiles/coder/setup-command")
 
@@ -7354,7 +7512,9 @@ class TestNewEndpoints:
         from hermes_constants import get_hermes_home
         import hermes_cli.web_server as web_server
 
-        (get_hermes_home() / "profiles" / "coder").mkdir(parents=True)
+        coder_home = get_hermes_home() / "profiles" / "coder"
+        coder_home.mkdir(parents=True)
+        (coder_home / "config.yaml").touch()  # identity marker: bare dirs are not profiles
         calls = []
         monkeypatch.setattr(web_server.sys, "platform", "darwin")
         monkeypatch.setattr(web_server.subprocess, "Popen", lambda args, **kwargs: calls.append(args))
@@ -7370,7 +7530,9 @@ class TestNewEndpoints:
         from hermes_constants import get_hermes_home
         import hermes_cli.web_server as web_server
 
-        (get_hermes_home() / "profiles" / "coder").mkdir(parents=True)
+        coder_home = get_hermes_home() / "profiles" / "coder"
+        coder_home.mkdir(parents=True)
+        (coder_home / "config.yaml").touch()  # identity marker: bare dirs are not profiles
         calls = []
         monkeypatch.setattr(web_server.sys, "platform", "win32")
         monkeypatch.setattr(web_server.subprocess, "Popen", lambda args, **kwargs: calls.append(args))
@@ -8165,9 +8327,7 @@ class TestNewEndpoints:
 
     def test_terminal_docker_probe_missing_cli(self, monkeypatch):
         """No docker binary on PATH -> needs_setup with install guidance."""
-        import hermes_cli.web_server as web_server
-
-        monkeypatch.setattr(shutil, "which", lambda name: None)
+        monkeypatch.setattr("tools.environments.docker.find_docker", lambda: None)
 
         body = self.client.get("/api/tools/terminal/backends").json()
         docker = next(r for r in body["backends"] if r["name"] == "docker")
@@ -8177,16 +8337,12 @@ class TestNewEndpoints:
     def test_terminal_docker_probe_daemon_down(self, monkeypatch):
         """docker CLI present but daemon unreachable -> needs_setup."""
         import subprocess as subprocess_mod
-        import hermes_cli.web_server as web_server
-
         monkeypatch.setattr(
-            shutil,
-            "which",
-            lambda name: "/usr/bin/docker" if name == "docker" else None,
+            "tools.environments.docker.find_docker",
+            lambda: "/usr/bin/docker",
         )
         monkeypatch.setattr(
-            web_server.subprocess,
-            "run",
+            "tools.environments.remote_common.run_capture",
             lambda cmd, **kw: subprocess_mod.CompletedProcess(cmd, 1, stdout="", stderr="daemon down"),
         )
 
@@ -8198,16 +8354,15 @@ class TestNewEndpoints:
     def test_terminal_docker_probe_daemon_ready(self, monkeypatch):
         """docker CLI + reachable daemon -> ready."""
         import subprocess as subprocess_mod
-        import hermes_cli.web_server as web_server
 
         monkeypatch.setattr(
             shutil,
             "which",
             lambda name: "/usr/bin/docker" if name in {"docker", "singularity"} else None,
         )
+        monkeypatch.setattr("tools.environments.docker.find_docker", lambda: "/usr/bin/docker")
         monkeypatch.setattr(
-            web_server.subprocess,
-            "run",
+            "tools.environments.remote_common.run_capture",
             lambda cmd, **kw: subprocess_mod.CompletedProcess(cmd, 0, stdout="27.0\n", stderr=""),
         )
 
@@ -8219,18 +8374,12 @@ class TestNewEndpoints:
 
     def test_terminal_probe_failure_is_a_status_not_a_500(self, monkeypatch):
         """A probe that raises must surface as a status row, never an error."""
-        import hermes_cli.web_server as web_server
-
-        monkeypatch.setattr(
-            shutil,
-            "which",
-            lambda name: "/usr/bin/docker" if name == "docker" else None,
-        )
+        monkeypatch.setattr("tools.environments.docker.find_docker", lambda: "/usr/bin/docker")
 
         def boom(cmd, **kw):
             raise OSError("exec format error")
 
-        monkeypatch.setattr(web_server.subprocess, "run", boom)
+        monkeypatch.setattr("tools.environments.remote_common.run_capture", boom)
 
         resp = self.client.get("/api/tools/terminal/backends")
         assert resp.status_code == 200
@@ -8268,9 +8417,7 @@ class TestNewEndpoints:
 
     def test_select_terminal_backend_persists_config(self, monkeypatch):
         """PUT .../backend writes terminal.backend and the list reflects it."""
-        import hermes_cli.web_server as web_server
-
-        monkeypatch.setattr(shutil, "which", lambda name: None)
+        monkeypatch.setattr("tools.environments.docker.find_docker", lambda: None)
 
         resp = self.client.put(
             "/api/tools/terminal/backend", json={"backend": "docker"}
@@ -10834,6 +10981,51 @@ class TestDashboardPluginManifestExtensions:
         assert len(entries) == 1
         assert entries[0]["tab"]["path"] == "/from-profile"
 
+    def test_unreadable_plugin_paths_do_not_block_discovery(self, tmp_path, monkeypatch, caplog):
+        """A denied plugin directory or manifest must not prevent valid plugins loading."""
+        from pathlib import Path
+
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        self._write_plugin(tmp_path, "valid", {
+            "name": "valid",
+            "label": "Valid Plugin",
+            "entry": "dist/index.js",
+        })
+        denied_root = tmp_path / "denied-root"
+        denied_root.mkdir()
+        denied_plugin = tmp_path / "plugins" / "denied"
+        (denied_plugin / "dashboard").mkdir(parents=True)
+        (denied_plugin / "dashboard" / "manifest.json").write_text("{}", encoding="utf-8")
+
+        from hermes_cli import web_server_dashboard
+        original_search_dirs = web_server_dashboard._dashboard_plugin_search_dirs
+        original_scandir = web_server_dashboard.os.scandir
+        original_exists = Path.exists
+
+        def search_dirs():
+            return [(denied_root, "user"), *original_search_dirs()]
+
+        def guarded_scandir(path):
+            if Path(path) == denied_root:
+                raise PermissionError("[WinError 5] Access is denied")
+            return original_scandir(path)
+
+        def guarded_exists(path):
+            if path == denied_plugin / "dashboard" / "manifest.json":
+                raise PermissionError("[WinError 5] Access is denied")
+            return original_exists(path)
+
+        monkeypatch.setattr(web_server_dashboard, "_dashboard_plugin_search_dirs", search_dirs)
+        monkeypatch.setattr(web_server_dashboard.os, "scandir", guarded_scandir)
+        monkeypatch.setattr(Path, "exists", guarded_exists)
+
+        plugins = web_server_dashboard._discover_dashboard_plugins()
+
+        assert "valid" in {plugin["name"] for plugin in plugins}
+        assert "denied" not in {plugin["name"] for plugin in plugins}
+        assert "Skipping unreadable dashboard plugin root" in caplog.text
+        assert "Skipping unreadable dashboard plugin" in caplog.text
+
 
 
     def test_slots_default_empty(self, tmp_path, monkeypatch):
@@ -11247,7 +11439,7 @@ class TestPtyWebSocket:
             notice = conn.receive_text()
             with pytest.raises(WebSocketDisconnect) as exc:
                 conn.receive_text()
-        assert "Chat unavailable" in notice
+        assert "Chat could not start" in notice
         assert exc.value.code == 1011
         if expect_detail is not None:
             assert expect_detail in notice

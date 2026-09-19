@@ -12,55 +12,14 @@ from hermes_cli.update_cmd_common import _best_effort
 logger = logging.getLogger("hermes_cli.update_cmd")
 
 
-def _reload_module_from_source(module, module_name: str) -> bool:
-    """Reload ``module`` after dropping its timestamp-based bytecode cache.
-
-    A git pull can replace a module within the same filesystem-timestamp second and preserve its
-    byte size; CPython then accepts the stale ``.pyc`` on ``importlib.reload`` even after
-    ``invalidate_caches()``. Returns ``True`` when the reload succeeded."""
-    import importlib
-    cached = getattr(module, "__cached__", None)
-    if isinstance(cached, str) and cached:
-        try:
-            Path(cached).unlink(missing_ok=True)
-        except OSError as exc:
-            logger.debug("Could not remove stale bytecode for %s: %s", module_name, exc)
-    try:
-        importlib.invalidate_caches()
-        importlib.reload(module)
-        return True
-    except Exception as exc:
-        logger.debug("Could not reload %s from source: %s", module_name, exc)
-        return False
-
-
-def _reload_config_modules() -> None:
-    """Force-reload config modules after git pull: the updater is the PRE-pull process, so the
-    cached modules hold OLD code and ``check_config_version()`` would report "up to date" despite a
-    pulled migration. ``_subprocess_compat`` / ``dashboard_procs`` reload too so the later dashboard
-    cleanup sees symbols the update added."""
-    import importlib
-    importlib.invalidate_caches()
-    for mod_name in (
-        "hermes_cli.config_defaults", "hermes_cli.config", "hermes_cli.config_migrations",
-        "hermes_cli._subprocess_compat", "hermes_cli.dashboard_procs"):
-        mod = sys.modules.get(mod_name)
-        if mod is not None:
-            _reload_module_from_source(mod, mod_name)
-
-
 def _run_config_check_fresh() -> tuple:
-    """``(current_ver, latest_ver)`` from freshly-reloaded modules (see ``_reload_config_modules``)."""
-    from hermes_cli.update_cmd import _reload_config_modules
-    _reload_config_modules()
+    """``(current_ver, latest_ver)`` of the active profile's config against the running code."""
     from hermes_cli.config import check_config_version
     return check_config_version(raise_on_parse_error=True)
 
 
 def _run_migrate_config_fresh(*, interactive: bool = False, quiet: bool = False) -> dict:
-    """Run config migration with freshly-reloaded modules; returns the results dict."""
-    from hermes_cli.update_cmd import _reload_config_modules
-    _reload_config_modules()
+    """Run config migration; returns the results dict."""
     from hermes_cli.config import migrate_config
     return migrate_config(interactive=interactive, quiet=quiet)
 
@@ -181,22 +140,20 @@ def _ask_configure_new_options(*, assume_yes: bool, gateway_mode: bool) -> str:
 def _check_and_apply_config_migration(
     *, assume_yes: bool = False, gateway_mode: bool = False, pre_update_snapshot_id: str | None = None
 ) -> None:
-    """Check/apply config migrations with freshly-reloaded modules. Runs on EVERY completion path
+    """Check/apply config migrations. Runs on EVERY completion path
     (post-pull, venv-repair, Node-deps repair on ``commit_count == 0``) so an interrupted update
     that already pulled code doesn't strand an old config version.
 
     See #91360.
     """
     from hermes_cli.update_cmd import (
-        _migrate_sibling_profile_configs, _reload_config_modules, _run_config_check_fresh,
-        _run_migrate_config_fresh)
+        _migrate_sibling_profile_configs, _run_config_check_fresh, _run_migrate_config_fresh)
     print()
     print("→ Checking configuration for new options...")
-    # Reload BEFORE any config reads so all checks use the updated code.
-    _reload_config_modules()
-    from hermes_cli.config import get_missing_env_vars, get_missing_config_fields
-    # A config-check failure must not break an otherwise-successful update.
+    # A config-check failure must not break an otherwise-successful update; it still fails
+    # when the pulled tree is internally inconsistent, hence the try.
     try:
+        from hermes_cli.config import get_missing_env_vars, get_missing_config_fields
         # Log, point at the manual command, and return. See #91360.
         missing_env = get_missing_env_vars(required_only=True)
         missing_config = get_missing_config_fields()

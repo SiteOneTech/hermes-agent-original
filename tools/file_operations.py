@@ -23,7 +23,7 @@ from abc import ABC, abstractmethod
 from typing import Optional, Dict
 from pathlib import Path
 
-from tools.binary_extensions import BINARY_EXTENSIONS
+from tools.binary_extensions import has_binary_extension
 from agent.file_safety import get_write_denied_error
 from tools.file_operations_common import (
     ExecuteResult, PatchResult, ReadResult, SearchResult, WriteResult,
@@ -173,12 +173,21 @@ def kind(mode):
         if test(mode):
             return name
     return 'special file'
-def scan(f):
+def scan(f, max_read_bytes=None):
     page, total, lineno, kept, partial = [], 0, 1, 0, False
+    read_bytes = 0
     while True:
-        chunk = f.read(1 << 20)
+        # A regular file can grow after fstat(). Probe one byte beyond the
+        # approved size so no more than max_read_bytes can ever be exported.
+        read_size = 1 << 20 if max_read_bytes is None else min(1 << 20, max_read_bytes + 1 - read_bytes)
+        if read_size <= 0:
+            return b''.join(page), total + (1 if partial else 0), True
+        chunk = f.read(read_size)
         if not chunk:
             break
+        read_bytes += len(chunk)
+        if max_read_bytes is not None and read_bytes > max_read_bytes:
+            return b''.join(page), total + (1 if partial else 0), True
         if lineno > end_line:
             total += chunk.count(b'\n')
             partial = chunk[-1:] != b'\n'
@@ -199,7 +208,7 @@ def scan(f):
             if wanted:
                 page.append(b'\n')
             total, lineno, kept, partial, pos = total + 1, lineno + 1, 0, False, nl + 1
-    return b''.join(page), total + (1 if partial else 0)
+    return b''.join(page), total + (1 if partial else 0), False
 flags = os.O_RDONLY | getattr(os, 'O_NONBLOCK', 0) | getattr(os, 'O_NOCTTY', 0) | getattr(os, 'O_BINARY', 0)
 try:
     fd = os.open(p, flags)
@@ -227,12 +236,23 @@ else:
             f = os.fdopen(fd, 'rb')
             fd = None
             with f:
-                sample = f.read(SAMPLE)
+                sample_limit = SAMPLE if max_bytes is None else min(SAMPLE, max_bytes + 1)
+                sample = f.read(sample_limit)
+                grew_during_read = max_bytes is not None and len(sample) > max_bytes
                 f.seek(0)
-                page, total = scan(f) if offset <= end_line else (b'', 0)
-            out = {'state': 'regular', 'file_size': st.st_size, 'total_lines': total,
-                   'sample': base64.b64encode(sample).decode('ascii'),
-                   'page': base64.b64encode(page).decode('ascii')}
+                if offset <= end_line and not grew_during_read:
+                    page, total, grew_during_read = scan(f, max_bytes)
+                else:
+                    page, total = b'', 0
+                observed_size = os.fstat(f.fileno()).st_size
+            if grew_during_read or (max_bytes is not None and observed_size > max_bytes):
+                # The precise final size can race with a writer, but it is at
+                # least one byte past the limit when bounded reads observed it.
+                out = {'state': 'too_large', 'file_size': max(observed_size, max_bytes + 1)}
+            else:
+                out = {'state': 'regular', 'file_size': st.st_size, 'total_lines': total,
+                       'sample': base64.b64encode(sample).decode('ascii'),
+                       'page': base64.b64encode(page).decode('ascii')}
     except Exception as exc:
         out = {'state': 'error', 'message': str(exc)}
     finally:
@@ -305,11 +325,25 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         effective_cwd = cwd or getattr(self.env, 'cwd', None) or self.cwd
         result = self.env.execute(command, cwd=effective_cwd, **kwargs)
         exit_code = result.get("returncode", 0)
+        output = result.get("output", "")
+        # The command wrapper's own ``builtin cd -- <cwd> || exit 126`` failed: the
+        # working directory does not exist on this backend (typically ``terminal.cwd``
+        # is a host path and the backend is a container). Name that, or the raw
+        # ``cd:`` line reads like a sandbox/mount fault at the requested path.
+        cwd_error = ""
+        if exit_code == 126 and "cd: " in output:
+            from tools.terminal_tool_config import _is_container_backend
+            env_type = getattr(self.env, "env_type", None)
+            hint = ("; for container backends use a path inside the container, e.g. /workspace"
+                    if env_type and _is_container_backend(env_type) else "")
+            cwd_error = output = (
+                f"working directory {effective_cwd!r} does not exist on the active terminal "
+                f"backend (check terminal.cwd or the session cwd{hint}). {output.strip()}")
         # A stdin write failure with a clean child exit is still a failure: the
         # child never received the input.
         if result.get("stdin_error") and exit_code == 0:
             exit_code = 1
-        return ExecuteResult(stdout=result.get("output", ""), exit_code=exit_code)
+        return ExecuteResult(stdout=output, exit_code=exit_code, cwd_error=cwd_error)
 
     def _has_command(self, cmd: str) -> bool:
         """Check if a command exists in the environment (cached); rg goes through
@@ -318,6 +352,8 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
             return self._resolve_command(cmd) is not None
         if cmd not in self._command_cache:
             result = self._exec(f"command -v {cmd} >/dev/null 2>&1 && echo 'yes'")
+            if result.cwd_error:  # the probe never ran: no verdict to cache
+                return False
             self._command_cache[cmd] = result.stdout.strip() == 'yes'
         return self._command_cache[cmd]
 
@@ -405,7 +441,7 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
 
     def _is_likely_binary(self, path: str, content_sample: str = None) -> bool:
         """Legacy text-layer binary check: extension, else >30% non-printable chars."""
-        if os.path.splitext(path)[1].lower() in BINARY_EXTENSIONS:
+        if has_binary_extension(path):
             return True
         if content_sample:
             # Undecodable bytes arrive as U+FFFD ("printable", so the ratio misses
@@ -556,7 +592,9 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
             f"Cannot read '{path}': not a regular file ({what}). "
             "Reading it could block indefinitely."))
 
-    def _env_unavailable_error(self, path: str) -> ReadResult:
+    def _env_unavailable_error(self, path: str, status: str = "env_unavailable") -> ReadResult:
+        if status != "env_unavailable":
+            return ReadResult(error=status)
         return ReadResult(error=(f"Terminal environment unavailable: could not stat {path} "
                                  "(the sandbox may still be starting or was removed). Retry shortly."))
 
@@ -613,7 +651,7 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         extensions never inline content: the descriptor is still validated, but only
         metadata (images) or the magic-byte sample (binaries) crosses the transport."""
         is_image = self._is_image(path)
-        ext_binary = os.path.splitext(path)[1].lower() in BINARY_EXTENSIONS
+        ext_binary = has_binary_extension(path)
         if is_image:
             page = self._read_regular_file_page(path, 1, 0, metadata_only=True)
         elif ext_binary:
@@ -671,7 +709,7 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         to the binary-file error). Skips known-binary extensions and files over
         10 MiB. ``path`` must already be expanded. Same descriptor discipline as
         ``_read_regular_file_page``: open O_NONBLOCK, fstat, S_ISREG, then read that fd."""
-        if os.path.splitext(path)[1].lower() in BINARY_EXTENSIONS or file_size > self._UTF16_MAX_BYTES:
+        if has_binary_extension(path) or file_size > self._UTF16_MAX_BYTES:
             return None
         snippet = (
             "import sys, json, os, stat\n"
@@ -845,7 +883,7 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
             with os.fdopen(fd, "rb") as fh:
                 fd = None  # fh owns the descriptor from this point.
                 sample = fh.read(1000)
-                ext_binary = os.path.splitext(path)[1].lower() in BINARY_EXTENSIONS
+                ext_binary = has_binary_extension(path)
                 if ext_binary or self._is_likely_binary_bytes(sample):
                     return self._read_binary_file(path, offset, limit, file_size, sample)
                 fh.seek(0)
@@ -898,7 +936,9 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         return self._assemble_read_result(
             read_output, offset=offset, end_line=end_line, total_lines=total_lines,
             file_size=file_size,
-            file_ends_with_newline=(last_byte == b"\n") if file_size else None)
+            # This reader already counts a final unterminated line. The flag is
+            # only for callers whose total came from a newline count.
+            file_ends_with_newline=None)
 
     @staticmethod
     def _image_redirect_result(file_size: int) -> ReadResult:
@@ -949,6 +989,12 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         read path so the BOM strip, pagination hint, ``cut`` newline-artifact fix and
         the ambiguous-silence guards never drift apart. ``file_ends_with_newline`` is
         None when the caller could not tell (artifact left alone, as before)."""
+        # ``wc -l`` counts newlines, not lines: a nonempty file whose last byte
+        # is not a newline holds one more line than the count (#3907). Adjust
+        # here so total_lines, truncation, and the past-EOF guard agree on every
+        # read path.
+        if file_size > 0 and file_ends_with_newline is False:
+            total_lines += 1
         if offset == 1:  # only the first chunk can carry a BOM (byte 0)
             read_output, _ = _strip_bom(read_output)
         truncated = total_lines > end_line
@@ -1393,7 +1439,7 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
             return PatchResult(error=denied)
         read_result = self._cat(path)
         if read_result.exit_code != 0:
-            return PatchResult(error=f"Failed to read file: {path}")
+            return PatchResult(error=read_result.cwd_error or f"Failed to read file: {path}")
         # Match and diff on BOM-stripped content (a phantom U+FEFF defeats an exact
         # first-line match); the raw read becomes write_file's pre_content.
         raw_content = read_result.stdout
@@ -1447,7 +1493,10 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
                 error=(f"Invalid file search order {order!r}; expected "
                        "'discovery' or 'modified'."))
         path = self._expand_path(path)
-        exists_probe = self._path_exists_probe(path)
+        probe = self._path_exists_probe(path)
+        exists_probe = probe.stdout
+        if probe.cwd_error:
+            return SearchResult(error=probe.cwd_error)
         if "exists" not in exists_probe and "not_found" not in exists_probe:
             return SearchResult(error=(f"Terminal environment unavailable: could not stat {path} "
                                        "(the sandbox may still be starting or was removed). Retry shortly."))
