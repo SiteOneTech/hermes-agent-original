@@ -41,7 +41,7 @@ test.skipIf(displayPrefix === null)(
       })
       const env: NodeJS.ProcessEnv = {}
 
-      for (const name of ['PATH', 'SystemRoot', 'WINDIR', 'DISPLAY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR']) {
+      for (const name of ['PATH', 'SystemRoot', 'WINDIR', 'DISPLAY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR', 'XAUTHORITY']) {
         if (process.env[name]) {env[name] = process.env[name]}
       }
 
