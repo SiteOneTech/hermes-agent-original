@@ -420,10 +420,12 @@ def enabled_mcp_server_names(config: dict) -> Set[str]:
     """MCP servers globally enabled in config.yaml or by a plugin (shared by platform + cron resolvers). Enabled
     unless ``enabled`` is explicitly falsey; portable-plugin servers (in-memory) count — enabling the plugin is
     the opt-in."""
+    from tools.mcp_tool_common import mcp_server_enabled
+
     mcp_servers = (config or {}).get("mcp_servers") or {}
     names = {
         str(name) for name, server_cfg in mcp_servers.items()
-        if isinstance(server_cfg, dict) and _parse_enabled_flag(server_cfg.get("enabled", True), default=True)
+        if isinstance(server_cfg, dict) and mcp_server_enabled(server_cfg)
     }
     try:
         from hermes_cli.plugins import get_portable_mcp_server_names_nowait
@@ -604,7 +606,19 @@ def _get_platform_tools(config: dict, platform: str, *, include_default_mcp_serv
     else:
         enabled_toolsets = _composite_toolsets(toolset_names, platform, explicitly_configured)
 
-    _recover_platform_native_toolsets(enabled_toolsets, platform, skip=configurable_keys | plugin_ts_keys | platform_default_keys)
+    # A direct saved checklist (for example ``[web]``) is exact: do not inject native
+    # toolsets that the profile owner deliberately did not select. A platform's default
+    # composite (for example ``[hermes-cli]``) remains an opt-in to every native member,
+    # including toolsets dynamically registered after the static composite was authored.
+    recover_native_toolsets = not explicitly_configured or any(
+        ts in platform_default_keys for ts in toolset_names
+    )
+    if recover_native_toolsets:
+        _recover_platform_native_toolsets(
+            enabled_toolsets,
+            platform,
+            skip=configurable_keys | plugin_ts_keys | platform_default_keys,
+        )
     if plugin_ts_keys:
         enabled_toolsets |= _enabled_plugin_toolsets(config, platform, toolset_names, plugin_ts_keys)
 

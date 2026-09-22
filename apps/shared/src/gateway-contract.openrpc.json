@@ -1753,6 +1753,42 @@
       }
     },
     {
+      "name": "onboarding.ensure_setup_profile",
+      "summary": "Create-or-read the backend-owned setup profile; the backend picks the name and finds it by role.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/Params"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/OnboardingEnsureSetupProfileResult"
+        }
+      }
+    },
+    {
+      "name": "onboarding.reset_setup_profile",
+      "summary": "Restore the setup profile to its created state in place (soul, memories, skills, sessions).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/Params"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/OnboardingResetSetupProfileResult"
+        }
+      }
+    },
+    {
       "name": "paste.collapse",
       "summary": "Spill a large paste to a file and hand back the inline placeholder.",
       "params": [
@@ -16292,6 +16328,17 @@
             ],
             "default": null,
             "title": "Partial"
+          },
+          "persisted_turn": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PersistedTurn"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
         "title": "MessageCompletePayload",
@@ -17347,6 +17394,61 @@
         "title": "OnboardingAnswers",
         "type": "object"
       },
+      "OnboardingEnsureSetupProfileResult": {
+        "additionalProperties": false,
+        "description": "``created`` is false when an existing setup profile was found (and returned untouched).",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "created": {
+            "title": "Created",
+            "type": "boolean"
+          },
+          "role": {
+            "const": "setup",
+            "default": "setup",
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "path",
+          "created"
+        ],
+        "title": "OnboardingEnsureSetupProfileResult",
+        "type": "object"
+      },
+      "OnboardingResetSetupProfileResult": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "reset": {
+            "default": true,
+            "title": "Reset",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "path"
+        ],
+        "title": "OnboardingResetSetupProfileResult",
+        "type": "object"
+      },
       "OpenRequestEntry": {
         "additionalProperties": false,
         "description": "One unanswered server\u2192client request (``server_requests.Request.snapshot``); the reconnecting\nclient re-delivers it to its request handlers.",
@@ -17404,6 +17506,13 @@
           "pane"
         ],
         "title": "PaneRevealPayload",
+        "type": "object"
+      },
+      "Params": {
+        "additionalProperties": false,
+        "description": "Client\u2192server method params / server\u2192client request params. Unknown keys are rejected.",
+        "properties": {},
+        "title": "Params",
         "type": "object"
       },
       "PasteCollapseParams": {
@@ -17822,6 +17931,53 @@
           }
         },
         "title": "PendingApproval",
+        "type": "object"
+      },
+      "PersistedTurn": {
+        "additionalProperties": false,
+        "description": "Committed SQLite row addresses for the agent's current-turn suffix. Missing ids are\nunproven, never negative acknowledgements. ``complete`` permits retiring the whole local\nturn only when the original turn boundary, every row and final body are still accounted\nfor; compaction, redirects and partial writes conservatively leave it false. Row ids are\nscoped to the owning profile's store, as in ``SessionMessage.row_id``.",
+        "properties": {
+          "row_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Row Ids",
+            "type": "array"
+          },
+          "complete": {
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "user_row_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "User Row Id"
+          },
+          "final_assistant_row_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Final Assistant Row Id"
+          }
+        },
+        "required": [
+          "row_ids",
+          "complete"
+        ],
+        "title": "PersistedTurn",
         "type": "object"
       },
       "PetCancelParams": {
@@ -20947,6 +21103,19 @@
             "title": "Previous Names",
             "type": "array"
           },
+          "role": {
+            "anyOf": [
+              {
+                "const": "setup",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Role"
+          },
           "last_session": {
             "anyOf": [
               {
@@ -23746,6 +23915,18 @@
             ],
             "default": null,
             "title": "Voice Stopped"
+          },
+          "user_row_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "User Row Id"
           },
           "survivor_user_row_ids": {
             "anyOf": [

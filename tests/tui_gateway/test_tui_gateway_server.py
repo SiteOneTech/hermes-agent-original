@@ -2613,19 +2613,20 @@ def test_load_enabled_toolsets_rejects_disabled_mcp_env(monkeypatch, capsys):
         config_mod, "load_config", lambda: {"platform_toolsets": {"cli": ["memory"]}}
     )
 
-    # Sorted: ["memory", "minimax_cli", "project"]. `kanban` is a configurable
-    # opt-in and is never recovered onto a saved list; `minimax_cli` is a
-    # non-configurable composite capability; `project` is GUI-only, folded in by
-    # _load_enabled_toolsets. Toolsets inside their first release
+    # A saved platform list is exact, even after an invalid environment override
+    # falls back to it: `minimax_cli` is a composite member and must not be
+    # recovered. `project` is GUI-only and is folded in by _load_enabled_toolsets.
+    # `kanban` is likewise a configurable opt-in. Toolsets inside their first release
     # (_RECENTLY_SHIPPED_TOOLSETS) are back-filled onto saved lists that never
     # offered them — allow those too.
     from hermes_cli.tools_config import _RECENTLY_SHIPPED_TOOLSETS
 
     result = server._load_enabled_toolsets()
     assert result is not None
-    assert {"memory", "minimax_cli", "project"} <= set(result)
+    assert {"memory", "project"} <= set(result)
+    assert "minimax_cli" not in result
     assert "kanban" not in result
-    assert set(result) - {"memory", "minimax_cli", "project"} <= _RECENTLY_SHIPPED_TOOLSETS
+    assert set(result) - {"memory", "project"} <= _RECENTLY_SHIPPED_TOOLSETS
     err = capsys.readouterr().err
     assert "ignoring disabled MCP servers" in err
     assert "mcp-off" in err
@@ -2650,9 +2651,10 @@ def test_load_enabled_toolsets_falls_back_when_tui_env_invalid(monkeypatch, caps
 
     result = server._load_enabled_toolsets()
     assert result is not None
-    assert {"memory", "minimax_cli", "project"} <= set(result)
+    assert {"memory", "project"} <= set(result)
+    assert "minimax_cli" not in result
     assert "kanban" not in result
-    assert set(result) - {"memory", "minimax_cli", "project"} <= _RECENTLY_SHIPPED_TOOLSETS
+    assert set(result) - {"memory", "project"} <= _RECENTLY_SHIPPED_TOOLSETS
     assert "using configured CLI toolsets" in capsys.readouterr().err
 
 

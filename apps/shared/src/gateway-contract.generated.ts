@@ -1624,6 +1624,7 @@ export interface ProfileRow {
   display_name?: string
   skill_count?: number
   previous_names?: string[]
+  role?: 'setup' | null
   last_session?: ProfileSessionPreview | null
   worker_session?: ProfileWorkerSession | null
   canonical_session?: ProfileCanonicalSession | null
@@ -1807,6 +1808,20 @@ export interface ProfilesRememberOnboardingResult {
   saved?: boolean
   profile?: string
   target?: string
+}
+/** Client→server method params / server→client request params. Unknown keys are rejected. */
+export type Params = Record<string, never>
+/** ``created`` is false when an existing setup profile was found (and returned untouched). */
+export interface OnboardingEnsureSetupProfileResult {
+  name: string
+  path: string
+  created: boolean
+  role?: 'setup'
+}
+export interface OnboardingResetSetupProfileResult {
+  name: string
+  path: string
+  reset?: boolean
 }
 export interface VaultListResult {
   items?: VaultItem[]
@@ -2315,6 +2330,7 @@ export interface PromptSubmitParams {
 export interface PromptSubmitResult {
   status?: PromptSubmitStatus | null
   voice_stopped?: boolean | null
+  user_row_id?: number | null
   survivor_user_row_ids?: (number | null)[] | null
   survivor_row_id_map?: Record<string, number | null> | null
   turn_isolation?: boolean | null
@@ -4129,6 +4145,7 @@ export interface MessageCompletePayload {
   recoverable?: boolean | null
   error_surface?: ErrorSurface | null
   partial?: boolean | null
+  persisted_turn?: PersistedTurn | null
 }
 /** ``prompt_turn._result_status``. */
 export type TurnStatus = 'complete' | 'error' | 'interrupted'
@@ -4151,6 +4168,13 @@ export interface ErrorSurface {
   model?: string | null
   resets_at?: number | null
   [key: string]: unknown
+}
+/** Committed SQLite row addresses for the agent's current-turn suffix. Missing ids are unproven, never negative acknowledgements. ``complete`` permits retiring the whole local turn only when the original turn boundary, every row and final body are still accounted for; compaction, redirects and partial writes conservatively leave it false. Row ids are scoped to the owning profile's store, as in ``SessionMessage.row_id``. */
+export interface PersistedTurn {
+  row_ids: number[]
+  complete: boolean
+  user_row_id?: number | null
+  final_assistant_row_id?: number | null
 }
 /** ``server._status_update`` and the direct emitters (goal / loop / heartbeat / process). */
 export interface StatusUpdatePayload {
@@ -4622,6 +4646,10 @@ export interface RpcMethods {
   'model.options': { params: ModelOptionsParams; result: ModelOptionsResult }
   /** Save an API key for a provider and return its refreshed inventory row. */
   'model.save_key': { params: ModelSaveKeyParams; result: ModelSaveKeyResult }
+  /** Create-or-read the backend-owned setup profile; the backend picks the name and finds it by role. */
+  'onboarding.ensure_setup_profile': { params: Params; result: OnboardingEnsureSetupProfileResult }
+  /** Restore the setup profile to its created state in place (soul, memories, skills, sessions). */
+  'onboarding.reset_setup_profile': { params: Params; result: OnboardingResetSetupProfileResult }
   /** Spill a large paste to a file and hand back the inline placeholder. */
   'paste.collapse': { params: PasteCollapseParams; result: PasteCollapseResult }
   /** Render a PDF's pages to PNG and queue them as images for the next turn. */
@@ -4978,6 +5006,8 @@ export const RPC_METHODS = [
   'model.disconnect',
   'model.options',
   'model.save_key',
+  'onboarding.ensure_setup_profile',
+  'onboarding.reset_setup_profile',
   'paste.collapse',
   'pdf.attach',
   'pet.cancel',
