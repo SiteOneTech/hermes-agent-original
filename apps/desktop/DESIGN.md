@@ -118,6 +118,17 @@ rows must not insert their full height before the outgoing stack can settle.
 No completion callback may clear the measurement of a newly arrived card.
 Reduced motion settles immediately without retaining empty clearance.
 
+## Window background behavior
+
+Settings → Appearance → Window layout offers **Minimize to tray**, off by default and
+local to this desktop installation. When enabled, minimizing ordinary windows
+hides them without stopping their work. Close, Alt+F4, and Cmd+Q keep their
+normal behavior. The tray's **Show Hermes** restores hidden windows;
+**Quit Hermes** keeps the ordinary active-work confirmation and teardown.
+On macOS the tray lives in the menu bar; the Dock icon hides only when no normal
+window remains visible and returns on restore. If the tray is unavailable,
+ordinary minimize/close behavior is retained rather than hiding an unreachable app.
+
 ## Window glass
 
 Glass defaults to **29% Tint, Sidebar only** in both light and dark appearances.
@@ -279,6 +290,9 @@ existing traffic-light and Window Controls Overlay measurements.
 
 The left cluster shows sidebar, settings, layout editor, and HUD controls. Flip
 and the right-sidebar toggle sit on the right; haptics remain in settings.
+In Simple interface mode only sidebar, settings and the layout editor render,
+and the reserved cluster width shrinks with them (`TITLEBAR_FIXED_TOOLS` is the
+one table both the buttons and the width reservation read).
 Holding Cmd (Ctrl off macOS) reveals small slot numbers over the target strip's
 status dots after 400ms, without changing tab widths. Hints follow the same
 binding and hovered/focused-zone resolver as the number shortcuts.

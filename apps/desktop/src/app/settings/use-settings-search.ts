@@ -125,6 +125,19 @@ export function useSettingsSearchCatalog(enabled: boolean) {
   const appearance = t.settings.appearance
 
   const appearanceEntries: SettingsSearchEntry[] = [
+    ...(window.hermesDesktop?.minimizeToTray
+      ? [
+          {
+            context: appearanceContext,
+            description: t.settings.config.minimizeToTrayDesc,
+            icon: Monitor,
+            id: `setting:${APPEARANCE_SETTING_IDS.minimizeToTray}`,
+            keywords: ['tray', 'background', 'minimize', 'dock', 'taskbar', 'menu bar'],
+            label: t.settings.config.minimizeToTrayTitle,
+            target: { view: 'config:appearance' as const, setting: APPEARANCE_SETTING_IDS.minimizeToTray }
+          }
+        ]
+      : []),
     {
       context: appearanceContext,
       description: t.language.description,
@@ -192,6 +205,15 @@ export function useSettingsSearchCatalog(enabled: boolean) {
       keywords: ['splash', 'wordmark', 'empty chat', 'new chat'],
       label: appearance.introSplashTitle,
       target: { setting: APPEARANCE_SETTING_IDS.introSplash, view: 'config:appearance' }
+    },
+    {
+      context: appearanceContext,
+      description: t.interfaceMode.hint,
+      icon: Palette,
+      id: `setting:${APPEARANCE_SETTING_IDS.interfaceMode}`,
+      keywords: ['simple', 'advanced', 'mode', 'interface', 'chrome', 'minimal', 'focus'],
+      label: t.interfaceMode.title,
+      target: { setting: APPEARANCE_SETTING_IDS.interfaceMode, view: 'config:appearance' }
     },
     {
       context: appearanceContext,
@@ -277,7 +299,22 @@ export function useSettingsSearchCatalog(enabled: boolean) {
   )
 
   return {
-    subpageEntries,
+    subpageEntries: [
+      ...subpageEntries,
+      ...(window.hermesDesktop?.hudModifier
+        ? [
+            {
+              context: t.keybinds.title,
+              icon: Settings2,
+              id: 'setting:hud-modifier',
+              keywords: ['HUD', 'summon', 'modifier', 'tap', 'Ctrl', 'Alt', 'Command', 'Option'],
+              label: t.settings.hudModifier.title,
+              description: t.settings.hudModifier.description,
+              target: { view: 'keybinds' as const, subpage: 'hud-gesture', setting: 'hud-modifier' }
+            }
+          ]
+        : [])
+    ],
     appearanceEntries,
     configEntries,
     credentialEntries,

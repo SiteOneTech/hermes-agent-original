@@ -844,6 +844,7 @@ const sidebars: SidebarsConfig = {
                 'developer-guide/web-search-provider-plugin',
                 'developer-guide/browser-provider-plugin',
                 'developer-guide/terminal-environment-plugin',
+                'developer-guide/plugins/application-declarations',
               ],
             },
             'developer-guide/creating-skills',
