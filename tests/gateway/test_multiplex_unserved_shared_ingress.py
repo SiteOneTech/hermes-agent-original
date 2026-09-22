@@ -32,12 +32,12 @@ def _runner():
 
 def _install_secondary(monkeypatch, runner, stamps):
     @contextmanager
-    def fake_scope(profile_home, *, hydrate_secrets=True):
+    def fake_scope(profile_home, *, hydrate_secrets=True, prepared_secret_scope=None):
         yield
 
     monkeypatch.setattr(gateway_run, "_profile_runtime_scope", fake_scope)
     monkeypatch.setattr(gateway_run, "_load_gateway_config", lambda: {})
-    monkeypatch.setattr("hermes_cli.env_loader.hydrate_profile_secret_sources", lambda home: {})
+    monkeypatch.setattr("hermes_cli.env_loader.hydrate_and_build_profile_secret_scope", lambda home: {})
     monkeypatch.setattr("hermes_cli.plugins.discover_plugins", lambda: None)
     monkeypatch.setattr(
         "gateway.config.load_gateway_config",

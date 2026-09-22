@@ -118,13 +118,12 @@ def _session_owner_scope(task_id: str):
         yield
         return
 
-    from agent.secret_scope import build_profile_secret_scope, reset_secret_scope, set_secret_scope
-    from hermes_cli.env_loader import hydrate_profile_secret_sources
+    from agent.secret_scope import reset_secret_scope, set_secret_scope
+    from hermes_cli.env_loader import hydrate_and_build_profile_secret_scope
 
     home_token = set_hermes_home_override(owner_home)
     try:
-        hydrate_profile_secret_sources(Path(owner_home))
-        secret_token = set_secret_scope(build_profile_secret_scope(Path(owner_home)))
+        secret_token = set_secret_scope(hydrate_and_build_profile_secret_scope(Path(owner_home)))
         try:
             yield
         finally:
@@ -196,6 +195,13 @@ def _write_owner_pid(socket_dir: str, session_name: str) -> None:
         _bt.logger.debug("Could not write owner_pid file for %s: %s", session_name, exc)
 
 
+def _argv_token_is_path(token: str, path: str) -> bool:
+    """True when ``token`` (or its ``--flag=VALUE`` value) names exactly ``path``."""
+    want = os.path.normpath(path).lower()
+    candidate = token.split("=", 1)[1] if token.startswith("-") and "=" in token else token
+    return bool(candidate) and os.path.normpath(candidate).lower() == want
+
+
 def _verify_reapable_browser_daemon(daemon_pid: int, socket_dir: str,
                                     session_name: str) -> bool:
     """Confirm a live PID is genuinely *this* session's agent-browser daemon (fail-closed).
@@ -218,7 +224,8 @@ def _verify_reapable_browser_daemon(daemon_pid: int, socket_dir: str,
     try:
         proc = psutil.Process(daemon_pid)
         name = (proc.name() or "").lower()
-        cmdline = " ".join(proc.cmdline() or []).lower()
+        argv = list(proc.cmdline() or [])
+        cmdline = " ".join(argv).lower()
     except psutil.NoSuchProcess:
         return False  # vanished between the liveness check and now
     except (psutil.AccessDenied, OSError) as exc:
@@ -227,9 +234,10 @@ def _verify_reapable_browser_daemon(daemon_pid: int, socket_dir: str,
     if "agent-browser" not in name and "agent-browser" not in cmdline:
         return refuse("not an agent-browser process (name=%r)", name)
 
-    socket_dir_l = socket_dir.lower()
-    socket_base_l = os.path.basename(socket_dir).lower()
-    bound = socket_dir_l in cmdline or (socket_base_l and socket_base_l in cmdline)
+    # Binding must be the FULL socket-dir path as an argv token (bare or `--flag=path`),
+    # never a substring: the dir basename is predictable (`agent-browser-<session>`), so a
+    # recycled PID running e.g. `grep agent-browser-h_x ...` would pass a basename check.
+    bound = any(_argv_token_is_path(tok, socket_dir) for tok in argv)
     if not bound:
         try:
             env_dir = (proc.environ() or {}).get("AGENT_BROWSER_SOCKET_DIR", "")

@@ -3,6 +3,11 @@ import type {SidebarsConfig} from '@docusaurus/plugin-content-docs';
 const sidebars: SidebarsConfig = {
   docs: [
     'user-stories',
+    // The Skills/Plugins hubs live in the navbar. On mobile Docusaurus opens the drawer on the doc
+    // sidebar, with the navbar a "Back to main menu" tap away, so without these links the hubs are
+    // undiscoverable on a phone.
+    {type: 'link', label: 'Browse Skills', href: '/skills'},
+    {type: 'link', label: 'Browse Plugins', href: '/plugins'},
     {
       type: 'category',
       label: 'Getting Started',
@@ -52,6 +57,7 @@ const sidebars: SidebarsConfig = {
           ],
         },
         'user-guide/sessions',
+        'user-guide/session-storage-recovery',
         'user-guide/profiles',
         'user-guide/profile-distributions',
         'user-guide/multi-profile-gateways',
@@ -175,7 +181,6 @@ const sidebars: SidebarsConfig = {
                     'user-guide/skills/bundled/autonomous-ai-agents/autonomous-ai-agents-codex',
                     'user-guide/skills/bundled/autonomous-ai-agents/autonomous-ai-agents-computer-use',
                     'user-guide/skills/bundled/autonomous-ai-agents/autonomous-ai-agents-hermes-agent',
-                    'user-guide/skills/bundled/autonomous-ai-agents/autonomous-ai-agents-merge-reconciler',
                     'user-guide/skills/bundled/autonomous-ai-agents/autonomous-ai-agents-opencode',
                   ],
                 },
@@ -203,6 +208,9 @@ const sidebars: SidebarsConfig = {
                   key: 'skills-bundled-devops',
                   collapsed: true,
                   items: [
+                    'user-guide/skills/bundled/devops/devops-factory-sandbox-kidu',
+                    'user-guide/skills/bundled/devops/devops-kanban-orchestrator',
+                    'user-guide/skills/bundled/devops/devops-kanban-worker',
                     'user-guide/skills/bundled/devops/devops-sdlc-review',
                   ],
                 },
@@ -242,6 +250,7 @@ const sidebars: SidebarsConfig = {
                   key: 'skills-bundled-productivity',
                   collapsed: true,
                   items: [
+                    'user-guide/skills/bundled/productivity/productivity-agent-crm-core',
                     'user-guide/skills/bundled/productivity/productivity-airtable',
                     'user-guide/skills/bundled/productivity/productivity-box',
                     'user-guide/skills/bundled/productivity/productivity-document-to-action-items',
@@ -254,6 +263,7 @@ const sidebars: SidebarsConfig = {
                     'user-guide/skills/bundled/productivity/productivity-powerpoint',
                     'user-guide/skills/bundled/productivity/productivity-product-price-monitor',
                     'user-guide/skills/bundled/productivity/productivity-teams-meeting-pipeline',
+                    'user-guide/skills/bundled/productivity/productivity-twenty-crm-adapter',
                     'user-guide/skills/bundled/productivity/productivity-weekly-review-planning',
                     'user-guide/skills/bundled/productivity/productivity-xlsx',
                   ],
@@ -287,6 +297,7 @@ const sidebars: SidebarsConfig = {
                   items: [
                     'user-guide/skills/bundled/software-development/software-development-codebase-inspection',
                     'user-guide/skills/bundled/software-development/software-development-dogfood',
+                    'user-guide/skills/bundled/software-development/software-development-factory-agent-operating-canon',
                     'user-guide/skills/bundled/software-development/software-development-github',
                     'user-guide/skills/bundled/software-development/software-development-hermes-agent-skill-authoring',
                     'user-guide/skills/bundled/software-development/software-development-inspecting-hermes-desktop-dom',
@@ -321,6 +332,7 @@ const sidebars: SidebarsConfig = {
                   key: 'skills-optional-autonomous-ai-agents',
                   collapsed: true,
                   items: [
+                    'user-guide/skills/optional/autonomous-ai-agents/autonomous-ai-agents-agent-merge-conflict-arbiter',
                     'user-guide/skills/optional/autonomous-ai-agents/autonomous-ai-agents-antigravity-cli',
                     'user-guide/skills/optional/autonomous-ai-agents/autonomous-ai-agents-blackbox',
                     'user-guide/skills/optional/autonomous-ai-agents/autonomous-ai-agents-dynamic-workflow',
@@ -356,8 +368,8 @@ const sidebars: SidebarsConfig = {
                   collapsed: true,
                   items: [
                     'user-guide/skills/optional/creative/creative-ai-presenter-video',
-                    'user-guide/skills/optional/creative/creative-ascii-art',
                     'user-guide/skills/optional/creative/creative-archify',
+                    'user-guide/skills/optional/creative/creative-ascii-art',
                     'user-guide/skills/optional/creative/creative-audiocraft-audio-generation',
                     'user-guide/skills/optional/creative/creative-auteur',
                     'user-guide/skills/optional/creative/creative-baoyu-article-illustrator',
@@ -473,6 +485,15 @@ const sidebars: SidebarsConfig = {
                     'user-guide/skills/optional/mcp/mcp-fastmcp',
                     'user-guide/skills/optional/mcp/mcp-mcp-oauth-remote-gateway',
                     'user-guide/skills/optional/mcp/mcp-mcporter',
+                  ],
+                },
+                {
+                  type: 'category',
+                  label: 'media',
+                  key: 'skills-optional-media',
+                  collapsed: true,
+                  items: [
+                    'user-guide/skills/optional/media/media-video-intel-pipeline',
                   ],
                 },
                 {

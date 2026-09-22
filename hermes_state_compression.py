@@ -704,7 +704,9 @@ class SessionCompressionMixin:
                     ORDER BY child.started_at ASC, child.id ASC
                     LIMIT 2
                     """,
-                    (current, current, current),
+                    # parent.id plus the three parent-bound fork/delegate/reset
+                    # markers in _NON_CONTINUATION_CHILD_FILTER_SQL.
+                    (current,) * 4,
                 ).fetchall()
             if not rows:
                 return current

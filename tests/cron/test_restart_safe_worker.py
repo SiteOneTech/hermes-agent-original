@@ -194,6 +194,43 @@ def test_external_worker_adopts_execution_and_runs_payload_once(
     assert not stderr_capture.exists()
 
 
+def test_external_worker_ack_is_never_observable_half_written(tmp_path, monkeypatch):
+    """The gateway polls ``ack_path.exists()`` then reads it (#107184, #116164 form 1): the ack
+    must appear atomically with its full body, or the parent logs "unreadable acknowledgement"
+    and loses the worker pid for a handoff that actually succeeded."""
+    import cron.scheduler as scheduler
+
+    payload = tmp_path / "payload.json"
+    ack = tmp_path / "exec-1.ready"
+    payload.write_text(
+        json.dumps({
+            "job": {"id": "job-1", "execution_id": "exec-1"},
+            "profile_home": str(tmp_path / "profile"),
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "cron.executions.adopt_claimed_execution",
+        lambda execution_id: {"id": execution_id, "status": "running"})
+    monkeypatch.setattr(scheduler, "run_one_job", lambda *_a, **_k: True)
+
+    real_dump = json.dump
+    visible_while_writing = []
+
+    def spying_dump(obj, fp, *args, **kwargs):
+        # The body is being produced right now: a reader must not be able to see the ack yet.
+        visible_while_writing.append(ack.exists())
+        return real_dump(obj, fp, *args, **kwargs)
+
+    monkeypatch.setattr(scheduler.json, "dump", spying_dump)
+
+    assert scheduler._run_external_worker_payload(payload, ack) is True
+
+    assert visible_while_writing == [False]
+    assert json.loads(ack.read_text(encoding="utf-8"))["execution_id"] == "exec-1"
+    assert [p.name for p in tmp_path.iterdir() if p.name.startswith("exec-1")] == [ack.name]
+
+
 def test_external_worker_refuses_to_run_without_durable_ownership(
     tmp_path, monkeypatch
 ):
@@ -345,6 +382,129 @@ def test_launch_external_worker_uses_restart_safe_scope_and_acknowledges(
     assert not (tmp_path / "cron/external-workers/exec-1.json").exists()
 
 
+def test_launch_external_worker_for_secondary_store_scrubs_launch_credentials_without_adapter_multiplexing(
+    tmp_path, monkeypatch
+):
+    """A host-wide ticker still serves secondary stores when adapter multiplexing is off."""
+    import cron.scheduler as scheduler
+    from agent.secret_scope import set_multiplex_active
+    from tools.process_registry import GatewayChildDispatch
+
+    launch_home = tmp_path / "launch"
+    secondary_home = tmp_path / "profiles" / "secondary"
+    launch_home.mkdir()
+    secondary_home.mkdir(parents=True)
+    (secondary_home / "cron").mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(launch_home))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "launch-key-must-not-reach-secondary-worker")
+    monkeypatch.setattr(scheduler, "_get_hermes_home", lambda: secondary_home)
+    monkeypatch.setattr(
+        "tools.process_registry.restart_safe_gateway_child_argv",
+        lambda command, **_kwargs: GatewayChildDispatch("direct", command),
+    )
+    spawned, payloads, _handoff, _get = _stub_external_worker_launch(scheduler, monkeypatch)
+
+    previous = set_multiplex_active(False)
+    try:
+        assert scheduler._launch_external_cron_worker(
+            {"id": "secondary-job", "execution_id": "exec-1", "prompt": "work"}
+        ) is True
+    finally:
+        set_multiplex_active(previous)
+
+    worker_env = spawned[0][1]["env"]
+    assert worker_env["HERMES_HOME"] == str(secondary_home.resolve())
+    assert "ANTHROPIC_API_KEY" not in worker_env
+    assert payloads[0]["secret_scope_strict"] is True
+
+
+def test_external_worker_preserves_parent_strict_scope_policy_after_home_becomes_process_home(
+    tmp_path, monkeypatch
+):
+    """The child must not re-enable os.environ fallback after the handoff rewrites HERMES_HOME."""
+    import cron.scheduler as scheduler
+    from agent.secret_scope import get_secret, set_multiplex_active
+
+    profile_home = tmp_path / "profiles" / "secondary"
+    profile_home.mkdir(parents=True)
+    payload = tmp_path / "payload.json"
+    ack = tmp_path / "strict.ready"
+    payload.write_text(
+        json.dumps({
+            "job": {"id": "job-1", "execution_id": "strict-exec"},
+            "profile_home": str(profile_home),
+            "multiplex_active": False,
+            "secret_scope_strict": True,
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HERMES_HOME", str(profile_home))
+    monkeypatch.setenv("LAUNCH_ONLY_API_KEY", "must-not-fallback-in-worker")
+    monkeypatch.setattr(
+        "cron.executions.adopt_claimed_execution",
+        lambda execution_id: {"id": execution_id, "status": "running"},
+    )
+    observed = []
+    monkeypatch.setattr(
+        scheduler,
+        "run_one_job",
+        lambda *_args, **_kwargs: observed.append(get_secret("LAUNCH_ONLY_API_KEY")) or True,
+    )
+
+    previous = set_multiplex_active(False)
+    try:
+        assert scheduler._run_external_worker_payload(payload, ack) is True
+    finally:
+        set_multiplex_active(previous)
+
+    assert observed == [None]
+
+
+def test_external_worker_body_never_downgrades_inherited_strict_scope(
+    tmp_path, monkeypatch
+):
+    """The real body must retain strictness after the child makes its target HERMES_HOME."""
+    import cron.scheduler as scheduler
+    from agent.secret_scope import (
+        get_secret,
+        reset_secret_scope_strict,
+        set_multiplex_active,
+        set_secret_scope_strict,
+    )
+
+    profile_home = tmp_path / "profiles" / "secondary"
+    profile_home.mkdir(parents=True)
+    monkeypatch.setenv("HERMES_HOME", str(profile_home))
+    monkeypatch.setenv("LAUNCH_ONLY_API_KEY", "must-not-fallback-inside-body")
+    monkeypatch.setattr(scheduler, "claim_dispatch", lambda _job_id: True)
+    monkeypatch.setattr(scheduler, "mark_execution_running", lambda _execution_id: {"id": _execution_id})
+    monkeypatch.setattr(scheduler, "_save_compose_deliver", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(scheduler, "_finish_completed_run", lambda *_args, **_kwargs: True)
+    observed = []
+    monkeypatch.setattr(
+        scheduler,
+        "run_job",
+        lambda *_args, **_kwargs: (
+            observed.append(get_secret("LAUNCH_ONLY_API_KEY")) or True,
+            "",
+            "ok",
+            None,
+        ),
+    )
+
+    multiplex_token = set_multiplex_active(False)
+    strict_token = set_secret_scope_strict(True)
+    try:
+        assert scheduler._run_one_job_body(
+            {"id": "body-job", "execution_id": "body-exec", "prompt": "work"}
+        ) is True
+    finally:
+        reset_secret_scope_strict(strict_token)
+        set_multiplex_active(multiplex_token)
+
+    assert observed == [None]
+
+
 def test_launch_external_worker_honors_ack_within_adoption_grace(
     tmp_path, monkeypatch
 ):
@@ -409,7 +569,7 @@ def test_launch_external_worker_honors_ack_within_adoption_grace(
     assert scheduler._launch_external_cron_worker(job) is True
     # The acknowledged path records the worker pid; the ownership-uncertain
     # timeout path never does.
-    assert scheduler._running_worker_pids == {"job-cold": 4321}
+    assert scheduler._running_worker_pids == {scheduler._inflight_key("job-cold"): 4321}
 
 
 def test_worker_dying_before_ack_names_its_stderr_cause(tmp_path, monkeypatch):
@@ -680,15 +840,15 @@ def test_shutdown_does_not_interrupt_restart_safe_waiter():
     import cron.scheduler as scheduler
 
     job_id = "external-waiter"
-    scheduler._running_job_ids.add(job_id)
-    scheduler._restart_safe_waiter_job_ids.add(job_id)
+    scheduler._running_job_ids.add(scheduler._inflight_key(job_id))
+    scheduler._restart_safe_waiter_job_ids.add(scheduler._inflight_key(job_id))
     try:
         assert scheduler.mark_running_jobs_interrupted("gateway restart") == []
-        assert job_id not in scheduler._interrupted_job_ids
+        assert scheduler._inflight_key(job_id) not in scheduler._interrupted_job_ids
     finally:
-        scheduler._restart_safe_waiter_job_ids.discard(job_id)
-        scheduler._running_job_ids.discard(job_id)
-        scheduler._interrupted_job_ids.discard(job_id)
+        scheduler._restart_safe_waiter_job_ids.discard(scheduler._inflight_key(job_id))
+        scheduler._running_job_ids.discard(scheduler._inflight_key(job_id))
+        scheduler._interrupted_job_ids.discard(scheduler._inflight_key(job_id))
 
 
 def test_worker_delivery_queue_is_keyed_by_the_delivering_jobs_own_execution(

@@ -19,6 +19,7 @@ const initialHermesDesktop = desktopWindow.hermesDesktop
 const notifyError = vi.fn()
 
 vi.mock('./notifications', () => ({
+  dismissNotification: vi.fn(),
   notifyError: (...args: unknown[]) => notifyError(...args)
 }))
 

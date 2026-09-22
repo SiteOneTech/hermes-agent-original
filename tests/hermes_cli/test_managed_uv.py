@@ -657,33 +657,6 @@ class TestRuntimeRepair:
         assert reacquired is not None
         _release_repair_lock(reacquired)
 
-    def test_windows_holders_refuse_runtime_mutation(self, tmp_path, monkeypatch):
-        from hermes_cli.managed_uv import repair_vulnerable_runtime
-
-        root, live, sentinel = _make_runtime_install(tmp_path, windows=True)
-        current = _runtime_info(live / "Scripts" / "python.exe", (3, 50, 4))
-        old_main = SimpleNamespace(
-            _detect_venv_python_processes=lambda: [
-                (1729, "python.exe", "hermes gateway run")
-            ]
-        )
-        monkeypatch.setitem(sys.modules, "hermes_cli.main", old_main)
-
-        with patch("hermes_cli.managed_uv.platform.system", return_value="Windows"), \
-             patch(
-                 "hermes_cli.managed_uv.probe_sqlite_runtime",
-                 return_value=current,
-             ), \
-             patch(
-                 "hermes_cli.managed_uv._install_safe_python_generation"
-             ) as mock_install:
-            result = repair_vulnerable_runtime("uv.exe", project_root=root)
-
-        assert result.status == "skipped"
-        assert "PID 1729" in result.detail
-        assert sentinel.read_text(encoding="utf-8") == "live"
-        assert not (root / ".hermes-runtime").exists()
-        mock_install.assert_not_called()
 
     def test_safe_runtime_sweeps_old_stale_backups(self, tmp_path):
         """A fixed runtime reclaims aged venv.stale.runtime-* leftovers

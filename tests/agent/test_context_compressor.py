@@ -3047,8 +3047,10 @@ class TestSummaryTargetRatio:
             )
             # Resolve while mock is active (lazy init defers this past __init__).
             _ = c.context_length
-        # 200K < 512K → threshold floored at 75%: 150K * 0.40 ratio = 60K
-        assert c.tail_token_budget == 60_000
+        # 200K < 512K → threshold floored at 75%: 150K * 0.40 ratio = 60K,
+        # then capped at 20% of the context window to keep the verbatim tail
+        # from consuming the whole request on smaller models.
+        assert c.tail_token_budget == 40_000
 
         with patch("agent.context_compressor.get_model_context_length", return_value=1_000_000):
             c = ContextCompressor(

@@ -243,7 +243,7 @@ def test_approval_hash_create_rejects_caller_declared_privileged_bypass(monkeypa
 def test_signature_approval_hash_schema_does_not_expose_privileged_bypass_args():
     entry = registry.get_entry("signature_approval_hash_create")
     assert entry is not None
-    props = entry.schema["function"]["parameters"]["properties"]
+    props = entry.schema["parameters"]["properties"]
 
     assert "internal_completion" not in props
     assert "privileged_completion" not in props

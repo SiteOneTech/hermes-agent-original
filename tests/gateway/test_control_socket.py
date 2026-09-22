@@ -385,6 +385,9 @@ def test_collect_fleet_versions_falls_back_to_state_file(tmp_path: Path, monkeyp
     monkeypatch.setattr(
         "gateway.status.live_gateway_pid_for_home", lambda h: os.getpid()
     )
+    monkeypatch.setattr(
+        ur, "_gateway_code_root", lambda *_args: ur._updater_code_root()
+    )
     fleet = ur.collect_fleet_versions()
     assert len(fleet) == 1
     assert fleet[0]["state"] == "stale"

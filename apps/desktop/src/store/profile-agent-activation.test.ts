@@ -43,6 +43,7 @@ vi.mock('@/hermes', () => ({
 }))
 vi.mock('@/lib/query-client', () => ({ invalidateProfileScopedQueries: vi.fn() }))
 vi.mock('@/store/starmap', () => ({ resetStarmapGraph }))
+vi.mock('./notifications', () => ({ dismissNotification: vi.fn() }))
 
 const { $activeGatewayProfile, ensureGatewayAgent, ensureGatewayProfile } = await import('./profile')
 

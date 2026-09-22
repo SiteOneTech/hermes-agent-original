@@ -13,6 +13,7 @@ import pytest
 import gateway.run as gateway_run
 from gateway.config import GatewayConfig, Platform, PlatformConfig
 from gateway.run import GatewayRunner
+from gateway.status import flush_runtime_status
 
 
 class _FakeAdapter:
@@ -165,7 +166,7 @@ class TestProfileRuntimeStatus:
         adapter._runtime_status_platform_key = "reviewer:discord"
         writes = []
         monkeypatch.setattr(
-            "gateway.status.write_runtime_status",
+            "gateway.status.publish_runtime_status",
             lambda **kwargs: writes.append(kwargs),
         )
 
@@ -233,11 +234,11 @@ def _install_secondary_reconnect_context(
     monkeypatch, runner, adapter, scoped_homes=None, hydration_flags=None
 ):
     @contextmanager
-    def fake_scope(profile_home, *, hydrate_secrets=True):
+    def fake_scope(profile_home, *, hydrate_secrets=True, prepared_secret_scope=None):
         if scoped_homes is not None:
             scoped_homes.append(Path(profile_home))
         if hydration_flags is not None:
-            hydration_flags.append(hydrate_secrets)
+            hydration_flags.append(prepared_secret_scope)
         yield
 
     monkeypatch.setattr(gateway_run, "_profile_runtime_scope", fake_scope)
@@ -283,6 +284,7 @@ class TestSecondaryProfileFatalRecovery:
             hydration_started.set()
             time.sleep(0.05)
             hydration_finished.set()
+            return {}
 
         async def ticker():
             nonlocal ticks_during_hydration
@@ -297,7 +299,7 @@ class TestSecondaryProfileFatalRecovery:
             return True
 
         monkeypatch.setattr(
-            "hermes_cli.env_loader.hydrate_profile_secret_sources", slow_hydrate
+            "hermes_cli.env_loader.hydrate_and_build_profile_secret_scope", slow_hydrate
         )
         monkeypatch.setattr(runner, "_connect_adapter_with_timeout", connect)
         monkeypatch.setattr(runner, "_connect_initial_adapter_with_timeout", connect)
@@ -322,7 +324,7 @@ class TestSecondaryProfileFatalRecovery:
         assert len(hydration_thread_ids) == 1
         assert hydration_thread_ids[0] != loop_thread_id
         assert ticks_during_hydration > 0
-        assert hydration_flags and set(hydration_flags) == {False}
+        assert hydration_flags and all(scope == {} for scope in hydration_flags)
         assert runner._profile_adapters["reviewer"][Platform.DISCORD] is replacement
 
     @pytest.mark.asyncio
@@ -334,7 +336,7 @@ class TestSecondaryProfileFatalRecovery:
         _install_secondary_reconnect_context(monkeypatch, runner, adapter)
         synced = []
         runner._sync_voice_mode_state_to_adapter = synced.append
-        monkeypatch.setattr("hermes_cli.env_loader.hydrate_profile_secret_sources", lambda h: {})
+        monkeypatch.setattr("hermes_cli.env_loader.hydrate_and_build_profile_secret_scope", lambda h: {})
         monkeypatch.setattr(gateway_run, "_load_gateway_config", lambda: {})
         monkeypatch.setattr(runner, "_snapshot_profile_busy_modes", lambda *a, **k: None)
         monkeypatch.setattr("hermes_cli.plugins.discover_plugins", lambda: None)
@@ -852,7 +854,7 @@ class TestSecondaryProfileConfigHandling:
         monkeypatch.setattr(runner, "_start_one_profile_adapters", fake_start_one)
         status = {}
         monkeypatch.setattr(
-            "gateway.status.write_runtime_status",
+            "gateway.status.publish_runtime_status",
             lambda **kwargs: status.update(kwargs),
         )
 
@@ -867,7 +869,7 @@ class TestSecondaryProfileConfigHandling:
 
     @pytest.mark.asyncio
     async def test_single_profile_start_clears_inherited_served_profiles(self, monkeypatch, tmp_path):
-        """``write_runtime_status`` re-stamps the previous writer's record in place, so a multiplexer's
+        """Runtime-status publication re-stamps the previous writer's record in place, so a multiplexer's
         ``served_profiles`` survived into a later single-profile run and every `hermes -p X` surface
         kept treating X as served (exit 78 on start, "running via multiplexer" on status)."""
         import json
@@ -880,6 +882,7 @@ class TestSecondaryProfileConfigHandling:
         runner.config = GatewayConfig(multiplex_profiles=False)
 
         assert await runner._start_secondary_profile_adapters() == 0
+        flush_runtime_status()
         assert read_runtime_status(tmp_path / "gateway_state.json")["served_profiles"] == []
 
     @pytest.mark.asyncio

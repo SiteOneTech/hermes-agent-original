@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from cron.jobs import create_job, get_job, list_jobs, load_jobs, save_jobs
+from cron.jobs import create_job, get_job, list_jobs, load_jobs, pause_job, save_jobs
 from hermes_cli import cron as cron_cli
 from hermes_cli.cron import cron_command
 from hermes_cli.subcommands.cron import build_cron_parser
@@ -317,6 +317,18 @@ class TestCronDoctor:
 class TestCronListStatusRendering:
     """`cron list` must never paint an undelivered run as a success (#83993)."""
 
+    def test_default_list_includes_paused_jobs(self, tmp_cron_dir, capsys, monkeypatch):
+        monkeypatch.setattr("hermes_cli.gateway.find_gateway_pids", lambda: [1])
+        job = create_job(prompt="Paused digest", schedule="every 1h")
+        pause_job(job["id"])
+
+        cron_command(Namespace(cron_command="list", all=False))
+
+        out = capsys.readouterr().out
+        assert job["id"] in out
+        assert "[paused]" in out
+        assert "No scheduled jobs" not in out
+
     def test_delivery_failed_is_not_green_ok(self, tmp_cron_dir, capsys, monkeypatch):
         monkeypatch.setattr("hermes_cli.gateway.find_gateway_pids", lambda: [1])
         # capsys is not a tty, so force colors on to check the paint itself.
@@ -382,7 +394,10 @@ class TestGatewayNotRunningWarning:
         )
         out = capsys.readouterr().out
         assert "Created job" in out
-        assert "Gateway is not running" in out
+        # Scheduler readiness is the relevant contract: under multiplexing, a missing
+        # per-profile PID alone does not prove the host gateway is absent.
+        assert "Scheduler is not ready" in out
+        assert "no gateway or no fresh profile heartbeat" in out
 
     def test_create_silent_when_gateway_running(self, tmp_cron_dir, capsys, monkeypatch):
         monkeypatch.setattr("hermes_cli.gateway.find_gateway_pids", lambda: [4242])
@@ -403,7 +418,50 @@ class TestGatewayNotRunningWarning:
         )
         out = capsys.readouterr().out
         assert "Created job" in out
-        assert "Gateway is not running" not in out
+        assert "Scheduler is not ready" not in out
+        assert "no gateway or no fresh profile heartbeat" not in out
+
+    @pytest.mark.parametrize(
+        ("heartbeat_age", "expect_warning"),
+        [(0.0, False), (None, True)],
+        ids=["served-profile-fresh", "served-profile-missing"],
+    )
+    def test_create_warning_tracks_the_served_profiles_own_heartbeat(
+        self, tmp_cron_dir, capsys, monkeypatch, heartbeat_age, expect_warning
+    ):
+        """A multiplex host's PID is not enough: each served profile must be fresh.
+
+        The profile intentionally has no dedicated gateway PID.  The warning is
+        suppressed only when the host serves it *and* its own ticker heartbeat
+        is fresh; a host/default-profile heartbeat must not mask a missing one.
+        """
+        monkeypatch.setattr(cron_cli, "_active_cron_provider_name", lambda: "builtin")
+        monkeypatch.setattr("gateway.status.is_gateway_runtime_lock_active", lambda: False)
+        monkeypatch.setattr("hermes_cli.gateway.find_gateway_pids", lambda: [])
+        monkeypatch.setattr(
+            "hermes_cli.gateway.named_profile_served_by_running_multiplexer", lambda: True
+        )
+        monkeypatch.setattr("cron.jobs.get_ticker_heartbeat_age", lambda: heartbeat_age)
+
+        cron_command(
+            Namespace(
+                cron_command="create",
+                schedule="0 11 * * *",
+                prompt="Daily report",
+                name="Daily 1130",
+                deliver=None,
+                repeat=None,
+                skill=None,
+                skills=None,
+                script=None,
+                workdir=None,
+                no_agent=False,
+            )
+        )
+
+        out = capsys.readouterr().out
+        assert "Created job" in out
+        assert ("Scheduler is not ready" in out) is expect_warning
 
     def test_list_warns_when_gateway_absent(self, tmp_cron_dir, capsys, monkeypatch):
         create_job(prompt="Daily report", schedule="0 11 * * *")
@@ -438,7 +496,7 @@ class TestExternalCronProviderStatus:
         assert "managed scheduler" in out
         assert "not firing" not in out.lower()
         assert "STALLED" not in out
-        assert "Gateway is not running" not in out
+        assert "No gateway is running on this host" not in out
         # Still surfaces the active-job summary.
         assert "active job(s)" in out
 
@@ -450,8 +508,8 @@ class TestExternalCronProviderStatus:
         monkeypatch.setattr("hermes_cli.gateway.find_gateway_pids", lambda: [])
         cron_command(Namespace(cron_command="status"))
         out = capsys.readouterr().out
-        # Built-in path is the historical ticker-based report.
-        assert "Gateway is not running" in out
+        # Built-in path is the host-ticker-based report; absence is a host-level alarm.
+        assert "No gateway is running on this host" in out
         assert "managed scheduler" not in out
 
     def test_create_silent_for_chronos_even_without_gateway(
@@ -771,7 +829,12 @@ class TestStatusSurfacesDeadScheduler:
     status` / `cron list` must not present the stale timestamp as an upcoming "Next run":
     flag it as overdue and say when the scheduler last ticked."""
 
-    def _dead_gateway(self, monkeypatch):
+    def _dead_gateway(self, monkeypatch, lock_dir):
+        # No gateway owns the HOST role either: point the rendezvous dir at an empty scratch dir
+        # so an unrelated host record can never make this profile look served. (Superseded by the
+        # tests/conftest.py hook in #118097 once that lands.)
+        lock_dir.mkdir(exist_ok=True)
+        monkeypatch.setenv("HERMES_GATEWAY_LOCK_DIR", str(lock_dir))
         monkeypatch.setattr("hermes_cli.gateway.find_gateway_pids", lambda: [])
         monkeypatch.setattr(
             "hermes_cli.gateway.named_profile_served_by_running_multiplexer", lambda: None
@@ -787,7 +850,7 @@ class TestStatusSurfacesDeadScheduler:
         self, tmp_cron_dir, capsys, monkeypatch
     ):
         job = create_job(prompt="Hourly", schedule="every 60m")
-        self._dead_gateway(monkeypatch)
+        self._dead_gateway(monkeypatch, tmp_cron_dir / "locks")
         self._park_next_run(job["id"], datetime.now(timezone.utc) - timedelta(hours=7))
         (tmp_cron_dir / "cron" / "ticker_heartbeat").write_text(str(time.time() - 25 * 3600))
 
@@ -796,7 +859,7 @@ class TestStatusSurfacesDeadScheduler:
         cron_command(Namespace(cron_command="list", all=False, json=False))
         list_out = capsys.readouterr().out
 
-        assert "Gateway is not running" in status_out
+        assert "No gateway is running on this host" in status_out
         assert "Scheduler last ticked" in status_out
         assert "OVERDUE" in status_out and "7h ago" in status_out
         # The stale timestamp must no longer read as an upcoming run on either surface.
@@ -808,7 +871,7 @@ class TestStatusSurfacesDeadScheduler:
         # a few minutes behind the ticker's own cadence is not an outage yet, and status must
         # not flash OVERDUE while doctor calls the same job healthy.
         job = create_job(prompt="Hourly", schedule="every 60m")
-        self._dead_gateway(monkeypatch)
+        self._dead_gateway(monkeypatch, tmp_cron_dir / "locks")
         self._park_next_run(job["id"], datetime.now(timezone.utc) - timedelta(minutes=5))
 
         cron_command(Namespace(cron_command="status"))

@@ -633,6 +633,13 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
             f"SAMPLE = {_SAMPLE_BYTES}\n"
         ) + _SAFE_READ_SNIPPET
         result = self._run_python_snippet(snippet)
+        # The wrapper can reject its own cwd before the Python interpreter has
+        # run. Preserve that diagnostic instead of classifying the absent
+        # sentinel as a transiently unavailable environment; callers need the
+        # invalid terminal.cwd (and container hint) to fix the real cause.
+        cwd_error = getattr(result, "cwd_error", "")
+        if isinstance(cwd_error, str) and cwd_error:
+            return {"state": "error", "message": cwd_error}
         stdout = _strip_terminal_fence_leaks(result.stdout or "")
         for match in re.finditer(re.escape(marker) + r"(\{.*?\})" + re.escape(marker), stdout):
             try:

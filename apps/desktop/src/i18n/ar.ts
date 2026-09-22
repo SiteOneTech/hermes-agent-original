@@ -71,6 +71,7 @@ export const ar = defineLocale({
     connect: 'اتصال',
     connecting: 'جار الاتصال',
     continue: 'متابعة',
+    bots: 'الروبوتات',
     copied: 'تم النسخ',
     copy: 'نسخ',
     copyFailed: 'فشل النسخ',
@@ -110,7 +111,8 @@ export const ar = defineLocale({
     renameLabel: 'الاسم الجديد',
     deleteTitle: name => `حذف ${name}؟`,
     deleteBody: 'سيتم نقله إلى سلة المهملات — يمكنك استعادته من هناك.',
-    pathCopied: 'تم نسخ المسار'
+    pathCopied: 'تم نسخ المسار',
+    revealMissing: 'هذا المجلد ليس على هذا الحاسوب'
   },
   boot: {
     ready: 'Hermes Desktop جاهز',
@@ -367,6 +369,56 @@ export const ar = defineLocale({
     noResults: 'لا توجد لغة مطابقة'
   },
   settings: {
+    subpages: {
+      appearanceTheme: 'السمة',
+      appearanceTypography: 'الخطوط والتحجيم',
+      appearanceWindowLayout: 'النافذة والتخطيط',
+      appearanceChatDisplay: 'عرض المحادثة',
+      appearancePet: 'الحيوان الأليف',
+      appearanceGeneral: 'عام',
+      modelMain: 'النموذج الرئيسي',
+      modelAuxiliary: 'النماذج المساعدة',
+      modelMoa: 'مزيج الوكلاء',
+      modelFallbacks: 'النماذج البديلة',
+      chatBehavior: 'السلوك',
+      chatAttachments: 'المرفقات',
+      workspaceProjects: 'المشاريع والاكتشاف',
+      workspaceShell: 'بيئة الصدفة',
+      workspaceFiles: 'الملفات والتنفيذ',
+      safetyApprovals: 'الموافقات',
+      safetyPrivacy: 'الخصوصية والشبكة',
+      safetyCheckpoints: 'نقاط الاستعادة',
+      browserProfile: 'ملف المتصفح',
+      browserNetwork: 'العناوين المحلية والخاصة',
+      memoryPersistent: 'الذاكرة الدائمة',
+      memoryContext: 'السياق والضغط',
+      voiceConversation: 'المحادثة الصوتية',
+      voiceTranscription: 'تحويل الكلام إلى نص',
+      voiceSpeech: 'تحويل النص إلى كلام',
+      advancedRuntime: 'حدود الوكيل',
+      advancedTools: 'الوصول إلى الأدوات',
+      advancedTerminal: 'خلفية الطرفية',
+      advancedOutput: 'حدود المخرجات',
+      advancedDelegation: 'الوكلاء الفرعيون',
+      advancedDesktop: 'سطح المكتب وبدء التشغيل',
+      gatewayConnection: 'هذه النافذة',
+      gatewayDevices: 'الاتصالات المحفوظة',
+      gatewayManagedUpdates: 'التحديثات البعيدة',
+      gatewayManagedUpdatesUnavailable: 'تتطلب التحديثات البعيدة إصدار سطح مكتب يدعم تحديثات SSH المُدارة.',
+      gatewayManagedUpdatesEmpty: 'أضف اتصال SSH في الاتصالات المحفوظة لإدارة تحديثاته هنا.',
+      keyboardShortcuts: 'تعيينات المفاتيح',
+      screenCapture: 'التقاط الشاشة',
+      notificationAlerts: 'تنبيهات سطح المكتب',
+      notificationSounds: 'الأصوات',
+      archivedSessions: 'الأرشفة والاحتفاظ',
+      defaultDirectory: 'مجلد المشروع الافتراضي',
+      vaultCredentials: 'بيانات الاعتماد المحفوظة',
+      vaultSources: 'مديرو كلمات المرور',
+      appUpdates: 'الإصدار والتحديثات',
+      uninstall: 'إلغاء التثبيت',
+      billingOverview: 'نظرة عامة',
+      billingPlans: 'الخطط'
+    },
     closeSettings: 'إغلاق الإعدادات',
     exportConfig: 'تصدير الإعدادات',
     importConfig: 'استيراد الإعدادات',
@@ -663,7 +715,8 @@ export const ar = defineLocale({
     },
     fieldLabels: {
       model: 'النموذج الافتراضي',
-      modelContextLength: 'يتجاوز نافذة السياق المكتشفة لنموذج المحادثة الرئيسي فقط (بالرموز). اتركه 0 لاستخدام القيمة المكتشفة للنموذج المحدد. لا يؤثر على النماذج المساعدة أو نماذج MoA.',
+      modelContextLength:
+        'يتجاوز نافذة السياق المكتشفة لنموذج المحادثة الرئيسي فقط (بالرموز). اتركه 0 لاستخدام القيمة المكتشفة للنموذج المحدد. لا يؤثر على النماذج المساعدة أو نماذج MoA.',
       fallbackProviders: 'النماذج الاحتياطية',
       toolsets: 'مجموعات الأدوات المفعلة',
       timezone: 'المنطقة الزمنية',
@@ -778,7 +831,8 @@ export const ar = defineLocale({
       'context.engine': 'استراتيجية إدارة المحادثات الطويلة قرب حد السياق.',
       'compression.enabled': 'يلخص السياق الأقدم عندما تكبر المحادثات.',
       'compression.codexGpt55Autoraise': 'يرفع عتبة الضغط إلى 85٪ لنماذج ChatGPT Codex OAuth المدعومة.',
-      'auxiliary.compression.timeout': 'عدد الثواني لانتظار نموذج الضغط المساعد في كل استدعاء (الافتراضي 120). ارفعه للنماذج المحلية البطيئة.',
+      'auxiliary.compression.timeout':
+        'عدد الثواني لانتظار نموذج الضغط المساعد في كل استدعاء (الافتراضي 120). ارفعه للنماذج المحلية البطيئة.',
       'voice.autoTts': 'ينطق ردود المساعد تلقائياً.',
       'tts.xai.voiceId': 'معرف صوت xAI مثل eve أو معرف صوت مخصص.',
       'tts.xai.language': 'رمز لغة النطق، مثل en.',
@@ -1729,6 +1783,14 @@ export const ar = defineLocale({
     failedCreate: 'فشل الإنشاء',
     failedRename: 'فشل إعادة التسمية'
   },
+  modelAssignment: {
+    saveFailed: 'لم يحفظ Hermes تغيير النموذج هذا.',
+    confirmTitle: 'تحذير اختيار النموذج',
+    confirmDetail: 'أكّد فقط إذا كنت تقبل هذه المقايضة.',
+    confirmAction: 'تأكيد',
+    declined: 'أُلغي تغيير النموذج — رفضت تحذير طبقة تدريب البيانات.'
+  },
+
   cron: {
     close: 'إغلاق',
     modelImpact: {
@@ -1736,12 +1798,7 @@ export const ar = defineLocale({
       message: count =>
         `${count} من المهام المجدولة غير المثبتة ستواصل العمل على النموذج الذي أُنشئت به. ثبّتها أو اضبط cron.model لنقلها.`,
       detailMore: (names, remaining) => `${names} و${remaining} أخرى`,
-      review: 'مراجعة المهام المجدولة',
-      saveFailed: 'لم يحفظ Hermes تغيير النموذج هذا.',
-      confirmTitle: 'تحذير اختيار النموذج',
-      confirmDetail: 'أكّد فقط إذا كنت تقبل هذه المقايضة.',
-      confirmAction: 'تأكيد',
-      declined: 'أُلغي تغيير النموذج — رفضت تحذير طبقة تدريب البيانات.'
+      review: 'مراجعة المهام المجدولة'
     },
     search: 'بحث',
     loading: 'جار التحميل...',
@@ -1932,6 +1989,10 @@ export const ar = defineLocale({
     results: 'النتائج',
     pinned: 'المثبتة',
     sessions: 'الجلسات',
+    terminal: 'الطرفية',
+    files: 'الملفات',
+    review: 'المراجعة',
+    logs: 'السجلات',
     cronJobs: 'المهام المجدولة',
     groupAriaGrouped: 'الجلسات مجمعة حسب مساحة العمل',
     groupAriaUngrouped: 'الجلسات غير مجمعة',
@@ -2180,6 +2241,8 @@ export const ar = defineLocale({
     }
   },
   statusStack: {
+    hideStack: 'إخفاء لوحة الحالة',
+    showStack: 'إظهار لوحة الحالة',
     agents: 'الوكلاء',
     background: count => `${count} في الخلفية`,
     goalActive: 'الهدف نشط',
@@ -2975,6 +3038,7 @@ export const ar = defineLocale({
       statusRecovered: 'تم الاسترداد',
       statusDone: 'تم',
       resultUnavailable: 'النتيجة غير متاحة',
+      resultInterrupted: 'تمت المقاطعة',
       memoryWriteNoted: 'تم تسجيل كتابة الذاكرة',
       actions: {
         read: 'قراءة',
@@ -3124,7 +3188,8 @@ export const ar = defineLocale({
     sudoSendFailed: 'فشل إرسال كلمة مرور sudo',
     secretSendFailed: 'فشل إرسال السر',
     sudoTitle: 'مطلوب sudo',
-    sudoDesc: 'راجع الأمر قبل إدخال كلمة مرور sudo. تُرسل كلمة المرور إلى الوكيل الذي ينفّذه وتُحفظ مؤقتًا لهذه الجلسة.',
+    sudoDesc:
+      'راجع الأمر قبل إدخال كلمة مرور sudo. تُرسل كلمة المرور إلى الوكيل الذي ينفّذه وتُحفظ مؤقتًا لهذه الجلسة.',
     sudoCommandUnavailable: 'لم يقدّم هذا الوكيل الأمر. ألغِ الطلب إذا لم تتمكن من التحقق منه في المحادثة.',
     sudoPlaceholder: 'كلمة المرور',
     secretTitle: 'مطلوب سر',

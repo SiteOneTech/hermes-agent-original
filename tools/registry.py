@@ -277,7 +277,12 @@ def check_fn_cache_scope() -> Optional[str]:
     try:
         from gateway.session_context import get_session_env
         if all(str(get_session_env(k, "") or "").strip() for k in _BROWSER_IDENTITY_KEYS):
-            return CHECK_FN_CACHE_BYPASS
+            # api_server binds a server-derived principal + transport family on EVERY request, so
+            # identity-present != controller-attached; only bypass when the extension-control
+            # feature is actually on (#79047).
+            from gateway.browser_control_broker import browser_control_enabled
+            if browser_control_enabled():
+                return CHECK_FN_CACHE_BYPASS
     except Exception:
         pass
     try:
@@ -669,6 +674,34 @@ class ToolRegistry:
         if not isinstance(schema, dict):
             raise ValueError(
                 f"Tool {name!r}: schema must be a dict, got {type(schema).__name__}")
+        # The registry's durable internal contract is a flat function descriptor
+        # (``name`` / ``description`` / ``parameters``). Some legacy local
+        # tool modules still pass an OpenAI wire wrapper, which otherwise lands
+        # in ToolEntry and later becomes a nested ``function.function`` schema.
+        # Normalize once at the ingress boundary rather than making every
+        # provider, registry reader and tool module understand both shapes.
+        if "function" in schema:
+            function_schema = schema["function"]
+            if schema.get("type") != "function" or not isinstance(function_schema, dict):
+                raise ValueError(
+                    f"Tool {name!r}: OpenAI function wrapper must contain a dict 'function'")
+            declared_name = function_schema.get("name")
+            if declared_name not in (None, name):
+                raise ValueError(
+                    f"Tool {name!r}: wrapped schema declares mismatched name {declared_name!r}")
+            schema = {
+                **{key: value for key, value in schema.items() if key not in {"type", "function"}},
+                **{key: value for key, value in function_schema.items() if key != "name"},
+            }
+        # MCP/Anthropic producers may spell the JSON Schema ``input_schema``.
+        # Normalize it at the same boundary; all internal consumers then use
+        # OpenAI's ``parameters`` spelling and no provider sees an empty tool.
+        if "input_schema" in schema:
+            if "parameters" in schema:
+                raise ValueError(
+                    f"Tool {name!r}: schema cannot define both 'parameters' and 'input_schema'")
+            schema = {**schema, "parameters": schema["input_schema"]}
+            del schema["input_schema"]
         params = schema.get("parameters")
         if params is not None and not isinstance(params, dict):
             raise ValueError(

@@ -55,8 +55,9 @@ def test_configured_features_probe_reads_the_fresh_target_interpreter(tmp_path, 
     def probe(python, script, *args, env=None, prelude=""):
         return real_probe(python, prelude + script, *args, env=env)
 
+    child_only_missing = "import tools.lazy_deps as ld; ld.is_available = lambda *_a, **_k: False\n"
     monkeypatch.setattr(main_install_repair, "_venv_probe",
-                        lambda p, s, *a, env=None: probe(p, s, *a, env=env, prelude="import sys; sys.modules['lark_oapi'] = None\n"))
+                        lambda p, s, *a, env=None: probe(p, s, *a, env=env, prelude=child_only_missing))
     missing = main_install_repair._configured_features_missing_deps(["uv", "pip"], env=env)
     assert [feature for feature, _hint in missing] == ["Feishu / Lark"]
 

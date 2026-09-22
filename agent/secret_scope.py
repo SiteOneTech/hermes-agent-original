@@ -51,6 +51,13 @@ def serves_routed_profile() -> bool:
 
 
 _SECRET_SCOPE: ContextVar[Optional[Mapping[str, str]]] = ContextVar("_SECRET_SCOPE", default=None)
+# Some execution paths route one job to another profile without turning the
+# whole host into a multiplexing gateway.  Those paths need the same no-fallback
+# secret boundary, but making _MULTIPLEX_ACTIVE temporary would race concurrent
+# host work.  Keep the stricter policy task-local with the secret mapping.
+_SECRET_SCOPE_STRICT: ContextVar[bool] = ContextVar(
+    "_SECRET_SCOPE_STRICT", default=False
+)
 
 
 class UnscopedSecretError(RuntimeError):
@@ -88,6 +95,26 @@ def set_secret_scope(secrets: Optional[Mapping[str, str]]) -> Token:
 
 def reset_secret_scope(token: Token) -> None:
     _SECRET_SCOPE.reset(token)
+
+
+def set_secret_scope_strict(strict: bool = True) -> Token:
+    """Require secret reads in this context to use its installed scope.
+
+    This is for routed work in a non-multiplex host.  It deliberately uses a
+    ContextVar rather than toggling the process-global multiplex latch, so a
+    profile-B cron run cannot change concurrent profile-A gateway behavior.
+    """
+    return _SECRET_SCOPE_STRICT.set(bool(strict))
+
+
+def reset_secret_scope_strict(token: Token) -> None:
+    """Restore the task-local secret fallback policy."""
+    _SECRET_SCOPE_STRICT.reset(token)
+
+
+def is_secret_scope_strict() -> bool:
+    """Whether this task-local scope forbids os.environ credential fallback."""
+    return _SECRET_SCOPE_STRICT.get()
 
 
 def current_secret_scope() -> Optional[Mapping[str, str]]:
@@ -148,11 +175,12 @@ def get_secret(name: str, default: Optional[str] = None) -> Optional[str]:
     """Resolve a credential by env-var name, honoring the active profile scope.
 
     Global vars always read ``os.environ``. With a scope installed, a miss returns
-    ``default`` under multiplexing (never another profile's ``os.environ`` value)
-    but falls through to ``os.environ`` otherwise — single-profile deployments
-    inject credentials via the process env (systemd, ``op run``), so the scope
-    must stay a ``.env`` overlay, not a blindfold (otherwise cron 401s). With no
-    scope: multiplex INACTIVE reads ``os.environ``; ACTIVE raises (fail closed).
+    ``default`` under multiplexing or an explicitly strict routed-work scope
+    (never another profile's ``os.environ`` value), but falls through otherwise —
+    single-profile deployments inject credentials via the process env (systemd,
+    ``op run``), so the ordinary scope must stay a ``.env`` overlay, not a
+    blindfold (otherwise cron 401s). With no scope: multiplex or strict mode
+    raises (fail closed).
     """
     if _is_global_env(name):
         return _environ_or(name, default)
@@ -161,8 +189,12 @@ def get_secret(name: str, default: Optional[str] = None) -> Optional[str]:
         val = scope.get(name)
         if val is not None:
             return val
-        return default if _MULTIPLEX_ACTIVE else _environ_or(name, default)
-    if _MULTIPLEX_ACTIVE:
+        return (
+            default
+            if (_MULTIPLEX_ACTIVE or _SECRET_SCOPE_STRICT.get())
+            else _environ_or(name, default)
+        )
+    if _MULTIPLEX_ACTIVE or _SECRET_SCOPE_STRICT.get():
         raise UnscopedSecretError(
             name,
             f"get_secret({name!r}) called with no profile secret scope active "

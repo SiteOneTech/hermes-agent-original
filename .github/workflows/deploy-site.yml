@@ -58,6 +58,8 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # v6.0.3
+        with:
+          fetch-depth: 0  # extract-plugins.py derives each catalog entry's added/updated dates from git log
 
       - name: Get GitHub App token
         id: app-token

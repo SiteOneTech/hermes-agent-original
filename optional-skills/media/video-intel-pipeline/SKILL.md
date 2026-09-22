@@ -53,8 +53,10 @@ Este pipeline **requiere** las siguientes herramientas (de ahí su naturaleza
 ## Setup (PEP668-safe)
 
 ```bash
-python3 -m venv /tmp/video-intel-venv
-/tmp/video-intel-venv/bin/pip install -U pip yt-dlp faster-whisper fastembed numpy
+SCRATCH_DIR="$(python3 -c 'import tempfile; print(tempfile.gettempdir())')"
+VENV_DIR="$SCRATCH_DIR/video-intel-venv"
+python3 -m venv "$VENV_DIR"
+"$VENV_DIR/bin/pip" install -U pip yt-dlp faster-whisper fastembed numpy
 # ffmpeg debe estar instalado en el sistema:
 #   Debian/Ubuntu: sudo apt install ffmpeg   |   macOS: brew install ffmpeg
 ```
@@ -87,17 +89,20 @@ faster-whisper, etc. ya están en el entorno activo.
 ### v2 (recomendado)
 
 ```bash
-SCRIPT="/tmp/video-intel-venv/bin/python ~/.hermes/skills/media/video-intel-pipeline/scripts/video_intel_v2.py"
+SCRATCH_DIR="$(python3 -c 'import tempfile; print(tempfile.gettempdir())')"
+VENV_DIR="$SCRATCH_DIR/video-intel-venv"
+OUT_DIR="$SCRATCH_DIR/video-intel"
+SCRIPT="$VENV_DIR/bin/python ~/.hermes/skills/media/video-intel-pipeline/scripts/video_intel_v2.py"
 
 # 1) Ingesta + transcripción + índice keyword + embeddings semánticos
 $SCRIPT ingest \
   --url "https://youtu.be/VIDEO_ID" \
-  --outdir /tmp/video-intel \
+  --outdir "$OUT_DIR" \
   --semantic
 
 # 2) Buscar dentro del video (híbrido keyword + semantic)
 $SCRIPT search \
-  --workdir "/tmp/video-intel/<VIDEO_FOLDER>" \
+  --workdir "$OUT_DIR/<VIDEO_FOLDER>" \
   --query "pricing y costos por anuncio" \
   --top-k 8 \
   --semantic
@@ -110,17 +115,19 @@ Opciones de `ingest`: `--model tiny|base|small|medium|large-v3` (default `small`
 ### v1 (simple)
 
 ```bash
-PY=/tmp/video-intel-venv/bin/python
+SCRATCH_DIR="$(python3 -c 'import tempfile; print(tempfile.gettempdir())')"
+PY="$SCRATCH_DIR/video-intel-venv/bin/python"
+OUT_DIR="$SCRATCH_DIR/video-intel"
 SCRIPT=~/.hermes/skills/media/video-intel-pipeline/scripts/video_intel_pipeline.py
 
 # Transcripción por defecto
-$PY $SCRIPT --url "https://youtu.be/VIDEO_ID" --outdir /tmp/video-intel
+$PY $SCRIPT --url "https://youtu.be/VIDEO_ID" --outdir "$OUT_DIR"
 
 # Forzar idioma de entrada
-$PY $SCRIPT --url "https://vimeo.com/..." --language es --outdir /tmp/video-intel
+$PY $SCRIPT --url "https://vimeo.com/..." --language es --outdir "$OUT_DIR"
 
 # Traducir a inglés durante ASR
-$PY $SCRIPT --url "https://youtu.be/VIDEO_ID" --task translate --outdir /tmp/video-intel
+$PY $SCRIPT --url "https://youtu.be/VIDEO_ID" --task translate --outdir "$OUT_DIR"
 ```
 
 ## Flujo de uso en Hermes

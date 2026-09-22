@@ -16,7 +16,6 @@ import {
 } from '@/lib/storage'
 import { withTimeout } from '@/lib/with-timeout'
 import { $connectionsRegistry } from '@/store/connection-registry-state'
-import { invalidateCronModelImpactScopeState } from '@/store/cron-model-impact-scope'
 import {
   $gateway,
   activeGatewayConnectionId,
@@ -27,6 +26,7 @@ import {
   openGatewayForProfile,
   openSecondaryCount
 } from '@/store/gateway'
+import { invalidateModelAssignmentCronImpactScope } from '@/store/model-assignment'
 import { notifyError } from '@/store/notifications'
 import { $poolLimits } from '@/store/pool-limits'
 import { notifyRemoteOverrideAuthFailure } from '@/store/profile-remote-override'
@@ -440,11 +440,11 @@ $activeGatewayProfile.subscribe(value => {
   setApiRequestProfile(key)
 
   if (_lastRoutedProfile !== null && _lastRoutedProfile !== key) {
-    invalidateCronModelImpactScopeState()
     // Profile-scoped settings + the unified session list are now stale.
     // Narrowed so account/marketplace/onboarding caches don't refetch on
     // every profile switch.
     invalidateProfileScopedQueries()
+    invalidateModelAssignmentCronImpactScope()
     resetStarmapGraph()
     // /api/profiles now routes to a different backend: strand any in-flight
     // profile-list fetch so the previous backend's late answer can't clobber

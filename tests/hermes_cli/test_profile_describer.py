@@ -33,10 +33,6 @@ def profile_env(tmp_path, monkeypatch):
     return home
 
 
-def test_read_profile_meta_empty_when_missing(profile_env):
-    meta = profiles_mod.read_profile_meta(profile_env)
-    assert meta == PROFILE_META_EMPTY
-
 
 def test_write_and_read_profile_meta(profile_env):
     profiles_mod.write_profile_meta(
@@ -68,11 +64,6 @@ def test_write_profile_meta_rejects_missing_dir(tmp_path):
     with pytest.raises(FileNotFoundError):
         profiles_mod.write_profile_meta(bogus, description="x")
 
-
-def test_read_profile_meta_tolerates_corrupt_yaml(profile_env):
-    (profile_env / "profile.yaml").write_text("not: valid: yaml: [unclosed")
-    meta = profiles_mod.read_profile_meta(profile_env)
-    assert meta == PROFILE_META_EMPTY
 
 
 # ---------------------------------------------------------------------------

@@ -107,9 +107,12 @@ Shape `metadata` so downstream parsers (reviewers, aggregators, schedulers) can 
 If your task produced files a human actually wants — a chart, a PDF, a spreadsheet, a generated image, an archive — pass their **absolute paths** to `kanban_complete(artifacts=[...])`. The gateway notifier uploads each one as a native attachment to whoever subscribed to the task, so the deliverable lands in their chat alongside the completion message instead of being a path they have to go fetch.
 
 ```python
+import tempfile
+
+scratch_dir = tempfile.gettempdir()
 kanban_complete(
     summary="Q3 revenue analysis: 14% QoQ growth, EMEA the laggard. Chart + full PDF attached.",
-    artifacts=["/tmp/q3-revenue.png", "/tmp/q3-report.pdf"],
+    artifacts=[f"{scratch_dir}/q3-revenue.png", f"{scratch_dir}/q3-report.pdf"],
     metadata={"rows_analyzed": 48000, "growth_qoq": 0.14},
 )
 ```

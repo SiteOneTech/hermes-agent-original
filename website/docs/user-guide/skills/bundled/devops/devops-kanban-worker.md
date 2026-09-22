@@ -1,14 +1,14 @@
 ---
-title: "Kanban Worker — Pitfalls, examples, and edge cases for Hermes Kanban workers"
+title: "Kanban Worker — Pitfalls and edge cases for Hermes Kanban workers"
 sidebar_label: "Kanban Worker"
-description: "Pitfalls, examples, and edge cases for Hermes Kanban workers"
+description: "Pitfalls and edge cases for Hermes Kanban workers"
 ---
 
 {/* This page is auto-generated from the skill's SKILL.md by website/scripts/generate-skill-docs.py. Edit the source SKILL.md, not this page. */}
 
 # Kanban Worker
 
-Pitfalls, examples, and edge cases for Hermes Kanban workers. The lifecycle itself is auto-injected into every worker's system prompt as KANBAN_GUIDANCE (from agent/prompt_builder.py); this skill is what you load when you want deeper detail on specific scenarios.
+Pitfalls and edge cases for Hermes Kanban workers.
 
 ## Skill metadata
 
@@ -17,9 +17,11 @@ Pitfalls, examples, and edge cases for Hermes Kanban workers. The lifecycle itse
 | Source | Bundled (installed by default) |
 | Path | `skills/devops/kanban-worker` |
 | Version | `2.0.0` |
+| Author | Teknium (teknium1), Hermes Agent |
+| License | MIT |
 | Platforms | linux, macos, windows |
 | Tags | `kanban`, `multi-agent`, `collaboration`, `workflow`, `pitfalls` |
-| Related skills | [`kanban-orchestrator`](/docs/user-guide/skills/bundled/devops/devops-kanban-orchestrator) |
+| Related skills | [`kanban-orchestrator`](../../bundled/devops/devops-kanban-orchestrator.md) |
 
 ## Reference: full SKILL.md
 
@@ -116,6 +118,30 @@ kanban_complete(
 ```
 
 Shape `metadata` so downstream parsers (reviewers, aggregators, schedulers) can use it without re-reading your prose.
+
+## Shipping deliverables (`artifacts=[...]`)
+
+If your task produced files a human actually wants — a chart, a PDF, a spreadsheet, a generated image, an archive — pass their **absolute paths** to `kanban_complete(artifacts=[...])`. The gateway notifier uploads each one as a native attachment to whoever subscribed to the task, so the deliverable lands in their chat alongside the completion message instead of being a path they have to go fetch.
+
+```python
+import tempfile
+
+scratch_dir = tempfile.gettempdir()
+kanban_complete(
+    summary="Q3 revenue analysis: 14% QoQ growth, EMEA the laggard. Chart + full PDF attached.",
+    artifacts=[f"{scratch_dir}/q3-revenue.png", f"{scratch_dir}/q3-report.pdf"],
+    metadata={"rows_analyzed": 48000, "growth_qoq": 0.14},
+)
+```
+
+Images and video embed inline; PDFs, docx, csv/xlsx/json/yaml, pptx, zip/tar/gz, audio, and html upload as files. Rules:
+
+- **Absolute paths only**, and the file must still exist when you complete — don't point at a scratch file you already deleted.
+- **Only real deliverables.** Skip intermediate logs, scratch files, and inputs the human already has.
+- `artifacts` is the **top-level** parameter the notifier reads. Do not bury deliverable paths in `metadata` (e.g. `metadata.codex_lane.artifacts`) and expect them to upload — the notifier only scans the top-level `artifacts` list, with a best-effort fallback over your `summary`/`result` text. Metadata paths are for downstream-worker bookkeeping, not delivery.
+- A bare string is auto-promoted to a one-element list, and it merges with any pre-existing `metadata.artifacts` without dupes.
+
+Same primitive works outside kanban: any agent surface delivers a file just by writing its absolute path into the response, and Slack/Discord/Telegram/etc. upload it natively — the `artifacts` param is the structured kanban entry point.
 
 ## Claiming cards you actually created
 

@@ -54,6 +54,13 @@ _DOTENV_PUBLISHED: dict[str, tuple[str | None, str, int]] = {}
 _DOTENV_PASSES = itertools.count()
 _DOTENV_LOCK = threading.RLock()
 
+# Per-process credentials a parent mints and injects into the child's environment (the Desktop shell /
+# a link-style launcher spawns `hermes dashboard` with a fresh HERMES_DASHBOARD_SESSION_TOKEN and keeps
+# the same token for its own /api probes). They are never .env configuration, so a persisted value in
+# ~/.hermes/.env must not replace an injected one — the parent would then 401 against its own child
+# (#115955). A value an earlier dotenv pass published is still reloaded normally.
+_SPAWN_CREDENTIAL_KEYS: frozenset[str] = frozenset({"HERMES_DASHBOARD_SESSION_TOKEN"})
+
 # Behavioral routing keys a parent Hermes process injects into child env that silently redirect a profile
 # onto the wrong provider path; these — and ONLY these — are scrubbed at startup when absent from the
 # profile's .env. Credentials are excluded: shell exports are a documented way to supply them, and
@@ -101,7 +108,8 @@ def secret_source_names() -> tuple[str, ...]:
 
 def get_secret_source_values(hermes_home: str | os.PathLike) -> dict[str, str]:
     """Return the external-secret value snapshot for ``hermes_home``."""
-    return dict(_SECRET_SOURCE_VALUES_BY_HOME.get(str(Path(hermes_home).resolve()), {}))
+    with _SECRET_SOURCE_CACHE_LOCK:
+        return dict(_SECRET_SOURCE_VALUES_BY_HOME.get(str(Path(hermes_home).resolve()), {}))
 
 
 def hydrate_profile_secret_sources(hermes_home: str | os.PathLike) -> dict[str, str]:
@@ -111,6 +119,34 @@ def hydrate_profile_secret_sources(hermes_home: str | os.PathLike) -> dict[str, 
     Fail-open / once-per-home like ``_apply_external_secret_sources``; never returns plaintext .env entries."""
     with _SECRET_SOURCE_CACHE_LOCK:
         return _hydrate_profile_secret_sources(Path(hermes_home))
+
+
+def hydrate_and_build_profile_secret_scope(hermes_home: str | os.PathLike) -> dict[str, str]:
+    """Atomically hydrate one profile's external secrets and materialize its private scope.
+
+    A same-profile cache reset may run concurrently on a gateway, cron, or tool
+    lifecycle thread. Keep the hydrated snapshot locked until the caller owns an
+    immutable scope mapping.
+    """
+    home = Path(hermes_home)
+    with _SECRET_SOURCE_CACHE_LOCK:
+        _hydrate_profile_secret_sources(home)
+        # This nested read is safe because the cache lock is re-entrant.
+        from agent.secret_scope import build_profile_secret_scope
+
+        return build_profile_secret_scope(home)
+
+
+def refresh_profile_secret_scope(hermes_home: str | os.PathLike) -> dict[str, str]:
+    """Atomically refresh one profile's external secrets and build its private scope.
+
+    A concurrent job for the same profile must not clear the external-secret
+    snapshot after hydration but before the caller installs its scope.
+    """
+    home = Path(hermes_home)
+    with _SECRET_SOURCE_CACHE_LOCK:
+        _reset_secret_source_cache_locked(home)
+        return hydrate_and_build_profile_secret_scope(home)
 
 
 def _hydrate_profile_secret_sources(home: Path) -> dict[str, str]:
@@ -176,6 +212,12 @@ def reset_secret_source_cache(hermes_home: str | os.PathLike | None = None) -> N
     this process, and a per-fire cron re-pull or a plugin-discovery refresh for one home must not wipe
     a sibling's hydrated snapshot — the sibling's next scope build would run empty until it re-hydrated
     (#102041)."""
+    with _SECRET_SOURCE_CACHE_LOCK:
+        _reset_secret_source_cache_locked(hermes_home)
+
+
+def _reset_secret_source_cache_locked(hermes_home: str | os.PathLike | None = None) -> None:
+    """Locked implementation for :func:`reset_secret_source_cache`."""
     if hermes_home is None:
         _APPLIED_HOMES.clear()
         _SECRET_SOURCES.clear()
@@ -302,8 +344,11 @@ def _load_dotenv_with_fallback(path: Path, *, override: bool, load_pass: int | N
                 continue
             current = os.environ.get(name)
             record = _DOTENV_PUBLISHED.get(name)
+            ours = record is not None and current == record[1]
+            if name in _SPAWN_CREDENTIAL_KEYS and current and not ours:
+                continue  # parent-minted per-process credential: .env must not split it from the parent
             # Ours and untouched since → keep the original baseline; anything else is a newer outside value.
-            baseline = record[0] if record is not None and current == record[1] else current
+            baseline = record[0] if ours else current
             os.environ[name] = value
             _DOTENV_PUBLISHED[name] = (baseline, value, load_pass)
     _sanitize_loaded_credentials()  # httpx encodes headers as ASCII
@@ -396,10 +441,10 @@ def load_hermes_dotenv(
     # Multiplex gateway: while a routed profile-home override is active, copying that profile's .env
     # into os.environ would expose its credentials to sibling turns and every spawned child. Unscoped
     # startup loads keep the normal path; external sources still refresh against the profile mapping.
-    from agent.secret_scope import is_multiplex_active
+    from agent.secret_scope import is_multiplex_active, is_secret_scope_strict
     from hermes_constants import get_hermes_home_override
 
-    if is_multiplex_active() and get_hermes_home_override() is not None:
+    if (is_multiplex_active() or is_secret_scope_strict()) and get_hermes_home_override() is not None:
         home_key = str(home_path.resolve())
         if home_key not in _SCOPED_SKIP_LOGGED:
             _SCOPED_SKIP_LOGGED.add(home_key)
@@ -537,6 +582,16 @@ def _apply_external_secret_sources(home_path: Path) -> None:
     tokens), BEFORE Hermes reads credentials; failures never block startup. Precedence/conflicts/provenance
     live in ``registry.apply_all``; this wrapper owns the once-per-home guard, the post-apply ASCII sweep,
     the ``_SECRET_SOURCES`` map and status lines."""
+    # The global dotenv path publishes the same per-home snapshots that routed
+    # profile refreshes consume. Keep guard, fetch, and publication in the
+    # shared lifecycle lock: otherwise a delayed older fetch can publish after
+    # refresh_profile_secret_scope() has installed a newer snapshot.
+    with _SECRET_SOURCE_CACHE_LOCK:
+        _apply_external_secret_sources_locked(home_path)
+
+
+def _apply_external_secret_sources_locked(home_path: Path) -> None:
+    """Locked implementation for :func:`_apply_external_secret_sources`."""
     home_key = str(Path(home_path).resolve())
     if home_key in _APPLIED_HOMES:
         return

@@ -20,8 +20,8 @@ class TestPersistentPool:
         import cron.scheduler as sched
 
         # Reset module state.
-        sched._parallel_pool = None
-        sched._parallel_pool_max_workers = None
+        sched._parallel_pools.clear()
+        sched._parallel_pool_max_workers.clear()
 
         pool1 = sched._get_parallel_pool(4)
         pool2 = sched._get_parallel_pool(4)
@@ -34,8 +34,8 @@ class TestPersistentPool:
         """New pool when max_workers changes."""
         import cron.scheduler as sched
 
-        sched._parallel_pool = None
-        sched._parallel_pool_max_workers = None
+        sched._parallel_pools.clear()
+        sched._parallel_pool_max_workers.clear()
 
         pool1 = sched._get_parallel_pool(2)
         pool2 = sched._get_parallel_pool(4)
@@ -47,13 +47,13 @@ class TestPersistentPool:
         """_shutdown_parallel_pool resets state."""
         import cron.scheduler as sched
 
-        sched._parallel_pool = None
-        sched._parallel_pool_max_workers = None
+        sched._parallel_pools.clear()
+        sched._parallel_pool_max_workers.clear()
         sched._get_parallel_pool(2)
 
         sched._shutdown_parallel_pool()
-        assert sched._parallel_pool is None
-        assert sched._parallel_pool_max_workers is None
+        assert not sched._parallel_pools
+        assert not sched._parallel_pool_max_workers
 
 
 class TestRunningJobGuard:
@@ -64,8 +64,8 @@ class TestRunningJobGuard:
         import cron.scheduler as sched
 
         # Reset state.
-        sched._parallel_pool = None
-        sched._parallel_pool_max_workers = None
+        sched._parallel_pools.clear()
+        sched._parallel_pool_max_workers.clear()
         sched._running_job_ids.clear()
 
         job = {
@@ -79,7 +79,7 @@ class TestRunningJobGuard:
         }
 
         # Simulate the job already running.
-        sched._running_job_ids.add("guard-job")
+        sched._running_job_ids.add(sched._inflight_key("guard-job"))
 
         dispatched = []
         monkeypatch.setattr(sched, "get_due_jobs", lambda: [job])
@@ -93,7 +93,7 @@ class TestRunningJobGuard:
         assert n == 0  # skipped, not dispatched
         assert dispatched == []
 
-        sched._running_job_ids.discard("guard-job")
+        sched._running_job_ids.discard(sched._inflight_key("guard-job"))
         sched._shutdown_parallel_pool()
 
 
@@ -144,15 +144,15 @@ class TestRunningJobGuard:
         future.set_result(result)
 
         assert claim_calls == [("queued-job", {"return_job": True})]
-        assert "queued-job" not in sched._running_job_ids
+        assert sched._inflight_key("queued-job") not in sched._running_job_ids
 
 
     def test_create_execution_failure_does_not_wedge_running_set(self, tmp_path, monkeypatch):
         """create_execution failures clear the running lock and still allow next jobs."""
         import cron.scheduler as sched
 
-        sched._parallel_pool = None
-        sched._parallel_pool_max_workers = None
+        sched._parallel_pools.clear()
+        sched._parallel_pool_max_workers.clear()
         sched._running_job_ids.clear()
 
         failing_job = {
@@ -206,8 +206,8 @@ class TestRunningJobGuard:
 
         assert n == 1
         assert called == ["healthy-job"]
-        assert "failing-job" not in sched._running_job_ids
-        assert "healthy-job" not in sched._running_job_ids
+        assert sched._inflight_key("failing-job") not in sched._running_job_ids
+        assert sched._inflight_key("healthy-job") not in sched._running_job_ids
 
         sched._shutdown_parallel_pool()
 
@@ -219,8 +219,8 @@ class TestSyncMode:
         """sync=True waits for jobs and returns actual results."""
         import cron.scheduler as sched
 
-        sched._parallel_pool = None
-        sched._parallel_pool_max_workers = None
+        sched._parallel_pools.clear()
+        sched._parallel_pool_max_workers.clear()
         sched._running_job_ids.clear()
 
         jobs = [
@@ -246,8 +246,8 @@ class TestSyncMode:
         """sync=False returns before parallel jobs finish (optimistic count)."""
         import cron.scheduler as sched
 
-        sched._parallel_pool = None
-        sched._parallel_pool_max_workers = None
+        sched._parallel_pools.clear()
+        sched._parallel_pool_max_workers.clear()
         sched._running_job_ids.clear()
 
         job = {
@@ -293,8 +293,8 @@ class TestWorkdirParallelPool:
         """sync=False returns immediately even when a workdir job is slow."""
         import cron.scheduler as sched
 
-        sched._parallel_pool = None
-        sched._parallel_pool_max_workers = None
+        sched._parallel_pools.clear()
+        sched._parallel_pool_max_workers.clear()
         sched._running_job_ids.clear()
 
         job = {
@@ -336,8 +336,8 @@ class TestWorkdirParallelPool:
         """A workdir job already in _running_job_ids is skipped on next tick."""
         import cron.scheduler as sched
 
-        sched._parallel_pool = None
-        sched._parallel_pool_max_workers = None
+        sched._parallel_pools.clear()
+        sched._parallel_pool_max_workers.clear()
         sched._running_job_ids.clear()
 
         job = {
@@ -352,7 +352,7 @@ class TestWorkdirParallelPool:
         }
 
         # Simulate the job already running.
-        sched._running_job_ids.add("guard-seq")
+        sched._running_job_ids.add(sched._inflight_key("guard-seq"))
 
         dispatched = []
         monkeypatch.setattr(sched, "get_due_jobs", lambda: [job])
@@ -366,7 +366,7 @@ class TestWorkdirParallelPool:
         assert n == 0  # skipped, not dispatched
         assert dispatched == []
 
-        sched._running_job_ids.discard("guard-seq")
+        sched._running_job_ids.discard(sched._inflight_key("guard-seq"))
         sched._shutdown_parallel_pool()
 
 
@@ -376,8 +376,8 @@ class TestProfileSequentialPool:
     def test_profile_job_uses_sequential_pool_without_blocking_ticker(self, monkeypatch):
         import cron.scheduler as sched
 
-        sched._parallel_pool = None
-        sched._parallel_pool_max_workers = None
+        sched._parallel_pools.clear()
+        sched._parallel_pool_max_workers.clear()
         sched._sequential_pool = None
         sched._running_job_ids.clear()
 
@@ -408,7 +408,7 @@ class TestProfileSequentialPool:
         assert sched.tick(verbose=False, sync=False) == 1
         assert time.monotonic() - start < 1.0
         assert sched._sequential_pool is not None
-        assert sched._parallel_pool is None
+        assert not sched._parallel_pools
 
         barrier.wait()
         time.sleep(0.1)
@@ -424,8 +424,8 @@ class TestTickBatchAdvance:
     def test_tick_calls_advance_next_runs_once_with_all_due_ids(self, tmp_path, monkeypatch):
         import cron.scheduler as sched
 
-        sched._parallel_pool = None
-        sched._parallel_pool_max_workers = None
+        sched._parallel_pools.clear()
+        sched._parallel_pool_max_workers.clear()
         sched._running_job_ids.clear()
 
         jobs = [

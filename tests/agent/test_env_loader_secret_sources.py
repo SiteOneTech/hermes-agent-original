@@ -135,6 +135,98 @@ def test_apply_external_secret_sources_records_bitwarden_origin(tmp_path, monkey
     )
 
 
+def test_global_external_apply_serializes_against_profile_refresh(tmp_path, monkeypatch):
+    """An older global fetch cannot publish after a newer profile refresh.
+
+    The legacy dotenv path writes process-global source caches. It must hold the
+    same cache lock through fetch and publication as the private profile refresh
+    APIs, or an older delayed fetch can overwrite a newer snapshot.
+    """
+    import threading
+
+    from agent import secret_scope
+    from agent.secret_sources import registry as reg_module
+    import agent.secret_sources.bitwarden as bw_module
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("BWS_ACCESS_TOKEN", "test-bootstrap")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    (tmp_path / ".env").write_text("BWS_ACCESS_TOKEN=test-bootstrap\n", encoding="utf-8")
+    (tmp_path / "config.yaml").write_text(
+        "secrets:\n"
+        "  bitwarden:\n"
+        "    enabled: true\n"
+        "    project_id: test-project\n"
+        "    access_token_env: BWS_ACCESS_TOKEN\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(bw_module, "find_bws", lambda **_kw: Path("/fake/bws"))
+    first_fetch_started = threading.Event()
+    release_first_fetch = threading.Event()
+    reset_entered = threading.Event()
+    apply_errors: list[BaseException] = []
+    refresh_errors: list[BaseException] = []
+    fetched = 0
+
+    def fake_fetch(**_kwargs):
+        nonlocal fetched
+        fetched += 1
+        if fetched == 1:
+            first_fetch_started.set()
+            assert release_first_fetch.wait(timeout=5)
+            return {"ANTHROPIC_API_KEY": "older-value"}, []
+        return {"ANTHROPIC_API_KEY": "newer-value"}, []
+
+    monkeypatch.setattr(bw_module, "fetch_bitwarden_secrets", fake_fetch)
+    reg_module._reset_registry_for_tests()
+    original_reset = env_loader._reset_secret_source_cache_locked
+
+    def tracked_reset(home):
+        reset_entered.set()
+        return original_reset(home)
+
+    monkeypatch.setattr(env_loader, "_reset_secret_source_cache_locked", tracked_reset)
+    was_multiplex = secret_scope.is_multiplex_active()
+    secret_scope.set_multiplex_active(False)
+    refreshed: dict[str, str] = {}
+
+    def global_apply():
+        try:
+            env_loader.load_hermes_dotenv(hermes_home=tmp_path)
+        except BaseException as exc:
+            apply_errors.append(exc)
+
+    def refresh_scope():
+        try:
+            refreshed.update(env_loader.refresh_profile_secret_scope(tmp_path))
+        except BaseException as exc:
+            refresh_errors.append(exc)
+
+    apply_thread = threading.Thread(target=global_apply, daemon=True)
+    refresh_thread = threading.Thread(target=refresh_scope, daemon=True)
+    apply_thread.start()
+    assert first_fetch_started.wait(timeout=5)
+    refresh_thread.start()
+    try:
+        # The refresh cannot enter reset while the earlier global source fetch
+        # still owns the shared cache lifecycle lock.
+        assert not reset_entered.wait(timeout=0.1)
+    finally:
+        release_first_fetch.set()
+        apply_thread.join(timeout=5)
+        refresh_thread.join(timeout=5)
+        secret_scope.set_multiplex_active(was_multiplex)
+        reg_module._reset_registry_for_tests()
+
+    assert not apply_thread.is_alive()
+    assert not refresh_thread.is_alive()
+    assert not apply_errors
+    assert not refresh_errors
+    assert reset_entered.is_set()
+    assert refreshed["ANTHROPIC_API_KEY"] == "newer-value"
+    assert env_loader.get_secret_source_values(tmp_path)["ANTHROPIC_API_KEY"] == "newer-value"
+
+
 def test_cold_profile_bitwarden_uses_profile_bootstrap_without_global_env(
     tmp_path, monkeypatch
 ):
@@ -202,6 +294,34 @@ def test_single_profile_scoped_load_keeps_override_behavior(tmp_path, monkeypatc
         assert (other_home / ".env") in loaded
     finally:
         os.environ.pop("HERMES_TEST_SHARED_ADAPTER_CONFIG", None)
+
+
+def test_strict_routed_scope_dotenv_load_never_publishes_into_process_env(tmp_path, monkeypatch):
+    """A non-multiplex routed cron/profile scope is as isolated as a multiplex turn."""
+    from agent import secret_scope
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+    launch_home = tmp_path / "launch"
+    routed_home = tmp_path / "profiles" / "secondary"
+    launch_home.mkdir()
+    routed_home.mkdir(parents=True)
+    (routed_home / ".env").write_text("ROUTED_ONLY_API_KEY=must-not-publish\n", encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(launch_home))
+    monkeypatch.delenv("ROUTED_ONLY_API_KEY", raising=False)
+
+    home_token = set_hermes_home_override(routed_home)
+    scope_token = secret_scope.set_secret_scope({"ROUTED_ONLY_API_KEY": "must-not-publish"})
+    strict_token = secret_scope.set_secret_scope_strict(True)
+    previous = secret_scope.set_multiplex_active(False)
+    try:
+        assert env_loader.load_hermes_dotenv(hermes_home=routed_home) == []
+    finally:
+        secret_scope.set_multiplex_active(previous)
+        secret_scope.reset_secret_scope_strict(strict_token)
+        secret_scope.reset_secret_scope(scope_token)
+        reset_hermes_home_override(home_token)
+
+    assert "ROUTED_ONLY_API_KEY" not in os.environ
 
 
 def test_multiplex_dotenv_load_hydrates_sources_without_global_env(

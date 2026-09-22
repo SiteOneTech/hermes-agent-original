@@ -1,14 +1,14 @@
 ---
-title: "Kanban Orchestrator"
+title: "Kanban Orchestrator — Decomposition playbook for the Kanban orchestrator role"
 sidebar_label: "Kanban Orchestrator"
-description: "Decomposition playbook + anti-temptation rules for an orchestrator profile routing work through Kanban"
+description: "Decomposition playbook for the Kanban orchestrator role"
 ---
 
 {/* This page is auto-generated from the skill's SKILL.md by website/scripts/generate-skill-docs.py. Edit the source SKILL.md, not this page. */}
 
 # Kanban Orchestrator
 
-Decomposition playbook + anti-temptation rules for an orchestrator profile routing work through Kanban. The "don't do the work yourself" rule and the basic lifecycle are auto-injected into every kanban worker's system prompt; this skill is the deeper playbook when you're specifically playing the orchestrator role.
+Decomposition playbook for the Kanban orchestrator role.
 
 ## Skill metadata
 
@@ -17,9 +17,11 @@ Decomposition playbook + anti-temptation rules for an orchestrator profile routi
 | Source | Bundled (installed by default) |
 | Path | `skills/devops/kanban-orchestrator` |
 | Version | `3.0.0` |
+| Author | Teknium (teknium1), Hermes Agent |
+| License | MIT |
 | Platforms | linux, macos, windows |
 | Tags | `kanban`, `multi-agent`, `orchestration`, `routing` |
-| Related skills | [`kanban-worker`](/docs/user-guide/skills/bundled/devops/devops-kanban-worker) |
+| Related skills | [`kanban-worker`](../../bundled/devops/devops-kanban-worker.md) |
 
 ## Reference: full SKILL.md
 
