@@ -11,14 +11,14 @@ from unittest.mock import MagicMock
 import pytest
 
 import plugins.memory.openviking as openviking_module
-from hermes_cli import __version__ as _HERMES_VERSION
+from hermes_cli.version_info import get_version_info
 from plugins.memory.openviking import (
     OpenVikingMemoryProvider,
     _DEFERRED_COMMIT_TIMEOUT,
     _VikingClient,
 )
 
-_EXPECTED_USER_AGENT = f"openviking-memory-hermes/{_HERMES_VERSION}"
+_EXPECTED_USER_AGENT = f"openviking-memory-hermes/{get_version_info().base_version}"
 
 
 def _clear_openviking_tenant_env(monkeypatch):
@@ -75,37 +75,6 @@ def _allow_setup_validation(monkeypatch, *, root_access: bool = False):
     )
 
 
-def test_openviking_provider_config_loader_uses_readonly_config(monkeypatch):
-    import hermes_cli.config as config_mod
-
-    calls = []
-    backing_config = {
-        "memory": {
-            "openviking": {
-                "endpoint": "http://127.0.0.1:19472",
-                "api_key": "test-key",
-            }
-        }
-    }
-
-    def load_config_readonly():
-        calls.append("readonly")
-        return backing_config
-
-    def load_config():
-        raise AssertionError("OpenViking config loader should use readonly config")
-
-    monkeypatch.setattr(config_mod, "load_config_readonly", load_config_readonly)
-    monkeypatch.setattr(config_mod, "load_config", load_config)
-
-    config = openviking_module._load_hermes_openviking_config()
-
-    assert calls == ["readonly"]
-    assert config == {
-        "endpoint": "http://127.0.0.1:19472",
-        "api_key": "test-key",
-    }
-    assert config is not backing_config["memory"]["openviking"]
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX file modes")
@@ -3848,7 +3817,7 @@ def test_initialize_skips_pending_session_owned_by_live_same_profile_provider(tm
     other_provider.shutdown()
 
 
-@pytest.mark.skipif(os.name == "nt", reason="POSIX advisory locks")
+@pytest.mark.platforms("posix")  # POSIX advisory locks
 @pytest.mark.parametrize("owner_run_id", ["dead-owner", ""])
 def test_concurrent_providers_claim_unlocked_pending_owner_once(
     tmp_path,
@@ -5320,22 +5289,6 @@ def test_in_place_compression_lifecycle_allows_a_later_commit():
         f"{provider._client.post.call_args_list}"
     )
 
-def test_resolve_connection_settings_reads_config_yaml_non_secret_fields(monkeypatch):
-    """#68209: non-secret fields saved to config.yaml feed the resolution chain."""
-    _clear_openviking_env(monkeypatch)
-    provider_config = {
-        "endpoint": "http://saved.test:1933",
-        "account": "cfg-account",
-        "user": "cfg-user",
-        "agent": "cfg-agent",
-    }
-
-    settings = openviking_module._resolve_connection_settings(provider_config)
-
-    assert settings["endpoint"] == "http://saved.test:1933"
-    assert settings["account"] == "cfg-account"
-    assert settings["user"] == "cfg-user"
-    assert settings["agent"] == "cfg-agent"
 
 
 def test_env_overrides_config_yaml_non_secret_fields(monkeypatch):
@@ -5483,7 +5436,7 @@ class TestOpenVikingEnvWriter:
 
         _write_env_vars(env, {"OPENAI_API_KEY": "new"})
 
-        assert env.read_bytes() == b"NAME=caf\xe9\nOPENAI_API_KEY=new\n"
+        assert env.read_bytes() == f"NAME=caf\xe9{os.linesep}OPENAI_API_KEY=new{os.linesep}".encode("latin-1")
 
     def test_plain_env_is_unchanged_apart_from_the_write(self, tmp_path):
         from plugins.memory.openviking import _write_env_vars

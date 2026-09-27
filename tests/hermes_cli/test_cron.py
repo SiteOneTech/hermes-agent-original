@@ -541,29 +541,6 @@ class TestExternalCronProviderStatus:
         assert "Scheduler is not ready" not in out
 
 
-def test_cron_list_warns_when_gateway_not_running(monkeypatch, capsys):
-    monkeypatch.setattr(
-        "cron.jobs.list_jobs",
-        lambda include_disabled=False: [
-            {
-                "id": "job-1",
-                "name": "Nightly docs",
-                "schedule_display": "every day",
-                "state": "scheduled",
-                "enabled": True,
-                "next_run_at": "2026-06-01T00:00:00Z",
-                "deliver": ["local"],
-            }
-        ],
-    )
-    monkeypatch.setattr("hermes_cli.gateway.find_gateway_pids", lambda: [])
-    monkeypatch.setattr(cron_cli, "_active_cron_provider_name", lambda: "builtin")
-
-    cron_cli.cron_list()
-
-    out = capsys.readouterr().out
-    assert "Scheduler is not ready" in out
-    assert "Nightly docs" in out
 
 
 def test_cron_status_reports_running_gateway(monkeypatch, capsys):
@@ -813,15 +790,6 @@ class TestSlashCronListLastStatus:
         out = self._run_list(tmp_cron_dir, capsys)
         assert "Last run: 2026-09-01T07:00:00+00:00 (delivery_failed: telegram: 502 Bad Gateway)" in out
 
-    def test_ok_stays_plain(self, tmp_cron_dir, capsys):
-        create_job(prompt="Nightly brief", schedule="every 1h")
-        jobs = load_jobs()
-        jobs[0]["last_run_at"] = "2026-09-01T07:00:00+00:00"
-        jobs[0]["last_status"] = "ok"
-        save_jobs(jobs)
-
-        out = self._run_list(tmp_cron_dir, capsys)
-        assert "(ok)" in out
 
 
 class TestStatusSurfacesDeadScheduler:

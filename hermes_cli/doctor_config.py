@@ -3,8 +3,8 @@ Split out of ``hermes_cli/doctor.py``."""
 
 from __future__ import annotations
 
+import codecs
 import os
-import shutil
 from hermes_cli.doctor_report import (
     Finding, _fail_and_issue, _section, check_bool, check_fail, check_info, check_ok, check_warn, doctor_check,
     warn_on_error,
@@ -18,11 +18,18 @@ def _has_provider_env_config(content: str) -> bool:
 
 
 def _read_doctor_env_text(path) -> str:
-    """Read a Hermes .env file with the env loader's UTF-8 → latin-1 fallback."""
+    """Read a Hermes .env file with the env loader's UTF-8 → latin-1 fallback.
+
+    ``utf-8-sig``, not plain ``utf-8``: a PowerShell 5.1 / Notepad BOM would otherwise leave
+    U+FEFF on the first key name, exactly as in ``env_loader._load_dotenv_with_fallback``.
+    """
+    raw = path.read_bytes()
     try:
-        return path.read_text(encoding="utf-8")
+        return raw.decode("utf-8-sig")
     except UnicodeDecodeError:
-        return path.read_text(encoding="latin-1")
+        if raw.startswith(codecs.BOM_UTF8):  # utf-8-sig can't strip it once we decode latin-1
+            raw = raw[len(codecs.BOM_UTF8):]
+        return raw.decode("latin-1")
 
 
 def _runtime_secrets_path():
@@ -346,14 +353,9 @@ def _check_config_file(should_fix: bool, f: Finding) -> None:
     elif (PROJECT_ROOT / 'cli-config.yaml').exists():
         check_ok("cli-config.yaml exists (in project directory)")
     elif should_fix:
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        example_config = PROJECT_ROOT / 'cli-config.yaml.example'
-        if example_config.exists():
-            shutil.copy2(str(example_config), str(config_path))
-        else:
-            from hermes_cli.config import DEFAULT_CONFIG, save_config
-            save_config(DEFAULT_CONFIG)
-        check_ok(f"Created {_DHH}/config.yaml from {'cli-config.yaml.example' if example_config.exists() else 'defaults'}")
+        from hermes_cli.config import seed_config_file
+        from_template = seed_config_file(config_path, PROJECT_ROOT / 'cli-config.yaml.example')
+        check_ok(f"Created {_DHH}/config.yaml from {'cli-config.yaml.example' if from_template else 'defaults'}")
         f.fixed += 1
     else:
         check_warn("config.yaml not found", "(using defaults)")
@@ -497,6 +499,37 @@ _CONFIG_DRIFT_STEPS = (
 )
 
 
+def _check_channel_record_hygiene() -> None:
+    """Stale per-install channel records (``update.installs.<sha16>``).
+
+    Same report-don't-delete posture as the state sweep. Three shapes
+    (hermes_cli.update_channel.stale_channel_records): a record whose path
+    holds a DIFFERENT install now (``replaced``), a record whose path is
+    gone (``missing``), and a record no live install-state folder claims
+    (``unclaimed``). Keep-on-doubt: doctor names the config key, the user
+    removes it.
+    """
+    try:
+        from hermes_cli.config import load_config
+        from hermes_cli.update_channel import stale_channel_records
+
+        stale = stale_channel_records(load_config() or {})
+    except Exception as exc:
+        check_warn("Channel-record hygiene unreadable", f"({exc})")
+        return
+    if not stale:
+        return
+    for sha16, record, reason in stale:
+        recorded = record.get("path") or "<no path>"
+        if reason == "replaced":
+            detail = f"(the install at {recorded} is a different install now — stale channel entry)"
+        elif reason == "missing":
+            detail = f"(nothing at {recorded} — safe to remove update.installs.{sha16})"
+        else:  # unclaimed
+            detail = f"(no live install claims {sha16} — safe to remove update.installs.{sha16})"
+        check_warn(f"Stale channel record: {sha16}", detail)
+
+
 @doctor_check()
 def _check_config_drift(should_fix: bool, f: Finding) -> None:
     """Config version, stale root keys, HERMES_MAX_ITERATIONS ghost, deprecations, structure.
@@ -510,6 +543,9 @@ def _check_config_drift(should_fix: bool, f: Finding) -> None:
     for step in _CONFIG_DRIFT_STEPS if config_path else (_drift_deprecations,):
         with warn_on_error(""):
             step(f, should_fix, config_path)
+    # Stale per-install update-channel records (update.installs.<sha16>):
+    # report-don't-delete, same posture as the state sweep.
+    _check_channel_record_hygiene()
 
 
 @doctor_check("xAI retirement check skipped", "({e})")

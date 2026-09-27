@@ -98,7 +98,8 @@ def git_repo_remote_no_tracking(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Lightweight reimplementations for testing (avoid importing cli.py)
+# Lightweight reimplementations for tests that predate worktree_ops extraction.
+# Newer coverage below imports the real production functions through cli/worktree_ops.
 # ---------------------------------------------------------------------------
 
 def _git_repo_root(cwd=None):
@@ -165,11 +166,7 @@ def _has_unpushed_commits(worktree_path, timeout=10):
 
 
 def _cleanup_worktree(info):
-    """Test version of _cleanup_worktree.
-
-    Preserves the worktree only if it has unpushed commits.
-    Dirty working tree alone is not enough to keep it.
-    """
+    """Test version of _cleanup_worktree."""
     wt_path = info["path"]
     branch = info["branch"]
     repo_root = info["repo_root"]
@@ -178,7 +175,7 @@ def _cleanup_worktree(info):
         return
 
     if _has_unpushed_commits(wt_path, timeout=10):
-        return False  # Did not clean up — has unpushed commits
+        return False
 
     subprocess.run(
         ["git", "worktree", "remove", wt_path, "--force"],
@@ -188,7 +185,7 @@ def _cleanup_worktree(info):
         ["git", "branch", "-D", branch],
         capture_output=True, text=True, timeout=10, cwd=repo_root,
     )
-    return True  # Cleaned up
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -1033,9 +1030,8 @@ class TestSystemPromptInjection:
 class TestWorktreeLockReaping:
     """Exercise the REAL cli._prune_stale_worktrees lock/dirty/unpushed logic.
 
-    Unlike the reimplementation-based tests above, these import the actual
-    production functions so the behavior contract is enforced against the
-    shipped code:
+    These import the actual production functions so the behavior contract is
+    enforced against the shipped code:
 
     - live-locked (owning pid running)  -> never reaped, any age
     - dead-locked clean (owning pid gone) -> unlocked + reaped (fixes the
@@ -1117,7 +1113,6 @@ class TestWorktreeLockReaping:
         cli._prune_stale_worktrees(str(git_repo))
         assert wt.exists(), "worktree under 24h must never be pruned"
 
-
 class TestWorktreeLockPredicate:
     """_worktree_lock_is_live classification (real cli helper)."""
 
@@ -1135,7 +1130,6 @@ class TestWorktreeLockPredicate:
         return p
 
     def test_unlocked_returns_none(self, git_repo):
-        import cli
         p = git_repo / ".worktrees" / "hermes-x"
         (git_repo / ".worktrees").mkdir(exist_ok=True)
         subprocess.run(
@@ -1155,12 +1149,10 @@ class TestWorktreeLockPredicate:
         assert worktree_ops._worktree_lock_is_live(str(git_repo), str(p)) == "dead"
 
     def test_foreign_lock_reason_returns_dead(self, git_repo):
-        import cli
         p = self._mk_locked(git_repo, "hermes-foreign", "some other tool")
         assert worktree_ops._worktree_lock_is_live(str(git_repo), str(p)) == "dead"
 
     def test_bad_repo_root_fails_safe_to_live(self, tmp_path):
-        import cli
         # Not a git repo -> git query fails -> must report "live" (never delete)
         assert worktree_ops._worktree_lock_is_live(str(tmp_path), str(tmp_path / "x")) == "live"
 
@@ -1369,7 +1361,6 @@ class TestMergeVerdictCache:
 
     def test_cache_hit_matches_uncached_verdict(self, git_repo):
         """A cached verdict must equal what the real git call returns."""
-        import cli
         wt, sha = self._mk(git_repo, "hermes-cachehit", commit=True)
         self._merge_upstream(git_repo, sha)
 
@@ -1395,7 +1386,6 @@ class TestMergeVerdictCache:
         This is the guard against the cache turning a 'merged, reapable' verdict
         into a stale approval to delete a tree that has since gained real work.
         """
-        import cli
         wt, sha = self._mk(git_repo, "hermes-moves", commit=True)
         self._merge_upstream(git_repo, sha)
 
@@ -1450,7 +1440,6 @@ class TestMergeVerdictCache:
 
     def test_cache_is_bounded(self, monkeypatch, tmp_path):
         """The cache file must not grow without limit across sessions."""
-        import cli
         from hermes_cli import worktree_ops
         path = tmp_path / "verdicts.json"
         monkeypatch.setattr(worktree_ops, "_worktree_merge_cache_path", lambda: path)
@@ -1549,7 +1538,6 @@ class TestPruneParallelEquivalence:
 
         cli._prune_stale_worktrees(str(git_repo))
         assert not wt.exists(), "serial fallback must still reap the merged tree"
-
 
 
 class TestShallowCloneDeepening:
@@ -1691,7 +1679,6 @@ class TestShallowCloneDeepening:
         )
 
     def test_deepen_noop_on_full_clone(self, git_repo):
-        import cli
         assert worktree_ops._deepen_shallow_repo(str(git_repo)) is True
 
     def test_real_unpushed_work_survives_deepening(self, tmp_path):
@@ -1710,6 +1697,7 @@ class TestShallowCloneDeepening:
         )
 
 
+@pytest.mark.platforms("linux")
 class TestPrMergedEscapeHatch:
     """Rebase-merged PRs whose diff changed during salvage defeat ``git
     cherry`` (patch-id mismatch), so the pruner asks GitHub whether the
@@ -1789,7 +1777,6 @@ class TestPrMergedEscapeHatch:
     def test_merged_verdict_memoized_by_branch_and_head(
         self, git_repo, tmp_path, monkeypatch
     ):
-        import cli
         wt = self._mk_diverged(git_repo, "hermes-memo")
         self._stub_gh(tmp_path, monkeypatch)
         cache: dict = {}
@@ -1801,7 +1788,6 @@ class TestPrMergedEscapeHatch:
         assert worktree_ops._worktree_branch_pr_merged(str(wt), cache=cache) is True
 
     def test_negative_verdict_not_cached(self, git_repo, tmp_path, monkeypatch):
-        import cli
         wt = self._mk_diverged(git_repo, "hermes-nocache-neg")
         self._stub_gh(tmp_path, monkeypatch, stdout="[]")
         cache: dict = {}

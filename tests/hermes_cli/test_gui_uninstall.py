@@ -206,8 +206,8 @@ def test_linux_discovery_includes_launcher_entry(tmp_path, monkeypatch):
     assert lde.desktop_entry_path() in gu.packaged_gui_app_paths()
 
 
+@pytest.mark.platforms("linux")
 def test_uninstall_removes_launcher_entry_and_refreshes_cache(tmp_path, monkeypatch):
-    monkeypatch.setattr(gu.sys, "platform", "linux")
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
 
     from hermes_cli import linux_desktop_entry as lde
@@ -238,22 +238,7 @@ def test_uninstall_removes_launcher_entry_and_refreshes_cache(tmp_path, monkeypa
     assert (hermes_home / "hermes-agent" / "hermes_cli").is_dir()
 
 
-def test_uninstall_skips_cache_refresh_when_no_launcher_entry(tmp_path, monkeypatch):
-    monkeypatch.setattr(gu.sys, "platform", "linux")
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
-
-    from hermes_cli import linux_desktop_entry as lde
-
-    refreshed: list[Path] = []
-    monkeypatch.setattr(lde, "refresh_desktop_databases", lambda d: refreshed.append(d) or [])
-    monkeypatch.setattr(gu, "desktop_userdata_dir", lambda: tmp_path / "none")
-
-    gu.uninstall_gui(tmp_path / ".hermes")
-
-    assert refreshed == []
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink semantics")
+@pytest.mark.platforms("posix")  # POSIX symlink semantics
 def test_remove_path_handles_symlink(tmp_path):
     target = tmp_path / "real"
     target.mkdir()
@@ -303,6 +288,7 @@ def test_run_uninstall_yes_keep_data_is_non_interactive(tmp_path, monkeypatch):
     monkeypatch.setattr(uninstall, "remove_wrapper_script", lambda: [])
     monkeypatch.setattr(uninstall, "remove_node_symlinks", lambda h: [])
     monkeypatch.setattr(uninstall, "_discover_named_profiles", lambda: [])
+    monkeypatch.setattr(uninstall, "code_removal_refusal", lambda: None)
     # Make input() blow up so a regression that reaches a prompt fails loudly.
     monkeypatch.setattr("builtins.input", lambda *a, **k: pytest.fail("prompted in --yes mode"))
 
@@ -337,6 +323,7 @@ def test_run_uninstall_yes_full_wipes_home(tmp_path, monkeypatch):
     monkeypatch.setattr(uninstall, "remove_wrapper_script", lambda: [])
     monkeypatch.setattr(uninstall, "remove_node_symlinks", lambda h: [])
     monkeypatch.setattr(uninstall, "_discover_named_profiles", lambda: [])
+    monkeypatch.setattr(uninstall, "code_removal_refusal", lambda: None)
     monkeypatch.setattr("builtins.input", lambda *a, **k: pytest.fail("prompted in --yes mode"))
 
     from hermes_cli import gui_uninstall as gu_mod

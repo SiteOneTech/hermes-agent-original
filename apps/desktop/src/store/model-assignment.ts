@@ -1,5 +1,5 @@
 import type { HermesConnection } from '@/global'
-import { getApiRequestProfile, setModelAssignment } from '@/hermes'
+import { getApiRequestProfile, type ProfileScope, setModelAssignment } from '@/hermes'
 import { translateNow } from '@/i18n'
 import { requestCronReview } from '@/store/cron'
 import { dismissNotification, notify } from '@/store/notifications'
@@ -214,7 +214,7 @@ function confirmModelWarning(message: string): Promise<boolean> {
 
 export async function setMainModelAssignment(
   request: Omit<ModelAssignmentRequest, 'scope'>,
-  scopeProfile?: null | string,
+  scopeProfile?: ProfileScope,
   options?: { skipConfirmPrompt?: boolean }
 ): Promise<ModelAssignmentResponse> {
   const { connection, generation } = beginCronImpactAssignment()

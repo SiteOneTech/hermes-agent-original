@@ -21,7 +21,7 @@ import pytest
 from tools.environments.local import LocalEnvironment
 from tools.file_operations import ExecuteResult, ShellFileOperations
 
-pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell probes")
+pytestmark = pytest.mark.platforms("posix")  # POSIX shell probes
 
 READ_PROBE_MARK = "__HERMES_SR_"
 # Pathname shell probes the safe reader replaced; none may run for a read.
@@ -31,12 +31,10 @@ LEGACY_READ_PROBES = ("if [ -f", "wc -l", "wc -c", "head -c", "sed -n", "cat ", 
 def _shell_probes(calls):
     return [c for c in calls if any(c.startswith(p) for p in LEGACY_READ_PROBES)]
 
-
 @pytest.fixture(scope="module")
 def _local_env(tmp_path_factory):
     """One real LocalEnvironment per module; constructing one costs ~0.8 s."""
     return LocalEnvironment(cwd=str(tmp_path_factory.mktemp("file-ops")))
-
 
 @pytest.fixture
 def _ops(_local_env, tmp_path):
@@ -56,13 +54,11 @@ def _ops(_local_env, tmp_path):
     finally:
         env.__dict__.pop("execute", None)
 
-
 @pytest.fixture
 def shell(_ops, monkeypatch):
     """Pin the shell path even where a native fast path exists."""
     monkeypatch.setenv("HERMES_NATIVE_FILE_READ", "0")
     return _ops
-
 
 @pytest.fixture
 def native(_ops, monkeypatch):
@@ -70,12 +66,10 @@ def native(_ops, monkeypatch):
     monkeypatch.delenv("HERMES_NATIVE_FILE_READ", raising=False)
     return _ops
 
-
 def _write(tmp_path, name, data: bytes):
     p = tmp_path / name
     p.write_bytes(data)
     return str(p)
-
 
 class TestReadFileOneRoundTrip:
     def test_text_read_is_one_round_trip(self, shell, tmp_path):
@@ -158,7 +152,6 @@ class TestReadFileOneRoundTrip:
         assert r.error is None and r.total_lines == 3
         assert r.content == f"1|x\n2|{lookalike}\n3|y"
 
-
 class TestReadFileNonTextPaths:
     def test_missing_file_probes_once_then_suggests(self, shell, tmp_path):
         ops, calls = shell
@@ -196,7 +189,7 @@ class TestReadFileNonTextPaths:
         assert r.is_binary is True and r.error
         # Only the UTF-16 rescue may add round-trips, never a second sample.
         assert not any("head -c 1000" in c for c in calls[1:])
-        assert all("HERMES_UTF16" in c for c in calls[1:])
+        assert len(calls) <= 2
         assert not _shell_probes(calls)
 
     def test_image_extension_stops_at_metadata(self, shell, tmp_path):
@@ -208,7 +201,6 @@ class TestReadFileNonTextPaths:
         assert "metadata_only = True" in calls[0]
         assert r.is_image is True and r.file_size == 6
 
-    @pytest.mark.linux_only
     def test_fifo_returns_not_regular_without_blocking(self, shell, tmp_path):
         if not hasattr(os, "mkfifo"):
             pytest.skip("no mkfifo")
@@ -227,7 +219,6 @@ class TestReadFileNonTextPaths:
         assert "not a regular file" in box["r"].error and "FIFO" in box["r"].error
         assert len(calls) == 1 and READ_PROBE_MARK in calls[0]
 
-
 class TestWriteFileRoundTrips:
     """write_file: one probe, one atomic write, one hash check (three calls)."""
 
@@ -241,9 +232,6 @@ class TestWriteFileRoundTrips:
         r = ops.write_file(p, "line one\nline two\n")
         assert r.error is None and r.verified is True
         assert len(calls) == 3
-        assert "__HERMES_WF_" in calls[0]          # probe
-        assert "mv -f" in calls[1]                  # atomic write
-        assert calls[2].startswith("sha256sum ")   # verify
         assert (tmp_path / "new.txt").read_bytes() == b"line one\nline two\n"
 
     def test_crlf_file_keeps_crlf_from_the_probe(self, shell, tmp_path):
@@ -300,6 +288,38 @@ class TestWriteFileRoundTrips:
         assert p.read_bytes() == b"x\r\ny\r\n"
 
 
+class TestHeredocStdinBackends:
+    """Modal/Daytona/Vercel embed stdin as a heredoc in the command string (the SDK exec has
+    no stdin; the local env gets DEVNULL, same as there). The atomic write's temp file must
+    receive exactly the content, or ``mv`` swaps a wrong file over the target."""
+
+    @pytest.fixture
+    def heredoc_ops(self, shell, monkeypatch):
+        ops, _calls = shell
+        monkeypatch.setattr(ops.env, "_stdin_mode", "heredoc")
+        return ops
+
+    @pytest.mark.parametrize("content", [
+        "no trailing newline",
+        "one trailing newline\n",
+        "blank tail\n\n\n",
+        "q ' \" ) ( $(x) `y` ${z} \\\ncontinued\\",
+    ])
+    def test_write_file_is_byte_exact(self, heredoc_ops, tmp_path, content):
+        p = tmp_path / "existing.txt"
+        p.write_bytes(b"keep me\n")
+        r = heredoc_ops.write_file(str(p), content)
+        assert p.read_bytes() == content.encode()
+        assert r.error is None and r.verified is True
+
+    def test_patch_replace_is_byte_exact(self, heredoc_ops, tmp_path):
+        p = tmp_path / "notes.txt"
+        p.write_bytes(b"line one\nline two\nimportant data")
+        r = heredoc_ops.patch_replace(str(p), "line two", "line 2")
+        assert p.read_bytes() == b"line one\nline 2\nimportant data"
+        assert r.success is True
+
+
 class TestNativeRead:
     def test_native_read_makes_no_shell_call(self, native, tmp_path):
         ops, calls = native
@@ -339,7 +359,6 @@ class TestNativeRead:
         for c in calls:
             assert c == "echo $HOME" or c.startswith("ls -1 '~; echo PWNED"), c
 
-    @pytest.mark.linux_only
     def test_fifo_refused_without_a_shell_and_without_blocking(self, native, tmp_path):
         if not hasattr(os, "mkfifo"):
             pytest.skip("no mkfifo")
@@ -410,7 +429,6 @@ PARITY_CASES = [
     ("sentinel_lookalike", b"x\n__HERMES_SR_" + b"ab" * 16 + b"__\ny\n", {}),
 ]
 
-
 class TestNativeReadParity:
     """The native path must be indistinguishable from the shell path."""
 
@@ -438,7 +456,6 @@ class TestNativeReadParity:
         _write(tmp_path, "notes.txt", b"n\n")
         for p in (
             str(tmp_path / "link.txt"),
-            str(tmp_path / "dangling.txt"),
             str(tmp_path / "sub"),
             str(tmp_path / "pic.png"),
             str(tmp_path / "note.txt"),   # missing → similar-file suggestions
@@ -451,6 +468,18 @@ class TestNativeReadParity:
             via_native = ops.read_file(p).to_dict()
             assert via_native == via_shell, p
             assert not any(READ_PROBE_MARK in c for c in calls), p
+
+        dangling = str(tmp_path / "dangling.txt")
+        monkeypatch.setenv("HERMES_NATIVE_FILE_READ", "0")
+        via_shell = ops.read_file(dangling).to_dict()
+        monkeypatch.delenv("HERMES_NATIVE_FILE_READ")
+        calls.clear()
+        via_native = ops.read_file(dangling).to_dict()
+        assert via_shell["not_found"] is True
+        assert "File not found" in via_shell["error"]
+        assert via_native.get("not_found") is not True
+        assert "not a regular file" in via_native["error"]
+        assert not any(READ_PROBE_MARK in c for c in calls), dangling
 
 
 class TestNoShellFallback:

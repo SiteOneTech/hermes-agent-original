@@ -78,6 +78,10 @@ _CODING_TOOLS = _core_without(
     "image_generate", "text_to_speech", "cronjob_manage", "computer_use", *_HA_TOOLS, kanban=False,
 ) + ["todo"]
 
+# Toolsets a CLIENT adds to its own sessions (tui_gateway/server.py::_gui_surface_toolsets), never
+# config: another surface lacking them made no configuration choice.
+CLIENT_SURFACE_TOOLSETS = frozenset({"project", "desktop_ui"})
+
 # Core toolset definitions: individual tools or references to other toolsets.
 TOOLSETS = {
     # Basic toolsets - individual tool categories
