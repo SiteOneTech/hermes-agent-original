@@ -197,6 +197,107 @@ def test_run_one_job_exception_records_failure_alert_delivery_error(monkeypatch)
     ]
 
 
+def test_run_one_job_crash_delivery_exception_still_marks_run(monkeypatch):
+    """Crash-alert plumbing must not mask the original job failure bookkeeping."""
+    marked = []
+    finished = []
+
+    monkeypatch.setattr(s, "_launch_external_cron_worker", lambda _job: False)
+    monkeypatch.setattr(
+        s, "create_execution", lambda *_a, **_kw: {"id": "exec-delivery-boom"}
+    )
+    monkeypatch.setattr(s, "claim_dispatch", lambda _job_id: True)
+    monkeypatch.setattr(s, "mark_execution_running", lambda _execution_id: {})
+    monkeypatch.setattr(
+        s,
+        "run_job",
+        lambda *_a, **_kw: (_ for _ in ()).throw(RuntimeError("provider failed")),
+    )
+    monkeypatch.setattr(
+        s,
+        "_deliver_crash_failure",
+        lambda *_a, **_kw: (_ for _ in ()).throw(
+            RuntimeError("delivery classifier failed")
+        ),
+    )
+    monkeypatch.setattr(
+        s,
+        "mark_job_run",
+        lambda *args, **kwargs: marked.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        s,
+        "finish_execution",
+        lambda *args, **kwargs: finished.append((args, kwargs)),
+    )
+
+    assert s.run_one_job({"id": "j-delivery-boom", "deliver": "telegram"}) is False
+    assert marked == [
+        (
+            ("j-delivery-boom", False, "provider failed"),
+            {"delivery_error": "delivery classifier failed"},
+        )
+    ]
+    assert finished == [
+        (
+            ("exec-delivery-boom",),
+            {
+                "success": False,
+                "error": "provider failed",
+                "delivery_outcome": "failed",
+            },
+        )
+    ]
+
+
+def test_run_one_job_external_dispatch_delivery_exception_still_marks_run(monkeypatch):
+    """A pre-handoff dispatch failure is still marked if its failure alert crashes."""
+    marked = []
+    finished = []
+
+    monkeypatch.setattr(
+        s,
+        "_launch_external_cron_worker",
+        lambda _job: (_ for _ in ()).throw(RuntimeError("spawn failed")),
+    )
+    monkeypatch.setattr(
+        s,
+        "_deliver_crash_failure",
+        lambda *_a, **_kw: (_ for _ in ()).throw(RuntimeError("delivery failed")),
+    )
+    monkeypatch.setattr(
+        s,
+        "mark_job_run",
+        lambda *args, **kwargs: marked.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        s,
+        "finish_execution",
+        lambda *args, **kwargs: finished.append((args, kwargs)),
+    )
+
+    job = {
+        "id": "j-dispatch-boom",
+        "execution_id": "exec-dispatch-boom",
+        "fire_claim": {"by": "owner-1"},
+    }
+    assert s.run_one_job(job) is True
+
+    error = "Restart-safe cron worker dispatch failed: spawn failed"
+    assert marked == [
+        (
+            ("j-dispatch-boom", False, error),
+            {"delivery_error": "delivery failed", "expected_fire_owner": "owner-1"},
+        )
+    ]
+    assert finished == [
+        (
+            ("exec-dispatch-boom",),
+            {"success": False, "error": error, "delivery_outcome": "failed"},
+        )
+    ]
+
+
 def _patch_escaped_failure(monkeypatch, delivered, *, exec_id, err):
     """Make run_job raise, and capture what the escape handler delivers."""
     monkeypatch.setattr(s, "create_execution", lambda *_a, **_kw: {"id": exec_id})

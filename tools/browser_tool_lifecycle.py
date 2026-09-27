@@ -732,10 +732,18 @@ def cleanup_all_browsers() -> None:
     _bt._chromium_autoinstall_attempted = False
     # Each resolved flag flips BEFORE its cache is nulled so a concurrent reader never
     # sees ``resolved=True`` with ``cache=None``.
-    for flag, cache in (
-        ("_command_timeout_resolved", "_cached_command_timeout"),
-        ("_snapshot_threshold_resolved", "_cached_snapshot_threshold"),
-        ("_browser_engine_resolved", "_cached_browser_engine"),
+    for flag, cache, reset_value in (
+        ("_command_timeout_resolved", "_cached_command_timeout", None),
+        ("_snapshot_threshold_resolved", "_cached_snapshot_threshold", None),
+        ("_browser_engine_resolved", "_cached_browser_engine", None),
+        ("_allow_private_urls_resolved", "_cached_allow_private_urls", None),
+        ("_auto_local_for_private_urls_resolved", "_cached_auto_local_for_private_urls", True),
+        ("_headed_mode_resolved", "_cached_headed_mode", None),
     ):
         setattr(_bt, flag, False)
-        setattr(_bt, cache, None)
+        setattr(_bt, cache, reset_value)
+    with _bt._cloud_provider_cache_lock:
+        _bt._cloud_provider_resolved = False
+        _bt._cached_cloud_provider = None
+        _bt._cached_cloud_provider_scope = None
+        _bt._cached_cloud_providers.clear()

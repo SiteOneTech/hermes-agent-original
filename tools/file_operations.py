@@ -619,12 +619,14 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         host's). A host path under the configured workspace mount is rewritten
         to that container path first, so a Windows drive path is readable
         inside Docker. Must run BEFORE shell escaping — ~ doesn't expand in quotes."""
-        from tools.terminal_tool_config import translate_mounted_host_path
-        host_root = getattr(self.env, "host_cwd", None)
-        container_root = getattr(self.env, "host_cwd_mount", None) or "/workspace"
-        translated = translate_mounted_host_path(path, host_root or "", container_root)
-        if translated:
-            return translated
+        from tools.terminal_tool_config import _is_container_backend, translate_mounted_host_path
+        env_type = getattr(self.env, "env_type", None)
+        if isinstance(env_type, str) and env_type and _is_container_backend(env_type):
+            host_root = getattr(self.env, "host_cwd", None)
+            container_root = getattr(self.env, "host_cwd_mount", None) or "/workspace"
+            translated = translate_mounted_host_path(path, host_root or "", container_root)
+            if translated:
+                return translated
         if not path or not path.startswith('~'):
             return path
         result = self._exec("echo $HOME")

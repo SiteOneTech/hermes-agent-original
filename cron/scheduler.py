@@ -2914,7 +2914,7 @@ def run_one_job(
                 # (#123401). Without this the outage is silent — no cron_incidents
                 # row, no ping — while executions.db keeps piling up failed rows.
                 if not post_handoff:
-                    delivery_error, delivery_outcome = _deliver_crash_failure(
+                    delivery_error, delivery_outcome = _deliver_crash_failure_safely(
                         job, error, adapters=adapters, loop=loop)
                 mark_job_run(
                     job["id"],
@@ -3334,6 +3334,20 @@ def _deliver_crash_failure(
     return delivery_error, delivery_outcome
 
 
+def _deliver_crash_failure_safely(
+    job: dict, err_text: str, *, adapters, loop,
+    runtime_home: Optional[Path] = None, store_home: Optional[Path] = None,
+) -> tuple[Optional[str], str]:
+    try:
+        return _deliver_crash_failure(
+            job, err_text, adapters=adapters, loop=loop,
+            runtime_home=runtime_home, store_home=store_home)
+    except Exception as delivery_exc:
+        logger.error(
+            "Crash failure delivery failed for job %s: %s",
+            job.get("id"), delivery_exc, exc_info=True)
+        return str(delivery_exc), "failed"
+
 
 def _run_one_job_body(
     job: dict, *, adapters=None, loop=None, verbose: bool = False,
@@ -3602,7 +3616,7 @@ def _run_one_job_body(
             and not isinstance(e, _FireClaimLostDuringSideEffect)
             and not _fire_claim_ownership_lost()
         ):
-            delivery_error, delivery_outcome = _deliver_crash_failure(
+            delivery_error, delivery_outcome = _deliver_crash_failure_safely(
                 job, _err_text, adapters=adapters, loop=loop,
                 runtime_home=_runtime_home, store_home=_store_home)
         try:

@@ -64,6 +64,82 @@ class TestCloudProviderCachePolicy:
         assert resolve_for(home_a) is providers[str(home_a)]
         assert resolutions == [str(home_a), str(home_b)]
 
+    def test_cleanup_clears_per_profile_cloud_provider_cache(self, tmp_path, monkeypatch):
+        from hermes_constants import (
+            get_hermes_home,
+            reset_hermes_home_override,
+            set_hermes_home_override,
+        )
+        from tools.browser_tool_lifecycle import cleanup_all_browsers
+
+        monkeypatch.setattr(
+            "hermes_cli.config.read_raw_config",
+            lambda: {"browser": {"cloud_provider": "profile-provider"}},
+        )
+        monkeypatch.setattr("tools.browser_tool_cloud._ensure_browser_plugins_loaded", lambda: None)
+        providers = {}
+        resolutions = []
+
+        def resolve(_name):
+            home = str(get_hermes_home())
+            resolutions.append(home)
+            return providers[home]
+
+        monkeypatch.setattr("tools.browser_tool_cloud._registry_get_browser_provider", resolve)
+        home_a = tmp_path / "browser-a"
+        home_b = tmp_path / "browser-b"
+        first_a = providers[str(home_a)] = Mock(name="first-a")
+        first_b = providers[str(home_b)] = Mock(name="first-b")
+
+        def resolve_for(home):
+            token = set_hermes_home_override(home)
+            try:
+                return bt_cloud._get_cloud_provider()
+            finally:
+                reset_hermes_home_override(token)
+
+        assert resolve_for(home_a) is first_a
+        assert resolve_for(home_b) is first_b
+        providers[str(home_a)] = Mock(name="second-a")
+        providers[str(home_b)] = Mock(name="second-b")
+        assert resolve_for(home_a) is first_a
+        assert resolve_for(home_b) is first_b
+
+        cleanup_all_browsers()
+
+        assert resolve_for(home_a) is providers[str(home_a)]
+        assert resolve_for(home_b) is providers[str(home_b)]
+        assert resolutions == [str(home_a), str(home_b), str(home_a), str(home_b)]
+
+    def test_cleanup_reloads_browser_policy_caches(self, monkeypatch):
+        from tools.browser_tool_lifecycle import cleanup_all_browsers
+
+        monkeypatch.delenv("AGENT_BROWSER_HEADED", raising=False)
+        cfg = {"browser": {
+            "allow_private_urls": True,
+            "auto_local_for_private_urls": False,
+            "headed": True,
+        }}
+        monkeypatch.setattr("hermes_cli.config.read_raw_config", lambda: cfg)
+        assert bt_cloud._allow_private_urls() is True
+        assert bt_cloud._auto_local_for_private_urls() is False
+        assert bt_cloud._is_headed_mode() is True
+
+        cfg["browser"] = {
+            "allow_private_urls": False,
+            "auto_local_for_private_urls": True,
+            "headed": False,
+        }
+        assert bt_cloud._allow_private_urls() is True
+        assert bt_cloud._auto_local_for_private_urls() is False
+        assert bt_cloud._is_headed_mode() is True
+
+        cleanup_all_browsers()
+
+        assert bt_cloud._allow_private_urls() is False
+        assert bt_cloud._auto_local_for_private_urls() is True
+        assert bt_cloud._is_headed_mode() is False
+
     def test_same_profile_registry_replacement_invalidates_cache(
         self, tmp_path, monkeypatch
     ):

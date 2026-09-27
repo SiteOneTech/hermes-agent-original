@@ -307,6 +307,25 @@ class TestPatchHints:
         # JSON error payload (not an inline "[Hint: ..." tail).
         assert json.loads(raw).get("_hint")
 
+    def test_patch_no_match_hint_scrubs_surrogateescaped_bytes(self, tmp_path):
+        target = tmp_path / "notes.txt"
+        target.write_bytes(b"alpha \xff beta\n")
+
+        from tools.file_tools import patch_tool
+        raw = patch_tool(
+            mode="replace",
+            path=str(target),
+            old_string="alpha z beta\nextra",
+            new_string="replacement\n",
+            task_id="surrogate-patch-output",
+        )
+
+        raw.encode("utf-8")
+        assert not any(0xD800 <= ord(ch) <= 0xDFFF for ch in raw)
+        result = json.loads(raw)
+        assert "error" in result
+        assert "\ufffd" in result["error"]
+
     @patch("tools.file_tools._get_file_ops")
     def test_success_no_hint(self, mock_get):
         mock_ops = MagicMock()

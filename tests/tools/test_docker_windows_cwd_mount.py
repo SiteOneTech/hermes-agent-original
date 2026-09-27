@@ -98,6 +98,17 @@ class TestToolsFollowTheMount:
         assert ops._expand_path(WIN_FILE) == "/host-cwd/Downloads/clip.jpg"
         assert ops._expand_path("/workspace/keep") == "/workspace/keep"
 
+    def test_file_ops_keep_mounted_host_path_for_non_container_env(self):
+        from tools.file_operations import ShellFileOperations
+
+        env = type("E", (), {
+            "env_type": "local", "cwd": "/host/project",
+            "host_cwd": "/host/project", "host_cwd_mount": None,
+        })()
+        ops = ShellFileOperations(env, cwd="/host/project")
+
+        assert ops._expand_path("/host/project/src/app.py") == "/host/project/src/app.py"
+
     def test_absolute_mounted_host_dir_follows_the_second_mount(self, monkeypatch):
         """A /mnt or /srv host dir (no /Users prefix) bound beside a claimed /workspace."""
         host, mount = "/mnt/d/projects/app", "/host-cwd"

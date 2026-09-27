@@ -44,6 +44,28 @@ from tools.file_tools_read_tracking import (
 logger = logging.getLogger(__name__)
 
 
+def _scrub_lone_surrogates(value):
+    if isinstance(value, str):
+        return "".join(
+            "\ufffd" if 0xD800 <= ord(ch) <= 0xDFFF else ch
+            for ch in value
+        )
+    if isinstance(value, list):
+        return [_scrub_lone_surrogates(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_scrub_lone_surrogates(item) for item in value)
+    if isinstance(value, dict):
+        return {
+            _scrub_lone_surrogates(key): _scrub_lone_surrogates(item)
+            for key, item in value.items()
+        }
+    return value
+
+
+def _json_tool_result(data) -> str:
+    return json.dumps(_scrub_lone_surrogates(data), ensure_ascii=False)
+
+
 _EXPECTED_WRITE_ERRNOS = {errno.EACCES, errno.EPERM, errno.EROFS}
 
 # Read-size guard. Model-agnostic, so characters proxy tokens: 100K chars is
@@ -496,7 +518,7 @@ def _read_extracted_document(path: str, _resolved, offset: int, limit: int, task
         _mark_full_write_baseline(str(_resolved), task_id)
         _update_read_timestamp(str(_resolved), task_id)
         file_state.record_read(task_id, str(_resolved))
-    return json.dumps(result_dict, ensure_ascii=False)
+    return _json_tool_result(result_dict)
 
 
 def _dedup_stub_or_block(task_data: dict, dedup_key: tuple, path: str) -> str:
@@ -523,13 +545,13 @@ def _dedup_stub_or_block(task_data: dict, dedup_key: tuple, path: str) -> str:
             # escalates to `repeated_exact_failure_block` over calls that never failed.
             **{GUARDRAIL_REFUSAL_KEY: True})
 
-    return json.dumps({
+    return _json_tool_result({
         "status": "unchanged",
         "message": _READ_DEDUP_STATUS_MESSAGE,
         "path": path,
         "dedup": True,
         "content_returned": False,
-    }, ensure_ascii=False)
+    })
 
 
 def _record_successful_read(task_data: dict, task_id: str, path: str, resolved_str: str,
@@ -633,7 +655,7 @@ def read_file_tool(path: str, offset: int = 1, limit: int = DEFAULT_READ_LIMIT, 
         if _file_ops_uses_host_paths(_get_file_ops(task_id)):
             kind = _special_file_kind(_resolved)
             if kind is not None:
-                return json.dumps({
+                return _json_tool_result({
                     "success": False,
                     "note": (
                         f"'{path}' is {kind}, not a regular file — reading "
@@ -688,9 +710,9 @@ def read_file_tool(path: str, offset: int = 1, limit: int = DEFAULT_READ_LIMIT, 
         # Failed reads cannot establish whole-file knowledge.
         _err = result_dict.get("error") or ""
         if isinstance(_err, str) and _err.startswith("File not found:"):
-            _record_not_found("read", resolved_str, task_id, json.dumps(result_dict, ensure_ascii=False))
+            _record_not_found("read", resolved_str, task_id, _json_tool_result(result_dict))
         if _err or result_dict.get("is_binary"):
-            return json.dumps(result_dict, ensure_ascii=False)
+            return _json_tool_result(result_dict)
 
         # Char budget on the FORMATTED content (what enters context), BEFORE
         # redaction (skip the regex pass on huge content); truncate gracefully
@@ -750,7 +772,7 @@ def read_file_tool(path: str, offset: int = 1, limit: int = DEFAULT_READ_LIMIT, 
                 f"You have read this exact file region {count} times consecutively. "
                 "The content has not changed since your last read. Use the information you already have. "
                 "If you are stuck in a loop, stop reading and proceed with writing or responding.")
-        return json.dumps(result_dict, ensure_ascii=False)
+        return _json_tool_result(result_dict)
     except Exception as e:
         return tool_error(str(e))
 
@@ -894,7 +916,7 @@ def write_file_tool(path: str, content: str, task_id: str = "default",
             # warning after the clobber (#65604). Nothing below runs.
             blocker = _stale_overwrite_blocker(path, _resolved, task_id)
             if blocker:
-                return json.dumps(_stale_write_refusal(path, blocker, _resolved), ensure_ascii=False)
+                return _json_tool_result(_stale_write_refusal(path, blocker, _resolved))
             warnings = _edit_warnings([path], path_to_resolved, task_id)
             rewrite_hint = _whole_file_rewrite_hint(task_id, _resolved, content)
             result = _get_file_ops(task_id).write_file(_resolved or path, content)
@@ -916,7 +938,7 @@ def write_file_tool(path: str, content: str, task_id: str = "default",
                     # same-task writes stay unblocked. patch never does this.
                     _mark_full_write_baseline(_resolved, task_id, getattr(result, "_content_sha256", None))
                 _note_edited(task_id, [path], path_to_resolved, session_id)
-        return json.dumps(result_dict, ensure_ascii=False)
+        return _json_tool_result(result_dict)
     except Exception as e:
         if _is_expected_write_exception(e):
             logger.debug("write_file expected denial: %s: %s", type(e).__name__, e)
@@ -1039,7 +1061,7 @@ def patch_tool(mode: str = "replace", path: str = None, old_string: str = None,
                 result_dict["_hint"] = (
                     "old_string not found. Use read_file to verify the current "
                     "content, or search_files to locate the text.")
-        return json.dumps(result_dict, ensure_ascii=False)
+        return _json_tool_result(result_dict)
     except Exception as e:
         return tool_error(str(e))
 
@@ -1112,7 +1134,7 @@ def search_tool(pattern: str, target: str = "content", path: str = ".",
         # No early return on a cached miss — same rationale as the read path.
         _search_err = result_dict.get("error") or ""
         if isinstance(_search_err, str) and _search_err.startswith("Path not found:"):
-            _record_not_found("search", resolved_search_path, task_id, json.dumps(result_dict, ensure_ascii=False))
+            _record_not_found("search", resolved_search_path, task_id, _json_tool_result(result_dict))
 
         if count >= 3:
             result_dict["_warning"] = (
@@ -1127,7 +1149,7 @@ def search_tool(pattern: str, target: str = "content", path: str = ".",
                 f"Results truncated. Use offset={offset + limit} to see more, "
                 "or narrow with a more specific pattern or file_glob."
             )
-        return json.dumps(result_dict, ensure_ascii=False)
+        return _json_tool_result(result_dict)
     except Exception as e:
         return tool_error(str(e))
 
