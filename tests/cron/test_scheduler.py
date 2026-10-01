@@ -4,6 +4,7 @@ import contextlib
 import contextvars
 import itertools
 import json
+import logging
 import os
 from unittest.mock import AsyncMock, patch, MagicMock
 
@@ -2403,7 +2404,7 @@ class TestRunJobSessionPersistence:
                    return_value={"provider": "openrouter", "api_key": "x",
                                  "base_url": "https://example.invalid",
                                  "api_mode": "chat_completions"}), \
-             patch("tools.mcp_tool.discover_mcp_tools", return_value=[]), \
+             patch("tools.mcp_tool_discovery.discover_mcp_tools", return_value=[]), \
              patch("run_agent.AIAgent") as mock_agent_cls:
             mock_agent = MagicMock()
             mock_agent.run_conversation.return_value = {"final_response": "ok"}
@@ -2474,7 +2475,7 @@ class TestRunJobConfigEnvVarExpansion:
              patch("hermes_state.SessionDB", return_value=fake_db), \
              patch("hermes_cli.runtime_provider.resolve_runtime_provider",
                    return_value=self._RUNTIME), \
-             patch("tools.mcp_tool.discover_mcp_tools", return_value=[]), \
+             patch("tools.mcp_tool_discovery.discover_mcp_tools", return_value=[]), \
              patch("run_agent.AIAgent") as mock_agent_cls:
             mock_agent = MagicMock()
             mock_agent.run_conversation.return_value = {"final_response": "ok"}
