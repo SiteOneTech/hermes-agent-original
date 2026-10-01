@@ -489,9 +489,10 @@ async def delete_empty_sessions_endpoint(profile: Optional[str] = None):
     Archived sessions are skipped — the user explicitly chose to keep those rows. * Children of deleted
     parents are orphaned, not cascade-deleted. See #95868.
     """
+    profile = destructive_profile(profile, "DELETE /api/sessions/empty")
     deleted = await asyncio.to_thread(
-        _with_db, destructive_profile(profile, "DELETE /api/sessions/empty"),
-        lambda db: db.delete_empty_sessions(), read_only=False)
+        _with_db, profile,
+        lambda db: db.delete_empty_sessions(sessions_dir=_session_files_dir(profile)), read_only=False)
     return {"ok": True, "deleted": deleted}
 
 
