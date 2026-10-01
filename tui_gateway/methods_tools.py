@@ -975,11 +975,90 @@ def _cmd_compress(rid, params, session, name, arg):
         return _err(rid, 5009, f"compress failed: {exc}")
 
 
+# ─── /memory + /skills write-approval review ─────────────────────────────────
+# The review surface (pending / approve / reject / diff / approval) is owned by the shared handler
+# hermes_cli/write_approval_commands.handle_pending_subcommand, which the classic CLI and the
+# messaging gateway already reach. Desktop/TUI clients normally get it through slash.exec ->
+# _SlashWorker (a private HermesCLI), but command.dispatch is their FALLBACK stage — with no
+# route here, a failed worker turned every /memory into the routing refusal "not a quick/
+# plugin/bundle/skill command: memory", so staged writes had no review path at all.
+#
+# The store must resolve under the SAME home as the command, which is why these run inside the
+# dispatcher's `_session_home_scope(session)` block: `load_on_disk_store()` reads the profile's
+# MEMORY.md/USER.md and its memory char limits (see the scope note on `_session_home_scope`,
+# #110695).
+_MEMORY_USAGE = ("Unknown /memory subcommand. "
+                 "Use: pending, approve <id>, reject <id>, approval <on|off>.")
+_SKILLS_USAGE = ("Unknown /skills subcommand here. "
+                 "Use: pending, approve <id>, reject <id>, diff <id>, approval <on|off>. "
+                 "(Search/install/browse are terminal-side.)")
+
+
+def _pending_subcommand_store(session):
+    """Memory store for the session's own profile: the live agent's store when there is one, else a
+    freshly loaded on-disk store — mirroring cli.py's /memory handler and the gateway's (Desktop/TUI
+    sessions have no long-lived agent store). ``None`` when even that fails, which the shared handler
+    reports as "memory store unavailable" instead of claiming the write was applied."""
+    if session:
+        with contextlib.suppress(Exception):
+            store = getattr(session.get("agent"), "_memory_store", None)
+            if store is not None:
+                return store
+    with contextlib.suppress(Exception):
+        return _tools_mod("tools.memory_tool").load_on_disk_store()
+    return None
+
+
+def _write_approval_mode_setter(subsystem: str):
+    """Persist ``<subsystem>.write_approval`` into the SESSION's profile config (this runs inside
+    ``_session_home_scope``, so ``_write_config_key`` writes the right profile's config.yaml)."""
+    return lambda enabled: _write_config_key(f"{subsystem}.write_approval", bool(enabled))
+
+
+def _run_pending_review(rid, subsystem: str, arg: str, session, *, unknown: str):
+    from hermes_cli.write_approval_commands import handle_pending_subcommand
+    from tools import write_approval as wa
+    out = handle_pending_subcommand(
+        subsystem, (arg or "").split(),
+        memory_store=_pending_subcommand_store(session) if subsystem == wa.MEMORY else None,
+        set_mode_fn=_write_approval_mode_setter(subsystem))
+    return _exec_out(rid, out if out is not None else unknown)
+
+
+def _cmd_memory(rid, params, session, name, arg):
+    """/memory — review staged memory writes, approve/reject them, toggle the gate."""
+    return _run_pending_review(rid, "memory", arg, session, unknown=_MEMORY_USAGE)
+
+
+def _cmd_skills(rid, params, session, name, arg):
+    """/skills write-approval subcommands only; the hub subcommands stay with the slash worker.
+
+    Returns None (falls through to the routing refusal, unchanged behaviour) for anything outside
+    the review surface — ``search``/``install``/``browse``/``inspect`` are the CLI skills hub's,
+    never a staged-write review. The allowlist mirrors the registry-declared review slice
+    (``CommandDef("skills", desktop_subcommands=...)`` in hermes_cli/commands.py)."""
+    sub = (arg or "").split()
+    commands = _tools_mod("hermes_cli.commands")
+    allowed = getattr(commands.resolve_command("skills"), "desktop_subcommands", None) or ()
+    if not sub or sub[0].lower() not in allowed:
+        return None
+    from tools import write_approval as wa
+    # The gate being off must not strand writes that are already staged (gateway parity): still
+    # answer when a pile exists, and point at the toggle when there is nothing to review.
+    if (sub[0].lower() not in {"approval", "mode"} and not wa.write_approval_enabled(wa.SKILLS)
+            and wa.pending_count(wa.SKILLS) == 0):
+        return _exec_out(rid, "Skill write approval is off (skills.write_approval). "
+                              "Enable it with /skills approval on, then review staged writes "
+                              "with /skills pending.")
+    return _run_pending_review(rid, "skills", arg, session, unknown=_SKILLS_USAGE)
+
+
 _SLASH_BUILTINS = {
     "queue": _cmd_queue, "q": _cmd_queue, "learn": _cmd_learn, "plan": _cmd_plan, "init": _cmd_init,
     "moa": _cmd_moa, "focus": _cmd_focus, "retry": _cmd_retry, "steer": _cmd_steer, "goal": _cmd_goal,
     "loop": _cmd_loop, "undo": _cmd_undo, "snapshot": _cmd_snapshot, "snap": _cmd_snapshot,
-    "compress": _cmd_compress, "compact": _cmd_compress}
+    "compress": _cmd_compress, "compact": _cmd_compress,
+    "memory": _cmd_memory, "skills": _cmd_skills}
 
 @method("command.dispatch")
 def _(rid, params: dict) -> dict:
@@ -1061,7 +1140,12 @@ def _(rid, params: dict) -> dict:
                 except Exception as e:
                     return _err(rid, 5030, f"slash worker start failed: {e}")
     try:
-        payload = {"output": worker.run(cmd) or "(no output)"}
+        output = worker.run(cmd)
+        if seed := (worker.pop_seed() if hasattr(worker, "pop_seed") else ""):
+            # /prompt//blueprint composed a next-turn prompt in the worker; route it as a
+            # send dispatch (both Desktop and TUI clients already handle {type:"send"}).
+            return _ok(rid, {"type": "send", "message": seed})
+        payload = {"output": output or "(no output)"}
         if warning := _mirror_slash_side_effects(sid, session, cmd):
             payload["warning"] = warning
         if base in _SESSION_CONTROL_SLASHES:
@@ -1674,9 +1758,9 @@ def _plugin_rows() -> list[dict]:
     pc = _tools_mod("hermes_cli.plugins_cmd")
     cat = _tools_mod("hermes_cli.plugins_cmd_catalog")
     enabled, disabled = pc._get_enabled_set(), pc._get_disabled_set()
-    pins = cat.catalog_pins()  # powers the desktop's "Update to <pin>" affordance
-    versions = cat.catalog_versions()
-    titles = cat.catalog_titles()  # server-sentence display names: ONE live-catalog resolution
+    # pins power the desktop's "Update to <pin>" affordance; titles are the server-sentence display
+    # names. One live-catalog resolution for the whole listing (see ``catalog_rows_maps``).
+    pins, versions, titles = cat.catalog_rows_maps()
     ref_pins = pc._read_install_metadata()  # ``--ref`` installs: pinned_sha so the desktop can show the pin
     out = []
     active = pc._category_active_names()

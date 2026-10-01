@@ -3,6 +3,7 @@ import { parseCommandDispatch, parseSlashCommand } from '@hermes/shared'
 import { type MutableRefObject, useCallback, useRef } from 'react'
 
 import { prepareDefaultNewSession } from '@/app/session/new-session-route'
+import { invalidateContextBreakdown } from '@/app/shell/hooks/use-context-breakdown'
 import { getProfiles } from '@/hermes'
 import type { Translations } from '@/i18n'
 import { type ChatMessage, toChatMessages } from '@/lib/chat-messages'
@@ -13,6 +14,7 @@ import {
   type DesktopCommandSurface,
   type DesktopPickerId,
   desktopSlashUnavailableMessage,
+  desktopSubcommandUnavailableMessage,
   isDesktopSlashCommand,
   resolveDesktopCommand
 } from '@/lib/desktop-slash-commands'
@@ -266,8 +268,22 @@ export function useSlashCommand(deps: SlashCommandDeps) {
 
         const { render: renderSlashOutput, sessionId, storedSessionId } = resolved
 
-        if (!isDesktopSlashCommand(name)) {
+        // Resolve the INVOCATION, not just the name: a command the desktop owns
+        // for its management surface can still delegate individual subcommands
+        // to the backend (`/skills pending` — see desktopSubcommandAllowlist).
+        if (!isDesktopSlashCommand(name, arg)) {
           renderSlashOutput(desktopSlashUnavailableMessage(name) || `/${name} is not available in the desktop app.`)
+
+          return
+        }
+
+        // Commands narrowed by `desktop_subcommands` (e.g. /skills exposes
+        // only its write-approval review slice here — the CLI hub mutations
+        // must not be reachable from a desktop exec) stop at the client.
+        const subcommandBlocked = desktopSubcommandUnavailableMessage(name, arg)
+
+        if (subcommandBlocked) {
+          renderSlashOutput(subcommandBlocked)
 
           return
         }
@@ -754,6 +770,13 @@ export function useSlashCommand(deps: SlashCommandDeps) {
                 storedSessionId
               )
             }
+
+            // The transcript just shrank by 5-10x outside any turn (busy never
+            // flipped), so the keyed context breakdown — if already fetched —
+            // is now wrong by that factor. Bump the invalidation generation:
+            // the statusbar gauge refetches immediately instead of serving the
+            // pre-compression figure until the session is switched (#94001).
+            invalidateContextBreakdown(sessionId)
 
             const usage = { ...result?.usage, ...result?.info?.usage }
 
