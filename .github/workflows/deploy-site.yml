@@ -57,7 +57,7 @@ jobs:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
-      - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # v6.0.3
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
         with:
           fetch-depth: 0  # extract-plugins.py derives each catalog entry's added/updated dates from git log
 
@@ -216,7 +216,7 @@ jobs:
       # collision is by definition the identical file — the merge never
       # overwrites current-build output (cp --update=none).
       - name: Restore asset retention pool
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: _asset_retention
           key: docs-asset-retention-${{ github.run_id }}
@@ -254,7 +254,7 @@ jobs:
       - name: Save asset retention pool
         # Always save under a fresh key (caches are immutable); restore-keys
         # prefix matching picks the newest on the next run.
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: _asset_retention
           key: docs-asset-retention-${{ github.run_id }}
@@ -266,4 +266,4 @@ jobs:
 
       - name: Deploy to GitHub Pages
         id: deploy
-        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128  # v5.0.0
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346  # v5.0.1

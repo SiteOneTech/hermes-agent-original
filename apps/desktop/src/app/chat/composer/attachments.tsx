@@ -24,7 +24,7 @@ export function AttachmentList({
 }) {
   return (
     <div
-      className="flex max-w-full flex-wrap gap-1.5 px-1 pt-1"
+      className="flex max-w-full flex-shrink-0 flex-wrap gap-1.5 overflow-hidden px-1 pt-1"
       data-slot="composer-attachments"
       data-testid="composer-attachments"
     >

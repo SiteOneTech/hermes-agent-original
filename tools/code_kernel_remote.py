@@ -523,6 +523,7 @@ def _run_remote_cell(
         _rpc_poll_loop,
         _ship_file_to_remote,
     )
+    from tools.code_execution_rpc import tool_errors_since
     from tools.interrupt import is_interrupted
     from tools.thread_context import propagate_context_to_thread
     kernel.cell_seq += 1
@@ -597,12 +598,19 @@ def _run_remote_cell(
                         cell_status = cell_payload.get("status", "error")
                     except ValueError:
                         cell_status = "protocol-error"
-                    removed = env.execute(
-                        f"rm -f {q_cells}/{shlex.quote(res_name)}",
-                        cwd="/", timeout=10,
-                    )
-                    if removed.get("returncode") == 130 or is_interrupted():
-                        cell_status = "interrupted"
+                    try:
+                        removed = env.execute(
+                            f"rm -f {q_cells}/{shlex.quote(res_name)}",
+                            cwd="/", timeout=10,
+                        )
+                    except Exception:
+                        if is_interrupted():
+                            cell_status = "interrupted"
+                        else:
+                            logger.debug("remote cell result cleanup failed", exc_info=True)
+                    else:
+                        if removed.get("returncode") == 130 or is_interrupted():
+                            cell_status = "interrupted"
                     break
                 time.sleep(_CELL_POLL_INTERVAL)
             else:
@@ -621,18 +629,23 @@ def _run_remote_cell(
         stop_event.set()
         rpc_thread.join(timeout=5)
 
+    tool_errors = tool_errors_since(tool_call_log)
+
     if cell_status == "interrupted":
         _REGISTRY.discard(key, kernel)
-        return _interrupted_result(
+        result = _interrupted_result(
             reused=reused,
             tool_calls_made=tool_call_counter[0],
         )
+        if tool_errors:
+            result["tool_errors"] = tool_errors
+        return result
 
     if cell_status in ("timeout", "protocol-error", "no-result"):
         # No safe way to interrupt one cell in place (same contract as
         # local): kill the kernel, report the loss, respawn next call.
         _REGISTRY.discard(key, kernel)
-        return {
+        result = {
             "status": "timeout" if cell_status == "timeout" else "error",
             "stdout": "",
             "stderr": "",
@@ -651,6 +664,9 @@ def _run_remote_cell(
                 ),
             },
         }
+        if tool_errors:
+            result["tool_errors"] = tool_errors
+        return result
 
     if cell_status == "exit":
         _REGISTRY.discard(key, kernel)
@@ -673,6 +689,8 @@ def _run_remote_cell(
             "execution_count": kernel.execution_count,
         },
     }
+    if tool_errors:
+        result["tool_errors"] = tool_errors
     if cell_status == "exit":
         result["kernel"]["ended"] = True
     if state_reset:
@@ -687,11 +705,3 @@ def _run_remote_cell(
     if cell_status == "error" and result["traceback"]:
         result["error"] = result["traceback"].strip().splitlines()[-1]
     return result
-
-
-# ---- BEGIN PLUGIN-COMPAT (revert-scheduled; see COMPAT_MANIFEST.md) ----
-# Names external plugins imported from this module before the Sep 2026 decomposition.
-# Internal code MUST NOT use these (scripts/check_compat_pointers.py fails CI if it does).
-# The whole block is removed by reverting the commit that added it.
-import base64  # noqa: F401,E402
-# ---- END PLUGIN-COMPAT ----
