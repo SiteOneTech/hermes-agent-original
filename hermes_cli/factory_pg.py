@@ -5016,6 +5016,50 @@ def _metadata_marks_documentation_recovery(task: dict[str, Any]) -> bool:
     )
 
 
+def _metadata_marks_independent_review_recovery(task: dict[str, Any]) -> bool:
+    """Return True for structured G1/docs independent-review recovery metadata.
+
+    A plain quality_review phase is intentionally not enough here: normal ALR
+    product reviews must stay docs-first gated while G1 is red.  The candidate
+    must opt in as an independent review recovery and bind the review target to
+    a G0/G1/documentation phase or scope through metadata, not title prose.
+    """
+
+    metadata = _metadata(task)
+    if not any(
+        metadata.get(key) is True
+        for key in (
+            "independent_review_recovery",
+            "g1_independent_review_recovery",
+            "docs_first_independent_review_recovery",
+        )
+    ):
+        return False
+    target_phases = []
+    for key in ("review_target_phase", "target_phase", "source_task_phase"):
+        value = metadata.get(key)
+        values = value if isinstance(value, (list, tuple, set)) else [value]
+        target_phases.extend(_normalize_dispatch_phase(item) for item in values)
+    if any(_phase_allows_g1_or_documentation_recovery(phase) for phase in target_phases if phase):
+        return True
+    target_scopes = []
+    for key in ("review_scope", "target_scope", "source_scope"):
+        value = metadata.get(key)
+        values = value if isinstance(value, (list, tuple, set)) else [value]
+        target_scopes.extend(_metadata_scope_key(item) for item in values)
+    review_recovery_scopes = {
+        "g0",
+        "g1",
+        "g1_recovery",
+        "documentation",
+        "documentation_recovery",
+        "docs",
+        "docs_first",
+        "docs_first_recovery",
+    }
+    return any(scope in review_recovery_scopes for scope in target_scopes)
+
+
 def _has_explicit_g1_or_documentation_recovery_scope(task: dict[str, Any]) -> bool:
     """Return True only for explicit G0/G1/documentation recovery scope.
 
@@ -5029,6 +5073,7 @@ def _has_explicit_g1_or_documentation_recovery_scope(task: dict[str, Any]) -> bo
         any(_phase_allows_g1_or_documentation_recovery(phase) for phase in _candidate_phase_signals(task))
         or _metadata_marks_g1_recovery(task)
         or _metadata_marks_documentation_recovery(task)
+        or _metadata_marks_independent_review_recovery(task)
     )
 
 
@@ -7135,6 +7180,8 @@ def _is_docs_first_validation_repair_task(task: dict[str, Any]) -> bool:
         return False
     if not _has_explicit_g1_or_documentation_recovery_scope(task):
         return False
+    if _metadata_marks_independent_review_recovery(task):
+        return True
     text = _task_text(task)
     docs_terms = (
         "docs-first",
