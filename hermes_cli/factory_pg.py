@@ -2788,6 +2788,13 @@ def _task_covers_reconciliation_anomaly(task: dict[str, Any], code: str) -> bool
     return False
 
 
+def _task_has_open_structured_reconciliation_coverage(task: dict[str, Any], code: str) -> bool:
+    if str(task.get("status") or "") in TERMINAL_TASK_STATUSES:
+        return False
+    metadata = _metadata(task)
+    return metadata.get("factory_reconciliation_task") is True and str(metadata.get("reconciliation_anomaly") or "").strip() == code
+
+
 def _latest_gate_statuses(gates: list[dict[str, Any]]) -> dict[str, str]:
     statuses: dict[str, str] = {}
     for gate in gates:
@@ -3045,7 +3052,7 @@ def ensure_reconciliation_tasks(project: dict[str, Any], findings: list[dict[str
     terminal = ",".join(_q(status) for status in TERMINAL_TASK_STATUSES)
     for finding in findings:
         code = str(finding.get("code") or "")
-        if not code or any(_task_covers_reconciliation_anomaly(task, code) for task in tasks):
+        if not code or any(_task_has_open_structured_reconciliation_coverage(task, code) for task in tasks):
             continue
         spec = RECONCILIATION_TASK_SPECS[code]
         task_id = f"{project_id}-reconcile-{code.replace('_', '-')}"
@@ -3119,6 +3126,8 @@ def cancel_resolved_reconciliation_tasks(project: dict[str, Any], findings: list
         if not anomaly:
             continue
         code, source = anomaly
+        if source != "structured_reconciliation_metadata":
+            continue
         if code in active_codes:
             continue
         resolved.append({"task_id": str(task.get("task_id") or ""), "code": code, "source": source})
