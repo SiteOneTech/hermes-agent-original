@@ -3126,6 +3126,27 @@ def cancel_resolved_reconciliation_tasks(project: dict[str, Any], findings: list
     if not resolved:
         return []
 
+    task_ids = ",".join(_q(item["task_id"]) for item in resolved)
+    active_run_rows = _normalize_rows(sql.rows(
+        f"""
+        SELECT task_id, run_id, status
+        FROM factory.task_runs
+        WHERE project_id={_q(project_id)}
+          AND task_id IN ({task_ids})
+          AND status IN ('queued','running')
+        """,
+        user=_user(),
+    ))
+    active_run_task_ids = {
+        str(row.get("task_id") or "")
+        for row in active_run_rows
+        if str(row.get("task_id") or "").strip()
+    }
+    if active_run_task_ids:
+        resolved = [item for item in resolved if item["task_id"] not in active_run_task_ids]
+    if not resolved:
+        return []
+
     terminal = ",".join(_q(status) for status in TERMINAL_TASK_STATUSES)
     task_ids = ",".join(_q(item["task_id"]) for item in resolved)
     note = "\n\n[factory-reconciler] Reconciliation anomaly resolved; task auto-cancelled."
