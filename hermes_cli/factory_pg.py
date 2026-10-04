@@ -4876,6 +4876,23 @@ _PRODUCT_OR_RUNTIME_METADATA_VALUE_KEYS = {
     "target_scope",
     "work_scope",
 }
+_PRODUCT_OR_DELIVERY_CHAIN_METADATA_KEYS = {
+    "blocked_until_rework_task",
+    "delivery_protocol",
+    "factory_auto_integration_forbidden",
+    "increment_integration_waived",
+    "increment_integration_waived_authorized_by",
+    "increment_integration_waived_reason",
+    "project_phase",
+    "rejected_predecessor_head_sha",
+    "replaces_task_id",
+    "review_replacements",
+    "rework_of_head_sha",
+    "rework_of_pr",
+    "rework_of_task_id",
+    "rework_trigger",
+    "scope_correction",
+}
 _G1_RECOVERY_METADATA_PHASE_KEYS = (
     "dispatch_phase",
     "factory_phase",
@@ -5014,6 +5031,45 @@ def _metadata_marks_documentation_recovery(task: dict[str, Any]) -> bool:
             "validation_preflight_recovery",
         )
     )
+
+
+def _metadata_marks_product_or_delivery_chain(task: dict[str, Any]) -> bool:
+    metadata = _metadata(task)
+    if _metadata_has_product_or_runtime_dispatch_scope(task):
+        return True
+    return any(_metadata_scope_key(key) in _PRODUCT_OR_DELIVERY_CHAIN_METADATA_KEYS for key in metadata)
+
+
+def _is_structured_factory_control_plane_review_recovery(task: dict[str, Any]) -> bool:
+    """Return True for bounded Factory review recovery rows using structured fields.
+
+    Current G1 recovery may arrive as an independent ``quality_review`` row that
+    reviews a PR-first exact-SHA control-plane repair. It is not itself product,
+    QA, security, or delivery execution, but old title/description heuristics can
+    misread the quoted history as runtime/product scope. Keep the positive
+    allow-list on explicit row shape and metadata only.
+    """
+
+    metadata = _metadata(task)
+    phase = _normalize_dispatch_phase(task.get("phase"))
+    owner = str(task.get("owner_profile") or task.get("owner_agent_id") or "").strip().lower()
+    reviewer = str(task.get("reviewer_profile") or task.get("reviewer_agent_id") or "").strip().lower()
+    source = str(metadata.get("source") or "").strip().lower()
+    repo_strategy_status = str(metadata.get("repo_strategy_status") or "").strip().lower()
+    if phase != "quality_review" or owner != "quality-reviewer":
+        return False
+    if not reviewer or reviewer == owner:
+        return False
+    if source != "factory_task_create" or repo_strategy_status != "passed":
+        return False
+    if _metadata_marks_product_or_delivery_chain(task):
+        return False
+    branch = str(task.get("branch") or "").strip()
+    worktree_path = str(task.get("worktree_path") or "").strip()
+    if not branch or not worktree_path:
+        return False
+    project_id = str(task.get("project_id") or "").strip()
+    return not project_id or project_id in branch or project_id in worktree_path
 
 
 def _has_explicit_g1_or_documentation_recovery_scope(task: dict[str, Any]) -> bool:
@@ -7133,36 +7189,11 @@ def _is_docs_first_validation_repair_task(task: dict[str, Any]) -> bool:
         return False
     if _is_reporting_dispatch_task(task) or _has_positive_product_or_runtime_dispatch_scope(task):
         return False
+    if _is_structured_factory_control_plane_review_recovery(task):
+        return True
     if not _has_explicit_g1_or_documentation_recovery_scope(task):
         return False
-    text = _task_text(task)
-    docs_terms = (
-        "docs-first",
-        "g1",
-        "document status",
-        "document-status",
-        "documentation",
-        "documentation_index",
-        "documentation index",
-        "required docs",
-    )
-    repair_terms = (
-        "reconciliation",
-        "repair",
-        "recovery",
-        "provenance",
-        "source-root",
-        "source root",
-        "runtime-source",
-        "runtime source",
-        "primary divergence",
-        "diverged-primary",
-        "dispatch behavior",
-        "dispatch preflight",
-        "control-plane",
-        "control plane",
-    )
-    return any(term in text for term in docs_terms) and any(term in text for term in repair_terms)
+    return True
 
 
 def _is_docs_first_gated_dispatch_task(task: dict[str, Any]) -> bool:
