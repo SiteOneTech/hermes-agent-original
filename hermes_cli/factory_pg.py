@@ -4965,7 +4965,9 @@ def _text_has_product_or_runtime_dispatch_scope(text: str) -> bool:
 def _text_without_negative_dispatch_guardrails(text: str) -> str:
     chunks = re.split(r"(?<=[.!?;])\s+|\n+", text)
     retained: list[str] = []
-    negative_marker = re.compile(r"\b(no|without|do not|does not|must not|never|forbidden|prohibited|sin)\b")
+    negative_marker = re.compile(
+        r"\b(no|without|do not|does not|must not|never|forbidden|prohibited|sin|fail-closed|denial|denied)\b"
+    )
     for chunk in chunks:
         if negative_marker.search(chunk) and _text_has_product_or_runtime_dispatch_scope(chunk):
             continue
