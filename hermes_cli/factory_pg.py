@@ -4736,6 +4736,8 @@ def _candidate_requires_validation_readiness_before_dispatch(candidate: dict[str
         # evidence from the broken run.  Gating the repair on those same
         # validation rows creates a claimed=null docs-first deadlock.
         return False
+    if _is_reporting_dispatch_task(candidate):
+        return True
     if _has_product_or_runtime_dispatch_scope(candidate):
         # A task can use a G1/recovery phase while still being about the ALR
         # product, external runtime, deployment, messaging, direct SQL, trading,
@@ -4798,11 +4800,17 @@ _PRODUCT_OR_RUNTIME_DISPATCH_SCOPE_TERMS = (
     "alr-063",
     "alr-070",
     "alr-080",
+    "alpha ledger",
     "product implementation",
     "ledger implementation",
     "external runtime",
+    "external-runtime",
+    "external work",
+    "external-work",
     "runtime propagation",
     "external connector",
+    "broker",
+    "broker connector",
     "trading",
     "market execution",
     "risk mutation",
@@ -4814,6 +4822,8 @@ _PRODUCT_OR_RUNTIME_DISPATCH_SCOPE_TERMS = (
     "live run",
     "deployment",
     "deploy",
+    "qa/security",
+    "qa security",
     "messaging",
     "message connector",
     "direct sql",
@@ -4959,13 +4969,21 @@ def _has_docs_first_repair_terms(task: dict[str, Any]) -> bool:
 
 
 def _text_has_product_or_runtime_dispatch_scope(text: str) -> bool:
-    return any(term in text for term in _PRODUCT_OR_RUNTIME_DISPATCH_SCOPE_TERMS)
+    return bool(re.search(r"\balr(?:[-_ ]?\d{2,3})?\b", text)) or any(
+        term in text for term in _PRODUCT_OR_RUNTIME_DISPATCH_SCOPE_TERMS
+    )
 
 
 def _text_without_negative_dispatch_guardrails(text: str) -> str:
     chunks = re.split(r"(?<=[.!?;])\s+|\n+", text)
     retained: list[str] = []
-    negative_marker = re.compile(r"\b(no|without|do not|does not|must not|never|forbidden|prohibited|sin)\b")
+    negative_marker = re.compile(
+        r"\b(no|without|do not|does not|must not|never|forbidden|prohibited|sin)\b"
+        r"|\b(?:must\s+)?remain\s+denied\b"
+        r"|\b(?:fail|fails|failing)[-_ ]closed\b"
+        r"|\bpreserv(?:e|es|ing)\b.*\b(?:denial|denied|fail[-_ ]closed|gated)\b"
+        r"|\bkeep(?:s|ing)?\b.*\b(?:denied|fail[-_ ]closed|gated)\b"
+    )
     for chunk in chunks:
         if negative_marker.search(chunk) and _text_has_product_or_runtime_dispatch_scope(chunk):
             continue
