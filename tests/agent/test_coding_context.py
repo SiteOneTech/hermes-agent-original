@@ -96,7 +96,7 @@ class TestCodingSelection:
     def test_auto_is_prompt_only(self, tmp_path):
         # Default posture must never override the user's configured toolsets —
         # off-by-default toolsets are already off, and explicit opt-ins
-        # (image-gen, spotify, …) survive entering a code workspace.
+        # (image-gen, homeassistant, …) survive entering a code workspace.
         _git_init(tmp_path)
         cfg = {"agent": {"coding_context": "auto"}}
         assert cc.coding_selection(platform="cli", cwd=tmp_path, config=cfg) is None
@@ -367,6 +367,16 @@ class TestRuntimeMode:
         mode = cc.resolve_runtime_mode(platform="cli", cwd=tmp_path, config={})
         with pytest.raises(Exception):
             mode.profile = cc.CODING_PROFILE  # type: ignore[misc]
+
+    def test_resolved_focus_ignores_an_on_disk_auto(self, tmp_path, monkeypatch):
+        # The focus decision is the mode's own config_mode, not a re-read of the user's config.
+        _git_init(tmp_path)
+        home = tmp_path / "home"
+        home.mkdir()
+        (home / "config.yaml").write_text(json.dumps({"agent": {"coding_context": "auto"}}))
+        monkeypatch.setenv("HERMES_HOME", str(home))
+        mode = cc.resolve_runtime_mode(platform="cli", cwd=tmp_path, config={"agent": {"coding_context": "focus"}})
+        assert mode.toolset_selection() == [cc.CODING_TOOLSET]
 
     def test_system_blocks_include_brief_and_workspace(self, tmp_path):
         _git_init(tmp_path)

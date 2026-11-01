@@ -529,7 +529,9 @@ class TestBomHandling:
             self, tmp_path: Path, monkeypatch, transport, noise):
         # The fence drops noise around the read, not noise printed WHILE it runs: a BASH_ENV DEBUG
         # hook firing for the transport command alone puts text inside the payload that still
-        # decodes ("TERM" is b"LDL"; "4c 44" is hex). Such a read must fail, and no edit may write.
+        # decodes ("TERM" is b"LDL"; "4c 44" is hex). The legacy byte-exact edit source
+        # must fail rather than writing those bytes. V4A uses the separate descriptor-safe
+        # reader, whose framed Python response ignores this out-of-band shell noise.
         from tools.file_operations import ShellFileOperations
         monkeypatch.setenv("HERMES_NATIVE_FILE_READ", "0")
         hook = tmp_path / "hook.sh"
@@ -543,9 +545,16 @@ class TestBomHandling:
 
         assert ops._read_exact_bytes(str(target))[0] is None
         assert not ops.patch_replace(str(target), "VERSION=1", "VERSION=2").success
-        assert not ops.patch_v4a(
-            f"*** Begin Patch\n*** Update File: {target}\n@@\n-VERSION=1\n+VERSION=2\n*** End Patch").success
-        assert target.read_bytes() == original
+        result = ops.patch_v4a(
+            f"*** Begin Patch\n*** Update File: {target}\n@@\n-VERSION=1\n+VERSION=2\n*** End Patch")
+        if transport == "base64":
+            assert result.success
+            assert target.read_bytes() == original.replace(b"VERSION=1", b"VERSION=2")
+        else:
+            # This harness removes base64 from the Python safe-reader snippet itself,
+            # so its source read must still fail closed.
+            assert not result.success
+            assert target.read_bytes() == original
 
     @pytest.mark.parametrize("op", ["add", "move"])
     def test_a_dangling_symlink_destination_is_occupied(self, ops, tmp_path: Path, op):
@@ -992,7 +1001,7 @@ class TestProfileHomeExemptsHermesRoot:
         import tools.file_tools_write_guards as ft
         from hermes_constants import reset_hermes_home_override, set_hermes_home_override
 
-        root, profile = self._profile_layout(tmp_path)
+        _root, profile = self._profile_layout(tmp_path)
         repo = tmp_path / "repo"
         (repo / ".hermes").mkdir(parents=True)
         monkeypatch.delenv("HERMES_HOME", raising=False)

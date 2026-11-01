@@ -1,11 +1,13 @@
 """Tests for cron/scheduler.py — origin resolution, delivery routing, and error logging."""
 
+import asyncio
 import contextlib
 import contextvars
 import itertools
 import json
 import logging
 import os
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch, MagicMock
 
 import pytest
@@ -19,10 +21,58 @@ from cron.scheduler import (
     _resolve_cron_enabled_toolsets,
     _resolve_delivery_target,
     _summarize_cron_failure_for_delivery,
-    run_job,
 )
 from cron.scheduler_delivery import _resolve_origin, _send_media_via_adapter
 from tools.env_passthrough import clear_env_passthrough
+
+
+def _run_owned_job(job, tmp_path, db=None):
+    """Run the production owner bridge, preserving each test's agent/DB probes."""
+    from gateway.session_contract import SessionRef
+    from gateway.session_cron import current_execution, execute
+    from hermes_state_registry import acquire, release
+
+    ref = SessionRef("test-profile", "canonical-cron-session")
+    admission_id = "cron-owner-admission"
+    request_id = "cron-owner-request"
+    owns_db = db is None
+    if owns_db:
+        db = acquire(tmp_path / "state.db")
+        db.create_session(ref.session_id, source="cron")
+    else:
+        db.db_path = str(tmp_path / "state.db")
+    authority = SimpleNamespace(
+        db=db,
+        sessions={ref.session_id: SimpleNamespace(source=SimpleNamespace(user_id="cron-owner"))},
+        pending_results={},
+    )
+    row = {
+        "admission_id": admission_id, "request_id": request_id,
+        "principal_id": "cron-owner", "payload": {"text": ""},
+    }
+    policy = SimpleNamespace(request_json=json.dumps({
+        "cron_job": job, "extra_prompt": None, "request_id": request_id,
+    }))
+
+    async def run():
+        previous = current_execution()
+        try:
+            await execute(authority, ref, row, policy)
+        except RuntimeError as exc:
+            saved = authority.pending_results.get(admission_id)
+            if saved is None:
+                raise
+            assert str(exc) == saved["result"]["cron_result"][3]
+        assert current_execution() is previous
+        assert authority._cron_cancellations == {}
+        return tuple(authority.pending_results[admission_id]["result"]["cron_result"])
+
+    try:
+        return asyncio.run(run())
+    finally:
+        if owns_db:
+            release(db)
+
 
 def test_cron_cleanup_worker_inherits_caller_contextvars():
     """Profile-scoped secrets must remain visible during threaded cleanup."""
@@ -858,7 +908,7 @@ class TestDeliverResultWrapping:
             future = Future()
             try:
                 future.set_result(_asyncio.run(coro))
-            except BaseException as exc:  # noqa: BLE001
+            except BaseException as exc:
                 future.set_exception(exc)
             return future
 
@@ -973,7 +1023,7 @@ class TestDeliverResultWrapping:
             future = Future()
             try:
                 future.set_result(_asyncio.run(coro))
-            except BaseException as _e:  # noqa: BLE001
+            except BaseException as _e:
                 future.set_exception(_e)
             return future
 
@@ -1258,7 +1308,7 @@ class TestRunJobSessionPersistence:
             mock_agent.run_conversation.return_value = {"final_response": "ok"}
             mock_agent_cls.return_value = mock_agent
 
-            success, output, final_response, error = run_job(job)
+            success, output, final_response, error = _run_owned_job(job, tmp_path, fake_db)
 
         assert success is True
         assert error is None
@@ -1268,7 +1318,7 @@ class TestRunJobSessionPersistence:
         kwargs = mock_agent_cls.call_args.kwargs
         assert kwargs["session_db"] is fake_db
         assert kwargs["platform"] == "cron"
-        assert kwargs["session_id"].startswith("cron_test-job_")
+        assert kwargs["session_id"] == "canonical-cron-session"
         original_session_id = kwargs["session_id"]
         fake_db.get_compression_tip.assert_called_once_with(original_session_id)
         fake_db.end_session.assert_called_once()
@@ -1669,7 +1719,7 @@ class TestRunJobSessionPersistence:
 
             mock_agent.close.side_effect = close_agent
             mock_agent_cls.return_value = mock_agent
-            success, *_ = run_job(job)
+            success, *_ = _run_owned_job(job, tmp_path, fake_db)
 
         assert success is True
         mock_agent.close.assert_called_once()
@@ -2021,7 +2071,7 @@ class TestRunJobSessionPersistence:
             "prompt": "hello",
         }
         with self._run_job_patches(tmp_path) as (fake_db, mock_agent_cls):
-            run_job(job)
+            _run_owned_job(job, tmp_path, fake_db)
 
         kwargs = mock_agent_cls.call_args.kwargs
         assert kwargs["skip_memory"] is False
@@ -2122,7 +2172,7 @@ class TestRunJobSessionPersistence:
                  },
              ), \
              patch("run_agent.AIAgent", FakeAgent):
-            success, output, final_response, error = run_job(job)
+            success, output, final_response, error = _run_owned_job(job, tmp_path, fake_db)
 
         assert success is True
         assert error is None
@@ -2182,7 +2232,7 @@ class TestRunJobSessionPersistence:
                  },
              ), \
              patch("run_agent.AIAgent", FakeAgent):
-            success, output, final_response, error = run_job(job)
+            success, output, final_response, error = _run_owned_job(job, tmp_path, fake_db)
 
         assert success is True
         assert error is None
@@ -2200,64 +2250,34 @@ class TestRunJobSessionPersistence:
 
     @pytest.mark.parametrize("timeout_value", ["600", "0"])
     def test_run_job_heartbeats_oneshot_claim_in_both_wait_modes(
-        self, tmp_path, monkeypatch, timeout_value
+        self, monkeypatch, timeout_value
     ):
-        """Timed and unlimited one-shot monitors both refresh their owned claim."""
+        """Timed and unlimited owner-side monitors refresh their owned claim."""
+        from concurrent.futures import Future
+        from cron.scheduler import _run_agent_with_watchdog
+
         job = {
             "id": "heartbeat-job",
-            "name": "heartbeat",
-            "prompt": "hello",
             "schedule": {"kind": "once", "run_at": "2026-07-10T12:00:00Z"},
             "run_claim": {"at": "2026-07-10T12:00:00Z", "by": "owner-token"},
         }
-        fake_db = MagicMock()
-
-        class FakeAgent:
-            def __init__(self, *args, **kwargs):
-                pass
-
-            def run_conversation(self, *args, **kwargs):
-                return {"final_response": "ok"}
-
-        class FakeFuture:
-            def result(self):
-                return {"final_response": "ok"}
-
-            def done(self):
-                return True  # run_job's finally asks the real Future; this one has already returned
-
-        fake_future = FakeFuture()
+        fake_future = Future()
+        fake_future.set_result({"final_response": "ok"})
         fake_pool = MagicMock()
         fake_pool.submit.return_value = fake_future
         wait_results = [(set(), set()), ({fake_future}, set())]
         monotonic_ticks = itertools.count(step=61.0)
         monkeypatch.setenv("HERMES_CRON_TIMEOUT", timeout_value)
 
-        with patch("cron.scheduler._hermes_home", tmp_path), \
-             patch("cron.scheduler._preflight_job_config", return_value=None), \
-             patch("hermes_state_registry.acquire", return_value=fake_db), \
-             patch(
-                 "hermes_cli.runtime_provider.resolve_runtime_provider",
-                 return_value={
-                     "api_key": "***",
-                     "base_url": "https://example.invalid/v1",
-                     "provider": "openrouter",
-                     "api_mode": "chat_completions",
-                 },
-             ), \
-             patch("run_agent.AIAgent", FakeAgent), \
-             patch("cron.scheduler.concurrent.futures.ThreadPoolExecutor", return_value=fake_pool), \
+        with patch("cron.scheduler.concurrent.futures.ThreadPoolExecutor", return_value=fake_pool), \
              patch("cron.scheduler.concurrent.futures.wait", side_effect=wait_results), \
              patch("cron.scheduler.time.monotonic", side_effect=monotonic_ticks.__next__), \
              patch("cron.scheduler.heartbeat_run_claim", return_value=True) as heartbeat:
-            success, _output, final_response, error = run_job(job)
+            result = _run_agent_with_watchdog(
+                MagicMock(), "hello", job, job["id"], "heartbeat", "cron:heartbeat-job:test", None)
 
-        assert success is True
-        assert error is None
-        assert final_response == "ok"
-        heartbeat.assert_called_once_with(
-            "heartbeat-job", expected_owner="owner-token"
-        )
+        assert result["final_response"] == "ok"
+        heartbeat.assert_called_once_with("heartbeat-job", expected_owner="owner-token")
 
     def test_run_job_resets_secret_source_cache_before_reload(self, tmp_path, monkeypatch):
         """Each run must clear the secret-source cache before re-reading the
@@ -2299,7 +2319,7 @@ class TestRunJobSessionPersistence:
             mock_agent = MagicMock()
             mock_agent.run_conversation.return_value = {"final_response": "ok"}
             mock_agent_cls.return_value = mock_agent
-            success, _output, _final, error = run_job(job)
+            success, _output, _final, error = _run_owned_job(job, tmp_path, fake_db)
 
         assert success is True
         assert error is None
@@ -2358,7 +2378,7 @@ class TestRunJobSessionPersistence:
              ), \
              patch("run_agent.AIAgent", FakeAgent):
             for job in jobs:
-                success, output, final_response, error = run_job(job)
+                success, output, final_response, error = _run_owned_job(job, tmp_path, fake_db)
                 assert success is True
                 assert error is None
                 assert final_response == "ok"
@@ -2427,9 +2447,12 @@ class TestRunJobConfigEnvVarExpansion:
     }
 
     def test_model_env_ref_in_config_yaml_is_expanded(self, tmp_path, monkeypatch):
-        """${VAR} in config.yaml model: is expanded using env after .env is loaded."""
+        """${VAR} in config.yaml model: is expanded from the PROFILE's own secret scope. The owner
+        bridge runs the job under that profile's runtime scope, where a process-env value would be
+        another profile's leak, so the ref resolves from ``<home>/.env`` and never os.environ."""
         (tmp_path / "config.yaml").write_text("model: ${_HERMES_TEST_CRON_MODEL}\n")
-        monkeypatch.setenv("_HERMES_TEST_CRON_MODEL", "gpt-4o-mini-cron-test")
+        (tmp_path / ".env").write_text("_HERMES_TEST_CRON_MODEL=gpt-4o-mini-cron-test\n")
+        monkeypatch.setenv("_HERMES_TEST_CRON_MODEL", "leaked-from-process-env")
 
         job = {"id": "env-job", "name": "env test", "prompt": "hi"}
         fake_db = MagicMock()
@@ -2445,7 +2468,7 @@ class TestRunJobConfigEnvVarExpansion:
             mock_agent = MagicMock()
             mock_agent.run_conversation.return_value = {"final_response": "ok"}
             mock_agent_cls.return_value = mock_agent
-            success, _, _, error = run_job(job)
+            success, _, _, error = _run_owned_job(job, tmp_path, fake_db)
 
         assert success is True
         assert error is None
@@ -2574,7 +2597,7 @@ class TestRunJobConfigEnvVarExpansion:
             mock_agent = MagicMock()
             mock_agent.run_conversation.return_value = {"final_response": "ok"}
             mock_agent_cls.return_value = mock_agent
-            success, _, _, error = run_job(job)
+            success, _, _, error = _run_owned_job(job, tmp_path, fake_db)
 
         assert success is True, error
         assert error is None
@@ -2626,7 +2649,7 @@ class TestRunJobConfigEnvVarExpansion:
             mock_agent = MagicMock()
             mock_agent.run_conversation.return_value = {"final_response": "ok"}
             mock_agent_cls.return_value = mock_agent
-            success, _, _, error = run_job(job)
+            success, _, _, error = _run_owned_job(job, tmp_path, fake_db)
 
         assert success is True
         assert error is None
@@ -2701,7 +2724,7 @@ class TestRunJobModelResolution:
             mock_agent = MagicMock()
             mock_agent.run_conversation.return_value = {"final_response": "ok"}
             mock_agent_cls.return_value = mock_agent
-            success, _, _, error = run_job(job)
+            success, _, _, error = _run_owned_job(job, tmp_path, fake_db)
 
         assert success is True
         assert error is None
@@ -2779,7 +2802,7 @@ class TestRunJobModelResolution:
              patch("hermes_cli.runtime_provider.resolve_runtime_provider",
                    return_value=self._RUNTIME), \
              patch("run_agent.AIAgent") as mock_agent_cls:
-            success, _, _, error = run_job(job)
+            success, _, _, error = _run_owned_job(job, tmp_path, fake_db)
 
         assert success is False
         assert error is not None
@@ -2868,14 +2891,14 @@ class TestRunJobModelResolution:
             mock_agent = MagicMock()
             mock_agent.run_conversation.return_value = {"final_response": "ok"}
             mock_agent_cls.return_value = mock_agent
-            success, _, _, error = run_job(job)
+            success, _, _, error = _run_owned_job(job, tmp_path, fake_db)
 
         assert success is True
         assert error is None
         assert mock_agent_cls.call_args.kwargs["model"] == "alias-key-model"
 
-    def test_corrupt_config_yaml_does_not_crash_with_job_model(self, tmp_path, monkeypatch):
-        """A malformed config.yaml degrades gracefully when the job has a model."""
+    def test_corrupt_config_yaml_refuses_even_with_job_model(self, tmp_path, monkeypatch):
+        """An explicit model cannot bypass invalid terminal/tool configuration."""
         (tmp_path / "config.yaml").write_text("{{{invalid yaml!!!")
         monkeypatch.delenv("HERMES_MODEL", raising=False)
 
@@ -2893,12 +2916,11 @@ class TestRunJobModelResolution:
             mock_agent = MagicMock()
             mock_agent.run_conversation.return_value = {"final_response": "ok"}
             mock_agent_cls.return_value = mock_agent
-            success, _, _, error = run_job(job)
+            success, _, _, error = _run_owned_job(job, tmp_path, fake_db)
 
-        # Explicit job model survives the corrupt-config fall-through.
-        assert success is True
-        assert error is None
-        assert mock_agent_cls.call_args.kwargs["model"] == "explicit-model"
+        assert success is False
+        assert "Hermes stopped because your settings file" in error
+        mock_agent_cls.assert_not_called()
 
 class TestRunJobSkillBacked:
     def test_run_job_preserves_skill_env_passthrough_into_worker_thread(self, tmp_path):
@@ -2947,7 +2969,7 @@ class TestRunJobSkillBacked:
             mock_agent_cls.return_value = mock_agent
 
             try:
-                success, output, final_response, error = run_job(job)
+                success, _output, final_response, error = _run_owned_job(job, tmp_path, fake_db)
             finally:
                 clear_env_passthrough()
 
@@ -3127,7 +3149,7 @@ class TestSilentDelivery:
              patch("cron.scheduler.claim_job_for_fire", return_value=True), \
              patch("cron.scheduler.run_job", return_value=(True, "# output", "[SILENT]", None)), \
              patch("cron.scheduler.save_job_output", return_value="/tmp/out.md"), \
-             patch("cron.scheduler._deliver_result") as deliver_mock, \
+             patch("cron.delivery_queue.enqueue", return_value={"status": "queued"}) as deliver_mock, \
              patch("cron.scheduler.mark_job_run"):
             from cron.scheduler import tick
             tick(verbose=False)
@@ -3140,7 +3162,7 @@ class TestSilentDelivery:
              patch("cron.scheduler.claim_job_for_fire", return_value=True), \
              patch("cron.scheduler.run_job", return_value=(True, "# output", response, None)), \
              patch("cron.scheduler.save_job_output", return_value="/tmp/out.md"), \
-             patch("cron.scheduler._deliver_result") as deliver_mock, \
+             patch("cron.delivery_queue.enqueue", return_value={"status": "queued"}) as deliver_mock, \
              patch("cron.scheduler.mark_job_run"):
             from cron.scheduler import tick
             tick(verbose=False)
@@ -3151,7 +3173,7 @@ class TestSilentDelivery:
              patch("cron.scheduler.claim_job_for_fire", return_value=True), \
              patch("cron.scheduler.run_job", return_value=(True, "# output", "[silent] nothing new", None)), \
              patch("cron.scheduler.save_job_output", return_value="/tmp/out.md"), \
-             patch("cron.scheduler._deliver_result") as deliver_mock, \
+             patch("cron.delivery_queue.enqueue", return_value={"status": "queued"}) as deliver_mock, \
              patch("cron.scheduler.mark_job_run"):
             from cron.scheduler import tick
             tick(verbose=False)
@@ -3166,7 +3188,7 @@ class TestSilentDelivery:
                  patch("cron.scheduler.claim_job_for_fire", return_value=True), \
                  patch("cron.scheduler.run_job", return_value=(True, "# output", marker, None)), \
                  patch("cron.scheduler.save_job_output", return_value="/tmp/out.md"), \
-                 patch("cron.scheduler._deliver_result") as deliver_mock, \
+                 patch("cron.delivery_queue.enqueue", return_value={"status": "queued"}) as deliver_mock, \
                  patch("cron.scheduler.mark_job_run"):
                 tick(verbose=False)
             deliver_mock.assert_not_called()
@@ -3179,7 +3201,7 @@ class TestSilentDelivery:
              patch("cron.scheduler.claim_job_for_fire", return_value=True), \
              patch("cron.scheduler.run_job", return_value=(True, "# output", response, None)), \
              patch("cron.scheduler.save_job_output", return_value="/tmp/out.md"), \
-             patch("cron.scheduler._deliver_result") as deliver_mock, \
+             patch("cron.delivery_queue.enqueue", return_value={"status": "queued"}) as deliver_mock, \
              patch("cron.scheduler.mark_job_run"):
             from cron.scheduler import tick
             tick(verbose=False)
@@ -3210,7 +3232,7 @@ class TestSilentDelivery:
              patch("cron.scheduler.claim_job_for_fire", return_value=True), \
              patch("cron.scheduler.run_job", return_value=(False, "# output", "", "some error")), \
              patch("cron.scheduler.save_job_output", return_value="/tmp/out.md"), \
-             patch("cron.scheduler._deliver_result") as deliver_mock, \
+             patch("cron.delivery_queue.enqueue", return_value={"status": "queued"}) as deliver_mock, \
              patch("cron.scheduler.mark_job_run"):
             from cron.scheduler import tick
             tick(verbose=False)
@@ -3221,7 +3243,7 @@ class TestSilentDelivery:
              patch("cron.scheduler.claim_job_for_fire", return_value=True), \
              patch("cron.scheduler.run_job", return_value=(True, "# full output", "[SILENT]", None)), \
              patch("cron.scheduler.save_job_output") as save_mock, \
-             patch("cron.scheduler._deliver_result") as deliver_mock, \
+             patch("cron.delivery_queue.enqueue", return_value={"status": "queued"}) as deliver_mock, \
              patch("cron.scheduler.mark_job_run"):
             save_mock.return_value = "/tmp/out.md"
             from cron.scheduler import tick
@@ -3235,12 +3257,13 @@ class TestSilentDelivery:
              patch("cron.scheduler.claim_job_for_fire", return_value=True), \
              patch("cron.scheduler.run_job", return_value=(True, "# output", "   \n\t  ", None)), \
              patch("cron.scheduler.save_job_output", return_value="/tmp/out.md"), \
-             patch("cron.scheduler._deliver_result") as deliver_mock, \
+             patch("cron.delivery_queue.enqueue", return_value={"status": "queued"}) as deliver_mock, \
              patch("cron.scheduler.mark_job_run") as mark_mock:
             from cron.scheduler import tick
             tick(verbose=False)
 
         deliver_mock.assert_not_called()
+        assert mark_mock.call_args.kwargs["execution_id"]
         mark_mock.assert_called_once()
         assert mark_mock.call_args[0][:2] == ("monitor-job", False)
 
@@ -3406,27 +3429,27 @@ class TestRunJobWakeGate:
             "script": script,
         }
 
-    def test_wake_false_skips_agent_and_returns_silent(self, caplog):
+    def test_wake_false_skips_agent_and_returns_silent(self, caplog, tmp_path):
         """When _run_job_script output ends with {wakeAgent: false}, the agent
         is not invoked and run_job returns the SILENT marker so delivery is
         suppressed."""
-        import cron.scheduler as scheduler
+        from cron import scheduler
         from cron import scheduler_script as sched_script
 
         with patch.object(sched_script, "_run_job_script",
                           return_value=(True, '{"wakeAgent": false}')), \
              patch("run_agent.AIAgent") as agent_cls:
-            success, doc, final, err = scheduler.run_job(self._make_job())
+            success, _doc, final, err = _run_owned_job(self._make_job(), tmp_path)
 
         assert success is True
         assert err is None
         assert final == SILENT_MARKER
         agent_cls.assert_not_called()
 
-    def test_wake_true_runs_agent_with_injected_output(self):
+    def test_wake_true_runs_agent_with_injected_output(self, tmp_path):
         """When the script returns {wakeAgent: true, data: ...}, the agent is
         invoked and the data line still shows up in the prompt."""
-        import cron.scheduler as scheduler
+        from cron import scheduler
         from cron import scheduler_script as sched_script
 
         script_output = '{"wakeAgent": true, "data": {"new": 3}}'
@@ -3437,7 +3460,7 @@ class TestRunJobWakeGate:
         with patch.object(sched_script, "_run_job_script",
                           return_value=(True, script_output)), \
              patch("run_agent.AIAgent", return_value=agent) as agent_cls:
-            success, doc, final, err = scheduler.run_job(self._make_job())
+            success, _doc, _final, err = _run_owned_job(self._make_job(), tmp_path)
 
         agent_cls.assert_called_once()
         # The script output should be visible in the prompt passed to
@@ -3758,85 +3781,115 @@ class TestParallelTick:
 
         assert result == 2
         # With max_workers=1, second job starts after first ends
-        end_s1 = [t for action, jid, t in call_times if action == "end" and jid == "s1"][0]
-        start_s2 = [t for action, jid, t in call_times if action == "start" and jid == "s2"][0]
+        end_s1 = next(t for action, jid, t in call_times if action == "end" and jid == "s1")
+        start_s2 = next(t for action, jid, t in call_times if action == "start" and jid == "s2")
         assert start_s2 >= end_s1, "Jobs ran concurrently despite max_parallel=1"
 
 class TestDeliverResultTimeoutCancelsFuture:
-    """When future.result(timeout=60) raises TimeoutError in the live adapter
-    delivery path, the outcome depends on whether the coroutine was already
-    running.  future.cancel() returning False means it is in flight on the wire
-    (cannot be un-sent) → treat as DELIVERED and skip the standalone fallback to
-    avoid a duplicate (#38922).  future.cancel() returning True means it never
-    started (wedged loop) → nothing was sent, so fall through to standalone or
-    the message is silently dropped.  Regression for #38922.
+    """When the live adapter's confirmation outlasts the wait, the outcome depends on whether the
+    send had STARTED on the gateway loop. Started: it is in flight (a paced multi-chunk send can
+    legitimately outlast the wait) — leave it running and skip the standalone fallback, which would
+    duplicate it (#38922). Never started (wedged loop): nothing was sent, so fall through to
+    standalone or the message is silently dropped. ``future.cancel()`` cannot tell the two apart:
+    a run_coroutine_threadsafe future stays PENDING until done, so cancel() returns True mid-send
+    and kills it — these tests drive a real loop for that reason.
     """
 
-    def test_live_adapter_timeout_assumes_delivered_no_duplicate(self):
-        """End-to-end: live adapter confirmation times out past the 60s budget.
-        The fix (#38922) treats the send as already-dispatched/delivered and
-        does NOT run the standalone fallback — otherwise the message is sent
-        twice."""
+    def _deliver(self, monkeypatch, adapter, loop):
+        from cron import scheduler_delivery
         from gateway.config import Platform
-        from concurrent.futures import Future
-
-        # Live adapter whose send() coroutine never resolves within the budget
-        adapter = AsyncMock()
-        adapter.send.return_value = MagicMock(success=True)
 
         pconfig = MagicMock()
         pconfig.enabled = True
         mock_cfg = MagicMock()
         mock_cfg.platforms = {Platform.TELEGRAM: pconfig}
-
-        loop = MagicMock()
-        loop.is_running.return_value = True
-
-        # A real concurrent.futures.Future, but we override .result() to raise
-        # TimeoutError exactly like the 60s wait firing in production.  We make
-        # .cancel() return False to simulate the coroutine being ALREADY RUNNING
-        # on the gateway loop (in flight on the wire) — the case where the send
-        # cannot be un-sent and a standalone resend would be a duplicate.
-        captured_future = Future()
-        cancel_calls = []
-
-        def in_flight_cancel():
-            cancel_calls.append(True)
-            return False  # already running — cannot be cancelled
-
-        captured_future.cancel = in_flight_cancel
-        captured_future.result = MagicMock(side_effect=TimeoutError("timed out"))
-
-        def fake_run_coro(coro, _loop):
-            coro.close()
-            return captured_future
-
-        job = {
-            "id": "timeout-job",
-            "deliver": "origin",
-            "origin": {"platform": "telegram", "chat_id": "123"},
-        }
-
+        monkeypatch.setattr(scheduler_delivery, "_LIVE_SEND_CONFIRM_TIMEOUT_SECS", 0.3)
+        job = {"id": "timeout-job", "deliver": "origin", "origin": {"platform": "telegram", "chat_id": "123"}}
         standalone_send = AsyncMock(return_value={"success": True})
-
         with patch("gateway.config.load_gateway_config", return_value=mock_cfg), \
              patch("cron.scheduler.load_config", return_value={"cron": {"wrap_response": False}}), \
-             patch("asyncio.run_coroutine_threadsafe", side_effect=fake_run_coro), \
              patch("tools.send_message_tool._send_to_platform", new=standalone_send):
-            result = _deliver_result(
-                job,
-                "Hello world",
-                adapters={Platform.TELEGRAM: adapter},
-                loop=loop,
-            )
+            result = _deliver_result(job, "Hello world", adapters={Platform.TELEGRAM: adapter}, loop=loop)
+        return result, standalone_send
 
-        # 1. cancel() was attempted (returned False = in flight).
-        assert cancel_calls == [True], "future.cancel() should be attempted on TimeoutError"
-        # 2. Delivery is reported successful (no error string returned).
-        assert result is None, f"expected successful delivery, got error: {result!r}"
-        # 3. The standalone fallback must NOT run — that is the #38922 fix:
-        #    an in-flight confirmation timeout is assume-delivered, not a resend.
+    def test_in_flight_send_outlasting_the_wait_keeps_running_and_is_not_duplicated(self, monkeypatch):
+        import asyncio
+        import threading
+        import time
+
+        loop = asyncio.new_event_loop()
+        threading.Thread(target=loop.run_forever, daemon=True).start()
+        events = []
+
+        async def slow_send(chat_id, content, **_kw):
+            events.append("started")
+            await asyncio.sleep(0.6)  # outlasts the 0.3s confirmation wait
+            events.append("finished")
+            return MagicMock(success=True, message_id="m1", raw_response=None)
+
+        adapter = MagicMock()
+        adapter.send = slow_send
+        try:
+            result, standalone_send = self._deliver(monkeypatch, adapter, loop)
+            time.sleep(0.6)
+        finally:
+            loop.call_soon_threadsafe(loop.stop)
+        assert result is None, f"expected the in-flight send to count as delivered, got {result!r}"
         standalone_send.assert_not_awaited()
+        assert events == ["started", "finished"], "the in-flight send must not be cancelled mid-way"
+
+    def test_send_that_never_started_falls_back_to_standalone(self, monkeypatch):
+        import asyncio
+        import threading
+        import time
+
+        loop = asyncio.new_event_loop()
+        threading.Thread(target=loop.run_forever, daemon=True).start()
+        loop.call_soon_threadsafe(time.sleep, 0.8)  # wedge the running loop past the 0.3s wait
+        adapter = MagicMock()
+        adapter.send = AsyncMock(return_value=MagicMock(success=True))
+        try:
+            result, standalone_send = self._deliver(monkeypatch, adapter, loop)
+            time.sleep(0.8)  # the loop un-wedges: the abandoned send must still never go out
+        finally:
+            loop.call_soon_threadsafe(loop.stop)
+        assert result is None, f"standalone should have delivered, got {result!r}"
+        standalone_send.assert_awaited_once()
+        adapter.send.assert_not_awaited()
+
+class TestDeliverResultPartialSplitDelivery:
+    def test_partial_split_delivery_is_not_resent_by_standalone(self):
+        """A split send that failed after delivering its head must not fall through to standalone,
+        which would deliver the whole payload again; the run reports the partial failure instead."""
+        import asyncio
+        import threading
+        from gateway.config import Platform
+        from gateway.platforms.base import SendResult
+
+        loop = asyncio.new_event_loop()
+        threading.Thread(target=loop.run_forever, daemon=True).start()
+        adapter = MagicMock()
+        adapter.splits_long_messages = True
+        adapter.send = AsyncMock(return_value=SendResult(
+            success=False, error="Twilio 400: rejected",
+            raw_response={"partial_overflow": True, "delivered_chunks": 2, "total_chunks": 5}))
+        pconfig = MagicMock()
+        pconfig.enabled = True
+        mock_cfg = MagicMock()
+        mock_cfg.platforms = {Platform.TELEGRAM: pconfig}
+        job = {"id": "partial-job", "deliver": "origin", "origin": {"platform": "telegram", "chat_id": "123"}}
+        standalone_send = AsyncMock(return_value={"success": True})
+        try:
+            with patch("gateway.config.load_gateway_config", return_value=mock_cfg), \
+                 patch("cron.scheduler.load_config", return_value={"cron": {"wrap_response": False}}), \
+                 patch("tools.send_message_tool._send_to_platform", new=standalone_send):
+                result = _deliver_result(job, "Hello world", adapters={Platform.TELEGRAM: adapter}, loop=loop)
+        finally:
+            loop.call_soon_threadsafe(loop.stop)
+        adapter.send.assert_awaited_once()
+        standalone_send.assert_not_awaited()
+        assert result and "delivered 2 of 5 chunks" in result, result
+
 
     def test_live_adapter_timeout_before_dispatch_falls_back_to_standalone(self):
         """When the coroutine never started (loop wedged) — future.cancel()
@@ -5127,7 +5180,7 @@ class TestCronContinuableSurfaceInChannel:
             try:
                 import asyncio as _asyncio
                 future.set_result(_asyncio.run(coro))
-            except BaseException as _e:  # noqa: BLE001
+            except BaseException as _e:
                 future.set_exception(_e)
             return future
 
@@ -5516,7 +5569,7 @@ class TestCronContinuableSurfaceInChannel:
         in_channel IS the continuation surface: the seed must fire on origin
         match alone. attach_to_session stays the opt-in for the SEPARATE
         default-surface mirror behavior; it must not be required here."""
-        from cron.scheduler import _deliver_result  # noqa: F401 (driven via helper)
+        from cron.scheduler import _deliver_result
 
         adapter = self._slack_adapter(supports_inchannel=True)
         with patch("cron.scheduler_delivery._seed_cron_channel_session", return_value=True) as seed_mock:
@@ -5800,7 +5853,6 @@ class TestBuildJobPromptExtraPrompt:
         job = {"prompt": "original"}
         _build_job_prompt(job, extra_prompt="transient context")
         assert job["prompt"] == "original"
-
 class TestSetCronSessionTitle:
     """Robust cron session titling: #50535/#50536/#50537."""
     def test_sets_title_when_no_collision(self):

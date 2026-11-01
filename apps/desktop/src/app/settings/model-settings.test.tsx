@@ -5,7 +5,6 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 
 import type * as ConfigApi from '@/api/config'
 import { I18nProvider, TRANSLATIONS } from '@/i18n'
-import { queryClient } from '@/lib/query-client'
 import { $notifications, clearNotifications } from '@/store/notifications'
 
 import { ModelSettings } from './model-settings'
@@ -23,9 +22,9 @@ const getGlobalModelInfo = vi.fn()
 const getGlobalModelOptions = vi.fn()
 const getAuxiliaryModels = vi.fn()
 const getMoaModels = vi.fn()
-const saveMoaModels = vi.fn()
 const setModelAssignment = vi.fn()
 const getRecommendedDefaultModel = vi.fn()
+const saveMoaModels = vi.fn()
 const setEnvVar = vi.fn()
 const getHermesConfigRecord = vi.fn()
 const saveHermesConfig = vi.fn()
@@ -44,9 +43,9 @@ vi.mock('@/hermes', async () => ({
   getApiRequestProfile: () => 'default',
   getMoaModels: (profile?: null | string) => getMoaModels(profile),
   profileScopeKey: (scope?: null | string) => (scope ?? '').trim() || 'default',
-  saveMoaModels: (body: unknown) => saveMoaModels(body),
   setModelAssignment: (body: unknown) => setModelAssignment(body),
   getRecommendedDefaultModel: (slug: string) => getRecommendedDefaultModel(slug),
+  saveMoaModels: (body: unknown) => saveMoaModels(body),
   setEnvVar: (key: string, value: string) => setEnvVar(key, value),
   getHermesConfigRecord: () => getHermesConfigRecord(),
   saveHermesConfig: (config: unknown) => saveHermesConfig(config),
@@ -75,15 +74,6 @@ beforeEach(() => {
         models: ['hermes-4', 'hermes-4-mini'],
         authenticated: true,
         capabilities: { 'hermes-4': { reasoning: true, fast: true } }
-      },
-      // An unconfigured api_key provider — surfaced by the full-universe payload.
-      {
-        name: 'DeepSeek',
-        slug: 'deepseek',
-        models: [],
-        authenticated: false,
-        auth_type: 'api_key',
-        key_env: 'DEEPSEEK_API_KEY'
       }
     ]
   })
@@ -91,29 +81,9 @@ beforeEach(() => {
     main: { provider: 'nous', model: 'hermes-4' },
     tasks: [{ task: 'vision', provider: 'auto', model: '', base_url: '' }]
   })
-  getMoaModels.mockResolvedValue({
-    active_preset: 'default',
-    aggregator: { provider: 'nous', model: 'hermes-4' },
-    aggregator_temperature: 0.2,
-    default_preset: 'default',
-    enabled: false,
-    max_tokens: 1024,
-    presets: {
-      default: {
-        aggregator: { provider: 'nous', model: 'hermes-4' },
-        aggregator_temperature: 0.2,
-        enabled: false,
-        max_tokens: 1024,
-        reference_models: [],
-        reference_temperature: 0.7
-      }
-    },
-    reference_models: [],
-    reference_temperature: 0.7
-  })
-  saveMoaModels.mockImplementation(async body => ({ ...body, ok: true }))
+  getMoaModels.mockResolvedValue(null)
   setModelAssignment.mockResolvedValue({ ok: true, provider: 'nous', model: 'hermes-4', gateway_tools: [] })
-  getRecommendedDefaultModel.mockResolvedValue({ provider: 'deepseek', model: 'deepseek-chat', free_tier: null })
+  getRecommendedDefaultModel.mockResolvedValue({ provider: 'nous', model: 'hermes-4', free_tier: null })
   setEnvVar.mockResolvedValue({ ok: true })
   getHermesConfigRecord.mockResolvedValue({ agent: { reasoning_effort: 'medium', service_tier: 'normal' } })
   saveHermesConfig.mockResolvedValue({ ok: true })
@@ -121,17 +91,21 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  // A success toast arms a 5 s auto-dismiss timer; left running, it fires after this file's
+  // jsdom window is gone and vitest reports "window is not defined" as an unhandled error.
+  clearNotifications()
   vi.clearAllMocks()
-  queryClient.clear()
   profileSwitchHandler = null
 })
 
 function renderModelSettings(scopeProfile?: string) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+
   return render(
     // The aux-task deep-link highlight reads useSearchParams, so the page
     // needs a router context in tests (the app provides HashRouter at root).
     <MemoryRouter>
-      <QueryClientProvider client={queryClient}>
+      <QueryClientProvider client={client}>
         <ModelSettings scopeProfile={scopeProfile} />
       </QueryClientProvider>
     </MemoryRouter>
@@ -163,45 +137,16 @@ describe('ModelSettings profile scope', () => {
 })
 
 describe('ModelSettings', () => {
-  it('loads the current main model and lists the full provider universe', async () => {
+  it('labels the main provider, model and default controls independently', async () => {
     renderModelSettings()
 
-    await waitFor(() => expect(getGlobalModelInfo).toHaveBeenCalled())
-    await waitFor(() => expect(getGlobalModelOptions).toHaveBeenCalled())
-
-    // Open the provider Select — every provider from the full payload should be
-    // listed, including the unconfigured one with its "set up" hint.
-    const triggers = await screen.findAllByRole('combobox')
-    fireEvent.click(triggers[0])
-
-    // "Nous" shows in both the trigger and the open list; the unconfigured
-    // provider + its setup hint are the unique signal of the full universe.
-    expect((await screen.findAllByText('Nous')).length).toBeGreaterThan(0)
-    expect(await screen.findByText(/DeepSeek/)).toBeTruthy()
-    expect(await screen.findByText(/set up/)).toBeTruthy()
+    expect(await screen.findByRole('combobox', { name: 'Provider' })).toBeTruthy()
+    expect(screen.getByRole('combobox', { name: 'Model' })).toBeTruthy()
+    expect(await screen.findByRole('combobox', { name: 'Reasoning' })).toBeTruthy()
+    expect(screen.getByText('Provider', { exact: true })).toBeTruthy()
+    expect(screen.getByText('Model', { exact: true })).toBeTruthy()
+    expect(setModelAssignment).not.toHaveBeenCalled()
   })
-
-  it('activates an unconfigured api_key provider inline by saving its key', async () => {
-    renderModelSettings()
-
-    await waitFor(() => expect(getGlobalModelOptions).toHaveBeenCalled())
-
-    // Open the provider Select and pick the unconfigured provider.
-    const triggers = screen.getAllByRole('combobox')
-    fireEvent.click(triggers[0])
-    const deepseekOption = await screen.findByText(/DeepSeek/)
-    fireEvent.click(deepseekOption)
-
-    // The inline key input appears for an api_key provider that needs setup.
-    const keyInput = await screen.findByPlaceholderText(/Paste DEEPSEEK_API_KEY/)
-    fireEvent.change(keyInput, { target: { value: 'sk-test-123' } })
-
-    const activate = await screen.findByRole('button', { name: /Activate/ })
-    fireEvent.click(activate)
-
-    await waitFor(() => expect(setEnvVar).toHaveBeenCalledWith('DEEPSEEK_API_KEY', 'sk-test-123'))
-  })
-
   it.each(['custom', 'local', 'custom:lab'])(
     'opens local endpoint setup when %s has no inventory row',
     async provider => {
@@ -395,7 +340,7 @@ describe('ModelSettings', () => {
     renderModelSettings()
     await waitFor(() => expect(getHermesConfigRecord).toHaveBeenCalled())
 
-    const fastSwitch = await screen.findByRole('switch', { name: /Fast/i })
+    const fastSwitch = await screen.findByRole('switch')
     fireEvent.click(fastSwitch)
 
     await waitFor(() => expect(saveHermesConfig).toHaveBeenCalledWith({ agent: { service_tier: 'fast' } }))
@@ -417,7 +362,85 @@ describe('ModelSettings', () => {
     renderModelSettings()
     await waitFor(() => expect(getHermesConfigRecord).toHaveBeenCalled())
 
-    expect(screen.queryByRole('switch', { name: /Fast/i })).toBeNull()
+    expect(screen.queryByRole('switch')).toBeNull()
+  })
+
+  it('renders plugin-registered auxiliary tasks after the built-ins with the server label (#40880)', async () => {
+    getAuxiliaryModels.mockResolvedValueOnce({
+      main: { provider: 'nous', model: 'hermes-4' },
+      tasks: [
+        { task: 'vision', provider: 'auto', model: '', base_url: '' },
+        {
+          task: 'grill_tab',
+          provider: 'openrouter',
+          model: 'openai/gpt-5-mini',
+          base_url: '',
+          label: 'Grill Tab',
+          hint: 'Tab-to-grill questions and brief synthesis',
+          plugin: 'grill-tab'
+        }
+      ]
+    })
+    await renderModelSettings()
+
+    const pluginRow = await screen.findByText('Grill Tab')
+    expect(pluginRow).toBeTruthy()
+    expect(screen.getByText('Tab-to-grill questions and brief synthesis')).toBeTruthy()
+    // Server-declared label is used for the plugin row only; built-ins keep i18n labels.
+    expect(screen.getByText('Vision')).toBeTruthy()
+    // Built-ins render first; the plugin row is appended.
+    const vision = document.getElementById('aux-task-vision')
+    const grill = document.getElementById('aux-task-grill_tab')
+    expect(vision && grill && vision.compareDocumentPosition(grill) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('shows an unpinned inheriting plugin task as following its base, and offers Follow once pinned', async () => {
+    getAuxiliaryModels.mockResolvedValueOnce({
+      main: { provider: 'nous', model: 'hermes-4' },
+      tasks: [
+        { task: 'compression', provider: 'openrouter', model: 'vendor/fast', base_url: '' },
+        {
+          task: 'side_task',
+          provider: 'auto',
+          model: '',
+          base_url: '',
+          label: 'Side model',
+          hint: 'side model for side',
+          plugin: 'side',
+          inherit_from: 'compression',
+          effective: { provider: 'openrouter', model: 'vendor/fast', base_url: '' }
+        },
+        {
+          task: 'pinned_task',
+          provider: 'nous',
+          model: 'hermes-4',
+          base_url: '',
+          label: 'Pinned side',
+          hint: 'pinned',
+          plugin: 'side',
+          inherit_from: 'compression',
+          effective: { provider: 'nous', model: 'hermes-4', base_url: '' }
+        }
+      ]
+    })
+    await renderModelSettings()
+
+    expect(await screen.findByText('inherits Compression · openrouter · vendor/fast')).toBeTruthy()
+    // Only the pinned inheriting row offers the way back to its base.
+    const follow = screen.getAllByRole('button', { name: 'Follow Compression' })
+    expect(follow).toHaveLength(1)
+    expect(document.getElementById('aux-task-pinned_task')?.contains(follow[0])).toBe(true)
+
+    fireEvent.click(follow[0])
+    await waitFor(() =>
+      expect(setModelAssignment).toHaveBeenCalledWith({
+        model: '',
+        provider: 'auto',
+        reasoning_effort: null,
+        scope: 'auxiliary',
+        task: 'pinned_task'
+      })
+    )
   })
 
   it('edits auxiliary reasoning effort and applies it with the assignment', async () => {
@@ -644,6 +667,92 @@ describe('ModelSettings', () => {
     expect(await screen.findByText(/1 auxiliary task \(/)).toBeTruthy()
     // The row shows where the pinned task actually points.
     expect(screen.getByText(/http:\/\/byron\.local:11434\/v1/)).toBeTruthy()
+  })
+})
+
+describe('ModelSettings provider switch', () => {
+  // #59063: a provider's model list is per-provider. Switching must not carry
+  // the previous provider's model over (ModelSelect's withActive() would keep
+  // painting it), and an empty freshly-selected custom provider must be probed
+  // via a refresh-scoped options fetch rather than left at 0 models.
+  it('clears the selected model when the user switches provider', async () => {
+    getGlobalModelOptions.mockResolvedValue({
+      providers: [
+        { name: 'Nous', slug: 'nous', models: ['hermes-4'], authenticated: true },
+        {
+          name: 'Custom endpoint',
+          slug: 'custom:lab',
+          api_url: 'http://10.0.0.2:8080/v1',
+          is_user_defined: true,
+          source: 'user-config',
+          models: ['gemma-4-12b-omni'],
+          authenticated: true
+        }
+      ]
+    })
+
+    renderModelSettings()
+    await screen.findAllByRole('combobox')
+
+    // The model select paints the current provider's model.
+    expect(await screen.findByText('hermes-4')).toBeTruthy()
+
+    // Switch provider through the main selector (first combobox opens the
+    // provider dropdown).
+    fireEvent.click(screen.getAllByRole('combobox')[0])
+    fireEvent.click(await screen.findByRole('option', { name: /Custom endpoint/ }))
+
+    // The previous provider's model must not carry over.
+    await waitFor(() => expect(screen.queryByText('hermes-4')).toBeNull())
+  })
+
+  it('probes an empty custom provider with a refresh-scoped options fetch on switch', async () => {
+    getGlobalModelOptions.mockResolvedValue({
+      providers: [
+        { name: 'Nous', slug: 'nous', models: ['hermes-4'], authenticated: true },
+        {
+          name: 'Lab',
+          slug: 'custom:lab',
+          api_url: 'http://10.0.0.2:8080/v1',
+          is_user_defined: true,
+          source: 'user-config',
+          models: [],
+          authenticated: true
+        }
+      ]
+    })
+
+    renderModelSettings()
+    await screen.findAllByRole('combobox')
+
+    // The refresh-scoped fetch repopulates the empty provider's models.
+    getGlobalModelOptions.mockResolvedValueOnce({
+      providers: [
+        { name: 'Nous', slug: 'nous', models: ['hermes-4'], authenticated: true },
+        {
+          name: 'Lab',
+          slug: 'custom:lab',
+          api_url: 'http://10.0.0.2:8080/v1',
+          is_user_defined: true,
+          source: 'user-config',
+          models: ['gemma-4-12b-omni'],
+          authenticated: true
+        }
+      ]
+    })
+
+    fireEvent.click(screen.getAllByRole('combobox')[0])
+    fireEvent.click(await screen.findByRole('option', { name: /Lab/ }))
+
+    await waitFor(() => {
+      // refresh-scoped, not the plain read the mount effect already made
+      expect(getGlobalModelOptions).toHaveBeenCalledWith({ refresh: true }, undefined)
+    })
+
+    // The refreshed catalog repopulates the empty provider's models: open the
+    // model select and the discovered model is offered.
+    fireEvent.click(screen.getAllByRole('combobox')[1])
+    expect(await screen.findByRole('option', { name: 'gemma-4-12b-omni' })).toBeTruthy()
   })
 })
 

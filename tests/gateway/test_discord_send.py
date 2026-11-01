@@ -45,7 +45,7 @@ def _ensure_discord_mock():
 
 _ensure_discord_mock()
 
-from plugins.platforms.discord.adapter import DiscordAdapter  # noqa: E402
+from plugins.platforms.discord.adapter import DiscordAdapter
 
 
 def _patch_discord_file(monkeypatch, discord_platform, factory):
@@ -169,7 +169,7 @@ async def test_send_retries_without_reference_when_reply_target_is_deleted():
 # Forum channel tests
 # ---------------------------------------------------------------------------
 
-import discord as _discord_mod  # noqa: E402 — imported after _ensure_discord_mock
+import discord as _discord_mod
 
 
 

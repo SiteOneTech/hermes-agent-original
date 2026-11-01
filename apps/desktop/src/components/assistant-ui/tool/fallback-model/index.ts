@@ -16,6 +16,7 @@ import {
   compactPreview,
   contextValue,
   formatDurationSeconds,
+  isNeutralFailure,
   isRecord,
   numberValue,
   parseMaybeObject,
@@ -738,6 +739,10 @@ function toolStatus(part: ToolPart, resultRecord: Record<string, unknown>): Tool
   }
 
   if (part.toolName === 'terminal' && error === 'Command failed with exit code 1.') {
+    return 'notice'
+  }
+
+  if (isNeutralFailure(part.toolName, part.result)) {
     return 'notice'
   }
 

@@ -451,7 +451,7 @@ class TestKeepaliveProbeFallback:
         task = MCPServerTask("test")
         task.initialize_result = _caps(tools=SimpleNamespace())
         task.session = SimpleNamespace(
-            send_ping=AsyncMock(side_effect=asyncio.TimeoutError()),
+            send_ping=AsyncMock(side_effect=TimeoutError()),
             list_tools=AsyncMock(return_value=SimpleNamespace(tools=[])),
         )
 
@@ -468,8 +468,8 @@ class TestKeepaliveProbeFallback:
         task = MCPServerTask("test")
         task.initialize_result = _caps(tools=SimpleNamespace())
         task.session = SimpleNamespace(
-            send_ping=AsyncMock(side_effect=asyncio.TimeoutError()),
-            list_tools=AsyncMock(side_effect=asyncio.TimeoutError()),
+            send_ping=AsyncMock(side_effect=TimeoutError()),
+            list_tools=AsyncMock(side_effect=TimeoutError()),
         )
 
         with pytest.raises((TimeoutError, asyncio.TimeoutError)):
@@ -483,7 +483,7 @@ class TestKeepaliveProbeFallback:
         task = MCPServerTask("test")
         task.initialize_result = _caps(prompts=SimpleNamespace())  # no tools
         task.session = SimpleNamespace(
-            send_ping=AsyncMock(side_effect=asyncio.TimeoutError()),
+            send_ping=AsyncMock(side_effect=TimeoutError()),
             list_tools=AsyncMock(),
         )
 
