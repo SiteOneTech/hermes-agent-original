@@ -3535,6 +3535,8 @@ export interface Translations extends NoticeTranslations {
       sendsOnRoute: (level: string) => string
       updateFailed: string
       fastFailed: string
+      daybreak: string
+      daybreakFailed: string
     }
     gatewayMenu: {
       gateway: string
