@@ -252,7 +252,7 @@ def _install_secondary_reconnect_context(
         if scoped_homes is not None:
             scoped_homes.append(Path(profile_home))
         if hydration_flags is not None:
-            hydration_flags.append(prepared_secret_scope)
+            hydration_flags.append(hydrate_secrets)
         yield
 
     monkeypatch.setattr(gateway_run, "_profile_runtime_scope", fake_scope)
@@ -323,9 +323,7 @@ class TestSecondaryProfileFatalRecovery:
             assert platform is Platform.DISCORD
             return True
 
-        monkeypatch.setattr(
-            "hermes_cli.env_loader.hydrate_and_build_profile_secret_scope", slow_hydrate
-        )
+        monkeypatch.setattr("hermes_cli.env_loader.hydrate_profile_secret_sources", slow_hydrate)
         monkeypatch.setattr(runner, "_connect_adapter_with_timeout", connect)
         monkeypatch.setattr(runner, "_connect_initial_adapter_with_timeout", connect)
         monkeypatch.setattr(gateway_run, "_load_gateway_config", dict)
@@ -349,7 +347,7 @@ class TestSecondaryProfileFatalRecovery:
         assert len(hydration_thread_ids) == 1
         assert hydration_thread_ids[0] != loop_thread_id
         assert ticks_during_hydration > 0
-        assert hydration_flags and all(scope == {} for scope in hydration_flags)
+        assert hydration_flags and all(flag is False for flag in hydration_flags)
         assert runner._profile_adapters["reviewer"][Platform.DISCORD] is replacement
 
     @pytest.mark.asyncio

@@ -227,7 +227,7 @@ class TestSecondaryAdapterUnavailableRecovery:
         scope = contextvars.ContextVar("probe_scope", default="launch")
 
         @contextmanager
-        def recording_scope(profile_home, *, hydrate_secrets=True):
+        def recording_scope(profile_home, *, hydrate_secrets=True, prepared_secret_scope=None):
             token = scope.set(str(profile_home))
             try:
                 yield
