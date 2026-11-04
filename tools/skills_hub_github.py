@@ -34,7 +34,8 @@ GITHUB_TAP_PROVIDERS = {
     "openai/skills": "OpenAI", "anthropics/skills": "Anthropic", "huggingface/skills": "HuggingFace",
     "nvidia/skills": "NVIDIA", "voltagent/awesome-agent-skills": "VoltAgent", "garrytan/gstack": "gstack",
     "minimax-ai/cli": "MiniMax", "wandb/skills": "Weights & Biases", "qdrant/skills": "Qdrant",
-    "pinecone-io/skills": "Pinecone",
+    "pinecone-io/skills": "Pinecone", "makenotion/skills": "Notion", "airtable/skills": "Airtable",
+    "shopify/shopify-ai-toolkit": "Shopify",
 }
 
 # Accepted ``--source`` provider filters (lowercased). Not real source ids —
@@ -211,7 +212,7 @@ def _tree_members(entries: list[dict], prefix: str):
                    item.get("type") == "blob" and item.get("mode") != "120000", item.get("sha"))
 
 
-def _regular_blob_sha(entries: List[dict], path: str) -> Optional[str]:
+def _regular_blob_sha(entries: list[dict], path: str) -> Optional[str]:
     """Object id of ``path`` when the tree lists it as a REGULAR blob, else None (missing, a
     directory, or a symlink — none of which may be fetched as this skill's file)."""
     for item in entries:
@@ -238,10 +239,13 @@ class GitHubSource(SkillSource):
         # + governance card; `trusted` via tools/skills_guard.py::TRUSTED_REPOS.
         {"repo": "NVIDIA/skills", "path": "skills/"},
         # Vendor-maintained skills for their own products; they replaced our copied
-        # weights-and-biases / qdrant / pinecone optional skills.
+        # weights-and-biases / qdrant / pinecone / notion / airtable / shopify optional skills.
         {"repo": "wandb/skills", "path": "skills/"},
         {"repo": "qdrant/skills", "path": "skills/"},
         {"repo": "pinecone-io/skills", "path": "skills/"},
+        {"repo": "makenotion/skills", "path": "skills/"},
+        {"repo": "Airtable/skills", "path": "plugins/airtable/skills/"},
+        {"repo": "Shopify/Shopify-AI-Toolkit", "path": "skills/"},
         {"repo": "garrytan/gstack", "path": ""},
         # --- Science bucket ---
         # Two scientific-skill repos share one hub category via the tap-level "bucket" key so

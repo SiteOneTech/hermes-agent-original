@@ -777,11 +777,11 @@ def _get_dashboard_plugins(force_rescan: bool = False) -> list:
 
 # Router mounting. ORDER IS ROUTE-MATCHING ORDER: literal paths must land before
 # templated siblings (e.g. /api/sessions/bulk-delete before /api/sessions/{id}).
-from hermes_cli.commerce_workspace_surface import router as _commerce_workspace_router  # noqa: E402
-from hermes_cli.fitness_coach_surface import router as _fitness_coach_router  # noqa: E402
-from hermes_cli.web_routers import factory as _factory_routes  # noqa: E402
+from hermes_cli.commerce_workspace_surface import router as _commerce_workspace_router
+from hermes_cli.fitness_coach_surface import router as _fitness_coach_router
+from hermes_cli.web_routers import factory as _factory_routes
 # Legacy re-export: ``web_server.<name>`` stays the address for the factory helpers/handlers.
-from hermes_cli.web_routers.factory import (  # noqa: E402,F401
+from hermes_cli.web_routers.factory import (
     _factory_append_notion_page_children, _factory_counts, _factory_dashboard_slice,
     _factory_doc_external_url, _factory_doc_inventory, _factory_effective_gates,
     _factory_gate_created_at, _factory_handoff_prompt, _factory_json_load, _factory_markdown_cell,
@@ -795,7 +795,7 @@ from hermes_cli.web_routers.factory import (  # noqa: E402,F401
     get_factory_dashboard, get_factory_events, get_factory_findings, get_factory_gates,
     get_factory_kanban_boards, get_factory_project_handoff, get_factory_projects,
     get_factory_tasks, run_factory_project_action, sync_factory_project_notion)
-from hermes_cli.web_routers import (  # noqa: E402
+from hermes_cli.web_routers import (
     files as _files_routes,
     git as _git_routes,
     local_models as _local_models_routes,
@@ -809,6 +809,7 @@ from hermes_cli.web_routers import (  # noqa: E402
     config_env as _config_env_routes,
     models as _models_routes,
     messaging as _messaging_routes,
+    messaging_relay as _messaging_relay_routes,
     oauth as _oauth_routes,
     cron as _cron_routes,
     mcp as _mcp_routes,
@@ -850,6 +851,7 @@ app.include_router(_config_env_routes.config_router)
 app.include_router(_models_routes.router)
 app.include_router(_config_env_routes.router)
 app.include_router(_messaging_routes.router)
+app.include_router(_messaging_relay_routes.router)
 app.include_router(_oauth_routes.router)
 app.include_router(_sessions_routes.manage_router)
 app.include_router(_status_routes.logs_router)

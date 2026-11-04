@@ -69,6 +69,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 # "skipped on this host" note and the lanes can never disagree.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.ci.list_os_marked_tests import gated_specs, spec_hosts
+from scripts.run_tests_launch import start_pytest
 
 
 def _sweep_killed_run_roots(root: str) -> None:
@@ -649,7 +650,6 @@ def _run_one_file_once(
     file_timeout: float,
 ) -> tuple[Path, int, str, dict[str, int], float]:
     """Single attempt of a per-file pytest subprocess (see _run_one_file)."""
-    cmd = [sys.executable, "-m", "pytest", str(file), *pytest_args]
 
     # Give this subprocess its own pytest temp root.
     #
@@ -675,31 +675,7 @@ def _run_one_file_once(
     env["TMPDIR"] = temproot
 
     subproc_start = time.monotonic()
-    # launch the pytest process
-    proc = subprocess.Popen(
-        cmd,
-        cwd=repo_root,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True, encoding="utf-8", errors="replace",
-        env=env,
-        # POSIX: place the child at the head of its own process group so
-        # _kill_tree can SIGKILL the group atomically.
-        # Windows: this maps to CREATE_NEW_PROCESS_GROUP in CPython 3.12+;
-        # _kill_tree handles the Windows path via taskkill /F /T.
-        start_new_session=True,
-    )
-
-    # Capture the pgid NOW, before the leader can exit and be reaped. Once
-    # the leader is reaped, os.getpgid(proc.pid) raises ProcessLookupError
-    # even though grandchildren in that group are still alive — defeating
-    # the whole cleanup. None on Windows where the pgid concept doesn't apply.
-    pgid: int | None = None
-    if sys.platform != "win32":
-        try:
-            pgid = os.getpgid(proc.pid)
-        except (ProcessLookupError, PermissionError):
-            pgid = None
+    proc, pgid = start_pytest(file, pytest_args, repo_root, env, _runner_scratch_root())
 
     try:
         output, _ = proc.communicate(timeout=file_timeout)
@@ -736,6 +712,10 @@ def _run_one_file_once(
 
     if rc not in (0, 5) and not output.strip():
         output = f"pytest child exited {rc} (0x{rc & 0xffffffff:08x}) with no output: {file}\n"
+    elif rc > 1 and rc not in (5, 124):
+        # A file can pass every test and still exit non-zero; without the
+        # status the failure dump shows only a green pytest summary.
+        output += f"(pytest child exit status {rc})\n"
 
     if rc == 5:
         # No tests collected in THIS file — legitimate per-file: a
@@ -975,6 +955,14 @@ def _save_durations(
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+#: Estimate for a file with no cached duration (roughly the P50 from profiling).
+_DEFAULT_FILE_DURATION = 2.0
+
+
+def _estimated_duration(file: Path, durations: dict[str, float], repo_root: Path) -> float:
+    return float(durations.get(_format_file(file, repo_root), _DEFAULT_FILE_DURATION))
+
+
 def _compute_lpt_slices(
     files: list[Path],
     slice_count: int,
@@ -987,8 +975,7 @@ def _compute_lpt_slices(
     file to the slice with the smallest accumulated time so far. This
     minimizes the makespan (max slice duration) and keeps CI jobs balanced.
 
-    Files with no cached duration get a default estimate of 2.0s (roughly
-    the P50 from profiling). This means first-time runs (no cache) still
+    Files with no cached duration get _DEFAULT_FILE_DURATION. This means first-time runs (no cache) still
     get reasonable distribution, and new files don't all land in one slice.
 
     Returns a list of N file-lists, one per slice (0-indexed).
@@ -996,11 +983,9 @@ def _compute_lpt_slices(
     if slice_count < 2:
         return [files]
 
-    default_dur = 2.0
     file_durs: list[tuple[Path, float]] = []
     for f in files:
-        rel = _format_file(f, repo_root)
-        dur = durations.get(rel, default_dur)
+        dur = _estimated_duration(f, durations, repo_root)
         file_durs.append((f, dur))
 
     # Sort longest first (LPT).
@@ -1017,6 +1002,22 @@ def _compute_lpt_slices(
         bucket_totals[min_idx] += dur
 
     return bucket_files
+
+
+def _longest_first(
+    files: list[Path], durations: dict[str, float], repo_root: Path
+) -> list[Path]:
+    """Order files for submission: slowest cached duration first.
+
+    The pool starts files in submission order, so a slow file submitted late
+    runs alone at the end while the other workers sit idle. Starting the slow
+    ones first leaves only short files for the tail. Files without a cached
+    duration get _DEFAULT_FILE_DURATION. Ties keep their original order, so an
+    empty cache leaves the order unchanged.
+    """
+    if not durations:
+        return files  # skip a path resolve per file when there is nothing to sort by
+    return sorted(files, key=lambda f: -_estimated_duration(f, durations, repo_root))
 
 
 def _slice_files(
@@ -1048,13 +1049,9 @@ def _slice_files(
     bucket_files = _compute_lpt_slices(sorted(files), slice_count, {}, repo_root)
 
     target = bucket_files[slice_index - 1]
-    target_dur = sum(
-        durations.get(_format_file(f, repo_root), 2.0) for f in target
-    )
+    target_dur = sum(_estimated_duration(f, durations, repo_root) for f in target)
     total_dur = sum(
-        durations.get(_format_file(f, repo_root), 2.0)
-        for bucket in bucket_files
-        for f in bucket
+        _estimated_duration(f, durations, repo_root) for bucket in bucket_files for f in bucket
     )
     print(
         f"Slice {slice_index}/{slice_count}: {len(target)} files "
@@ -1651,17 +1648,16 @@ def main() -> int:
         sys.path.insert(0, str(repo_root))
     _sweep_killed_run_roots(_runner_scratch_root())
 
-    # Duration cache for the timeout scaler: known-slow files get
-    # proportional headroom instead of a false timeout-kill under
-    # CI load (see _effective_file_timeout). Loaded once and shared by
-    # every batch below.
+    # Duration cache serves both the timeout scaler and upstream's longest-first
+    # ordering. Keep the fork's exclusive-file isolation: nested subprocess
+    # pools must finish before this runner opens its regular parallel pool.
     timeout_durations = _load_durations(repo_root)
 
-    def _run_batch(batch: List[Path], workers: int) -> None:
-        """Run one batch and report through the shared progress callback."""
+    def _run_batch(batch: list[Path], workers: int) -> None:
+        """Run one batch in longest-first order through the shared callback."""
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures: List[Future] = []
-            for file in batch:
+            futures: list[Future] = []
+            for file in _longest_first(batch, timeout_durations, repo_root):
                 t0 = time.monotonic()
                 fut = pool.submit(
                     _run_one_file, file, pytest_passthrough, repo_root,
@@ -1672,9 +1668,8 @@ def main() -> int:
                 )
                 fut.add_done_callback(lambda f, file=file, t0=t0: _on_done(file, t0, f))
                 futures.append(fut)
-            # Block until everything's done. ThreadPoolExecutor.__exit__ waits
-            # for all submitted work, but doing it explicitly here makes the
-            # control flow obvious.
+            # ThreadPoolExecutor.__exit__ also waits, but doing so explicitly
+            # keeps the two-phase exclusive/parallel control flow evident.
             for fut in futures:
                 fut.result() if fut.exception() is None else None
 

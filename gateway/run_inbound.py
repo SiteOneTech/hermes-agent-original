@@ -631,10 +631,10 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
                 # The chat's first input, and a command's turn, not committed yet never commit.
                 authority.fence_route(_quick_key)
             return
-        from gateway.session_contract import Principal, SessionRef
+        from gateway.session_contract import SessionActor, SessionRef
         from hermes_state_runtime import RuntimeStoreError, list_session_admissions
         ref = SessionRef(authority.profile_id, sid)
-        actor = Principal('messaging-control', authority.profile_id,
+        actor = SessionActor('messaging-control', authority.profile_id,
                           frozenset({'session:submit', 'session:control'}), 'busy-command')
         rows = await asyncio.to_thread(list_session_admissions, authority.db, session_id=sid)
         # A FIFO paused on a lost (``unknown``) turn is the operator's to resume: its pause notice
@@ -1905,7 +1905,7 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
         agent_path = to_agent_visible_cache_path(os.path.abspath(path))
         return f"[voice message could not be transcribed automatically; the audio is available at: {agent_path}]"
 
-    async def _transcribe_one_clip(self, path: str, transcribe_audio, transcribe_audio_local_fallback) -> Tuple[Optional[str], str]:
+    async def _transcribe_one_clip(self, path: str, transcribe_audio, transcribe_audio_local_fallback) -> tuple[Optional[str], str]:
         """``(transcript_or_None, note)`` for one clip via configured STT with local fallback."""
         result = await asyncio.to_thread(transcribe_audio, path, None, "gateway")
         if not result.get("success"):
@@ -1932,8 +1932,8 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
         return transcript, f'"{transcript}"'
 
     async def _enrich_message_with_transcription(
-        self, user_text: str, audio_paths: List[str], clip_memo: Optional[dict] = None,
-    ) -> tuple[str, List[str]]:
+        self, user_text: str, audio_paths: list[str], clip_memo: Optional[dict] = None,
+    ) -> tuple[str, list[str]]:
         """Transcribe voice clips with the configured STT provider and prepend the transcripts →
         ``(enriched_text, successful_transcripts)``; the transcripts (input order; empty if every clip
         failed or STT is disabled) let callers echo them back before the agent loop. ``clip_memo``
@@ -1958,7 +1958,7 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
             return self._prepend_media_prefix("[voice message could not be transcribed]", user_text), []
 
         enriched_parts = []
-        successful_transcripts: List[str] = []
+        successful_transcripts: list[str] = []
         for path in audio_paths:
             try:
                 if clip_memo is not None and path in clip_memo:
@@ -1981,7 +1981,7 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
             user_text = self._prepend_media_prefix("\n\n".join(enriched_parts), user_text)
         return user_text, successful_transcripts
 
-    def _pending_event_audio_paths(self, event) -> List[str]:
+    def _pending_event_audio_paths(self, event) -> list[str]:
         """Return STT-eligible paths from a pending voice message."""
         from gateway.run import _event_media_is_stt_input
         return [
@@ -1991,7 +1991,7 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
 
     async def _transcribe_pending_audio_event_once(
         self, event, user_text: Optional[str] = None
-    ) -> tuple[str | None, List[str]]:
+    ) -> tuple[str | None, list[str]]:
         """Transcribe a pending audio event once and cache the result on the event: the interrupt
         monitor and the pending-drain path both need it — one STT call and one echo per message.
         ``user_text`` is a deliberate override of the caption; ``None`` reads ``event.text`` live."""
@@ -2023,7 +2023,7 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
         return enriched_text, successful_transcripts
 
     async def _echo_pending_stt_transcripts_once(
-        self, event, adapter, source, transcripts: List[str], *, metadata=None,
+        self, event, adapter, source, transcripts: list[str], *, metadata=None,
         log_context: str = "Transcript",
     ) -> None:
         """Echo pending-event STT transcripts to the chat at most once. Tracked as a COUNT (not a
@@ -2040,7 +2040,7 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
 
     async def _transcribe_and_echo_pending_voice(
         self, event, adapter, source, text: str, *, log_context: str, metadata=_UNSET
-    ) -> tuple[str, List[str]]:
+    ) -> tuple[str, list[str]]:
         """Transcribe a pending voice event and echo transcripts once → ``(enriched_text,
         transcripts)`` for ``agent.interrupt()`` or the pending-drain flow; ``(text, [])`` when there
         is no STT-eligible media (caller owns the ``_build_media_placeholder`` fallback). ``text`` is
