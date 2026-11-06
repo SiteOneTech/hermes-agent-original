@@ -592,3 +592,6 @@ class _PluginProvidersPutBody(BaseModel):
 class _PluginVisibilityBody(BaseModel):
     hidden: bool
 
+class _PluginAutoUpdateBody(BaseModel):
+    enabled: bool
+
