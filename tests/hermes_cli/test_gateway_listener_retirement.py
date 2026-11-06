@@ -62,4 +62,3 @@ def test_standalone_serve_keeps_the_permit_protocol(monkeypatch):
                        headers=headers).json() == {"ok": True}
     assert "error" in server.handle_request(RPC)
     assert fence._committed
-
