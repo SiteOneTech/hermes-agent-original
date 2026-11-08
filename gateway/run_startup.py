@@ -37,39 +37,39 @@ from typing import Any, Dict, Optional, Tuple
 # Log-record parity with the origin module.
 logger = logging.getLogger("gateway.run")
 
-# Startup connects overlap (#83791), but each one is launched only after the previous
-# platform has had this long to finish. A real connect is network-bound and blows past it,
-# so the overlap is unchanged; a connect that returns immediately is fully observed —
-# including the restart its "connected" report may request — before the next platform is
-# started, so no platform behind a restart request ever connects.
-_STARTUP_CONNECT_STAGGER_S = 0.05
-
 
 def recover_left_core_in(
     home: Path, *, hydrate_secrets: bool = True, prepared_secret_scope: Optional[dict] = None,
-) -> None:
-    """Install the catalog plugin of every feature that left core (Home Assistant) *home* uses, in
-    *home*'s runtime scope (its config, secrets and allow_lazy_installs); once per process per home.
-    Blocking: call it off the event loop."""
+) -> list[str]:
+    """Install every needed left-core catalog plugin in *home*'s runtime scope.
+
+    Return installed plugin names so startup can reload platform configuration when needed.
+    Blocking: call off the event loop.
+    """
     from gateway.run import _profile_runtime_scope
     from hermes_cli.left_core_migration import recover_at_startup
     with _profile_runtime_scope(
         Path(home), prepared_secret_scope=prepared_secret_scope, hydrate_secrets=hydrate_secrets,
     ):
-        recover_at_startup(gateway_start=True)
+        return recover_at_startup(gateway_start=True)
 
 
-def recover_left_core_at_gateway_start() -> None:
+def recover_left_core_at_gateway_start() -> bool:
     """Left-core migration for the homes whose platform config the runner loads first: the launch
     home and the default root (the multiplex primary; a named launcher is then served as a
     secondary). Every secondary runs :func:`recover_left_core_in` before its plugins are discovered,
-    so a platform plugin it gets starts its adapter in the same gateway start."""
-    from hermes_cli.left_core_migration import recover_at_startup
+    so a platform plugin it gets starts its adapter in the same gateway start. True when a plugin
+    that ships a gateway platform was installed: platform config loaded before it lacks the platform."""
+    from hermes_cli.left_core_migration import LEFT_CORE
     from hermes_constants import get_default_hermes_root, get_hermes_home
-    recover_at_startup(gateway_start=True)
+    # The launch home too runs in its own scope: a multiplexing config load already armed fail-closed
+    # secret reads, so an unscoped install read of its own .env raised. Its sources were hydrated at boot.
+    launch = Path(get_hermes_home())
+    installed = recover_left_core_in(launch, hydrate_secrets=False)
     root = Path(get_default_hermes_root())
-    if root.resolve() != Path(get_hermes_home()).resolve():
-        recover_left_core_in(root)
+    if root.resolve() != launch.resolve():
+        installed += recover_left_core_in(root)
+    return any(feature.platform and feature.plugin in installed for feature in LEFT_CORE)
 
 
 
@@ -1058,7 +1058,7 @@ class GatewayStartupMixin:
     _ALLOWLIST_ENV_PLATFORMS = (
         "TELEGRAM", "DISCORD", "WHATSAPP", "WHATSAPP_CLOUD", "SLACK", "SIGNAL", "EMAIL", "SMS",
         "MATTERMOST", "MATRIX", "DINGTALK", "FEISHU", "WECOM", "WECOM_CALLBACK", "WEIXIN",
-        "BLUEBUBBLES", "QQ", "YUANBAO",
+        "BLUEBUBBLES", "QQ",
     )
     _BUILTIN_ALLOWED_USERS_VARS = tuple(f"{p}_ALLOWED_USERS" for p in _ALLOWLIST_ENV_PLATFORMS) + (
         "SIGNAL_GROUP_ALLOWED_USERS", "TELEGRAM_GROUP_ALLOWED_USERS",
@@ -1335,40 +1335,21 @@ class GatewayStartupMixin:
                 ok = await self._connect_initial_adapter_with_timeout(adp, p)
             except Exception as _exc:
                 return (p, adp, p_cfg, "exception", _exc)
-            if ok:
-                # Report the outcome HERE, not from the aggregation pass: a listener on this
-                # status (the desktop, a service supervisor) may answer "connected" with a
-                # restart request, and that request has to be visible before the next platform
-                # is launched. Registration stays in the single-threaded aggregation below.
-                # connect() may return True on a degraded (unconfirmed) receive path; don't stamp "connected".
-                _degraded = adp.send_path_degraded
-                self._update_platform_runtime_status(
-                    p.value, platform_state="retrying" if _degraded else "connected", error_code=None,
-                    error_message=adp.DEGRADED_STATUS_MESSAGE if _degraded else None,
-                )
             return (p, adp, p_cfg, "ok" if ok else "failed", None)
 
         if not _pending_connects:
             return []
-        # Abort-aware staggered launch: connects still overlap, but a restart/shutdown requested by a
-        # platform that has already reported its outcome stops the platforms behind it from connecting
-        # at all. Anything in flight is cancelled, anything already connected is torn down.
-        _task_map: Dict[Any, Tuple] = {}
-        _pending_tasks: set = set()
-        _unstarted = list(_pending_connects)
-        while _unstarted and not self._startup_should_abort():
-            _p, _c, _a = _unstarted.pop(0)
-            _t = asyncio.ensure_future(_connect_one_startup(_p, _c, _a))
-            _task_map[_t] = (_p, _c, _a)
-            _pending_tasks.add(_t)
-            if _unstarted:
-                _done, _ = await asyncio.wait({_t}, timeout=_STARTUP_CONNECT_STAGGER_S)
-                _pending_tasks -= _done
+        # Abort-aware concurrent wait: a restart/shutdown mid-connect cancels pending connects, tears down
+        # completed ones, and aborts startup.
+        _task_map = {
+            asyncio.ensure_future(_connect_one_startup(p, c, a)): (p, c, a) for (p, c, a) in _pending_connects
+        }
+        _pending_tasks = set(_task_map)
         while _pending_tasks:
             _done, _pending_tasks = await asyncio.wait(_pending_tasks, timeout=0.05)
             if _pending_tasks and self._startup_should_abort():
                 break
-        if not _unstarted and not _pending_tasks:
+        else:
             return [_t.exception() or _t.result() for _t in _task_map]
         # Settle in-flight connects FIRST so a completed adapter's disconnect cannot unblock a sibling.
         for _t in _pending_tasks:
@@ -1381,10 +1362,6 @@ class GatewayStartupMixin:
         ]
         for _t in [*_pending_tasks, *_connected_ok]:
             await self._startup_teardown_adapter(_task_map[_t][2], _task_map[_t][0])
-        # Adapters that never got to connect were still created and wired by the pre-filter pass;
-        # tear them down on the same path _connect_one_startup uses for its own pre-connect abort.
-        for _p, _c, _a in _unstarted:
-            await self._startup_teardown_adapter(_a, _p)
         await self._abort_startup_if_shutdown_requested()
         return None
 
@@ -1424,12 +1401,13 @@ class GatewayStartupMixin:
             if outcome == "ok":
                 self._publish_primary_adapter(platform, adapter)
                 connected_count += 1
-                # The runtime status was already stamped by _connect_one_startup, as soon as the
-                # connect returned; only registration and the log line are deferred to here.
-                logger.info(
-                    "\u2713 %s connected%s", platform.value,
-                    " (degraded)" if adapter.send_path_degraded else "",
+                # connect() may return True on a degraded (unconfirmed) receive path; don't stamp "connected".
+                _degraded = adapter.send_path_degraded
+                self._update_platform_runtime_status(
+                    platform.value, platform_state="retrying" if _degraded else "connected", error_code=None,
+                    error_message=adapter.DEGRADED_STATUS_MESSAGE if _degraded else None,
                 )
+                logger.info("\u2713 %s connected%s", platform.value, " (degraded)" if _degraded else "")
                 continue
             # outcome == "failed"
             logger.warning("\u2717 %s failed to connect", platform.value)

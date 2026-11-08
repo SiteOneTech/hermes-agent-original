@@ -14,7 +14,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from agent.file_safety import HOME_CREDENTIAL_DIRS
 from hermes_cli.archive_safe import archive_root_dirs, make_targz, normalize_archive_parts, safe_extract_targz
@@ -22,6 +22,9 @@ from hermes_cli import config_backend as _config_backend
 from hermes_cli.profiles_config import _migrate_profile_config_if_outdated
 from hermes_cli.home_data_layout import PM_RUNTIME_ROOT_DIRS, SECRET_CACHE_STORES
 from hermes_cli.profiles_remove import _rmtree_make_writable, _rmtree_with_retry, wait_profile_unowned
+from hermes_cli.profiles_export_scrub import (
+    GATEWAY_CONNECTION_STORE_RE as _GATEWAY_CONNECTION_STORE_RE, GATEWAY_CONNECTION_STORES as _GATEWAY_CONNECTION_STORES,
+    scrub_export_secrets as _scrub_export_secrets)
 from hermes_constants import (
     LOCAL_RUNTIME_ROOT_DIRS, PROFILE_ID_RE, clear_named_profile_deleted, mark_named_profile_deleted,
     named_profile_has_identity, named_profile_is_deleted, named_profile_is_live,
@@ -145,6 +148,7 @@ def _clone_all_copytree_ignore(source_dir: Path):
         ignored = _non_exportable_entries(directory, names)
         if at_root:
             ignored.update(root_exclude & set(names))
+            ignored.update(n for n in names if _GATEWAY_CONNECTION_STORE_RE.fullmatch(n.casefold()))
         return ignored
 
     return _ignore
@@ -183,6 +187,7 @@ PROFILE_CREDENTIAL_PATHS = frozenset({
     "chrome-debug",                 # /browser connect Chrome profile (cookies, logins)
     "home",                         # subprocess HOME: gh, git, ssh, npm and skill-CLI credentials
     "backups", "state-snapshots",   # pre-update zips, config copies, update snapshots of the stores
+    *_GATEWAY_CONNECTION_STORES,    # saved gateways' session tokens + OAuth sign-ins (sidecars: _STORE_COPY_RE)
     *_OS_CREDENTIAL_STORES,
 })
 _CREDENTIAL_PATH_PARTS = tuple(tuple(p.casefold().split("/")) for p in PROFILE_CREDENTIAL_PATHS)
@@ -192,7 +197,7 @@ _CREDENTIAL_PATH_PARTS = tuple(tuple(p.casefold().split("/")) for p in PROFILE_C
 # writers' formats match (post_update ``.bak-<stamp>[.N]``, config_backups' legacy siblings), because a
 # hand-named ``config.yaml.bak-my-note`` is the user's and ships through the export scrub instead.
 _STORE_COPY_RE = re.compile(
-    r"auth\.json\..+|\.env\.bak.*"
+    r"auth\.json\..+|\.env\.bak.*|gateway-connections?(?:-tokens)?\.json\..+"
     r"|config\.yaml\.(?:bak-\d{8}t\d{6}z(?:\.\d+)?|bak\.\d+|corrupt\..*|bak-pre-migrate-.*)"
 )
 
@@ -667,26 +672,11 @@ class ProfileInfo:
     # True when ``description`` was LLM-generated and not yet user-confirmed (dashboard
     # shows a "review" badge).
     description_auto: bool = False
-    # Dashboard-facing visual metadata for profile cards. This is intentionally
-    # profile metadata, not config.yaml: changing the visible name/avatar must
-    # not rename the profile id or affect runtime model/provider settings.
-    # ``display_name`` is presentation only — resolution/comparison/spawn paths
-    # always use ``name``.
+    # Presentation-only display name; resolution/comparison/spawn always use ``name``.
     display_name: str = ""
-    avatar_path: str = ""
-    engine_label: str = ""
-    engine_model: str = ""
     # Bot Mode title (``profile.yaml`` ``ui_meta['hermes-bots'].title``) — the name
     # the Bots roster shows. Presentation-only, like ``display_name``.
     bot_title: str = ""
-    # Dashboard capability summaries. ``toolsets`` mirrors the profile's
-    # configured runtime/tool surface (top-level ``toolsets`` first,
-    # ``platform_toolsets.cli`` as a compatibility fallback). ``assigned_skills``
-    # is the explicit preload list from config, while ``skill_names`` is the
-    # installed/enabled skill inventory for display/search.
-    toolsets: List[str] = field(default_factory=list)
-    assigned_skills: List[str] = field(default_factory=list)
-    skill_names: List[str] = field(default_factory=list)
     # Canonical ids this profile was previously known by (``hermes profile rename``
     # appends here). Lets Bot Mode group chats re-link persisted member
     # descriptors to the renamed live profile (#110200).
@@ -794,9 +784,6 @@ _SKILL_COUNT_TTL_SECONDS = 600.0
 _SKILL_COUNT_RECHECK_SECONDS = 60.0
 _SKILL_COUNT_NEXT_CHECK: dict[str, float] = {}
 _SKILL_COUNT_LOCK = threading.Lock()
-# Same contract for the dashboard capability summary, which re-walks the same skill tree.
-_PROFILE_CAPS_CACHE: dict[str, tuple[tuple, float, dict]] = {}
-_PROFILE_CAPS_NEXT_CHECK: dict[str, float] = {}
 # One scan lock per skills dir so concurrent cold scans of the SAME profile share one walk
 # while different profiles' scans still run in parallel.
 _SKILL_COUNT_SCAN_LOCKS: dict[str, threading.Lock] = {}
@@ -857,162 +844,6 @@ def _count_skills(profile_dir: Path) -> int:
         return count
 
 
-def _listify_config_value(value: Any) -> List[str]:
-    """Normalize a config scalar/list into a stable list of non-empty strings.
-
-    ``hermes config set`` serializes collection values as quoted JSON/Python
-    literals. Reuse the runtime skill parser so the dashboard capability card
-    cannot report a skill as enabled when runtime loading has disabled it.
-    """
-    if value is None:
-        return []
-    from agent.skill_utils import parse_config_string_list
-
-    raw_items = parse_config_string_list(value)
-    result: List[str] = []
-    for item in raw_items:
-        text = str(item).strip()
-        if text:
-            result.append(text)
-    return result
-
-
-def _read_skill_name_from_md(skill_md: Path) -> str:
-    """Return the skill's frontmatter name, falling back to its directory."""
-    fallback = skill_md.parent.name
-    try:
-        text = skill_md.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return fallback
-    if not text.startswith("---"):
-        return fallback
-    try:
-        import yaml
-
-        frontmatter = text.split("---", 2)[1]
-        data = yaml.safe_load(frontmatter) or {}
-        if isinstance(data, dict):
-            name = str(data.get("name") or "").strip()
-            if name:
-                return name
-    except Exception:
-        return fallback
-    return fallback
-
-
-def _enabled_profile_skill_names(profile_dir: Path, config: dict) -> List[str]:
-    """List installed skill names that are not disabled in config.yaml.
-
-    Walks through the same ``iter_skill_index_files`` :func:`_walk_skill_count` uses, so the
-    names shown and the number counted describe one inventory — it prunes excluded/support
-    dirs and token-gates org mirrors to the active org, which a bare ``rglob`` does not.
-    """
-    skills_dir = profile_dir / "skills"
-    if not skills_dir.is_dir():
-        return []
-    from agent.skill_utils import iter_skill_index_files
-
-    skills_cfg = config.get("skills") if isinstance(config, dict) else {}
-    disabled = set()
-    if isinstance(skills_cfg, dict):
-        disabled = {str(name).strip() for name in _listify_config_value(skills_cfg.get("disabled"))}
-    names: set[str] = set()
-    for skill_md in iter_skill_index_files(skills_dir, "SKILL.md"):
-        name = _read_skill_name_from_md(Path(skill_md))
-        if name and name not in disabled:
-            names.add(name)
-    return sorted(names, key=str.casefold)
-
-
-def _profile_caps_signature(profile_dir: Path) -> tuple:
-    """Change token for a profile's capability summary: the skills-dir signature plus
-    ``config.yaml``'s mtime (toolsets / assigned skills live there, not in the tree)."""
-    try:
-        config_mtime = (profile_dir / "config.yaml").stat().st_mtime
-    except OSError:
-        config_mtime = 0.0
-    return (_skills_dir_signature(profile_dir / "skills"), config_mtime)
-
-
-def _read_profile_capabilities(profile_dir: Path) -> dict:
-    """Read dashboard-facing toolset and skill summaries for a profile.
-
-    This deliberately avoids calling the full tools/skills HTTP endpoints for
-    every profile card.  It reads the profile-local config and skill inventory
-    directly so `/api/profiles` can show each profile's capabilities in one
-    request without mutating anything.
-
-    Cached by :func:`_profile_caps_signature` + TTL, like :func:`_count_skills`: the skill
-    inventory is the same ``rglob`` this walk would repeat for every card. Polled callers
-    go through :func:`_cached_profile_capabilities` instead and never walk at all.
-    """
-    key = str(profile_dir)
-    signature = _profile_caps_signature(profile_dir)
-    now = time.time()
-    cached = _PROFILE_CAPS_CACHE.get(key)
-    if cached is not None and cached[0] == signature and (now - cached[1]) < _SKILL_COUNT_TTL_SECONDS:
-        return dict(cached[2])
-    caps = _walk_profile_capabilities(profile_dir)
-    _PROFILE_CAPS_CACHE[key] = (signature, now, caps)
-    return dict(caps)
-
-
-def _cached_profile_capabilities(profile_dir: Path) -> dict:
-    """Last known capability summary with ZERO skill-tree I/O on the calling thread; the
-    empty summary until the first background refresh lands. Mirrors
-    :func:`_cached_skill_count` so one polled ``GET /api/profiles`` walks nothing."""
-    key = str(profile_dir)
-    now = time.time()
-    with _SKILL_COUNT_LOCK:
-        due = _PROFILE_CAPS_NEXT_CHECK.get(key, 0.0) <= now
-        if due:
-            _PROFILE_CAPS_NEXT_CHECK[key] = now + _SKILL_COUNT_RECHECK_SECONDS
-    if due:
-        threading.Thread(target=_read_profile_capabilities, args=(profile_dir,),
-                         name="hermes-profile-caps", daemon=True).start()
-    cached = _PROFILE_CAPS_CACHE.get(key)
-    return dict(cached[2]) if cached is not None else {
-        "toolsets": [], "assigned_skills": [], "skill_names": []}
-
-
-def _walk_profile_capabilities(profile_dir: Path) -> dict:
-    """Uncached capability read: parse ``config.yaml`` and walk the skill inventory."""
-    config_path = profile_dir / "config.yaml"
-    config: dict = {}
-    if config_path.exists():
-        try:
-            # This card intentionally reports the profile's explicit local
-            # declarations rather than defaults/managed overlays.  Delegate
-            # parsing to the canonical raw-config owner so it retains the
-            # documented profile-safe YAML semantics.
-            from hermes_cli.config import read_user_config_raw
-
-            loaded = read_user_config_raw(config_path)
-            if isinstance(loaded, dict):
-                config = loaded
-        except Exception:
-            config = {}
-
-    toolsets = _listify_config_value(config.get("toolsets"))
-    if not toolsets:
-        platform_toolsets = config.get("platform_toolsets")
-        if isinstance(platform_toolsets, dict):
-            toolsets = _listify_config_value(platform_toolsets.get("cli"))
-
-    skills_cfg = config.get("skills") if isinstance(config, dict) else {}
-    assigned_skills = []
-    if isinstance(skills_cfg, dict):
-        assigned_skills = _listify_config_value(skills_cfg.get("assigned"))
-
-    return {
-        "toolsets": toolsets,
-        "assigned_skills": assigned_skills,
-        "skill_names": _enabled_profile_skill_names(profile_dir, config),
-    }
-
-
-# ---------------------------------------------------------------------------
-
 def _cached_skill_count(profile_dir: Path) -> int:
     """Last known skill count with ZERO skill-tree I/O on the calling thread. A never-counted
     or aged entry schedules one background :func:`_count_skills` per profile per recheck
@@ -1038,10 +869,9 @@ def _cached_skill_count(profile_dir: Path) -> int:
 
 
 def read_profile_meta(profile_dir: Path) -> dict:
-    """Read ``profile.yaml`` -> ``{description, description_auto, display_name, avatar_path,
-    engine_label, engine_model, bot_title, previous_names}`` (empty defaults when
-    missing/unreadable). Never raises — a corrupt file on one profile must not break
-    ``hermes profile list``."""
+    """Read ``profile.yaml`` -> ``{description, description_auto, display_name,
+    previous_names}`` (empty defaults when missing/unreadable). Never raises — a
+    corrupt file on one profile must not break ``hermes profile list``."""
     def _read() -> dict:
         data = _load_yaml_dict(profile_dir / "profile.yaml") or {}
         ui_meta = data.get("ui_meta")
@@ -1054,9 +884,6 @@ def read_profile_meta(profile_dir: Path) -> dict:
             "description": str(data.get("description") or "").strip(),
             "description_auto": bool(data.get("description_auto", False)),
             "display_name": str(data.get("display_name") or "").strip(),
-            "avatar_path": str(data.get("avatar_path") or "").strip(),
-            "engine_label": str(data.get("engine_label") or "").strip(),
-            "engine_model": str(data.get("engine_model") or "").strip(),
             "bot_title": bot_title,
             "previous_names": _clean_previous_names(data.get("previous_names")),
         }
@@ -1085,12 +912,7 @@ def _clean_previous_names(raw) -> list[str]:
 
 def write_profile_meta(
     profile_dir: Path, *, description: Optional[str] = None, description_auto: Optional[bool] = None,
-    display_name: Optional[str] = None,
-    avatar_path: Optional[str] = None,
-    engine_label: Optional[str] = None,
-    engine_model: Optional[str] = None,
-    previous_names: Optional[List[str]] = None,
-    role: Optional[str] = None,
+    display_name: Optional[str] = None, previous_names: Optional[list[str]] = None,
 ) -> None:
     """Update ``profile.yaml`` in place: only passed fields are overwritten; the file is
     created if missing. The profile directory itself must exist."""
@@ -1108,12 +930,6 @@ def write_profile_meta(
             existing["display_name"] = display_name.strip()
         else:
             existing.pop("display_name", None)
-    if avatar_path is not None:
-        existing["avatar_path"] = avatar_path.strip()
-    if engine_label is not None:
-        existing["engine_label"] = engine_label.strip()
-    if engine_model is not None:
-        existing["engine_model"] = engine_model.strip()
     if previous_names is not None:
         # Rename history for group-chat member sync (#110200): consumers match
         # stale persisted handles against the live roster via these names.
@@ -1160,18 +976,11 @@ def _profile_info(name: str, path: Path, *, is_default: bool, alias_name: Option
     if not is_default:
         gateway_running = gateway_running or _served_by_running_multiplexer(name)
     skill_count = _cached_skill_count(path) if lazy_skill_count else _count_skills(path)
-    # Dashboard capability summary: read straight from the profile's own config + skill
-    # inventory so /api/profiles can render every card in one request without touching the
-    # tools/skills endpoints (and without mutating anything). ``lazy_skill_count`` applies
-    # here too — it walks the same tree, so a polled list must not pay for it either.
-    caps = _cached_profile_capabilities(path) if lazy_skill_count else _read_profile_capabilities(path)
     return ProfileInfo(
         name=name, path=path, is_default=is_default, gateway_running=gateway_running, model=model,
         provider=provider, has_env=(path / ".env").exists(), skill_count=skill_count,
         alias_path=alias_path, alias_name=alias_name, distribution_name=dist_name,
         distribution_version=dist_version, distribution_source=dist_source,
-        toolsets=caps["toolsets"], assigned_skills=caps["assigned_skills"],
-        skill_names=caps["skill_names"],
         **meta,
     )
 
@@ -1603,9 +1412,6 @@ def create_profile(
                 logger.info("profile %s: cloned without messaging channels %s", canon, stripped)
         finish_profile_layout(staging, no_skills=no_skills, clone_all=clone_all, description=description, soul=soul)
         os.rename(staging, profile_dir)
-        # A failed creation must leave the old tombstone intact so a live multiplexer cannot
-        # recreate a deleted profile. Only clear it after the fully initialized tree is published.
-        clear_named_profile_deleted(profile_dir)
     except BaseException:
         discard_unpublished_vault_key(clone_key)
         shutil.rmtree(staging, ignore_errors=True)
@@ -1622,52 +1428,6 @@ def create_profile(
     _notify_multiplexer(canon)
     return profile_dir
 
-
-def _clone_staging_dir(profile_dir: Path) -> Path:
-    """Fresh ``profiles/.<name>.staging-<pid>`` beside the final dir (same filesystem, so the publish
-    rename is atomic). A leftover from a crashed create is discarded."""
-    staging = profile_dir.parent / f".{profile_dir.name}.staging-{os.getpid()}"
-    profile_dir.parent.mkdir(parents=True, exist_ok=True)
-    if staging.is_symlink() or staging.is_file():
-        staging.unlink()
-    elif staging.is_dir():
-        shutil.rmtree(staging, ignore_errors=True)
-    return staging
-
-
-def _finish_profile_layout(profile_dir: Path, *, no_skills: bool, clone_all: bool,
-                           description: Optional[str]) -> None:
-    """Seed files a fresh profile owns from day one; runs on the staging tree before publish."""
-    # Seed an empty .env so the profile owns a credentials file from day one. Without it,
-    # profile-scoped env writes (dashboard Channels/Keys pages, `hermes -p <name> auth add`)
-    # had no file until first write and the profile silently inherited shell API keys —
-    # read by users as "the new profile reads the root .env". Skipped when a clone copied one.
-    _seed_file_if_missing(profile_dir / ".env", _PLACEHOLDER_ENV, 0o600)
-
-    # Default SOUL.md to customize immediately (skipped when a clone already provided one).
-    with contextlib.suppress(Exception):  # best-effort — don't fail profile creation over this
-        from hermes_cli.default_soul import DEFAULT_SOUL_MD
-        _seed_file_if_missing(profile_dir / "SOUL.md", DEFAULT_SOUL_MD)
-
-    # Opt-out marker read by seed_profile_skills() and `hermes update`'s all-profile sync
-    # (the feature still works via the empty skills/ dir if this fails).
-    if no_skills:
-        _seed_file_if_missing(
-            profile_dir / NO_BUNDLED_SKILLS_MARKER,
-            "This profile opted out of bundled-skill seeding (`hermes profile create --no-skills`).\n"
-            "Delete this file to re-enable sync on the next `hermes update`.\n",
-        )
-
-    # Migrate config-only clones now so desktop/status don't warn that a just-created
-    # profile is v0/outdated; --clone-all snapshots stay byte-for-byte apart from the
-    # explicit runtime/history stripping above.
-    if not clone_all:
-        _migrate_profile_config_if_outdated(profile_dir)
-
-    # Description last, so a partial-create failure doesn't strand a description file.
-    if description and description.strip():
-        with contextlib.suppress(Exception):  # non-fatal — `hermes profile describe` works later
-            write_profile_meta(profile_dir, description=description.strip(), description_auto=False)
 
 def _notify_multiplexer(canon: str) -> None:
     from hermes_cli.gateway_multiplex_served import notify_multiplexer_profiles_changed
@@ -2354,52 +2114,6 @@ def _export_credential_entries(directory: str, contents: list) -> set:
     return {entry for entry in contents for store in _EXPORT_CREDENTIAL_PARTS
             if entry == store[-1] and parts[len(parts) + 1 - len(store):] == store[:-1]}
 
-# Text/config suffixes secret-scrubbed on export; binary DBs, images etc. are left alone.
-_EXPORT_REDACT_SUFFIXES = frozenset({
-    ".md", ".txt", ".yaml", ".yml", ".json", ".jsonl", ".toml", ".ini", ".cfg", ".conf", ".py", ".sh",
-    ".bash", ".zsh", ".js", ".ts", ".tsx", ".jsx", ".css", ".html", ".xml", ".csv",
-})
-# ``Path(".cursorrules").suffix`` is "" — name-match; ``*.env.example`` uses endswith; a hand-named
-# config copy (``config.yaml.bak-my-note``) holds config.yaml's secrets under a suffix of its own.
-_EXPORT_REDACT_NAMES = frozenset({".cursorrules"})
-
-
-def _should_redact_export_file(path: Path) -> bool:
-    name = path.name
-    return (
-        name in _EXPORT_REDACT_NAMES
-        or name.lower().endswith(".env.example")
-        or name.lower().startswith("config.yaml.")
-        or path.suffix.lower() in _EXPORT_REDACT_SUFFIXES
-    )
-
-
-def _scrub_export_secrets(staged: Path) -> None:
-    """Force-redact secret-shaped strings in a staged export tree (same pass as ``hermes
-    sessions export --redact``). Runs on the staged copy only; symlinks to text files are
-    materialized when content changes so redaction never follows a link back into the source."""
-    from agent.redact import redact_sensitive_text
-    for path in staged.rglob("*"):
-        try:
-            is_link = path.is_symlink()
-            if not path.is_file():  # broken links, symlinked dirs, non-files
-                continue
-        except OSError:
-            continue
-        if not _should_redact_export_file(path):
-            continue
-        try:
-            text = path.read_text(encoding="utf-8-sig")
-        except (UnicodeDecodeError, OSError):
-            continue
-        redacted = redact_sensitive_text(text, force=True)
-        if redacted == text:
-            continue
-        if is_link:
-            path.unlink()
-        path.write_text(redacted, encoding="utf-8")
-
-
 def export_profile(name: str, output_path: str, extra_files: Optional[dict[str, str]] = None) -> Path:
     """Export a profile to a tar.gz archive; credential files are excluded and staged text is
     force-redacted first. Returns the output file path."""
@@ -2449,8 +2163,7 @@ def import_profile(archive_path: str, name: Optional[str] = None) -> Path:
     if archive_root is None:
         raise ValueError("Profile archive must contain exactly one top-level directory.")
 
-    # Default-profile archives have "default/" at top level; importing as "default" would
-    # target ~/.hermes itself.
+    # A "default/" archive imported as "default" would target ~/.hermes itself.
     canon = _canon_valid(inferred_name)
     if canon == "default":
         raise ValueError(
@@ -2480,7 +2193,6 @@ def import_profile(archive_path: str, name: Optional[str] = None) -> Path:
                 else:
                     child.unlink()
         shutil.move(str(final_source), str(profile_dir))
-
     clear_named_profile_deleted(profile_dir)
     return profile_dir
 
@@ -2555,7 +2267,6 @@ def rename_profile(old_name: str, new_name: str) -> Path:
         if live_mux and not wait_profile_unowned(old_dir):  # same owner wait as delete_profile
             raise RuntimeError("a running gateway still owns this profile; retry the rename once it settles")
         old_dir.rename(new_dir)
-        clear_named_profile_deleted(new_dir)
     except Exception:
         if live_mux:
             clear_named_profile_deleted(old_dir)
@@ -2565,10 +2276,8 @@ def rename_profile(old_name: str, new_name: str) -> Path:
             print(f"⚠ The gateway service was removed. Reinstall it with: hermes -p {old_canon} gateway install")
         raise
     print(f"✓ Renamed {old_dir.name} → {new_dir.name}")
-    # The tombstone lives at profiles/.deleted/<old_name>; old_dir is gone so nothing can
-    # resurrect it, and a future profile reusing the old name must not read as deleted.
-    if live_mux:
-        clear_named_profile_deleted(old_dir)
+    clear_named_profile_deleted(old_dir)
+    clear_named_profile_deleted(new_dir)
 
     # 2b. Record the rename so Bot Mode group chats can re-link persisted
     # member descriptors to the new slug (#110200). Best-effort: a metadata
