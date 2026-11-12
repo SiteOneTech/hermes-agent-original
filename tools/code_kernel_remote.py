@@ -18,6 +18,7 @@ failure fails OPEN to the per-call path with a note.
 from __future__ import annotations
 
 import atexit
+import contextlib
 import json
 import logging
 import secrets
@@ -28,14 +29,9 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from tools.code_kernel import KernelRegistry
+from tools.code_kernel import RUNNER_CELL_SOURCE, KernelRegistry, stale_modules_warning
 
 logger = logging.getLogger(__name__)
-
-# A fixed lock stripe serializes registry selection, spawn/reset/liveness, the complete cell
-# protocol, and result retirement for one owner key. Fixed stripes avoid an unbounded side
-# registry of locks after many short sessions.
-_REMOTE_OWNER_LOCKS = tuple(threading.Lock() for _ in range(64))
 
 # Host poll interval for a cell result file; each poll is one env.execute round-trip
 # (0.1-0.4s on ssh/docker), so this is a floor, not a rate.
@@ -43,10 +39,7 @@ _CELL_POLL_INTERVAL = 0.5
 
 # The remote runner: a forever-loop that polls for cell request files, execs them in one
 # persistent namespace, writes response files. Pure files + stdlib only (transport-agnostic);
-# cells and tool-RPC share the kernel dir under distinct prefixes. It deliberately does NOT
-# reuse tools.code_kernel's RUNNER_CELL_SOURCE: the host folds the runner's OWN clipping into
-# the reply's truncation metadata, which needs the pre-clip byte totals per stream that the
-# shared cell core does not report.
+# cells and tool-RPC share the kernel dir under distinct prefixes.
 REMOTE_KERNEL_RUNNER_SOURCE = '''\
 """Auto-generated Hermes REMOTE session-kernel runner (file cell protocol)."""
 import contextlib
@@ -59,19 +52,10 @@ import traceback
 
 KDIR = os.environ["HERMES_KERNEL_DIR"]
 CELLS = os.path.join(KDIR, "cells")
-CAPTURE_LIMIT = {capture_limit}
+_CAPTURE_LIMIT = {capture_limit}
 IDLE_EXIT_SECONDS = {idle_exit}
 
-GLOBALS = {{"__name__": "__main__", "__builtins__": __builtins__}}
-
-
-def _bounded(text):
-    encoded = text.encode("utf-8", errors="replace")
-    total_bytes = len(encoded)
-    if total_bytes <= CAPTURE_LIMIT:
-        return text, False, total_bytes
-    return encoded[:CAPTURE_LIMIT].decode("utf-8", errors="replace"), True, total_bytes
-
+{cell_source}
 
 def main():
     execution_count = 0
@@ -97,32 +81,7 @@ def main():
             os.remove(req_path)
             last_activity = time.time()
             execution_count += 1
-            out, err = io.StringIO(), io.StringIO()
-            status = "ok"
-            trace = ""
-            try:
-                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-                    exec(compile(request["code"], "<cell>", "exec"), GLOBALS)
-            except SystemExit as exc:
-                status = "exit"
-                trace = "SystemExit: " + repr(exc.code)
-            except BaseException:
-                status = "error"
-                trace = traceback.format_exc()
-            stdout_text, stdout_clipped, stdout_bytes_total = _bounded(out.getvalue())
-            stderr_text, stderr_clipped, stderr_bytes_total = _bounded(err.getvalue())
-            payload = {{
-                "id": request.get("id", ""),
-                "status": status,
-                "stdout": stdout_text,
-                "stderr": stderr_text,
-                "stdout_clipped": stdout_clipped,
-                "stderr_clipped": stderr_clipped,
-                "stdout_bytes_total": stdout_bytes_total,
-                "stderr_bytes_total": stderr_bytes_total,
-                "traceback": trace,
-                "execution_count": execution_count,
-            }}
+            payload, _ = run_cell(request, execution_count)
             res_name = name.replace("cell_req_", "cell_res_")
             tmp = os.path.join(CELLS, res_name + ".tmp")
             # Cell results carry the executed code's output: owner-only, even if
@@ -131,7 +90,7 @@ def main():
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False)
             os.replace(tmp, os.path.join(CELLS, res_name))
-            if status == "exit":
+            if payload["status"] == "exit":
                 return
 
 
@@ -156,7 +115,6 @@ class RemoteKernel:
     pid: str
     rpc_token: str
     owner: str
-    created: float = field(default_factory=time.monotonic)
     last_used: float = field(default_factory=time.monotonic)
     execution_count: int = 0
     cell_seq: int = 0
@@ -166,85 +124,66 @@ class RemoteKernel:
     attached: int = 0
     # Owned by a live delegate_task child: exempt from LRU eviction (the child's teardown disposes it).
     pinned: bool = False
+    # The bound hosted scope at spawn (None outside a hosted scope): kernel maintenance (reap,
+    # eviction kill, session-boundary shutdown) may run on another agent's thread or none at all,
+    # and its commands reach the sandbox only under the scope that owns it.
+    owner_scope: Any = None
 
     def sh(self, cmd: str, timeout: int = 15) -> str:
-        return _sh(self.env, cmd, timeout)
+        with self._owning_scope():
+            return _sh(self.env, cmd, timeout)
+
+    @contextlib.contextmanager
+    def _owning_scope(self):
+        """Bind the captured owning scope for trusted teardown: the kernel record itself is the
+        authority for whose sandbox its commands may reach, never a caller's bound scope. With the
+        owning sandbox already bound (a later turn of it: its own, newer fence) or never hosted
+        this is the identity."""
+        from tools.environments.sandbox_scope import hosted_scope, sandbox_identity
+        scope, bound = self.owner_scope, hosted_scope()
+        if scope is None or (bound is not None and sandbox_identity(bound) == sandbox_identity(scope)):
+            yield
+            return
+        from hermes_scope import push_state
+        token = push_state(scope=scope, home=None, secrets=None, terminal=None)
+        try:
+            yield
+        finally:
+            token.reset()
 
     def is_alive(self) -> bool:
-        """Bounded liveness probe: kill -0 through the transport. Any transport failure counts
-        as dead — a dropped ssh connection and a dead runner are indistinguishable from here,
-        and both have the same correct answer (respawn)."""
+        """Bounded liveness probe: kill -0 through the transport. Any transport
+        failure counts as dead — a dropped ssh connection and a dead runner are
+        indistinguishable from here, and both have the same correct answer (respawn)."""
         try:
             return "ALIVE" in self.sh(f"kill -0 {shlex.quote(self.pid)} 2>/dev/null && echo ALIVE")
         except Exception:
             return False
 
+    def kill(self) -> None:
+        """Best-effort kill of the runner and its subprocesses, then rm -rf."""
+        q_pid = shlex.quote(self.pid)
+        for cmd, failure in (
+            # Kill the runner's children if the shell gave it a group, then the PID itself.
+            (f"pkill -TERM -P {q_pid} 2>/dev/null; kill {q_pid} 2>/dev/null; true",
+             "remote kernel kill failed (transport?)"),
+            (f"rm -rf {shlex.quote(self.kernel_dir)}", "remote kernel dir cleanup failed"),
+        ):
+            try:
+                self.sh(cmd)
+            except Exception:
+                logger.debug(failure, exc_info=True)
 
-def _kernel_key(owner: str, env_type: str, task_env_id: str, sandbox_tools: frozenset) -> Tuple:
+
+def _kernel_key(owner: str, env_type: str, task_env_id: str, sandbox_tools: frozenset) -> tuple:
     """The hermes_tools stub module is generated from ``sandbox_tools`` once, at spawn, so a kernel
     is only reusable by calls with the SAME tool set; a different set gets its own kernel."""
     return (owner, "remote", env_type, task_env_id, tuple(sorted(sandbox_tools)))
 
 
-def _owner_lock(key: Tuple) -> threading.Lock:
-    return _REMOTE_OWNER_LOCKS[hash(key) % len(_REMOTE_OWNER_LOCKS)]
-
-
-# Registry + lock shared-shape with code_kernel; teardown runs outside the lock. Teardown goes
-# through the module-level _kill so the interrupt-safe cleanup below stays the only kill seam.
-_REGISTRY = KernelRegistry(lambda kernel: _kill(kernel))
-_REMOTE_KERNELS: Dict[Tuple, "RemoteKernel"] = _REGISTRY.kernels
-_REMOTE_KERNELS_LOCK = _REGISTRY.lock
-
-
-def _run_cleanup_command(kernel: RemoteKernel, command: str) -> None:
-    """Run teardown even when the calling tool thread is interrupted."""
-    from tools.interrupt import is_interrupted
-
-    errors: list[BaseException] = []
-
-    def run() -> None:
-        try:
-            kernel.env.execute(command, cwd="/", timeout=15)
-        except BaseException as exc:
-            errors.append(exc)
-
-    if not is_interrupted():
-        run()
-        return
-
-    # Environment.execute cooperatively aborts any command issued on an
-    # interrupted thread. Teardown is the exception: run it on a fresh daemon
-    # thread whose interrupt state is clean, otherwise the remote runner would
-    # survive the interrupted cell we are reporting as killed.
-    worker = threading.Thread(target=run, daemon=True)
-    worker.start()
-    worker.join(timeout=16)
-    if worker.is_alive():
-        logger.debug("remote kernel cleanup command did not settle in time")
-    elif errors:
-        raise errors[0]
-
-
-def _kill(kernel: RemoteKernel) -> None:
-    """Best-effort kill of the runner and its subprocesses, then rm -rf."""
-    try:
-        _run_cleanup_command(
-            kernel,
-            # Kill the runner's process group if the shell gave it one,
-            # falling back to the single PID.
-            f"pkill -TERM -P {shlex.quote(kernel.pid)} 2>/dev/null; "
-            f"kill {shlex.quote(kernel.pid)} 2>/dev/null; true",
-        )
-    except Exception:
-        logger.debug("remote kernel kill failed (transport?)", exc_info=True)
-    try:
-        _run_cleanup_command(
-            kernel,
-            f"rm -rf {shlex.quote(kernel.kernel_dir)}",
-        )
-    except Exception:
-        logger.debug("remote kernel dir cleanup failed", exc_info=True)
+# Registry + lock shared-shape with code_kernel; teardown runs outside the lock.
+_REGISTRY = KernelRegistry(lambda kernel: kernel.kill())
+_REMOTE_KERNELS: dict[tuple, RemoteKernel] = _REGISTRY.kernels
 
 
 def shutdown_all_remote_kernels() -> None:
@@ -253,9 +192,12 @@ def shutdown_all_remote_kernels() -> None:
 
 def shutdown_remote_kernels_for_owner(owner: str) -> None:
     """Session-boundary disposal — wired to the same clear_session hook as
-    local kernels, so /new and session close reap both kinds."""
+    local kernels, so /new and session close reap both kinds. The owner is
+    resolved for the CURRENT scope, so a session close touches only the
+    current agent's remote kernels, never another hosted agent's."""
     if owner:
-        _REGISTRY.shutdown(owner)
+        from tools.code_kernel import session_close_owner
+        _REGISTRY.shutdown(session_close_owner(owner))
 
 
 def shutdown_remote_kernels_where(owner_matches: Callable[[str], bool]) -> None:
@@ -263,7 +205,7 @@ def shutdown_remote_kernels_where(owner_matches: Callable[[str], bool]) -> None:
     _REGISTRY.shutdown(owner_matches=owner_matches)
 
 
-def _reap_unlocked(idle_timeout: int) -> List["RemoteKernel"]:
+def _reap_unlocked(idle_timeout: int) -> list[RemoteKernel]:
     """Pop idle-expired, unattached remote kernels; caller tears them down outside the lock. The
     runner self-exits after the same idle window, so this clears the HOST-side entry — without it
     the map grew one entry per never-revisited (owner, env_type, task_env_id) for the gateway's life."""
@@ -273,7 +215,7 @@ def _reap_unlocked(idle_timeout: int) -> List["RemoteKernel"]:
     return [_REMOTE_KERNELS.pop(key) for key in doomed]
 
 
-def _evict_over_cap_unlocked(keep: Tuple) -> List["RemoteKernel"]:
+def _evict_over_cap_unlocked(keep: tuple) -> list[RemoteKernel]:
     """Pop least-recently-used unattached remote kernels beyond the process-wide cap (the same
     ``max_session_kernels`` bound as local kernels, applied independently to this map)."""
     from tools.code_kernel import _lifecycle_limits
@@ -310,7 +252,7 @@ def _spawn_remote_kernel(env, env_type: str, owner: str, task_env_id: str,
                          "remote kernel dir setup", timeout=15)
         rpc_token = secrets.token_urlsafe(32)
         _ship_file_to_remote(env, f"{kernel_dir}/kernel_runner.py", REMOTE_KERNEL_RUNNER_SOURCE.format(
-            capture_limit=MAX_STDOUT_BYTES, idle_exit=idle_exit))
+            cell_source=RUNNER_CELL_SOURCE, capture_limit=MAX_STDOUT_BYTES, idle_exit=idle_exit))
         _ship_file_to_remote(env, f"{kernel_dir}/hermes_tools.py",
                              generate_hermes_tools_module(list(sandbox_tools), transport="file"))
         # kernel.env is removed after sourcing: the runner's env keeps the
@@ -352,356 +294,173 @@ def _spawn_remote_kernel(env, env_type: str, owner: str, task_env_id: str,
     return kernel
 
 
-def execute_in_remote_kernel(
-    code: str,
-    *,
-    env,
-    env_type: str,
-    task_env_id: str,
-    sandbox_tools: frozenset,
-    timeout: int,
-    max_tool_calls: int,
-    reset: bool,
-    idle_exit: int = 1800,
-) -> Optional[Dict[str, Any]]:
-    """Run one cell in the owner's remote kernel.
-
-    Returns the raw cell result dict (caller does output post-processing),
-    or ``None`` when no kernel could be spawned — the caller falls open to
-    the per-call path. ``state_lost`` / ``state_reset`` / ``reused`` ride in
-    the ``kernel`` sub-dict, matching the local kernel's result shape.
-    """
-    from tools.code_kernel import _resolve_owner
-
-    owner = _resolve_owner(task_env_id)
-    # The generated hermes_tools.py is fixed at spawn time, so its capability
-    # set is part of both the registry and owner-lock identity.  A later cell
-    # with a different tool set must get fresh stubs rather than reuse the
-    # previous kernel under the same owner/task coordinates.
+def _acquire_remote_kernel(env, env_type: str, owner: str, task_env_id: str,
+                           sandbox_tools: frozenset, *, reset: bool,
+                           idle_exit: int) -> tuple[Optional[RemoteKernel], bool, bool, bool]:
+    """Find/respawn the owner's kernel: (kernel|None, reused, state_reset, state_lost); reaps
+    idle-expired entries on the way in."""
+    from tools.environments.sandbox_scope import hosted_scope
+    owner_scope = hosted_scope()
     key = _kernel_key(owner, env_type, task_env_id, sandbox_tools)
-    with _owner_lock(key):
-        return _execute_in_remote_kernel_locked(
-            code,
-            env=env,
-            env_type=env_type,
-            task_env_id=task_env_id,
-            sandbox_tools=sandbox_tools,
-            timeout=timeout,
-            max_tool_calls=max_tool_calls,
-            reset=reset,
-            idle_exit=idle_exit,
-            owner=owner,
-            key=key,
-        )
-
-
-def _interrupted_result(*, reused: bool, tool_calls_made: int = 0) -> Dict[str, Any]:
-    return {
-        "status": "interrupted",
-        "stdout": "",
-        "stderr": "",
-        "traceback": "",
-        "tool_calls_made": tool_calls_made,
-        "kernel": {
-            "reused": reused,
-            "remote": True,
-            "ended": True,
-            "state_lost": True,
-            "note": (
-                "Cell interrupted; the remote session kernel was killed and "
-                "its state was lost. The next call starts a fresh kernel."
-            ),
-        },
-    }
-
-
-def _execute_in_remote_kernel_locked(
-    code: str,
-    *,
-    env,
-    env_type: str,
-    task_env_id: str,
-    sandbox_tools: frozenset,
-    timeout: int,
-    max_tool_calls: int,
-    reset: bool,
-    idle_exit: int,
-    owner: str,
-    key: Tuple,
-) -> Optional[Dict[str, Any]]:
-    """Execute while the owner-key lock is held for the full cell lifecycle."""
-    from tools.code_kernel import _lifecycle_limits
-    from tools.interrupt import is_interrupted
-
-    state_lost = False
-    state_reset = False
-    _, configured_idle = _lifecycle_limits()
-    idle_exit = configured_idle
-
-    with _REMOTE_KERNELS_LOCK:
-        had_current = key in _REMOTE_KERNELS
+    state_lost = state_reset = False
+    with _REGISTRY.lock:
         expired = _reap_unlocked(idle_exit)
         kernel = _REMOTE_KERNELS.get(key)
-    if had_current and kernel is None:
-        state_lost = True
     for doomed in expired:
-        _kill(doomed)
-
+        doomed.kill()
     if kernel is not None and reset:
         _REGISTRY.discard(key, kernel)
-        kernel = None
-        state_reset = True
-
-    if is_interrupted():
-        if kernel is not None:
-            _REGISTRY.discard(key, kernel)
-        return _interrupted_result(reused=kernel is not None)
-
+        kernel, state_reset = None, True
     if kernel is not None and not kernel.is_alive():
-        # Transport drop, container restart, self-reaped on idle, OOM — all the same answer:
-        # report the loss, respawn fresh (the kill is then only best-effort dir cleanup;
-        # the process is already gone).
+        # Transport drop, container restart, self-reaped on idle, OOM — all
+        # the same answer: report the loss, respawn fresh (kill is then only
+        # best-effort dir cleanup; the process is already gone).
         _REGISTRY.discard(key, kernel)
-        kernel = None
-        state_lost = True
-        if is_interrupted():
-            return _interrupted_result(reused=True)
-
+        kernel, state_lost = None, True
     reused = kernel is not None
-    spawned = False
     if kernel is None:
-        kernel = _spawn_remote_kernel(
-            env, env_type, owner, task_env_id, sandbox_tools,
-            idle_exit=idle_exit,
-        )
-        if kernel is None:
-            return None  # fail open to per-call
-        spawned = True
-
-    # A newly created kernel is published and attached under one registry
-    # lock. Another owner can enforce the process-wide cap concurrently, so
-    # publishing it first would expose a brief but real eviction window before
-    # its first cell starts.
-    with _REMOTE_KERNELS_LOCK:
-        kernel.attached += 1
-        if spawned:
+        kernel = _spawn_remote_kernel(env, env_type, owner, task_env_id, sandbox_tools, idle_exit=idle_exit)
+        if kernel is not None:
             from agent.delegation_context import is_delegated_child_context
             kernel.pinned = is_delegated_child_context()
-            _REMOTE_KERNELS[key] = kernel
-        kernel.last_used = time.monotonic()
+            kernel.owner_scope = owner_scope
+            with _REGISTRY.lock:
+                _REMOTE_KERNELS[key] = kernel
+    return kernel, reused, state_reset, state_lost
+
+
+def _run_remote_cell(kernel: RemoteKernel, code: str, timeout: int) -> tuple[str, dict[str, Any]]:
+    """Ship one cell request and poll for its result: (cell status, payload)."""
+    from tools.code_execution_tool import _ship_file_to_remote
+    kernel.cell_seq += 1
+    seq = f"{kernel.cell_seq:06d}"
+    q_cells, q_res = shlex.quote(f"{kernel.kernel_dir}/cells"), shlex.quote(f"cell_res_{seq}.json")
+    # One round-trip: tmp write + rename publishes the request atomically.
+    _ship_file_to_remote(kernel.env, f"{kernel.kernel_dir}/cells/cell_req_{seq}.json",
+                         json.dumps({"id": seq, "code": code}, ensure_ascii=False), atomic=True)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            body = kernel.sh(f"cat {q_cells}/{q_res} 2>/dev/null", timeout=20).strip()
+        except Exception:
+            # One flaky round-trip is not kernel death; liveness decides.
+            body = ""
+        if body:
+            try:
+                payload = json.loads(body)
+                status = payload.get("status", "error")
+            except ValueError:
+                payload, status = {}, "protocol-error"
+            try:
+                kernel.sh(f"rm -f {q_cells}/{q_res}", timeout=10)
+            except Exception:
+                # Best-effort: the cell already ran, so raising here would send
+                # the caller to its per-call fallback and run the code twice.
+                # A leftover result file is harmless (seq is monotonic).
+                logger.debug("remote kernel: cell result cleanup failed", exc_info=True)
+            return status, payload
+        time.sleep(_CELL_POLL_INTERVAL)
+    return "timeout", {}
+
+
+def execute_in_remote_kernel(
+    code: str, *, env, env_type: str, task_env_id: str, sandbox_tools: frozenset,
+    timeout: int, max_tool_calls: int, reset: bool, idle_exit: int = 1800,
+) -> Optional[dict[str, Any]]:
+    """Run one cell in the owner's remote kernel. Returns the raw cell result dict (caller
+    post-processes output), or ``None`` when no kernel could be spawned (caller falls open to
+    per-call). ``state_lost``/``state_reset``/``reused`` ride in the ``kernel`` sub-dict."""
+    from tools.code_kernel import _resolve_owner
+    owner = _resolve_owner(task_env_id)
+    kernel, reused, state_reset, state_lost = _acquire_remote_kernel(
+        env, env_type, owner, task_env_id, sandbox_tools, reset=reset, idle_exit=idle_exit)
+    if kernel is None:
+        return None  # fail open to per-call
+    key = _kernel_key(owner, env_type, task_env_id, sandbox_tools)
+    kernel.last_used = time.monotonic()
+    with _REGISTRY.lock:
+        kernel.attached += 1
         evicted = _evict_over_cap_unlocked(keep=key)
     for doomed in evicted:
-        _kill(doomed)
+        doomed.kill()
     try:
-        return _run_remote_cell(
-            kernel, key, code, env=env, task_env_id=task_env_id,
-            sandbox_tools=sandbox_tools, timeout=timeout,
-            max_tool_calls=max_tool_calls, reused=reused,
-            state_reset=state_reset, state_lost=state_lost,
-        )
+        return _run_attached_cell(kernel, key, code, env=env, task_env_id=task_env_id,
+                                  sandbox_tools=sandbox_tools, timeout=timeout, max_tool_calls=max_tool_calls,
+                                  reused=reused, state_reset=state_reset, state_lost=state_lost)
     finally:
-        with _REMOTE_KERNELS_LOCK:
+        with _REGISTRY.lock:
             kernel.attached -= 1
             kernel.last_used = time.monotonic()
 
 
-def _run_remote_cell(
-    kernel: RemoteKernel,
-    key: Tuple,
-    code: str,
-    *,
-    env,
-    task_env_id: str,
-    sandbox_tools: frozenset,
-    timeout: int,
-    max_tool_calls: int,
-    reused: bool,
-    state_reset: bool,
-    state_lost: bool,
-) -> Dict[str, Any]:
-    from tools.code_execution_tool import (
-        _rpc_poll_loop,
-        _ship_file_to_remote,
-    )
+def _run_attached_cell(kernel: RemoteKernel, key: tuple, code: str, *, env, task_env_id: str,
+                       sandbox_tools: frozenset, timeout: int, max_tool_calls: int,
+                       reused: bool, state_reset: bool, state_lost: bool) -> dict[str, Any]:
     from tools.code_execution_rpc import tool_errors_since
-    from tools.interrupt import is_interrupted
+    from tools.code_execution_tool import _rpc_poll_loop
     from tools.thread_context import propagate_context_to_thread
-    kernel.cell_seq += 1
-    seq = f"{kernel.cell_seq:06d}"
-    q_cells = shlex.quote(f"{kernel.kernel_dir}/cells")
-
-    # Clean stale tool-RPC requests from a previous cell before arming this
-    # cell's poll loop, so a background thread the last cell leaked cannot
-    # smuggle a call into this cell's authority window.
+    # Clean stale tool-RPC requests from a previous cell before arming this cell's poll loop, so
+    # a background thread the last cell leaked cannot smuggle a call into this authority window.
     q_rpc = shlex.quote(kernel.kernel_dir + '/rpc')
     try:
         kernel.sh(f"rm -f {q_rpc}/req_* {q_rpc}/res_*", timeout=10)
     except Exception:
         pass
-
-    tool_call_log: list = []
-    tool_call_counter = [0]
-    stop_event = threading.Event()
-    # Per-cell RPC thread carrying THIS call's approval/session context —
-    # the remote analogue of CellAuthority: authority lives exactly as long
-    # as the cell's poll loop.
+    tool_call_counter, tool_call_log, stop_event = [0], [], threading.Event()
+    # Per-cell RPC thread carrying THIS call's approval/session context — the remote analogue
+    # of CellAuthority: authority lives exactly as long as the cell's poll loop.
     rpc_thread = threading.Thread(
-        target=propagate_context_to_thread(_rpc_poll_loop),
-        args=(
-            env, f"{kernel.kernel_dir}/rpc", task_env_id,
-            tool_call_log, tool_call_counter, max_tool_calls,
-            sandbox_tools, stop_event, kernel.rpc_token,
-        ),
-        daemon=True,
-    )
+        target=propagate_context_to_thread(_rpc_poll_loop), daemon=True,
+        args=(env, f"{kernel.kernel_dir}/rpc", task_env_id, tool_call_log, tool_call_counter,
+              max_tool_calls, sandbox_tools, stop_event, kernel.rpc_token))
     rpc_thread.start()
-
-    cell_status = "no-result"
-    cell_payload: Dict[str, Any] = {}
+    cell_status, cell_payload = "no-result", {}
     try:
-        request = json.dumps({"id": seq, "code": code}, ensure_ascii=False)
-        _ship_file_to_remote(
-            env, f"{kernel.kernel_dir}/cells/cell_req_{seq}.json.tmp", request,
-        )
-        moved = env.execute(
-            f"mv {q_cells}/cell_req_{seq}.json.tmp {q_cells}/cell_req_{seq}.json",
-            cwd="/", timeout=10,
-        )
-        if is_interrupted() or moved.get("returncode") == 130:
-            cell_status = "interrupted"
-        else:
-            deadline = time.monotonic() + timeout
-            res_name = f"cell_res_{seq}.json"
-            while time.monotonic() < deadline:
-                if is_interrupted():
-                    cell_status = "interrupted"
-                    break
-                try:
-                    probe = env.execute(
-                        f"cat {q_cells}/{shlex.quote(res_name)} 2>/dev/null",
-                        cwd="/", timeout=20,
-                    )
-                except Exception:
-                    if is_interrupted():
-                        cell_status = "interrupted"
-                        break
-                    # One flaky round-trip is not kernel death; liveness decides.
-                    time.sleep(_CELL_POLL_INTERVAL)
-                    continue
-                if probe.get("returncode") == 130 or is_interrupted():
-                    cell_status = "interrupted"
-                    break
-                body = (probe.get("output", "") or "").strip()
-                if body:
-                    try:
-                        cell_payload = json.loads(body)
-                        cell_status = cell_payload.get("status", "error")
-                    except ValueError:
-                        cell_status = "protocol-error"
-                    try:
-                        removed = env.execute(
-                            f"rm -f {q_cells}/{shlex.quote(res_name)}",
-                            cwd="/", timeout=10,
-                        )
-                    except Exception:
-                        if is_interrupted():
-                            cell_status = "interrupted"
-                        else:
-                            logger.debug("remote cell result cleanup failed", exc_info=True)
-                    else:
-                        if removed.get("returncode") == 130 or is_interrupted():
-                            cell_status = "interrupted"
-                    break
-                time.sleep(_CELL_POLL_INTERVAL)
-            else:
-                cell_status = "timeout"
+        cell_status, cell_payload = _run_remote_cell(kernel, code, timeout)
     except Exception:
-        if is_interrupted():
-            cell_status = "interrupted"
-        else:
-            # The request may never have reached the runner, so the caller's per-call
-            # fallback runs the code exactly once. Kill the kernel as the timeout path
-            # does: leaving it registered would let the next call reuse a kernel whose
-            # state silently missed this cell.
-            _REGISTRY.discard(key, kernel)
-            raise
+        # The atomic ship is the only remote call here that can raise (the poll
+        # and result cleanup are best-effort), so the request never reached the runner and the
+        # caller's per-call fallback runs the code exactly once. Kill the
+        # kernel as the timeout path does: leaving it registered would let the
+        # next call reuse a kernel whose state silently missed this cell.
+        _REGISTRY.discard(key, kernel)
+        raise
     finally:
         stop_event.set()
         rpc_thread.join(timeout=5)
-
-    tool_errors = tool_errors_since(tool_call_log)
-
-    if cell_status == "interrupted":
-        _REGISTRY.discard(key, kernel)
-        result = _interrupted_result(
-            reused=reused,
-            tool_calls_made=tool_call_counter[0],
-        )
-        if tool_errors:
-            result["tool_errors"] = tool_errors
-        return result
-
-    if cell_status in ("timeout", "protocol-error", "no-result"):
-        # No safe way to interrupt one cell in place (same contract as
-        # local): kill the kernel, report the loss, respawn next call.
-        _REGISTRY.discard(key, kernel)
-        result = {
-            "status": "timeout" if cell_status == "timeout" else "error",
-            "stdout": "",
-            "stderr": "",
-            "traceback": "",
-            "tool_calls_made": tool_call_counter[0],
-            "kernel": {
-                "reused": reused,
-                "remote": True,
-                "ended": True,
-                "state_lost": True,
-                "note": (
-                    "Cell timed out; the remote session kernel was killed and "
-                    "its state was lost. The next call starts a fresh kernel."
-                    if cell_status == "timeout" else
-                    "Remote kernel protocol failure; kernel killed, state lost."
-                ),
-            },
-        }
-        if tool_errors:
-            result["tool_errors"] = tool_errors
-        return result
-
-    if cell_status == "exit":
-        _REGISTRY.discard(key, kernel)
-
-    kernel.execution_count = int(cell_payload.get("execution_count", 0) or 0)
-
-    result: Dict[str, Any] = {
-        "status": "success" if cell_status in ("ok", "exit") else "error",
-        "stdout": cell_payload.get("stdout", ""),
-        "stderr": cell_payload.get("stderr", ""),
-        "traceback": cell_payload.get("traceback", ""),
-        "stdout_clipped": bool(cell_payload.get("stdout_clipped")),
-        "stderr_clipped": bool(cell_payload.get("stderr_clipped")),
-        "stdout_bytes_total": int(cell_payload.get("stdout_bytes_total", 0) or 0),
-        "stderr_bytes_total": int(cell_payload.get("stderr_bytes_total", 0) or 0),
-        "tool_calls_made": tool_call_counter[0],
-        "kernel": {
-            "reused": reused,
-            "remote": True,
-            "execution_count": kernel.execution_count,
-        },
+    kernel_info: dict[str, Any] = {"reused": reused, "remote": True}
+    result: dict[str, Any] = {
+        "status": "error", "stdout": cell_payload.get("stdout", ""), "stderr": cell_payload.get("stderr", ""),
+        "traceback": cell_payload.get("traceback", ""), "tool_calls_made": tool_call_counter[0], "kernel": kernel_info,
+        "tool_errors": tool_errors_since(tool_call_log),
     }
-    if tool_errors:
-        result["tool_errors"] = tool_errors
+    if cell_status in ("timeout", "protocol-error", "no-result"):
+        # No safe way to interrupt one cell in place (same contract as local): kill, report, respawn.
+        _REGISTRY.discard(key, kernel)
+        if cell_status == "timeout":
+            result["status"] = "timeout"
+        kernel_info.update(ended=True, state_lost=True, note=(
+            "Cell timed out; the remote session kernel was killed and its state was lost. The next call "
+            "starts a fresh kernel." if cell_status == "timeout"
+            else "Remote kernel protocol failure; kernel killed, state lost."))
+        return result
     if cell_status == "exit":
-        result["kernel"]["ended"] = True
+        _REGISTRY.discard(key, kernel)
+        kernel_info["ended"] = True
+    kernel.execution_count = kernel_info["execution_count"] = int(cell_payload.get("execution_count", 0) or 0)
+    if cell_status in ("ok", "exit"):
+        result["status"] = "success"
+    result["stdout_clipped"] = bool(cell_payload.get("stdout_clipped"))
+    result["stderr_clipped"] = bool(cell_payload.get("stderr_clipped"))
     if state_reset:
-        result["kernel"]["state_reset"] = True
+        kernel_info["state_reset"] = True
     if state_lost:
-        result["kernel"]["state_lost"] = True
-        result["kernel"]["note"] = (
+        kernel_info.update(state_lost=True, note=(
             "The previous remote kernel was gone (transport drop, container "
-            "restart, or idle self-exit); state from earlier calls was lost "
-            "and a fresh kernel was started."
-        )
+            "restart, or idle self-exit); state from earlier calls was lost and a fresh kernel was started."))
     if cell_status == "error" and result["traceback"]:
         result["error"] = result["traceback"].strip().splitlines()[-1]
+    stale_warning = stale_modules_warning(cell_payload)
+    if stale_warning:
+        kernel_info["warning"] = stale_warning  # the caller rebuilds the result but keeps `kernel`
     return result
