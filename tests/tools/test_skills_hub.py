@@ -227,10 +227,17 @@ class TestGitHubSourceFileFetch:
         assert sent[-1]["Accept"] == "application/vnd.github.v3.raw"
         assert auth.rejected[0] == "GITHUB_TOKEN/GH_TOKEN"
 
+@pytest.fixture
+def allow_public_skill_fetches(monkeypatch):
+    monkeypatch.setattr("tools.skills_hub.is_safe_url", lambda _url: True)
+    monkeypatch.setattr("tools.skills_hub.check_website_access", lambda _url: None)
+
+
 # ---------------------------------------------------------------------------
 # SkillsShSource
 # ---------------------------------------------------------------------------
 
+@pytest.mark.usefixtures("allow_public_skill_fetches")
 class TestSkillsShSource:
     def _source(self):
         auth = MagicMock(spec=GitHubAuth)
@@ -241,13 +248,11 @@ class TestSkillsShSource:
         ``Accept-Encoding: gzip`` pin: skills.sh serves sitemaps brotli-compressed and
         httpx's optional brotlicffi backend has a streaming-decode bug on them, so the
         default ``gzip, deflate, br`` negotiation must never reach the server."""
-        monkeypatch.setattr("tools.skills_hub.is_safe_url", lambda _url: True)
-        monkeypatch.setattr("tools.skills_hub.check_website_access", lambda _url: None)
         monkeypatch.setattr("tools.skills_hub_skillssh._cached_metas", lambda _key: None)
         monkeypatch.setattr("tools.skills_hub_skillssh._cache_metas", lambda _key, _metas: None)
         calls = []
 
-        def fake_get(url, *, timeout, headers=None):
+        def fake_get(url, *, timeout, headers=None, **_kw):
             calls.append((url, headers))
             body = ("<sitemapindex><sitemap><loc>https://www.skills.sh/sitemap-skills-0.xml</loc></sitemap></sitemapindex>"
                     if url.endswith("/sitemap.xml") else
@@ -264,7 +269,7 @@ class TestSkillsShSource:
 
     @patch("tools.skills_hub._write_index_cache")
     @patch("tools.skills_hub._read_index_cache", return_value=None)
-    @patch("tools.skills_hub.httpx.get")
+    @patch("tools.skills_hub._ssrf_safe_http_get")
     def test_search_maps_skills_sh_results_to_prefixed_identifiers(self, mock_get, _mock_read_cache, _mock_write_cache):
         mock_get.return_value = MagicMock(
             status_code=200,
@@ -298,8 +303,6 @@ class TestSkillsShSource:
     ):
         """A per-skill sitemap shard that keeps failing is a hole in the catalog, not an
         empty shard: retry it, and never publish the partial slice to the shared cache."""
-        monkeypatch.setattr("tools.skills_hub.is_safe_url", lambda _url: True)
-        monkeypatch.setattr("tools.skills_hub.check_website_access", lambda _url: None)
         monkeypatch.setattr("tools.skills_hub_skillssh._cached_metas", lambda _key: None)
         monkeypatch.setattr("tools.skills_hub_skillssh._cache_metas", lambda _key, _metas: None)
         index = ("<sitemapindex><sitemap><loc>https://www.skills.sh/sitemap-skills-0.xml</loc></sitemap>"
@@ -307,7 +310,7 @@ class TestSkillsShSource:
         shard0 = "<urlset><url><loc>https://www.skills.sh/o/r/skill-a</loc></url></urlset>"
         calls: list[str] = []
 
-        def fake_get(url, *, timeout, headers=None):
+        def fake_get(url, *, timeout, headers=None, **_kw):
             calls.append(url)
             if url.endswith("sitemap.xml"):
                 return MagicMock(status_code=200, headers={}, text=index)
@@ -324,7 +327,7 @@ class TestSkillsShSource:
 
     @patch("tools.skills_hub._write_index_cache")
     @patch("tools.skills_hub._read_index_cache", return_value=None)
-    @patch("tools.skills_hub.httpx.get")
+    @patch("tools.skills_hub._ssrf_safe_http_get")
     @patch.object(GitHubSource, "fetch")
     def test_fetch_falls_back_to_tree_search_for_deeply_nested_skills(
         self, mock_fetch, mock_get, _mock_read_cache, _mock_write_cache,
@@ -384,6 +387,7 @@ class TestSkillsShSource:
         # Verify the tree-resolved identifier was used for the final GitHub fetch
         mock_fetch.assert_any_call("owner/repo/cli-tool/components/skills/development/my-skill")
 
+@pytest.mark.usefixtures("allow_public_skill_fetches")
 class TestFindSkillInRepoTree:
     """Tests for GitHubSource._find_skill_in_repo_tree."""
 
@@ -392,7 +396,7 @@ class TestFindSkillInRepoTree:
         auth.get_headers.return_value = {"Accept": "application/vnd.github.v3+json"}
         return GitHubSource(auth=auth)
 
-    @patch("tools.skills_hub.httpx.get")
+    @patch("tools.skills_hub._ssrf_safe_http_get")
     def test_finds_deeply_nested_skill(self, mock_get):
         tree_entries = [
             {"path": "README.md", "type": "blob"},
@@ -417,12 +421,13 @@ class TestFindSkillInRepoTree:
         result = self._source()._find_skill_in_repo_tree("davila7/claude-code-templates", "senior-backend")
         assert result == "davila7/claude-code-templates/cli-tool/components/skills/development/senior-backend"
 
-    @patch("tools.skills_hub.httpx.get")
+    @patch("tools.skills_hub._ssrf_safe_http_get")
     def test_returns_none_when_repo_api_fails(self, mock_get):
         mock_get.return_value = MagicMock(status_code=404)
         result = self._source()._find_skill_in_repo_tree("owner/repo", "my-skill")
         assert result is None
 
+@pytest.mark.usefixtures("allow_public_skill_fetches")
 class TestRepoRootSkillLayout:
     """Regression for #115028: skills.sh repos whose SKILL.md sits at the repo ROOT (no skill
     directory, e.g. orzcls/win-disk-cleaner) are listed by search but could not be resolved by
@@ -479,7 +484,7 @@ class TestRepoRootSkillLayout:
 
     @patch("tools.skills_hub._write_index_cache")
     @patch("tools.skills_hub._read_index_cache", return_value=None)
-    @patch("tools.skills_hub.httpx.get")
+    @patch("tools.skills_hub._ssrf_safe_http_get")
     def test_inspect_resolves_skill_md_at_repo_root(self, mock_get, _mock_read_cache, _mock_write_cache):
         mock_get.side_effect = self._github_stub(self.ROOT_TREE)
 
@@ -492,7 +497,7 @@ class TestRepoRootSkillLayout:
 
     @patch("tools.skills_hub._write_index_cache")
     @patch("tools.skills_hub._read_index_cache", return_value=None)
-    @patch("tools.skills_hub.httpx.get")
+    @patch("tools.skills_hub._ssrf_safe_http_get")
     def test_fetch_resolves_and_names_bundle_for_repo_root_skill(self, mock_get, _mock_read_cache, _mock_write_cache):
         mock_get.side_effect = self._github_stub(self.ROOT_TREE)
 
@@ -509,19 +514,15 @@ class TestRepoRootSkillLayout:
 
     @patch("tools.skills_hub._write_index_cache")
     @patch("tools.skills_hub._read_index_cache", return_value=None)
-    @patch("tools.skills_hub.httpx.get")
+    @patch("tools.skills_hub._ssrf_safe_http_get")
     def test_root_layout_does_not_resolve_as_a_multi_skill_repo(self, mock_get, _mock_read_cache, _mock_write_cache):
         """A repo with a root SKILL.md AND another skill dir is not a root-layout single skill."""
         mock_get.side_effect = self._github_stub(self.ROOT_TREE + [{"path": "skills/other/SKILL.md", "type": "blob"}])
 
         assert self._source().inspect(self.IDENTIFIER) is None
 
+@pytest.mark.usefixtures("allow_public_skill_fetches")
 class TestWellKnownSkillSource:
-    @pytest.fixture(autouse=True)
-    def _allow_public_skill_fetches(self, monkeypatch):
-        monkeypatch.setattr("tools.skills_hub.is_safe_url", lambda _url: True)
-        monkeypatch.setattr("tools.skills_hub.check_website_access", lambda _url: None)
-
     def _source(self):
         return WellKnownSkillSource()
 
@@ -549,7 +550,7 @@ class TestWellKnownSkillSource:
 
     @patch("tools.skills_hub._write_index_cache")
     @patch("tools.skills_hub._read_index_cache", return_value=None)
-    @patch("tools.skills_hub.httpx.get")
+    @patch("tools.skills_hub._ssrf_safe_http_get")
     def test_fetch_rejects_unsafe_file_paths_from_well_known_endpoint(self, mock_get, _mock_read_cache, _mock_write_cache):
         def fake_get(url, *args, **kwargs):
             if url.endswith("/index.json"):
@@ -570,12 +571,8 @@ class TestWellKnownSkillSource:
 
         assert bundle is None
 
+@pytest.mark.usefixtures("allow_public_skill_fetches")
 class TestUrlSource:
-    @pytest.fixture(autouse=True)
-    def _allow_public_skill_fetches(self, monkeypatch):
-        monkeypatch.setattr("tools.skills_hub.is_safe_url", lambda _url: True)
-        monkeypatch.setattr("tools.skills_hub.check_website_access", lambda _url: None)
-
     def _source(self):
         return UrlSource()
 
@@ -1360,7 +1357,7 @@ class TestGitHubSourceImmutableBlobFetch:
         response = MagicMock(status_code=200, content=b"immutable bytes")
         blob_sha = "a" * 40
 
-        with patch("tools.skills_hub.httpx.get", return_value=response) as get:
+        with patch.object(source, "_github_get", return_value=response) as get:
             assert source._fetch_file_bytes(
                 "owner/repo", "optional-skills/demo/SKILL.md", blob_sha=blob_sha,
             ) == b"immutable bytes"
@@ -2200,6 +2197,7 @@ class TestIndexMissFallback:
 # _load_hermes_index — centralized index fetch (Browse-hub landing / search)
 # ---------------------------------------------------------------------------
 
+@pytest.mark.usefixtures("allow_public_skill_fetches")
 class TestLoadHermesIndex:
     """Regression coverage for the Skills-Hub index fetch.
 
@@ -2220,8 +2218,6 @@ class TestLoadHermesIndex:
 
     def test_fetch_does_not_request_brotli(self, monkeypatch, tmp_path):
         """The index fetch must not negotiate Brotli (the broken decoder path)."""
-        import tools.skills_hub_search as hub_search
-
         self._isolate_cache(monkeypatch, tmp_path)
 
         captured = {}
@@ -2233,7 +2229,7 @@ class TestLoadHermesIndex:
             resp.json.return_value = {"skills": [{"name": "x"}]}
             return resp
 
-        monkeypatch.setattr(hub_search.httpx, "get", fake_get)
+        monkeypatch.setattr("tools.skills_hub._ssrf_safe_http_get", fake_get)
 
         data = _load_hermes_index()
         assert data == {"skills": [{"name": "x"}]}
@@ -2247,8 +2243,6 @@ class TestLoadHermesIndex:
         self, monkeypatch, tmp_path
     ):
         """If every attempt fails to decode, serve the stale cache rather than None."""
-        import tools.skills_hub_search as hub_search
-
         cache_file = self._isolate_cache(monkeypatch, tmp_path)
         cache_file.write_text(json.dumps({"skills": [{"name": "stale"}]}))
         # Force the cache to look expired so the network path runs.
@@ -2260,7 +2254,7 @@ class TestLoadHermesIndex:
         def fake_get(url, *args, **kwargs):
             raise httpx.DecodingError("brotli boom")
 
-        monkeypatch.setattr(hub_search.httpx, "get", fake_get)
+        monkeypatch.setattr("tools.skills_hub._ssrf_safe_http_get", fake_get)
 
         data = _load_hermes_index()
         assert data == {"skills": [{"name": "stale"}]}

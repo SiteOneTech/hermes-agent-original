@@ -522,8 +522,10 @@ class GitHubSource(SkillSource):
             wait = backoff
             try:
                 resp = hub()._skills_hub_http_get(
-                    url, params=params, headers=hdrs, timeout=timeout, follow_redirects=True
+                    url, params=params, headers=hdrs, timeout=timeout
                 )
+            except hub().SkillsHubFetchBlocked:
+                return None
             except httpx.HTTPError as e:
                 logger.debug("GitHub GET %s failed (attempt %d/%d): %s", url, attempt + 1, max_retries, e)
                 if last_attempt:
@@ -622,7 +624,7 @@ class GitHubSource(SkillSource):
                 try:
                     raw = hub()._skills_hub_http_get(
                         f"https://raw.githubusercontent.com/{repo}/{ref}/{quote(path, safe='/')}",
-                        timeout=15.0, follow_redirects=False)
+                        timeout=15.0)
                 except (httpx.HTTPError, OSError, ValueError):
                     self._raw_unusable = True
                 else:
