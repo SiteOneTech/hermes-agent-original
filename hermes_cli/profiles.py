@@ -14,9 +14,10 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from agent.file_safety import HOME_CREDENTIAL_DIRS
+from agent.skill_utils import is_excluded_skill_path, parse_config_string_list
 from hermes_cli.archive_safe import archive_root_dirs, make_targz, normalize_archive_parts, safe_extract_targz
 from hermes_cli import config_backend as _config_backend
 from hermes_cli.profiles_config import _migrate_profile_config_if_outdated
@@ -687,6 +688,14 @@ class ProfileInfo:
     # appends here). Lets Bot Mode group chats re-link persisted member
     # descriptors to the renamed live profile (#110200).
     previous_names: list[str] = field(default_factory=list)
+    # Dashboard capability summaries. ``toolsets`` mirrors the profile's
+    # configured runtime/tool surface (top-level ``toolsets`` first,
+    # ``platform_toolsets.cli`` as a compatibility fallback). ``assigned_skills``
+    # is the explicit preload list from config, while ``skill_names`` is the
+    # installed/enabled skill inventory for display/search.
+    toolsets: List[str] = field(default_factory=list)
+    assigned_skills: List[str] = field(default_factory=list)
+    skill_names: List[str] = field(default_factory=list)
 
 
 def _load_yaml_dict(path: Path) -> Optional[dict]:
@@ -969,6 +978,95 @@ def set_profile_display_name(profile_name: str, display_name: str) -> str:
 
 # CRUD operations
 
+def _listify_config_value(value: Any) -> List[str]:
+    """Normalize a config value into a stable list of non-empty strings.
+
+    Delegates to the runtime's :func:`parse_config_string_list` so dashboard
+    summaries normalize exactly like skill/tool loading does — including the
+    JSON/Python-literal strings ``hermes config set`` writes for lists (#13026)."""
+    return [text for text in (str(item).strip() for item in parse_config_string_list(value)) if text]
+
+
+def _read_skill_name_from_md(skill_md: Path) -> str:
+    """Return the skill's frontmatter name, falling back to its directory."""
+    fallback = skill_md.parent.name
+    try:
+        text = skill_md.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return fallback
+    if not text.startswith("---"):
+        return fallback
+    try:
+        import yaml
+
+        frontmatter = text.split("---", 2)[1]
+        data = yaml.safe_load(frontmatter) or {}
+        if isinstance(data, dict):
+            name = str(data.get("name") or "").strip()
+            if name:
+                return name
+    except Exception:
+        return fallback
+    return fallback
+
+
+def _enabled_profile_skill_names(profile_dir: Path, config: dict) -> List[str]:
+    """List installed skill names that are not disabled in config.yaml."""
+    skills_dir = profile_dir / "skills"
+    if not skills_dir.is_dir():
+        return []
+    skills_cfg = config.get("skills") if isinstance(config, dict) else {}
+    disabled = set()
+    if isinstance(skills_cfg, dict):
+        disabled = {str(name).strip() for name in _listify_config_value(skills_cfg.get("disabled"))}
+    names: set[str] = set()
+    for skill_md in skills_dir.rglob("SKILL.md"):
+        if is_excluded_skill_path(skill_md):
+            continue
+        name = _read_skill_name_from_md(skill_md)
+        if name and name not in disabled:
+            names.add(name)
+    return sorted(names, key=str.casefold)
+
+
+def _read_profile_capabilities(profile_dir: Path) -> dict:
+    """Read dashboard-facing toolset and skill summaries for a profile.
+
+    This deliberately avoids calling the full tools/skills HTTP endpoints for
+    every profile card.  It reads the profile-local config and skill inventory
+    directly so `/api/profiles` can show each profile's capabilities in one
+    request without mutating anything.
+    """
+    config_path = profile_dir / "config.yaml"
+    config: dict = {}
+    if config_path.exists():
+        try:
+            import yaml
+
+            loaded = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+            if isinstance(loaded, dict):
+                config = loaded
+        except Exception:
+            config = {}
+
+    toolsets = _listify_config_value(config.get("toolsets"))
+    if not toolsets:
+        platform_toolsets = config.get("platform_toolsets")
+        if isinstance(platform_toolsets, dict):
+            toolsets = _listify_config_value(platform_toolsets.get("cli"))
+
+    skills_cfg = config.get("skills") if isinstance(config, dict) else {}
+    assigned_skills = []
+    if isinstance(skills_cfg, dict):
+        assigned_skills = _listify_config_value(skills_cfg.get("assigned"))
+
+    return {
+        "toolsets": toolsets,
+        "assigned_skills": assigned_skills,
+        "skill_names": _enabled_profile_skill_names(profile_dir, config),
+    }
+
+
 def _profile_info(name: str, path: Path, *, is_default: bool, alias_name: Optional[str] = None,
                   lazy_skill_count: bool = False) -> ProfileInfo:
     """Build one :class:`ProfileInfo` from a profile directory."""
@@ -980,11 +1078,14 @@ def _profile_info(name: str, path: Path, *, is_default: bool, alias_name: Option
     if not is_default:
         gateway_running = gateway_running or _served_by_running_multiplexer(name)
     skill_count = _cached_skill_count(path) if lazy_skill_count else _count_skills(path)
+    caps = _read_profile_capabilities(path)
     return ProfileInfo(
         name=name, path=path, is_default=is_default, gateway_running=gateway_running, model=model,
         provider=provider, has_env=(path / ".env").exists(), skill_count=skill_count,
         alias_path=alias_path, alias_name=alias_name, distribution_name=dist_name,
         distribution_version=dist_version, distribution_source=dist_source,
+        toolsets=caps.get("toolsets") or [], assigned_skills=caps.get("assigned_skills") or [],
+        skill_names=caps.get("skill_names") or [],
         **meta,
     )
 
