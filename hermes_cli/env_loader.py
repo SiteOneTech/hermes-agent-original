@@ -211,7 +211,7 @@ def adopt_env_provenance(provenance: dict[str, list[str]]) -> None:
 def get_secret_source_values(hermes_home: str | os.PathLike) -> dict[str, str]:
     """Return the external-secret value snapshot for ``hermes_home``."""
     with _SECRET_SOURCE_CACHE_LOCK:
-        return dict(_SECRET_SOURCE_VALUES_BY_HOME.get(str(Path(hermes_home).resolve()), {}))
+        return dict(_SECRET_SOURCE_VALUES_BY_HOME.get(hermes_home_key(hermes_home), {}))
 
 
 def hydrate_profile_secret_sources(hermes_home: str | os.PathLike) -> dict[str, str]:
@@ -259,7 +259,7 @@ def _hydrate_profile_secret_sources(home: Path) -> dict[str, str]:
 
     if worker_config_snapshot() is not None:
         return {}
-    home_key = str(home.resolve())
+    home_key = hermes_home_key(home)
     if home_key in _APPLIED_HOMES:
         return get_secret_source_values(home)
 
@@ -348,7 +348,7 @@ def _reset_secret_source_cache_locked(hermes_home: str | os.PathLike | None = No
         _SECRET_SOURCE_WRITES_BY_HOME.clear()
         _RELEASED_BRIDGE_CLAIMS_BY_HOME.clear()
         return
-    home_key = str(Path(hermes_home).resolve())
+    home_key = hermes_home_key(hermes_home)
     _APPLIED_HOMES.discard(home_key)
     _SECRET_SOURCE_VALUES_BY_HOME.pop(home_key, None)
     _SECRET_SOURCE_RESTORE_BY_HOME.pop(home_key, None)
@@ -810,7 +810,7 @@ def load_hermes_dotenv(
     if ((is_multiplex_active() or is_secret_scope_strict())
             and get_hermes_home_override() is not None
             and (home_path.resolve() != launch_home or get_hermes_home().resolve() != launch_home)):
-        home_key = str(home_path.resolve())
+        home_key = hermes_home_key(home_path)
         if home_key not in _SCOPED_SKIP_LOGGED:
             _SCOPED_SKIP_LOGGED.add(home_key)
             logger.debug("multiplex: skipping process-global dotenv load for routed "
@@ -879,7 +879,7 @@ def load_hermes_dotenv(
     # runtime-secrets.env is one of those override loads, so a name an authoritative source owns is
     # reverted here — its provenance goes back with it rather than staying labelled "infisical".
     if _SECRET_SOURCE_RESTORE_BY_HOME:
-        for name, value in _SECRET_SOURCE_RESTORE_BY_HOME.get(str(home_path.resolve()), {}).items():
+        for name, value in _SECRET_SOURCE_RESTORE_BY_HOME.get(hermes_home_key(home_path), {}).items():
             if os.environ.get(name) != value:
                 os.environ[name] = value
                 if _SECRET_SOURCES.get(name) == "infisical":
@@ -970,7 +970,7 @@ def _revoke_secret_source_writes(home_path: Path, *, keep) -> None:
     replaced since (the profile's ``.env``, the administrator-managed ``.env``, a shell export, a later
     source) is theirs and stays. A revoked name gets back the value it held before the source's first
     write, or is removed when it had none."""
-    home_key = str(Path(home_path).resolve())
+    home_key = hermes_home_key(home_path)
     writes = _SECRET_SOURCE_WRITES_BY_HOME.get(home_key)
     claims = _RELEASED_BRIDGE_CLAIMS_BY_HOME.get(home_key)
     if not writes and not claims:
@@ -1101,7 +1101,7 @@ def _apply_external_secret_sources(home_path: Path) -> None:
 
 def _apply_external_secret_sources_locked(home_path: Path) -> None:
     """Locked implementation for :func:`_apply_external_secret_sources`."""
-    home_key = str(Path(home_path).resolve())
+    home_key = hermes_home_key(home_path)
     if home_key in _APPLIED_HOMES:
         return
 

@@ -113,7 +113,11 @@ def _owner_secret_mapping(home: Path) -> dict[str, str]:
     interval per home: every retry is a helper subprocess, and connect/reconnect loops are tight."""
     from agent.secret_scope import _is_process_home, build_profile_secret_scope
     from hermes_cli import env_loader
-    key = str(home.resolve())
+    from hermes_constants import hermes_home_key
+    # hermes_home_key is the same key env_loader writes into _APPLIED_HOMES and
+    # _SECRET_SOURCE_VALUES_BY_HOME, so the retry guard and the "did it fully
+    # hydrate" check below agree with the loader instead of missing on every call.
+    key = hermes_home_key(home)
     should_retry = time.monotonic() >= _hydrate_retry_after.get(key, 0.0)
     if _is_process_home(home):
         if should_retry:

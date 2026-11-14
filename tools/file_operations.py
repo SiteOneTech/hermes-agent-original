@@ -161,6 +161,9 @@ _SAFE_READER_BAD_PAYLOAD = "Safe file reader returned invalid encoded data."
 _SAFE_READ_MARKER_PREFIX = "__HERMES_SR_"
 _SAMPLE_BYTES = 1000          # leading bytes that drive binary detection
 _THROUGH_EOF = 2**31 - 1      # ``end_line`` meaning "every line"
+# ``read_file_raw`` returns the whole file (patch/V4A read through it), so it carries a
+# hard size cap: beyond it a caller must use offset/limit range reads instead.
+_RAW_READ_MAX_BYTES = 50 * 1024 * 1024
 
 # Body of the safe-reader snippet; ``_read_regular_file_page`` prepends the
 # parameters (``m``, ``p``, ``offset``, ``end_line``, ``max_bytes``, ``metadata_only``,
@@ -860,19 +863,20 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         return {"state": "env_unavailable"}
 
     def _page_for_text_read(self, path: str, offset: int, end_line: int,
-                            line_clamp_bytes: Optional[int] = None) -> tuple[dict, bool, bool]:
+                            line_clamp_bytes: Optional[int] = None,
+                            max_bytes: Optional[int] = None) -> tuple[dict, bool, bool]:
         """``(page, is_image, ext_binary)`` for a text read. Images and known-binary
         extensions never inline content: the descriptor is still validated, but only
         metadata (images) or the magic-byte sample (binaries) crosses the transport."""
         is_image = self._is_image(path)
         ext_binary = has_binary_extension(path)
         if is_image:
-            page = self._read_regular_file_page(path, 1, 0, metadata_only=True)
+            page = self._read_regular_file_page(path, 1, 0, metadata_only=True, max_bytes=max_bytes)
         elif ext_binary:
-            page = self._read_regular_file_page(path, 1, 0)  # sample only, no line scan
+            page = self._read_regular_file_page(path, 1, 0, max_bytes=max_bytes)  # sample only, no line scan
         else:
             page = self._read_regular_file_page(
-                path, offset, end_line, line_clamp_bytes=line_clamp_bytes)
+                path, offset, end_line, line_clamp_bytes=line_clamp_bytes, max_bytes=max_bytes)
         return page, is_image, ext_binary
 
     def _page_error(self, path: str, page: dict) -> Optional[ReadResult]:
@@ -1349,13 +1353,19 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         """Whole file as a plain string (no pagination/line numbers/clamping) through
         the same validated descriptor as ``read_file``; patch/V4A rely on it."""
         path = self._expand_path(path)
-        page, is_image, ext_binary = self._page_for_text_read(path, 1, _THROUGH_EOF)
+        page, is_image, ext_binary = self._page_for_text_read(
+            path, 1, _THROUGH_EOF, max_bytes=_RAW_READ_MAX_BYTES)
         failure = self._page_error(path, page)
         if failure is not None:
             return failure
         if page["state"] == "missing":
             return self._suggest_similar_files(path)
         file_size = self._page_int(page, "file_size")
+        if page["state"] == "too_large":
+            return ReadResult(
+                file_size=file_size, _too_large=True,
+                error=(f"File is too large ({file_size:,} bytes, limit is "
+                       f"{_RAW_READ_MAX_BYTES:,}). Read a range with offset/limit instead."))
         if is_image:
             return ReadResult(is_image=True, is_binary=True, file_size=file_size)
         sample_bytes = self._page_bytes(page, "sample")
