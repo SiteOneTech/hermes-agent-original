@@ -21,6 +21,7 @@ from hermes_cli.config import (
     redact_key,
     OPTIONAL_ENV_VARS,
 )
+from hermes_cli.config_secret_refs import provider_name_key_env
 import gateway.status as _gw_status
 import hermes_cli.config as _cfg_mod
 import hermes_cli.web_routers.chat_ws as _rt_chat_ws
@@ -5151,13 +5152,13 @@ CONFIG_SCHEMA = ProviderConfigSchema(
         assert model_cfg["base_url"] == "https://text.example.com/v1"
         assert model_cfg["api_key"] == "sk-secret"
 
-        # Registered in custom_providers (dedup by base_url) so the picker shows
-        # a proper ready row instead of the "needs setup" dead-end.
+        # Registered in custom_providers (dedup by base_url) so the picker shows a ready row; the
+        # key lives in .env under the row's key_env (#77471).
         custom = cfg.get("custom_providers") or []
         assert any(
             isinstance(e, dict)
             and e.get("base_url") == "https://text.example.com/v1"
-            and e.get("api_key") == "sk-secret"
+            and os.environ.get(e.get("key_env") or "") == "sk-secret"
             and e.get("model") == "gpt-oss-120b"
             for e in custom
         )
@@ -5485,7 +5486,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
         authenticating to the deleted host, and the credential the operator
         just removed through the dashboard survives the delete.
         """
-        from hermes_cli.config import custom_endpoint_key_env, get_env_value, load_config
+        from hermes_cli.config import get_env_value, load_config
 
         self.client.post(
             "/api/providers/custom-endpoints",
@@ -5501,7 +5502,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
             "/api/providers/custom-endpoints/acme/activate", json={}
         ).status_code == 200
 
-        env_var = custom_endpoint_key_env("acme")
+        env_var = provider_name_key_env("acme")
         cfg = load_config()
         assert cfg["model"]["key_env"] == env_var
         assert get_env_value(env_var) == "sk-acme-secret"
@@ -5724,7 +5725,6 @@ CONFIG_SCHEMA = ProviderConfigSchema(
         never appeared for the profile the user was actually configuring.
         """
         from hermes_cli import profiles as profiles_mod
-        from hermes_cli.config import custom_endpoint_key_env
         from hermes_constants import get_hermes_home
 
         default_home = get_hermes_home()
@@ -5747,7 +5747,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
         # get_env_value(): save_env_value also mirrors the key into the shared
         # os.environ, so a reader-based check can't tell WHICH profile's store
         # actually received the write.
-        env_var = custom_endpoint_key_env("worker-proxy")
+        env_var = provider_name_key_env("worker-proxy")
 
         worker_cfg = (worker_home / "config.yaml").read_text()
         assert "worker-proxy" in worker_cfg
@@ -5787,7 +5787,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
                 assert path.read_bytes() == data
     def test_custom_endpoint_save_keeps_the_api_key_out_of_config(self):
         """The key belongs in .env behind key_env, never in config.yaml (#69449)."""
-        from hermes_cli.config import custom_endpoint_key_env, get_env_value, load_config
+        from hermes_cli.config import get_env_value, load_config
 
         self.client.post(
             "/api/providers/custom-endpoints",
@@ -5803,7 +5803,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
 
         cfg = load_config()
         entry = cfg["providers"]["proxy"]
-        env_var = custom_endpoint_key_env("proxy")
+        env_var = provider_name_key_env("proxy")
         assert entry["key_env"] == env_var
         assert "api_key" not in entry
         assert "api_key" not in cfg["model"]
@@ -6015,7 +6015,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
         """
         import hermes_yaml as yaml
 
-        from hermes_cli.config import custom_endpoint_key_env, get_config_path, get_env_value
+        from hermes_cli.config import get_config_path, get_env_value
 
         monkeypatch.setenv("MY_PROXY_KEY", "sk-user-managed")
         get_config_path().write_text(
@@ -6044,7 +6044,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
 
         raw = yaml.safe_load(get_config_path().read_text(encoding="utf-8"))
         assert raw["providers"]["proxy"]["api_key"] == "${MY_PROXY_KEY}"
-        assert not get_env_value(custom_endpoint_key_env("proxy"))
+        assert not get_env_value(provider_name_key_env("proxy"))
 
     def test_custom_endpoint_blank_api_key_clears_the_credential(self):
         """An explicitly emptied field means "remove the key", not "keep it"."""
@@ -6073,7 +6073,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
         and ``:8001`` onto one name, so saving the second silently overwrites
         the first's key.
         """
-        from hermes_cli.config import custom_endpoint_key_env, get_env_value
+        from hermes_cli.config import get_env_value
 
         for port, key in ((8000, "sk-first"), (8001, "sk-second")):
             self.client.post(
@@ -6087,8 +6087,8 @@ CONFIG_SCHEMA = ProviderConfigSchema(
                 },
             )
 
-        assert get_env_value(custom_endpoint_key_env("local-8000")) == "sk-first"
-        assert get_env_value(custom_endpoint_key_env("local-8001")) == "sk-second"
+        assert get_env_value(provider_name_key_env("local-8000")) == "sk-first"
+        assert get_env_value(provider_name_key_env("local-8001")) == "sk-second"
 
     def test_custom_endpoint_response_reports_a_key_held_in_env(self):
         """has_api_key must follow key_env, not just a plaintext api_key.

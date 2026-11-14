@@ -159,6 +159,7 @@ def _fallback_profile_entry(profiles_mod, name: str, home: Path, *, is_default: 
         "display_name": meta.get("display_name", ""), "avatar_path": meta.get("avatar_path", ""),
         "engine_label": meta.get("engine_label", ""), "engine_model": meta.get("engine_model", ""),
         "bot_title": meta.get("bot_title", ""),
+        "ui_meta": meta.get("ui_meta", {}) or {},
         "toolsets": list(caps.get("toolsets", []) or []),
         "assigned_skills": list(caps.get("assigned_skills", []) or []),
         "skill_names": list(caps.get("skill_names", []) or []),
