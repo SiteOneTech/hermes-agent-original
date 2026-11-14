@@ -2398,6 +2398,52 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
 
     # -- Artifact workspace (browsable roots, API-key gated) -------------------------
 
+
+    async def _handle_skills(self, request: web.Request) -> web.Response:
+        """GET /v1/skills — deterministic JSON listing of installed skills (name, description,
+        category), the same set ``/skills list`` shows."""
+        try:
+            from tools.skills_tool import find_all_skills, sort_skills
+            skills = sort_skills(
+                find_all_skills(
+                    skip_disabled=False, include_editorial=True
+                )
+            )
+        except Exception:
+            logger.exception("GET /v1/skills failed")
+            return _error_response("Failed to enumerate skills", 500, err_type="server_error")
+        return web.json_response({"object": "list", "data": skills})
+
+    async def _handle_toolsets(self, request: web.Request) -> web.Response:
+        """GET /v1/toolsets — each toolset the api_server agent exposes: enabled/configured state
+        plus the concrete tool names it expands to."""
+        try:
+            from hermes_cli.config import load_config
+            from hermes_cli.tools_config import (
+                _get_effective_configurable_toolsets, _get_platform_tools, _toolset_has_keys,
+                get_nous_subscription_features)
+            from toolsets import resolve_toolset
+            config = load_config()
+            enabled_toolsets = _get_platform_tools(config, "api_server", include_default_mcp_servers=False)
+            features = get_nous_subscription_features(config)
+            data: list[dict[str, Any]] = []
+            for name, label, desc in _get_effective_configurable_toolsets():
+                try:
+                    tools = sorted(set(resolve_toolset(name)))
+                except Exception:
+                    tools = []
+                data.append({
+                    "name": name, "label": label, "description": desc,
+                    "enabled": name in enabled_toolsets,
+                    "configured": _toolset_has_keys(name, config, features=features),
+                    "tools": tools})
+        except Exception:
+            logger.exception("GET /v1/toolsets failed")
+            return _error_response("Failed to enumerate toolsets", 500, err_type="server_error")
+        return web.json_response({"object": "list", "platform": "api_server", "data": data})
+
+    # -- /api/sessions: thin client/session resource API -------------------------------
+
     @staticmethod
     def _artifact_segment_allowed(segment: str) -> bool:
         """Block hidden/secret/cache-ish names from artifact browsing."""
