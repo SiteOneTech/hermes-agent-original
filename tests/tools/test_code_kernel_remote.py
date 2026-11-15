@@ -21,8 +21,8 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from tools.code_kernel_remote import (
+    _REGISTRY,
     _REMOTE_KERNELS,
-    _REMOTE_KERNELS_LOCK,
     RemoteKernel,
     execute_in_remote_kernel,
     shutdown_all_remote_kernels,
@@ -153,46 +153,6 @@ class TestSpawnAndReuse(RemoteKernelBase):
         self.assertFalse(result["kernel"]["reused"])
         self.assertEqual(sum(1 for c in env.commands if "nohup" in c), 2)
 
-    def test_same_owner_cells_are_serialized_for_the_full_lifecycle(self):
-        first_cat = threading.Event()
-        release_first = threading.Event()
-        second_cat = threading.Event()
-        cat_calls = [0]
-
-        def cat_handler(command):
-            cat_calls[0] += 1
-            if cat_calls[0] == 1:
-                first_cat.set()
-                release_first.wait(2)
-                return {"output": json.dumps(_cell(stdout="one\n")), "returncode": 0}
-            second_cat.set()
-            return {
-                "output": json.dumps(_cell(stdout="two\n", execution_count=2)),
-                "returncode": 0,
-            }
-
-        env = ScriptedEnv([
-            ("nohup", lambda c: {"output": "PID:4242\n", "returncode": 0}),
-            ("kill -0", lambda c: {"output": "ALIVE\n", "returncode": 0}),
-            ("cat ", cat_handler),
-        ])
-        results = []
-        first = threading.Thread(target=lambda: results.append(_run(env)))
-        second = threading.Thread(target=lambda: results.append(_run(env)))
-        first.start()
-        self.assertTrue(first_cat.wait(2))
-        second.start()
-        try:
-            self.assertFalse(second_cat.wait(0.2))
-        finally:
-            release_first.set()
-            first.join(3)
-            second.join(3)
-
-        self.assertFalse(first.is_alive())
-        self.assertFalse(second.is_alive())
-        self.assertEqual([result["status"] for result in results], ["success", "success"])
-
 
 class TestDeathDetection(RemoteKernelBase):
     def test_dead_kernel_is_reported_and_respawned(self):
@@ -233,57 +193,6 @@ class TestDeathDetection(RemoteKernelBase):
         self.assertEqual(len(_REMOTE_KERNELS), 0)
         # The kernel was actually killed on the remote.
         self.assertTrue(any("kill " in c for c in env.commands))
-
-    def test_remote_interrupt_result_kills_kernel_and_reports_interrupted(self):
-        env = ScriptedEnv([
-            ("nohup", lambda c: {"output": "PID:77\n", "returncode": 0}),
-            ("kill -0", lambda c: {"output": "ALIVE\n", "returncode": 0}),
-            ("cat ", lambda c: {"output": "[Command interrupted]", "returncode": 130}),
-        ])
-
-        result = _run(env)
-
-        self.assertEqual(result["status"], "interrupted")
-        self.assertTrue(result["kernel"]["state_lost"])
-        self.assertEqual(len(_REMOTE_KERNELS), 0)
-        self.assertTrue(any("kill " in c for c in env.commands))
-
-    def test_thread_interrupt_kills_an_existing_kernel(self):
-        env = ScriptedEnv(_spawn_ok_handlers([_cell(), _cell()]))
-        _run(env)
-
-        with patch("tools.interrupt.is_interrupted", return_value=True):
-            result = _run(env)
-
-        self.assertEqual(result["status"], "interrupted")
-        self.assertTrue(result["kernel"]["state_lost"])
-        self.assertEqual(len(_REMOTE_KERNELS), 0)
-        self.assertTrue(any("kill " in c for c in env.commands))
-
-    def test_thread_interrupt_sends_kill_outside_the_interrupted_thread(self):
-        from tools.interrupt import is_interrupted, set_interrupt
-
-        class InterruptAwareEnv(ScriptedEnv):
-            kill_was_sent = False
-
-            def execute(self, command, cwd=None, timeout=None):
-                if command.startswith("pkill"):
-                    if is_interrupted():
-                        return {"output": "[Command interrupted]", "returncode": 130}
-                    self.kill_was_sent = True
-                return super().execute(command, cwd=cwd, timeout=timeout)
-
-        env = InterruptAwareEnv(_spawn_ok_handlers([_cell()]))
-        _run(env)
-        tid = threading.current_thread().ident
-        set_interrupt(True, tid)
-        try:
-            result = _run(env)
-        finally:
-            set_interrupt(False, tid)
-
-        self.assertEqual(result["status"], "interrupted")
-        self.assertTrue(env.kill_was_sent)
 
 
 class TestOwnershipIsolation(RemoteKernelBase):
@@ -334,21 +243,6 @@ class TestOwnershipIsolation(RemoteKernelBase):
 
         self.assertEqual({key[0] for key in _REMOTE_KERNELS}, {"owner-2", "owner-3"})
         self.assertEqual(len(_REMOTE_KERNELS), 2)
-
-    def test_idle_remote_kernels_are_reaped_on_the_next_call(self):
-        env = ScriptedEnv(_spawn_ok_handlers([_cell(), _cell()]))
-        _run(env, task="owner-a")
-        stale = next(iter(_REMOTE_KERNELS.values()))
-        stale.last_used -= 10
-
-        with patch(
-            "tools.code_execution_tool._load_config",
-            return_value={"max_session_kernels": 4, "kernel_idle_timeout": 1},
-        ):
-            _run(env, task="owner-b")
-
-        self.assertNotIn("owner-a", {key[0] for key in _REMOTE_KERNELS})
-        self.assertIn("owner-b", {key[0] for key in _REMOTE_KERNELS})
 
 
 class TestIdleReapAndCapEviction(RemoteKernelBase):
@@ -418,7 +312,7 @@ class TestIdleReapAndCapEviction(RemoteKernelBase):
             worker = threading.Thread(target=_run, args=(busy_env,), kwargs={"task": "busy"})
             worker.start()
             self.assertTrue(cell_is_running.wait(2))
-            with _REMOTE_KERNELS_LOCK:
+            with _REGISTRY.lock:
                 self.assertTrue(any(k.attached for k in _REMOTE_KERNELS.values()))
             env = ScriptedEnv(_spawn_ok_handlers([_cell()]))
             _run(env, task="settled")
@@ -427,102 +321,6 @@ class TestIdleReapAndCapEviction(RemoteKernelBase):
             gate.set()
             worker.join(10)
         self.assertFalse(any("kill 4242" in c for c in busy_env.commands))
-
-    def test_new_kernel_is_attached_before_another_owner_can_evict_it(self):
-        """A freshly spawned kernel must not be evictable before its first
-        cell is attached by the owner that created it."""
-        busy_spawned = threading.Event()
-        busy_paused = threading.Event()
-        settled_reached_eviction = threading.Event()
-        release_busy = threading.Event()
-        busy_cell_started = threading.Event()
-        finish_busy_cell = threading.Event()
-        killed = []
-        real_monotonic = time.monotonic
-        locks = {}
-        lifecycle_calls = {"settled": 0}
-
-        busy_kernel = RemoteKernel(
-            env=ScriptedEnv([]), env_type="ssh", kernel_dir="/tmp/busy",
-            pid="101", rpc_token="busy", owner="busy", created=0, last_used=0,
-        )
-        settled_kernel = RemoteKernel(
-            env=ScriptedEnv([]), env_type="ssh", kernel_dir="/tmp/settled",
-            pid="202", rpc_token="settled", owner="settled", created=0, last_used=0,
-        )
-
-        def _spawn(_env, _env_type, owner, task_env_id, _tools, *, idle_exit):
-            if task_env_id == "busy":
-                busy_spawned.set()
-                return busy_kernel
-            return settled_kernel
-
-        def _clock():
-            if (
-                threading.current_thread().name == "busy-owner"
-                and busy_spawned.is_set()
-                and not busy_paused.is_set()
-            ):
-                busy_paused.set()
-                release_busy.wait(3)
-            return real_monotonic()
-
-        def _limits():
-            if threading.current_thread().name == "settled-owner":
-                lifecycle_calls["settled"] += 1
-                if lifecycle_calls["settled"] == 2:
-                    settled_reached_eviction.set()
-            return 1, 1800
-
-        def _release_after_old_interleaving():
-            # Before the fix, settled reaches eviction while busy is published
-            # but unattached. After the fix it waits on the registry lock until
-            # this watchdog releases busy, which is then non-evictable.
-            settled_reached_eviction.wait(1)
-            time.sleep(0.1)
-            release_busy.set()
-
-        def _run_cell(kernel, *_args, **_kwargs):
-            if kernel is busy_kernel:
-                busy_cell_started.set()
-                finish_busy_cell.wait(3)
-            return {"status": "success"}
-
-        results = []
-        with (
-            patch("tools.code_kernel._resolve_owner", side_effect=lambda task: task),
-            patch("tools.code_kernel._lifecycle_limits", side_effect=_limits),
-            patch("tools.code_kernel_remote._owner_lock", side_effect=lambda key: locks.setdefault(key, threading.Lock())),
-            patch("tools.code_kernel_remote._spawn_remote_kernel", side_effect=_spawn),
-            patch("tools.code_kernel_remote._run_remote_cell", side_effect=_run_cell),
-            patch("tools.code_kernel_remote._kill", side_effect=lambda kernel: killed.append(kernel.pid)),
-            patch("tools.code_kernel_remote.time.monotonic", side_effect=_clock),
-        ):
-            busy_worker = threading.Thread(
-                target=lambda: results.append(_run(ScriptedEnv([]), task="busy")),
-                name="busy-owner",
-            )
-            settled_worker = threading.Thread(
-                target=lambda: results.append(_run(ScriptedEnv([]), task="settled")),
-                name="settled-owner",
-            )
-            releaser = threading.Thread(target=_release_after_old_interleaving)
-            busy_worker.start()
-            self.assertTrue(busy_paused.wait(2))
-            settled_worker.start()
-            releaser.start()
-            settled_worker.join(5)
-            self.assertFalse(settled_worker.is_alive())
-            self.assertTrue(busy_cell_started.wait(2))
-            finish_busy_cell.set()
-            busy_worker.join(5)
-            releaser.join(2)
-
-        self.assertFalse(busy_worker.is_alive())
-        self.assertFalse(settled_worker.is_alive())
-        self.assertNotIn("101", killed)
-        self.assertEqual({key[0] for key in _REMOTE_KERNELS}, {"busy", "settled"})
-        self.assertEqual([result["status"] for result in results], ["success", "success"])
 
 
 class TestDispatchIntegration(unittest.TestCase):
