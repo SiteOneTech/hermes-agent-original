@@ -20,15 +20,23 @@ from agent.file_safety import _BLOCKED_PROJECT_ENV_BASENAMES as _ENV_FILE_BASENA
 from agent.redact_command_segments import _command_segments
 from agent.redact_connstr import _KV_CONNSTR_GATE_RE, _redact_kv_connection_strings
 from agent.redact_control_split import mask_control_split_tokens
+from agent.redact_db_url import _DSN_PW_PLACEHOLDER_RE, _is_userinfo_placeholder, redact_db_url_query_passwords
 from agent.redact_discord import _redact_discord_tokens
 from agent.redact_headers import (
     _COOKIE_HEADER_JSON_RE, _COOKIE_HEADER_JSON_UNTERMINATED_RE, _SECRET_HEADER_JSON_RE,
     _SECRET_HEADER_JSON_UNTERMINATED_RE, json_header_value_is_credential, redact_cookie_assignments,
     redact_header_credentials,
 )
+from agent.redact_partial_keys import _redact_partial_private_keys
 from agent.redact_pattern_shape import _pattern_structure
+from agent.redact_secret_sources import redact_secret_source_values
 from agent.redact_spaced_cfg import redact_spaced_cfg_assignments
 from agent.redact_zhipu import _ZHIPU_API_KEY_RE
+from agent.redact_vault_values import (  # re-exported: callers import these from agent.redact
+    clear_vault_redaction_values,
+    redact_registered_vault_values,
+    register_vault_redaction_value,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,64 +45,6 @@ logger = logging.getLogger(__name__)
 # RecursionError on the way to the model.
 REDACT_WALK_MAX_DEPTH = 320
 REDACT_WALK_DEPTH_MARKER = "[redacted: nesting limit]"
-
-# ---------------------------------------------------------------------------
-# Vault-value redaction registry (profile-scoped, bounded)
-# ---------------------------------------------------------------------------
-# Exact secret values that transited a server-side vault fill (browser_vault). Generic
-# credential-shaped regexes cannot catch an arbitrary user password, so the fill path registers
-# the exact bytes and every browser_* tool result (including browser_cdp Runtime.evaluate
-# passthrough) is scrubbed against them before it can reach the model. Memory only: never
-# persisted or logged. Keyed by profile home so a multiplex gateway never scrubs profile B's
-# output with profile A's passwords (which would also confirm to B that the bytes exist), and
-# bounded per profile: a fill-heavy session evicts its oldest entries rather than growing forever.
-_VAULT_REDACTION_MAX_PER_PROFILE = 64
-_VAULT_REDACTION_VALUES: dict = {}  # profile home → ordered {value: None}
-_VAULT_REDACTION_LOCK = threading.Lock()
-
-
-def _vault_scope() -> str:
-    from hermes_constants import get_hermes_home
-    return str(get_hermes_home())
-
-
-def register_vault_redaction_value(value) -> None:
-    """Register an exact vault secret value for model-facing redaction.
-
-    Called by the vault fill path BEFORE the injection happens, so no later browser tool result
-    can echo the value back into model context. Also registers the form a text input normalizes
-    it to (CR/LF stripped), since that is what the page holds.
-    """
-    if not isinstance(value, str) or not value:
-        return
-    normalized = value.replace("\r", "").replace("\n", "")
-    with _VAULT_REDACTION_LOCK:
-        bucket = _VAULT_REDACTION_VALUES.setdefault(_vault_scope(), {})
-        for v in (value, normalized):
-            if v:
-                bucket.pop(v, None)  # re-registering refreshes recency
-                bucket[v] = None
-        while len(bucket) > _VAULT_REDACTION_MAX_PER_PROFILE:
-            del bucket[next(iter(bucket))]
-
-
-def clear_vault_redaction_values() -> None:
-    """Drop the current profile's registered values (profile teardown / explicit lock)."""
-    with _VAULT_REDACTION_LOCK:
-        _VAULT_REDACTION_VALUES.pop(_vault_scope(), None)
-
-
-def redact_registered_vault_values(text: str) -> str:
-    """Exact-substring scrub of every vault secret value registered for the current profile."""
-    if not isinstance(text, str) or not text:
-        return text
-    with _VAULT_REDACTION_LOCK:
-        bucket = _VAULT_REDACTION_VALUES.get(_vault_scope())
-        values = sorted(bucket, key=len, reverse=True) if bucket else ()  # longest first: a substring never shadows its superstring
-    for value in values:
-        if value in text:
-            text = text.replace(value, "«redacted-vault-secret»")
-    return text
 
 # Sensitive query-string param names (case-insensitive): opaque tokens / OAuth
 # codes / pre-signed signatures with no vendor prefix.
@@ -1139,6 +1089,8 @@ def _redact_private_key_blocks(text: str) -> str:
     ``AccountKey=-----BEGIN`` first would break the PEM header and leave the body visible."""
     if "-----BEGIN" in text and "-----END" in text:  # no END, no match: skip the quadratic scan
         text = _PRIVATE_KEY_RE.sub("[REDACTED PRIVATE KEY]", text)
+    if "PRIVATE KEY-----" in text:
+        text = _redact_partial_private_keys(text)
     if "LS0tLS1CRUdJTi" in text:
         text = _B64_PEM_RE.sub(
             lambda m: "[REDACTED PRIVATE KEY]" if _is_b64_pem_key(m.group(0)) else m.group(0),
@@ -1514,23 +1466,6 @@ def _redact_assignments(text: str, *, mask_nonreusable: bool = False) -> str:
     return text
 
 
-# A docs placeholder is a lower-case or ALL-CAPS name in angle brackets (``<password>``) or an
-# upper-case env var reference (``${REDIS_PASSWORD}``); ``$ecretPassw0rd`` or ``<Zq8x…>`` is
-# a real password that happens to start with the same character.
-_DSN_PW_PLACEHOLDER_RE = re.compile(r"<(?:[a-z][a-z_ -]*|[A-Z][A-Z_ -]*)>|\$\{?[A-Z_][A-Z0-9_]*\}?|%[A-Z_][A-Z0-9_]*%")
-
-
-# ``https://user:password@host`` in docs names the field instead of filling it in.
-_USERINFO_PLACEHOLDER_WORDS = frozenset({"password", "passwd", "pass", "pw", "pwd", "secret", "token"})
-
-
-def _is_userinfo_placeholder(password: str) -> bool:
-    """A template (``{pw}``, ``{{ pw }}``), docs placeholder or field name, never a literal secret."""
-    return ((password.startswith("{") and password.endswith("}"))
-            or _DSN_PW_PLACEHOLDER_RE.fullmatch(password) is not None
-            or password.casefold() in _USERINFO_PLACEHOLDER_WORDS)
-
-
 def _redact_userinfo_passwords(text: str) -> str:
     """Mask the password half of ``scheme://user:pass@host`` userinfo (#125664).
 
@@ -1572,6 +1507,7 @@ def _redact_url_credentials(text: str, code_file: bool, *, file_read: bool = Fal
         return m.group(0)
 
     text = _DB_CONNSTR_RE.sub(_redact_db, text)
+    text = redact_db_url_query_passwords(text)
     text = _WEBHOOK_URL_RE.sub(_redact_webhook, text)
     text = _URL_BARE_TOKEN_RE.sub(lambda m: f"{m.group(1)}{_mask_token(m.group(2))}{m.group(3)}", text)
     return _redact_userinfo_passwords(text)
@@ -1636,13 +1572,27 @@ def redact_sensitive_text(text: str, *, force: bool = False, code_file: bool = F
     if not text:
         return text
     # Vault secrets are a hard model-egress boundary: scrubbed regardless of the redact_secrets preference.
-    text = redact_registered_vault_values(text)
+    text = redact_secret_source_values(redact_registered_vault_values(text))
     if not (force or _redact_enabled()):
         return text
+    return redact_credential_shapes(text, force=force, code_file=code_file, file_read=file_read,
+                                    secret_file=secret_file, redact_url_credentials=redact_url_credentials,
+                                    keep_phone_numbers=keep_phone_numbers)
+
+
+def redact_credential_shapes(text: str, *, force: bool = False, code_file: bool = False,
+                             file_read: bool = False, secret_file: bool = False,
+                             redact_url_credentials: bool = False, keep_phone_numbers: bool = False) -> str:
+    """The pattern passes of ``redact_sensitive_text`` alone: no registered exact values, no preference
+    gate. A classifier (does this value have a credential shape?) must not read a registry, or another
+    profile's values would decide what this one treats as secret."""
     # ``secret_file`` is authoritative: a caller that classified the source as secret-bearing must not
     # be silently fail-open because another flag (code_file, or file_read implying it) was also set.
     code_file = (code_file or file_read) and not secret_file
 
+    # Key blocks first: a body line holding a token prefix (``gAAAA``) would otherwise be masked into
+    # ``gAAAAh...Y2Nj`` and end the partial-key run there, leaving the lines past it visible.
+    text = _redact_private_key_blocks(text)
     # Control/zero-width chars can split a token body so _PREFIX_RE alone misses it.
     if _has_known_prefix_substring(text):
         _prefix_sub = _mask_token_nonreusable if file_read else _mask_token
@@ -1664,7 +1614,6 @@ def redact_sensitive_text(text: str, *, force: bool = False, code_file: bool = F
     # Flags and connection-string keys carry a credential in command text, so they are not
     # gated on code_file: the shape (``--password=`` / ``;AccountKey=``) is unambiguous, and
     # the surfaces that leaked them (approval cards, chat status) run this pass anyway.
-    text = _redact_private_key_blocks(text)
     text = _redact_cli_secrets(text, _mask_token_nonreusable if file_read else None)
 
     if force and "=" in text:

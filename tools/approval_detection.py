@@ -16,6 +16,7 @@ import unicodedata
 from tools import approval_parser_budget as _parser_budget
 from tools.approval_parser_budget import _scan_backtick_end, _scan_dollar_paren_end, _scan_shell
 from tools.approval_ansi_c import _is_shell_comment_start, expand_ansi_c_quotes
+from tools.approval_git_options import _GIT, _GIT_PUSH, _GIT_PUSH_ARGS, _join_escaped_word_chars
 from tools.approval_home_fold import _rewrite_resolved_hermes_home, _rewrite_resolved_user_home
 from tools.approval_env_split import _split_env_string
 
@@ -520,7 +521,8 @@ def _detect_hardline_command(command: str) -> tuple:
     _, malformed_grep = _grep_safe_detection_variant(_mask_quoted_newlines(expand_ansi_c_quotes(command)))
     if malformed_grep:
         return (True, _MALFORMED_EXEC_DESCRIPTION)
-    for command_variant in _command_detection_variants(command):
+    capped: list[str] = []
+    for command_variant in _command_detection_variants(command, capped=capped):
         variant_lower = command_variant.lower()
         masked_lower: str | None = None
         for pattern_re, description, quote_masked in HARDLINE_PATTERNS_COMPILED:
@@ -534,7 +536,8 @@ def _detect_hardline_command(command: str) -> tuple:
                 )
             if pattern_re.search(masked_lower if quote_masked else variant_lower):
                 return (True, description)
-    return (False, None)
+    # eval code nested past _MAX_EVAL_NESTING was not inspected: fail closed like the other parser limits.
+    return (True, _PARSER_LIMIT_DESCRIPTION) if capped else (False, None)
 
 
 # ---- Dangerous command patterns -----------------------------------------------------------
@@ -562,26 +565,6 @@ _PS_EXE_AT_COMMAND_POSITION = (
     r"\s*+(?:[^\s;&|\"'(){}\x60]*[\\/])?(?:powershell|pwsh)(?:\.exe)?(?=\s)"
 )
 
-# `git` plus the global options that may sit before the subcommand (`git -C <dir> reset --hard`).
-# Value-taking options consume their separate value word; any other option is a single dash token.
-# A word may contain quoted runs (`-C "/a b"`, `--git-dir='/a b/.git'`), which the shell passes as
-# one argument. Each option is an atomic group with the value-taking form tried first: the two
-# alternatives overlap (`-c x` is also two dash-or-word tokens), so a non-atomic run of option-like
-# tokens (`git -c -c -c ... x`) is re-split exponentially on a failed match. The run is capped:
-# every later `git` word starts a new search, and an uncapped run made `git -c git -c ... x` quadratic.
-_GIT_WORD = r'''(?:"[^"]*"|'[^']*'|[^\s;|&"'])+'''
-_GIT = (r'\bgit(?>\s+(?:(?:-c|--git-dir|--work-tree|--namespace|--exec-path|--super-prefix|--config-env'
-        rf'|--attr-source)\s+{_GIT_WORD}|-{_GIT_WORD})){{0,64}}\s+')
-_GIT_PUSH = rf'{_GIT}push\b'
-# The push's own arguments, bounded to ONE command segment: a later command's flag is never the
-# push's (`git push -q origin main && grep -f patterns.txt log` is not a force push). A quoted
-# string is one atom, so a quoted `;`/`&`/`|` (`-o 'ci;skip'`) does not end the segment, and a
-# flag inside quotes is not seen; a redirection's `&`/`|` (`2>&1`, `&>`, `>|`) stays inside too.
-# Every alternative starts on a different character (or lookaround), so a failed match scans a
-# run once instead of re-splitting it exponentially (`>&>&>&...`, `'a' 'a' 'a' ...`). The scan
-# stops at a nested push, whose own search covers the rest, so `git push git push ...` is linear.
-_GIT_PUSH_ARGS = (r'''(?:(?>'[^']*'|"(?:[^"\\]|\\[\s\S])*")|'(?![^']*')|"(?![^"]*")'''
-                  r'''|\\[\s\S]|(?!''' + _GIT_PUSH + r''')[^;&|\n'"\\]|(?<=[<>])&|(?<![<>])&(?=>)|(?<=>)\|)*''')
 # An argument may open with a quote the shell strips (`"-f"`, `'+main'`, `"--force"`).
 _GIT_PUSH_ARG_START = r'''\s["']?'''
 _DEV_TCP_REDIRECT_DESCRIPTION = "reverse shell via /dev/tcp or /dev/udp redirect"
@@ -962,10 +945,12 @@ for _canonical_key, _legacy_key in [
     _PATTERN_KEY_ALIASES.setdefault(_legacy_key, set()).update({_legacy_key, _canonical_key})
 
 # Regex edits change a pattern's regex-derived legacy key; keep each pre-change spelling resolvable so
-# approvals stored under it still match: (?-i:-D) scoping, and the optional drive letter (#38964).
+# approvals stored under it still match: (?-i:-D) scoping, the optional drive letter (#38964), and
+# `git reset --hard` accepting abbreviated `--h`/`--ha`/`--har`.
 for _canonical_key, _old_key in [
     ("git branch force delete", r"git\s+branch\s+-D"),
     ("delete in root path", r"rm\s+(-[^\s]*\s+)*/"),
+    ("git reset --hard (destroys uncommitted changes)", r"git\s+reset\s+--hard"),
 ]:
     _PATTERN_KEY_ALIASES.setdefault(_canonical_key, set()).add(_old_key)
     _PATTERN_KEY_ALIASES.setdefault(_old_key, set()).add(_canonical_key)
@@ -1109,6 +1094,8 @@ _MAX_SUBSTITUTION_DEPTH = 32
 # A backslash-newline that an even run of backslashes precedes (so the backslash is not itself escaped).
 _LINE_CONTINUATION_RE = re.compile(r"(?<!\\)((?:\\\\)*+)\\\r?\n")
 _PARSER_LIMIT_DESCRIPTION = "command parser limit exceeded"
+# Each nested eval re-parses the rest of the command, so every level is a full rescan.
+_MAX_EVAL_NESTING = 8
 _MALFORMED_EXEC_DESCRIPTION = "command parser limit or malformed executable payload"
 # A scan that ran out of its step budget: approval, never remembered (a session or always grant
 # would wave every later unscanned command through), and not a hardline refusal.
@@ -1452,6 +1439,44 @@ def _execution_flag_findings(command: str):
                         yield (f"arbitrary program execution via {executable_name} {finding[0]}", finding[1])
 
 
+def _eval_payload(args: list[str]) -> str | None:
+    """Return the shell code eval would run: its arguments joined by spaces."""
+    # eval takes no options: only an explicit ``--`` is consumed. A first word such
+    # as ``-x`` is code (zsh reports it missing and runs the rest of the list).
+    if args and args[0] == "--":
+        args = args[1:]
+    return " ".join(args) or None
+
+
+def _eval_payloads(command: str):
+    """Yield the code each ``eval`` in *command* hands back to the shell, like a ``-c`` payload.
+    Kept out of _execution_flag_findings: eval is not itself a dangerous mechanism, only its code is."""
+    for segment in _iter_top_level_shell_segments(command):
+        for start, _, word in _iter_shell_command_word_spans(segment):
+            if os.path.basename(_deobfuscate_shell_word_for_detection(word)).lower() != "eval":
+                continue
+            # Bound to eval's own command: a `$(eval …)` / backtick nested in an outer command ends at
+            # its closing `)`/`` ` ``, so the outer command's arguments are not eval code.
+            tokens = _shell_segment_tokens(_shell_command_segment(segment, start), 0)
+            payload = _eval_payload(tokens[1:]) if tokens else None
+            if payload:
+                yield payload
+
+
+def _nested_payloads(source: str, eval_depth: int, capped: list[str] | None):
+    """Yield ``(payload, eval_depth)`` for each program-bearing option and eval in *source*. eval code is
+    one level deeper; past _MAX_EVAL_NESTING it is not surfaced (`eval eval … ls` made detection
+    quadratic) and *source* is recorded in *capped* so the caller can fail closed."""
+    for _, payload in _execution_flag_findings(source):
+        if payload:
+            yield payload, eval_depth
+    if eval_depth < _MAX_EVAL_NESTING:
+        for payload in _eval_payloads(source):
+            yield payload, eval_depth + 1
+    elif capped is not None and next(_eval_payloads(source), None):
+        capped.append(source)
+
+
 def _skip_shell_whitespace(command: str, pos: int) -> int:
     while pos < len(command) and command[pos].isspace():
         pos += 1
@@ -1755,7 +1780,7 @@ def _deny_command_variants(command: str):
                 pending.append(payload)
 
 
-def _command_detection_variants(command: str):
+def _command_detection_variants(command: str, eval_depth: int = 0, capped: list[str] | None = None):
     # Mask quoted newlines BEFORE normalization: normalization strips escapes (\" -> ") and ""
     # pairs, corrupting quote tracking (`echo "a\""` becomes an unterminated quote) so masking
     # afterwards could swallow a REAL unquoted newline separator. The raw command carries faithful quote state
@@ -1792,9 +1817,10 @@ def _command_detection_variants(command: str):
             yield marked_win
     # Program-bearing options are parsed in their owning command's context; surfacing only the payload lets the
     # hardline floor inspect what will actually run without promoting similar flags or quoted prose.
-    pending = [normalized]
+    pending = [(normalized, eval_depth)]
     while pending:
-        for _, payload in _execution_flag_findings(pending.pop()):
+        source, depth = pending.pop()
+        for payload, payload_depth in _nested_payloads(source, depth, capped):
             if fresh(payload):
                 yield payload
                 # A payload may start with an option-looking program and then invoke a hardline command
@@ -1802,13 +1828,15 @@ def _command_detection_variants(command: str):
                 marked_payload = _mark_command_starts(payload)
                 if marked_payload != payload and fresh(marked_payload):
                     yield marked_payload
-                pending.append(payload)
+                pending.append((payload, payload_depth))
+    if capped:  # the caller fails closed; the passes below would only rescan the chain
+        return
     # Payloads parsed from NORMALIZED text lost their escapes before their own quote expansion ran
     # (`bash -c "$'\\x72\\x6d' -rf /"` reached the patterns as `$'x72x6d'`). Parse the raw argument
-    # too and treat it as new shell input; each payload is a strict substring, so recursion ends.
-    for _, payload in _execution_flag_findings(_mask_quoted_newlines(command)):
-        if payload and payload != command:
-            for variant in _command_detection_variants(payload):
+    # too and treat it as new shell input; each payload is shorter than its source, so recursion ends.
+    for payload, payload_depth in _nested_payloads(_mask_quoted_newlines(command), eval_depth, capped):
+        if payload != command:
+            for variant in _command_detection_variants(payload, payload_depth, capped):
                 if fresh(variant):
                     yield variant
     # Subshell `(cmd)` / brace-group `{ cmd; }` openers put `cmd` at a real command position the flat `_CMDPOS`
@@ -1827,7 +1855,8 @@ def _command_detection_variants(command: str):
         yield faithful
     # An escaped separator is literal text inside its word (`git push -o ci\;skip -f`), but
     # normalization strips the backslash and leaves a real `;` that ends a segment-bounded match.
-    joined = re.sub(r'\\(.)', lambda m: '_' if m.group(1) in ';&|' else m.group(0), command)
+    # The same holds for an escaped space or quote inside an option value (`git -C my\\ repo push -f`).
+    joined = _join_escaped_word_chars(command)
     if joined != command and fresh(variant := _normalize_command_for_detection(_mask_quoted_newlines(joined))):
         yield variant
     # Quoting/escaping can spell an executable in pieces (r\m, r''m). Keep that deobfuscation scoped
@@ -1992,7 +2021,8 @@ def _iter_dangerous_descriptions(command: str, only: frozenset[str] | None = Non
     patterns = DANGEROUS_PATTERNS_COMPILED if only is None else [
         (pattern_re, description) for pattern_re, description in DANGEROUS_PATTERNS_COMPILED if description in only
     ]
-    for command_variant in _command_detection_variants(command):
+    capped: list[str] = []
+    for command_variant in _command_detection_variants(command, capped=capped):
         command_lower = _lower_preserving_flags(command_variant)
         masked_lower: str | None = None
         for pattern_re, description in patterns:
@@ -2013,6 +2043,8 @@ def _iter_dangerous_descriptions(command: str, only: frozenset[str] | None = Non
                     yield description
             elif pattern_re.search(command_lower):
                 yield description
+    if capped and only is None:
+        yield _PARSER_LIMIT_DESCRIPTION
     if only is not None:
         # The variation-selector check is a content rule too, so the content-only scan keeps it.
         if _INVISIBLE_UNICODE_DESCRIPTION in only and _HIDDEN_VARIATION_SELECTOR_RE.search(command):
