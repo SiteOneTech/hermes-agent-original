@@ -37,6 +37,9 @@ from cron.env_settings import cron_env_setting
 from cron.jobs_invariants import _validate_job_mode_invariants, validate_schedule_knobs
 from cron.jobs_tristate import normalize_catch_up as _normalize_catch_up, normalize_wrap_response
 from cron.jobs_model_pin import _main_model_pin
+from cron.jobs_normalize import (
+    _normalize_base_url, _normalize_context_from, _normalize_failure_deliver, _normalize_job_optional_text,
+)
 from cron import jobs_time
 from cron.scheduler_ownership import _claim_owner_is_dead
 from cron import extra_fire, jobs_error_text, store_health
@@ -1704,43 +1707,6 @@ def _normalize_profile(profile: Optional[str]) -> Optional[str]:
     return normalized
 
 
-def _main_model_pin() -> Tuple[Optional[str], Optional[str]]:
-    """``(provider, model)`` the main agent runs on right now (``model.default`` + the provider it
-    resolves to), for ``pinned=True`` jobs: the lock is a plain per-job pin, so the scheduler needs
-    no second precedence axis. ``(None, None)`` when nothing is configured (the job stays unpinned)."""
-    from hermes_cli.config_effective import load_user_config_effective
-
-    cfg_path = get_hermes_home() / "config.yaml"
-    cfg = load_user_config_effective(cfg_path) if cfg_path.exists() else {}
-    model_cfg = cfg.get("model") or {}
-    model = model_cfg.get("default") or model_cfg.get("model") if isinstance(model_cfg, dict) else model_cfg
-    model = _normalize_job_optional_text(model)
-    if not model:
-        return None, None
-    provider = None
-    with contextlib.suppress(Exception):
-        from hermes_cli.runtime_provider import resolve_runtime_provider
-        provider = _normalize_job_optional_text(resolve_runtime_provider(requested=None).get("provider"))
-    return (provider.lower() if provider else None), model
-
-
-def _normalize_job_optional_text(
-    value: Any, *, strip_trailing_slash: bool = False
-) -> Optional[str]:
-    if not isinstance(value, str):
-        return None
-    return (value.strip().rstrip("/") if strip_trailing_slash else value.strip()) or None
-
-
-def _normalize_base_url(value: Any) -> Optional[str]:
-    return _normalize_job_optional_text(value, strip_trailing_slash=True)
-
-
-def _normalize_str_list(items: Any) -> Optional[list[str]]:
-    """Non-blank stripped items of *items*, or None when nothing remains."""
-    return [str(j).strip() for j in items if str(j).strip()] or None
-
-
 def _normalize_enabled_toolsets(value: Any) -> Optional[list[str]]:
     """Per-job toolset allowlist. An explicitly-set EMPTY list means 'nothing allowed' and must
     persist as [] — normalizing it to None would read back as 'no restriction' (#82010). Absent
@@ -1750,22 +1716,6 @@ def _normalize_enabled_toolsets(value: Any) -> Optional[list[str]]:
     if not isinstance(value, list):
         raise ValueError("enabled_toolsets must be a list of toolset names (or [] for none).")
     return [str(j).strip() for j in value if str(j).strip()]
-
-
-def _normalize_context_from(value: Any) -> Optional[list[str]]:
-    """Accept a job id or a list of ids; anything else is None."""
-    if isinstance(value, str):
-        value = [value]
-    return _normalize_str_list(value) if isinstance(value, list) else None
-
-
-def _normalize_failure_deliver(value: Any) -> Optional[str]:
-    """failure_deliver shares deliver's value grammar; flatten str/list like the tool layer's
-    _normalize_deliver_param for direct create_job callers. Semantic validation happens at
-    resolution time via the shared deliver path."""
-    if isinstance(value, (list, tuple)):
-        return ",".join(str(p).strip() for p in value if str(p).strip()) or None
-    return _normalize_job_optional_text(value)
 
 
 def _normalize_reasoning_effort(value: Any) -> Optional[str]:
@@ -2601,6 +2551,9 @@ def mark_job_run(
             quota_hold.plan_hold(job, quota_hold_seconds, recover_consumed_fire=recover_consumed_fire)
         else:
             quota_hold.clear_state(job)
+        # A run rewrites all jobs, including legacy failure stamps on idle siblings.
+        for stored_job in jobs:
+            jobs_error_text.scrub_retained_stamps(stored_job)
         save_jobs(jobs)
         return True
 

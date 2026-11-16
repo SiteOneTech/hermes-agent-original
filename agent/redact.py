@@ -11,23 +11,28 @@ import os
 import re
 import shlex
 import threading
-import unicodedata
 from urllib.parse import unquote_plus
 
 # Shared with agent/file_safety's read-block list so the two defenses can't
 # drift: a blocked file_tools read that falls back to ``cat`` is still caught.
 from agent.file_safety import _BLOCKED_PROJECT_ENV_BASENAMES as _ENV_FILE_BASENAMES
+from agent.redact_approval_display import sanitize_command_for_display  # re-exported: callers import it from agent.redact
 from agent.redact_command_segments import _command_segments
 from agent.redact_connstr import _KV_CONNSTR_GATE_RE, _redact_kv_connection_strings
-from agent.redact_control_split import mask_control_split_tokens
+from agent.redact_control_split import mask_control_split_tokens, mask_prefix_matches
 from agent.redact_db_url import _DSN_PW_PLACEHOLDER_RE, _is_userinfo_placeholder, redact_db_url_query_passwords
 from agent.redact_discord import _redact_discord_tokens
+from agent.redact_credential_stores import (
+    _LINE_NUMBER_GUTTER, _SECRET_CFG_NAMES, aws_credential_process_keys, outside_spans,
+    redact_credential_store_lines,
+)
 from agent.redact_headers import (
     _COOKIE_HEADER_JSON_RE, _COOKIE_HEADER_JSON_UNTERMINATED_RE, _SECRET_HEADER_JSON_RE,
     _SECRET_HEADER_JSON_UNTERMINATED_RE, json_header_value_is_credential, redact_cookie_assignments,
     redact_header_credentials,
 )
 from agent.redact_partial_keys import _redact_partial_private_keys
+from agent.redact_hermes_home import _is_under_hermes_home
 from agent.redact_pattern_shape import _pattern_structure
 from agent.redact_secret_sources import redact_secret_source_values
 from agent.redact_spaced_cfg import redact_spaced_cfg_assignments
@@ -37,6 +42,7 @@ from agent.redact_vault_values import (  # re-exported: callers import these fro
     redact_registered_vault_values,
     register_vault_redaction_value,
 )
+from agent.file_safety import HOME_CREDENTIAL_FILES
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +157,7 @@ _PREFIX_PATTERNS = [
     r"GOCSPX-[A-Za-z0-9_-]{8,}",        # Google OAuth client secret (pasted client_secret.json, #64351)
     r"ya29\.(?:[a-z]\.)?[A-Za-z0-9_-]{20,}",  # Google OAuth access token: user a0…, service-account c., STS d. (#64351)
     r"AQ\.[A-Za-z0-9_-]{40,}",           # Google Gemini authorization keys (newer "AQ." prefix; AIza pattern doesn't catch them) — #66920
+    r"1//0[A-Za-z0-9_-]{20,}",          # Google OAuth refresh token (#39654)
     r"pplx-[A-Za-z0-9]{10,}",           # Perplexity
     r"fal_[A-Za-z0-9_-]{10,}",          # Fal.ai
     r"fc-[A-Za-z0-9]{10,}",             # Firecrawl
@@ -287,12 +294,6 @@ _ENV_ASSIGN_LOWER_RE = re.compile(
 # (contains a dot), which is unambiguously a config key — never a prose word. 3. _CFG_ANCHORED_RE matches a
 # bare secret-word key only at line start (optionally after ``export``), so conversational ``I have
 # password=foo`` mid-sentence is left alone.
-_SECRET_CFG_NAMES = r"(?:api[ _.\-]?key|token|secret|passwd|password|credential|auth)"
-# Rendered line-number prefix: ``5|line`` (read_file), ``6:line`` (grep -n), ``7-line`` (grep -A/-B/-C
-# context lines) and ``     8\tline`` (cat -n / nl: right-aligned number + TAB). Callers put the ONLY
-# leading ``[ \t]*`` in front of it — stacking a second whitespace run around an optional gutter made
-# the anchored passes quadratic on long indented lines (2s per 5k spaces).
-_LINE_NUMBER_GUTTER = r"(?:[0-9]+(?:[|:\-]|\t)[ \t]*)?"
 _CFG_VALUE = r"(['\"]?)([^\s&]+?)\2(?=[\s&]|$)"
 # Linear pre-gate for the _CFG_*_RE subs: no secret keyword => neither can match.
 _CFG_SECRET_WORD_RE = re.compile(_SECRET_CFG_NAMES, re.IGNORECASE)
@@ -885,8 +886,8 @@ def _compile_prefix_matcher(patterns: list) -> re.Pattern[str]:
 def _compile_prefix_sub_matcher(patterns: list) -> re.Pattern[str]:
     """_PREFIX_RE for the masking pass, also admitting a key glued to an identifier by ``-``/``_``
     (``backup-sk-…``, ``x-ghp_…``), which _PREFIX_RE rejects so ``scikit-learn`` stays whole. One
-    fixed-width lookbehind keeps main's single scan; _mask_prefix_match masks a glued match only
-    when its body is opaque, so ``backup-sk-learn`` stays whole too (#147240)."""
+    fixed-width lookbehind keeps main's single scan; _is_glued_identifier keeps a glued match unless
+    its body is opaque, so ``backup-sk-learn`` stays whole too (#147240)."""
     # Branches grouped by their literal first char (every pattern opens on one, see
     # register_redaction_patterns): admitting ``-``/``_`` before a key makes every separator a
     # candidate, and a flat 60-way alternation per candidate doubled the cost of a ``_ghp_`` flood.
@@ -914,13 +915,13 @@ def _is_opaque_prefixed_token(token: str) -> bool:
     return False
 
 
-def _mask_prefix_match(m: "re.Match[str]", mask) -> str:
-    glued = m.start() > 0 and m.string[m.start() - 1] in "-_"
-    token = m.group(1)
+def _is_glued_identifier(m: "re.Match[str]", token: str | None = None) -> bool:
+    """A _PREFIX_SUB_RE match glued to an identifier by ``-``/``_`` whose body (``token``,
+    default the match's) is not opaque."""
+    token = m.group(1) if token is None else token
     # Google OAuth prefixes are distinctive even when base64url separators break every long run.
-    if glued and not token.startswith(("GOCSPX-", "ya29.")) and not _is_opaque_prefixed_token(token):
-        return m.group(0)
-    return mask(token)
+    return (m.start() > 0 and m.string[m.start() - 1] in "-_"
+            and not token.startswith(("GOCSPX-", "ya29.", "1//0")) and not _is_opaque_prefixed_token(token))
 
 # mask_secret strips EVERY control char (incl. \n/\t, C1, DEL, zero-width) so a
 # masked secret never emits multiline or invisible bytes into display output.
@@ -936,57 +937,6 @@ def mask_secret(value: str, *, head: int = 4, tail: int = 4, floor: int = 12,
     if not value:
         return empty
     return placeholder if len(value) < floor else f"{value[:head]}...{value[-tail:]}"
-
-
-# Approval-prompt display integrity: the copy a human approves must show everything that will run.
-# Code points that render as nothing or as a line break become visible escapes: every control,
-# format, private-use, unassigned and surrogate code point (category C*, except tab/newline), line
-# and paragraph separators (Zl/Zp), and blank-rendering marks/letters in other categories (variation
-# selectors incl. U+E0100-E01EF, CGJ, Khmer/Mongolian selectors, Hangul fillers, Braille blank).
-# Ordinary non-ASCII text is untouched. Padding that pushes the tail off screen or past a preview
-# cut (space runs, whitespace-only lines) collapses to a marker; real indentation is kept.
-_APPROVAL_NON_ASCII_RE = re.compile(r"[^\x20-\x7e\t\n]+")
-_APPROVAL_BLANK_GLYPHS = frozenset(
-    "\u034f\u115f\u1160\u17b4\u17b5\u180b\u180c\u180d\u180f\u2800\u3164\uffa0"
-    + "".join(map(chr, range(0xFE00, 0xFE10))) + "".join(map(chr, range(0xE0100, 0xE01F0))))
-_APPROVAL_SPACE = r"[ \t\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]"
-# Mid-line runs (after visible text) of 21+, or line-leading runs past any sane indentation.
-_APPROVAL_PAD_RE = re.compile(rf"(?<=\S){_APPROVAL_SPACE}{{21,}}|(?m:^){_APPROVAL_SPACE}{{65,}}")
-# 3+ consecutive blank or whitespace-only lines; the match ends at a newline so the next line keeps its indent.
-_APPROVAL_BLANK_RE = re.compile(rf"\n(?:{_APPROVAL_SPACE}*\n){{3,}}")
-_APPROVAL_SAME_CHAR_RUN_RE = re.compile(r"(.)\1*", re.DOTALL)
-# Prose mode (questions shown to a human, never executed) surfaces only what can hide or reorder
-# text: controls, bidi embeddings/overrides/isolates, line/paragraph separators and padding. ZWJ,
-# ZWNJ and variation selectors stay, because emoji and scripts such as Persian need them.
-_PROSE_BIDI_CONTROLS = frozenset("\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069")
-
-
-def _escape_approval_run(run: str, prose: bool = False) -> str:
-    """Escape the invisible code points of a non-ASCII run; 4+ repeats of one show once with their count."""
-    def one(m: re.Match) -> str:
-        ch, n = m.group(1), len(m.group())
-        cat = unicodedata.category(ch)
-        if prose:
-            hidden = cat == "Cc" or cat in ("Zl", "Zp") or ch in _PROSE_BIDI_CONTROLS
-        else:
-            hidden = ch in _APPROVAL_BLANK_GLYPHS or cat[0] == "C" or cat in ("Zl", "Zp")
-        if not hidden:
-            return m.group()
-        esc = ch.encode("unicode_escape").decode("ascii")
-        return f"⟨{esc} ×{n}⟩" if n >= 4 else esc * n
-    return _APPROVAL_SAME_CHAR_RUN_RE.sub(one, run)
-
-
-def sanitize_command_for_display(text: str | None, *, prose: bool = False) -> str:
-    """Make hidden content in an approval-prompt string visible; clean text comes back unchanged.
-
-    Display-only: the executed command, smart assessment and allowlist keys never see this copy.
-    ``prose=True`` is the lighter pass for question text (see ``_PROSE_BIDI_CONTROLS``)."""
-    if not text:
-        return ""
-    out = _APPROVAL_NON_ASCII_RE.sub(lambda m: _escape_approval_run(m.group(), prose), text)
-    out = _APPROVAL_BLANK_RE.sub(lambda m: f"\n⟨+{m.group().count(chr(10)) - 1} blank lines⟩\n", out)
-    return _APPROVAL_PAD_RE.sub(lambda m: f" ⟨+{len(m.group())} whitespace chars⟩ ", out)
 
 
 def redact_approval_display(text: str | None, *, force: bool = False, prose: bool = False) -> str:
@@ -1483,6 +1433,12 @@ def _redact_userinfo_passwords(text: str) -> str:
     return _URL_USERINFO_PAIR_RE.sub(_sub, text)
 
 
+def _redact_credential_store_lines(text: str, *, mask_nonreusable: bool) -> str:
+    """``secret_file``-only credential-store pass (agent/redact_credential_stores.py)."""
+    mask = _mask_token_nonreusable if mask_nonreusable else _mask_token
+    return redact_credential_store_lines(text, mask, lambda k, v: _should_redact_assignment(k, v, check_keyword=True))
+
+
 def _redact_url_credentials(text: str, code_file: bool, *, file_read: bool = False) -> str:
     """DB connection-string passwords, incoming-webhook secrets, bare-token and ``user:pass`` URL
     userinfo (``://`` text only)."""
@@ -1600,16 +1556,21 @@ def redact_credential_shapes(text: str, *, force: bool = False, code_file: bool 
         # across them — a secret smuggled as ``sk-abc\\x1bdef…`` leaks verbatim (issue #77484). Mask such
         # runs by first matching on a control-stripped copy, then re-masking the corresponding span in the
         # original (the stripped copy and the original are aligned 1:1 for non-control chars).
-        text = mask_control_split_tokens(text, _prefix_sub, _PREFIX_RE)
-        text = _PREFIX_SUB_RE.sub(lambda m: _mask_prefix_match(m, _prefix_sub), text)
+        text = mask_control_split_tokens(text, _prefix_sub, _PREFIX_RE, _PREFIX_SUB_RE, _is_glued_identifier)
+        text = mask_prefix_matches(text, _prefix_sub, _PREFIX_SUB_RE, _is_glued_identifier)
 
     if "." in text:
         _mask = _mask_token_nonreusable if file_read else _mask_token
         text = _ZHIPU_API_KEY_RE.sub(lambda m: _mask(m.group(1)), text)
         text = _redact_discord_tokens(text, _mask)
 
+    # Store lines first: the assignment passes would mask only the first word of ``password=a b``.
+    aws_command_lines = []
+    if secret_file:
+        text = _redact_credential_store_lines(text, mask_nonreusable=file_read)
+        aws_command_lines = aws_credential_process_keys(text)
     if not code_file:
-        text = _redact_assignments(text, mask_nonreusable=file_read)
+        text = outside_spans(text, aws_command_lines, lambda t: _redact_assignments(t, mask_nonreusable=file_read))
 
     # Flags and connection-string keys carry a credential in command text, so they are not
     # gated on code_file: the shape (``--password=`` / ``;AccountKey=``) is unambiguous, and
@@ -1716,8 +1677,11 @@ _ENV_DUMP_COMMANDS = frozenset({"env", "printenv", "set", "export", "declare"})
 # ``config.yaml`` / source files stay on the code_file path (``MAX_TOKENS: 100``).
 _FILE_READ_COMMANDS = frozenset({
     "cat", "head", "tail", "type", "bat", "less", "more", "nl",
-    "zcat", "tac", "view", "batcat", "grep", "awk", "sed",
+    "zcat", "tac", "view", "batcat", "grep", "awk", "sed", "get-content", "gc",
 })
+# PowerShell binds a parameter value with a colon: ``Get-Content -Path:~\_netrc`` (also via the
+# ``cat``/``type``/``gc`` aliases). Not applied to the pattern-first filters, whose positional count matters.
+_PS_COLON_PARAM_RE = re.compile(r"-[A-Za-z]+:(.+)")
 _SHELL_RC_BASENAMES = frozenset({
     ".bashrc", ".bash_profile", ".bash_login", ".profile",
     ".zshrc", ".zprofile", ".zlogin", ".zshenv",
@@ -1731,37 +1695,12 @@ _HERMES_HOME_PREFIXES = ("$HERMES_HOME/", "${HERMES_HOME}/")
 _HOME_PREFIXES = ("$HOME/", "${HOME}/")
 
 
-def _is_under_hermes_home(path: str) -> bool:
-    """True when an absolute ``config.yaml`` path sits under the active Hermes home or root.
-
-    The default home's basename is an installation detail — ``.hermes`` on POSIX, ``hermes``
-    under ``AppData/Local`` on Windows — and a resolved path never spells ``$HERMES_HOME``,
-    so the literal-segment test in ``_is_secret_file_arg`` cannot see a native Windows path.
-    Compare against the resolved homes instead. Only reached for a ``config.yaml`` basename,
-    so the resolve cost stays off the per-token command scan.
-    """
-    from agent.file_safety import _hermes_dirs
-    from tools.environments.sandbox_scope import sandbox_lexical_path
-    # A hosted path names a file in the sandbox: judged as written (never empty), not resolved on this host.
-    try:
-        target = os.path.normcase(sandbox_lexical_path(path) or os.path.realpath(os.path.expanduser(path)))
-    except (OSError, ValueError):
-        return False
-    for home in _hermes_dirs():
-        try:
-            base = os.path.normcase(os.path.realpath(str(home)))
-        except (OSError, ValueError):
-            continue
-        if target == base or target.startswith(base + os.sep):
-            return True
-    return False
-
-
 def _is_secret_file_arg(arg: str) -> bool:
-    """``.env``-style or shell rc basename anywhere; ``config.yaml`` only under a
-    ``.hermes`` directory, ``$HERMES_HOME``, or the resolved Hermes home (never arbitrary
-    YAML). The resolved-home arm is what covers native Windows, where the home directory
-    is ``%LOCALAPPDATA%\\hermes`` and carries no ``.hermes`` segment."""
+    """``.env``-style, shell rc or credential-store basename (``.netrc``, ``.pgpass``, ...)
+    anywhere; ``credentials`` / ``config`` only under ``.aws`` (the bare names are too generic), and
+    ``config.yaml`` only under a ``.hermes`` directory, ``$HERMES_HOME``, or the resolved
+    Hermes home (never arbitrary YAML). The resolved-home arm is what covers native Windows,
+    where the home directory is ``%LOCALAPPDATA%\\hermes`` and carries no ``.hermes`` segment."""
     path = arg.strip("\"'").replace("\\", "/")
     hermes_home = False
     for prefix in _HERMES_HOME_PREFIXES:
@@ -1779,6 +1718,8 @@ def _is_secret_file_arg(arg: str) -> bool:
     if not parts:
         return False
     if parts[-1] in _ENV_FILE_BASENAMES or parts[-1] in _SHELL_RC_BASENAMES:
+        return True
+    if parts[-1] in HOME_CREDENTIAL_FILES or parts[-2:] in ([".aws", "credentials"], [".aws", "config"]):
         return True
     # ``config.yaml`` plus the ``config.yaml.good.<stamp>`` / ``.corrupt.<stamp>`` copies Hermes
     # writes under ``backups/config/`` — same contents, same secrets.
@@ -1800,7 +1741,12 @@ def _command_reads_secret_file(command: str | None) -> bool:
         reader = tokens[0].rsplit("/", 1)[-1].lower()
         if reader not in _FILE_READ_COMMANDS:
             continue
-        positional = [arg for arg in tokens[1:] if not arg.startswith("-")]
+        positional = [
+            arg if not arg.startswith("-") else m.group(1)
+            for arg in tokens[1:]
+            if not arg.startswith("-")
+            or (reader not in _PATTERN_FIRST_COMMANDS and (m := _PS_COLON_PARAM_RE.fullmatch(arg)))
+        ]
         if reader in _PATTERN_FIRST_COMMANDS:
             positional = positional[1:]
         if any(_is_secret_file_arg(arg) for arg in positional):
@@ -1859,12 +1805,13 @@ def redact_for_egress(text: str, *, urls: bool = False, keep_phone_numbers: bool
 def redact_terminal_output(output: str, command: str | None = None, *, force: bool = False) -> str:
     """Single redaction policy for ALL terminal-output surfaces: the ENV/YAML-assignment
     pass runs only when ``command`` is an env dump or reads a secret-bearing file (``.env``,
-    shell rc, Hermes ``config.yaml``); otherwise code_file=True avoids false positives on
-    source/config dumps."""
+    shell rc, a credential store like ``.netrc``, Hermes ``config.yaml``); otherwise
+    code_file=True avoids false positives on source/config dumps."""
     if not output:
         return output
-    code_file = not (is_env_dump_command(command) or _command_reads_secret_file(command))
-    redacted = redact_sensitive_text(output, force=force, code_file=code_file)
+    secret_file = _command_reads_secret_file(command)
+    code_file = not (secret_file or is_env_dump_command(command))
+    redacted = redact_sensitive_text(output, force=force, code_file=code_file, secret_file=secret_file)
     # Source-preserving output still gets the Python-repr pass on high-confidence
     # diagnostic lines (pytest ``E   `` introspection, final exception lines): that is
     # where {'BRAVE_API_KEY': '…'} leaks, not in source dumps.
