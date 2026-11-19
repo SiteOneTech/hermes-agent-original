@@ -22,6 +22,21 @@ from tests.fixtures.storage_seed import seed_messages, seed_session
 from tests.gateway.fixtures.storage_handles import close_storage_handles, storage_handle
 import hermes_yaml as yaml
 
+
+@pytest.fixture(autouse=True)
+def _initialized_session_store(close_storage_handles):
+    """Give every test an initialized state.db in its hermetic home.
+
+    Browse endpoints open the profile store READ-ONLY and refuse a store the gateway
+    never initialized (``Session store is not initialized`` 503), which is exactly the
+    state of a freshly created HERMES_HOME. Opening the real handle once creates the
+    schema the endpoints read, without weakening that production guard.
+    """
+    from hermes_constants import get_hermes_home
+    from tests.gateway.fixtures.storage_handles import storage_handle
+
+    return storage_handle(get_hermes_home())
+
 from hermes_cli.config_defaults import DEFAULT_CONFIG
 from hermes_cli.config import (
     reload_env,
@@ -583,34 +598,39 @@ class TestWebServerEndpoints:
 
 
     def test_status_active_session_count_uses_read_only_db(self, monkeypatch, tmp_path):
-        import hermes_cli.web_server as web_server
-        import hermes_state
+        from hermes_cli import web_server
 
         # Satisfy the fresh-install guard: read_only opens require the DB
         # file to already exist.
         fake_db_path = tmp_path / "state.db"
         fake_db_path.touch()
-        monkeypatch.setattr(hermes_state, "DEFAULT_DB_PATH", fake_db_path)
+        monkeypatch.setattr(_rt_status, "_session_db_path_for_profile",
+                            lambda _profile: fake_db_path)
 
         captured = {}
+        listed = [
+            SimpleNamespace(session=SimpleNamespace(ended_at=None), last_active=95),
+            SimpleNamespace(session=SimpleNamespace(ended_at=99), last_active=99),
+            SimpleNamespace(session=SimpleNamespace(ended_at=None), last_active=-300),
+        ]
 
-        class _FakeDB:
-            def __init__(self, *args, **kwargs):
-                captured["read_only"] = kwargs.get("read_only")
-
-            def list_sessions_rich(self, limit, compact_rows=False):
-                captured["limit"] = limit
+        class _FakeSessions:
+            def list_sessions(self, query, window, compact_rows=False):
+                captured["limit"] = window.limit
                 captured["compact_rows"] = compact_rows
-                return [
-                    {"ended_at": None, "last_active": 95},
-                    {"ended_at": 99, "last_active": 99},
-                    {"ended_at": None, "last_active": -300},
-                ]
+                return listed
+
+        class _FakeStore:
+            sessions = _FakeSessions()
 
             def close(self):
                 captured["closed"] = True
 
-        monkeypatch.setattr("hermes_state.SessionDB", _FakeDB)
+        def _open(profile, read_only=False):
+            captured["read_only"] = read_only
+            return _FakeStore()
+
+        monkeypatch.setattr(_rt_status, "_open_session_db_for_profile", _open)
         monkeypatch.setattr(web_server.time, "time", lambda: 100)
 
         assert _rt_status._count_status_active_sessions() == 1
@@ -621,19 +641,17 @@ class TestWebServerEndpoints:
     def test_status_active_session_count_fresh_install_returns_zero(self, monkeypatch, tmp_path):
         """No state.db yet (fresh install): return 0 without attempting a
         read-only open, which would raise OperationalError on every poll."""
-        import hermes_cli.web_server as web_server
-        import hermes_state
-
-        monkeypatch.setattr(hermes_state, "DEFAULT_DB_PATH", tmp_path / "absent.db")
+        monkeypatch.setattr(_rt_status, "_session_db_path_for_profile",
+                            lambda _profile: tmp_path / "absent.db")
 
         def _boom(*a, **k):
-            raise AssertionError("SessionDB must not be constructed when db file is absent")
+            raise AssertionError("no store may be opened when the db file is absent")
 
-        monkeypatch.setattr("hermes_state.SessionDB", _boom)
+        monkeypatch.setattr(_rt_status, "_open_session_db_for_profile", _boom)
         assert _rt_status._count_status_active_sessions() == 0
 
     def test_get_status_degrades_when_active_session_count_fails(self, monkeypatch):
-        import hermes_cli.web_server as web_server
+        from hermes_cli import web_server
 
         def _locked_count():
             raise TimeoutError("database is locked")
@@ -645,13 +663,12 @@ class TestWebServerEndpoints:
         assert resp.json()["active_sessions"] == 0
 
     def test_get_status_uses_cached_gateway_pid_probe(self, monkeypatch):
-        import hermes_cli.web_server as web_server
+        from hermes_cli import web_server
 
         calls = {"get_running_pid_cached": 0}
 
         def _cached_pid():
             calls["get_running_pid_cached"] += 1
-            return None
 
         monkeypatch.setattr(_gw_status, "get_running_pid_cached", _cached_pid)
 
@@ -669,7 +686,7 @@ class TestWebServerEndpoints:
         sets (issue #56986) — so the handler must pass explicit per-profile
         paths (issue #69143).
         """
-        import hermes_cli.web_server as web_server
+        from hermes_cli import web_server
         from hermes_cli import profiles as profiles_mod
 
         worker_home = profiles_mod.get_profile_dir("worker")
@@ -680,7 +697,6 @@ class TestWebServerEndpoints:
 
         def _pid(pid_path=None, **kw):
             seen["pid_path"] = pid_path
-            return None
 
         def _runtime(path=None):
             seen["status_path"] = path
@@ -726,7 +742,7 @@ class TestWebServerEndpoints:
         This asserts the RELATIONSHIP — both endpoints resolve liveness the
         same way — not either endpoint's literal value.
         """
-        import hermes_cli.web_server as web_server
+        from hermes_cli import web_server
 
         # No local PID and no local runtime state: only the health probe can
         # see the gateway, which is exactly the cross-container deployment.
@@ -761,7 +777,7 @@ class TestWebServerEndpoints:
         Guards against "fix" it by hardcoding True somewhere: with every rung
         declining, both surfaces must report the gateway down.
         """
-        import hermes_cli.web_server as web_server
+        from hermes_cli import web_server
 
         monkeypatch.setattr(_gw_status, "get_running_pid_cached", lambda *a, **k: None)
         monkeypatch.setattr(_gw_status, "get_running_pid", lambda *a, **k: None)
@@ -895,7 +911,7 @@ class TestWebServerEndpoints:
         assert resp.status_code == 400
 
     def test_get_status_hides_update_capability_in_managed_runtime(self, monkeypatch):
-        import hermes_cli.web_server as web_server
+        from hermes_cli import web_server
 
         monkeypatch.setattr(_web_server_files, "_dashboard_local_update_managed_externally", lambda: True)
 
@@ -905,7 +921,7 @@ class TestWebServerEndpoints:
 
     def test_dashboard_update_capability_detects_generic_container(self, monkeypatch):
         import hermes_constants
-        import hermes_cli.web_server as web_server
+        from hermes_cli import web_server
 
         monkeypatch.setattr(hermes_constants, "is_container", lambda: True)
         # A docker install inside a container should be managed externally.
@@ -917,7 +933,7 @@ class TestWebServerEndpoints:
         """A git checkout inside a container (e.g. bind-mounted in hermes-webui)
         should still offer dashboard updates — the checkout is self-managed."""
         import hermes_constants
-        import hermes_cli.web_server as web_server
+        from hermes_cli import web_server
 
         monkeypatch.setattr(hermes_constants, "is_container", lambda: True)
         monkeypatch.setattr(_cfg_mod, "detect_install_method", lambda _root: "git")
@@ -927,7 +943,7 @@ class TestWebServerEndpoints:
     def test_dashboard_update_capability_blocks_pip_in_container(self, monkeypatch):
         """A pip install inside a container is still managed externally."""
         import hermes_constants
-        import hermes_cli.web_server as web_server
+        from hermes_cli import web_server
 
         monkeypatch.setattr(hermes_constants, "is_container", lambda: True)
         monkeypatch.setattr(_cfg_mod, "detect_install_method", lambda _root: "pip")
@@ -1112,7 +1128,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
     def test_post_memory_provider_setup_runs_declared_external_install(self, monkeypatch):
         import subprocess
 
-        import hermes_cli.web_server as web_server
+        from hermes_cli import web_server
 
         calls = []
         check_count = 0
@@ -2174,7 +2190,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
         assert "does not exist" in resp.json()["detail"]
 
     def test_chat_image_upload_enforces_image_size_cap(self, monkeypatch):
-        import hermes_cli.web_server as web_server
+        from hermes_cli import web_server
 
         monkeypatch.setattr(_rt_files, "_CHAT_IMAGE_UPLOAD_MAX_BYTES", 4)
 
@@ -2471,7 +2487,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
         ]
 
     def test_import_sessions_endpoint_rejects_oversized_stream(self):
-        import hermes_cli.web_server as web_server
+        from hermes_cli import web_server
 
         payload = b'{"sessions":[]}' + b" " * _rt_sessions._SESSION_IMPORT_MAX_BYTES
         response = self.client.post(
@@ -3055,7 +3071,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
         assert "archived" not in resp.json()
 
     def test_audio_transcription_endpoint(self, monkeypatch):
-        import tools.transcription_tools as transcription_tools
+        from tools import transcription_tools
 
         captured = {}
 
@@ -3093,7 +3109,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
         the live voice loop treats it as a quiet turn and re-listens, instead
         of surfacing a 400 toast on every pause (the ElevenLabs empty-
         transcript spam)."""
-        import tools.transcription_tools as transcription_tools
+        from tools import transcription_tools
 
         monkeypatch.setattr(
             transcription_tools,
@@ -3146,9 +3162,9 @@ CONFIG_SCHEMA = ProviderConfigSchema(
         assert "/api/audio/elevenlabs/voices" in paths
 
     def test_elevenlabs_voices_unavailable_without_key(self, monkeypatch):
-        import hermes_cli.web_server as web_server
+        from hermes_cli import web_server
 
-        monkeypatch.setattr(_cfg_mod, "load_env", lambda: {})
+        monkeypatch.setattr(_cfg_mod, "load_env", dict)
         monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
 
         resp = self.client.get("/api/audio/elevenlabs/voices")
@@ -3156,7 +3172,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
         assert resp.json() == {"available": False, "voices": []}
 
     def test_speak_text_returns_base64_data_url(self, monkeypatch, tmp_path):
-        import tools.tts_tool as tts_tool
+        from tools import tts_tool
 
         audio_file = tmp_path / "speech.mp3"
         audio_file.write_bytes(b"ID3fake-audio-bytes")
@@ -3223,7 +3239,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
         assert status_data["pid"] is None
 
     def test_update_hermes_returns_nix_guidance_without_spawning(self, monkeypatch):
-        import hermes_cli.web_server as web_server
+        from hermes_cli import web_server
 
         def fail_spawn(*_args, **_kwargs):
             raise AssertionError("Nix update guard should not spawn hermes update")
@@ -3249,7 +3265,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
         assert "Nix" in data["message"]
 
     def test_update_hermes_returns_managed_runtime_guidance_without_spawning(self, monkeypatch):
-        import hermes_cli.web_server as web_server
+        from hermes_cli import web_server
 
         spawned = False
         detected = False
@@ -3365,7 +3381,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
         ]
 
     def test_action_status_reaps_completed_process(self, monkeypatch):
-        import hermes_cli.web_server as web_server
+        from hermes_cli import web_server
 
         waited = {"done": False}
 
@@ -3399,7 +3415,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
         }
 
     def test_action_status_ignores_wait_failure(self, monkeypatch):
-        import hermes_cli.web_server as web_server
+        from hermes_cli import web_server
 
         class _Proc:
             pid = 99
@@ -3427,7 +3443,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
         }
 
     def test_action_status_tails_large_log_without_read_text(self, tmp_path, monkeypatch):
-        import hermes_cli.web_server as web_server
+        from hermes_cli import web_server
 
         monkeypatch.setattr(_web_server_gateway, "_ACTION_LOG_DIR", tmp_path)
         _web_server_gateway._ACTION_PROCS.pop("hermes-update", None)
@@ -3491,7 +3507,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
 
     def test_get_status_filters_unconfigured_gateway_platforms(self, monkeypatch):
         import gateway.config as gateway_config
-        import hermes_cli.web_server as web_server
+        from hermes_cli import web_server
 
         class _Platform:
             def __init__(self, value):
@@ -3527,7 +3543,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
 
     def test_get_status_hides_stale_platforms_when_gateway_not_running(self, monkeypatch):
         import gateway.config as gateway_config
-        import hermes_cli.web_server as web_server
+        from hermes_cli import web_server
 
         class _GatewayConfig:
             def get_connected_platforms(self):
@@ -3629,7 +3645,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
 
         cfg = load_config()
         cfg.setdefault("stt", {}).setdefault("providers", {})["mywhisper"] = {
-            "command": "whisper-cli {input}",  # type: omitted → command implied
+            "command": "whisper-cli {input}",  # no "type" key → command is implied
         }
         save_config(cfg)
 
@@ -6781,7 +6797,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
         """
         import subprocess as _subprocess
 
-        import hermes_cli.web_server as web_server
+        from hermes_cli import web_server
         from hermes_cli import memory_setup
         from tools import lazy_deps as ld
 
@@ -7528,7 +7544,7 @@ class TestNewEndpoints:
         from hermes_cli.config import load_config
         from hermes_cli.skills_config import get_disabled_skills
         import hermes_cli.profiles as profiles_mod
-        import hermes_cli.web_server as web_server
+        from hermes_cli import web_server
 
         monkeypatch.setattr(profiles_mod, "create_wrapper_script", lambda name: None)
 
@@ -7681,7 +7697,7 @@ class TestNewEndpoints:
 
     def test_profile_open_terminal_uses_macos_terminal(self, monkeypatch):
         from hermes_constants import get_hermes_home
-        import hermes_cli.web_server as web_server
+        from hermes_cli import web_server
 
         coder_home = get_hermes_home() / "profiles" / "coder"
         coder_home.mkdir(parents=True)
@@ -7699,7 +7715,7 @@ class TestNewEndpoints:
 
     def test_profile_open_terminal_uses_windows_cmd(self, monkeypatch):
         from hermes_constants import get_hermes_home
-        import hermes_cli.web_server as web_server
+        from hermes_cli import web_server
 
         coder_home = get_hermes_home() / "profiles" / "coder"
         coder_home.mkdir(parents=True)
@@ -7886,9 +7902,9 @@ class TestNewEndpoints:
             assert "enabled" in skills[0]
 
     def test_skills_list_includes_disabled_skills(self, monkeypatch):
-        import tools.skills_tool as skills_tool
-        import hermes_cli.skills_config as skills_config
-        import hermes_cli.web_server as web_server
+        from tools import skills_tool
+        from hermes_cli import skills_config
+        from hermes_cli import web_server
 
         def _fake_find_all_skills(*, skip_disabled=False):
             if skip_disabled:
@@ -7937,9 +7953,9 @@ class TestNewEndpoints:
             assert "enabled" in toolsets[0]
 
     def test_toolsets_list_matches_cli_enabled_state(self, monkeypatch):
-        import hermes_cli.tools_config as tools_config
+        from hermes_cli import tools_config
         import toolsets as toolsets_module
-        import hermes_cli.web_server as web_server
+        from hermes_cli import web_server
         from hermes_cli.nous_subscription import NousSubscriptionFeatures
 
         # Keep this row-shape test isolated from subscription discovery, which
@@ -8090,7 +8106,7 @@ class TestNewEndpoints:
         assert resp.status_code == 400
 
     def test_toolsets_resolve_subscription_features_once(self, monkeypatch):
-        import hermes_cli.tools_config as tools_config
+        from hermes_cli import tools_config
         from hermes_cli.nous_subscription import NousSubscriptionFeatures
 
         calls = 0
@@ -8473,7 +8489,7 @@ class TestNewEndpoints:
 
     def test_get_terminal_backends_shape_and_local_ready(self, monkeypatch):
         """GET .../backends returns one row per backend; local is always ready."""
-        import hermes_cli.web_server as web_server
+        from hermes_cli import web_server
 
         monkeypatch.setattr(shutil, "which", lambda name: None)
 
@@ -8559,7 +8575,7 @@ class TestNewEndpoints:
 
     def test_terminal_ssh_probe_reports_missing_keys(self, monkeypatch):
         """SSH without host/user config lists the missing terminal.* keys."""
-        import hermes_cli.web_server as web_server
+        from hermes_cli import web_server
 
         monkeypatch.setattr(shutil, "which", lambda name: None)
 
@@ -9614,7 +9630,7 @@ class TestProbeGatewayHealth:
         """When GATEWAY_HEALTH_URL is unset, the probe returns (False, None)."""
         import hermes_cli.web_server as ws
         monkeypatch.setattr(ws, "_GATEWAY_HEALTH_URL", None)
-        alive, body = _web_server_gateway._probe_gateway_health()
+        alive, _body = _web_server_gateway._probe_gateway_health()
         assert alive is False
         assert body is None
 
@@ -9646,14 +9662,13 @@ class TestProbeGatewayHealth:
         # Both paths should fail (no server), but we verify they were constructed
         # correctly by checking the URLs attempted.
         calls = []
-        original_urlopen = ws.urllib.request.urlopen
 
         def mock_urlopen(req, **kwargs):
             calls.append(req.full_url)
             raise ConnectionError("mock")
 
         monkeypatch.setattr(ws.urllib.request, "urlopen", mock_urlopen)
-        alive, body = _web_server_gateway._probe_gateway_health()
+        alive, _body = _web_server_gateway._probe_gateway_health()
         assert alive is False
         assert "http://gw:8642/health/detailed" in calls
         assert "http://gw:8642/health" in calls
@@ -12548,7 +12563,7 @@ class TestDashboardComponentHealth:
         assert dashboard["selftest"] in {"unknown", "ok", "failing"}
 
     def test_storage_degraded_when_state_db_probe_fails(self, monkeypatch):
-        import gateway.readiness as readiness
+        from gateway import readiness
 
         monkeypatch.setattr(
             readiness, "_probe_state_db", lambda home: {"status": "degraded", "detail": "OperationalError"}

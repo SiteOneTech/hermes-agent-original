@@ -23,11 +23,11 @@ def check_core_deps():
     if shutil.which("ffmpeg") is None:
         missing.append("ffmpeg")
     try:
-        import yt_dlp  # noqa
+        import yt_dlp
     except Exception:
         missing.append("yt-dlp")
     try:
-        import faster_whisper  # noqa
+        import faster_whisper
     except Exception:
         missing.append("faster-whisper")
     if missing:
@@ -36,8 +36,8 @@ def check_core_deps():
 
 def optional_semantic_deps_ok() -> bool:
     try:
-        import numpy  # noqa
-        import fastembed  # noqa
+        import numpy
+        import fastembed
         return True
     except Exception:
         return False
@@ -51,7 +51,7 @@ def sanitize_name(name: str) -> str:
 
 def run_ffmpeg_to_wav(src: Path, dst: Path):
     cmd = ["ffmpeg", "-y", "-i", str(src), "-ac", "1", "-ar", "16000", "-vn", str(dst)]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    proc = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL, check=False)
     if proc.returncode != 0:
         fail(f"ffmpeg conversion failed: {proc.stderr[-1500:]}")
 
@@ -120,7 +120,7 @@ def hhmmss(seconds: float) -> str:
     return f"{m:02d}:{sec:02d}"
 
 
-def build_keyword_index_sqlite(workdir: Path, segments: List[Dict[str, Any]]):
+def build_keyword_index_sqlite(workdir: Path, segments: list[dict[str, Any]]):
     db = workdir / "search.db"
     if db.exists():
         db.unlink()
@@ -136,7 +136,7 @@ def build_keyword_index_sqlite(workdir: Path, segments: List[Dict[str, Any]]):
     return db
 
 
-def build_semantic_embeddings(workdir: Path, segments: List[Dict[str, Any]], model_name: str):
+def build_semantic_embeddings(workdir: Path, segments: list[dict[str, Any]], model_name: str):
     import numpy as np
     from fastembed import TextEmbedding
 
@@ -308,7 +308,7 @@ def semantic_search(workdir: Path, query: str, top_k: int):
     model_name = meta.get("model", "BAAI/bge-small-en-v1.5")
 
     embedder = TextEmbedding(model_name=model_name)
-    qv = np.asarray(list(embedder.embed([query]))[0], dtype=np.float32)
+    qv = np.asarray(next(iter(embedder.embed([query]))), dtype=np.float32)
     qn = np.linalg.norm(qv)
     if qn == 0:
         return []
@@ -334,7 +334,7 @@ def semantic_search(workdir: Path, query: str, top_k: int):
     return out
 
 
-def reciprocal_rank_fusion(results_lists: List[List[Dict[str, Any]]], k: int = 60):
+def reciprocal_rank_fusion(results_lists: list[list[dict[str, Any]]], k: int = 60):
     fused = {}
     for lst in results_lists:
         for rank, item in enumerate(lst, start=1):

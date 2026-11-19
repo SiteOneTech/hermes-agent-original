@@ -67,6 +67,7 @@ def _run_mmx(args: list[str], timeout: int = 600) -> subprocess.CompletedProcess
         timeout=timeout,
         env=_runtime_env(),
         check=False,
+        stdin=subprocess.DEVNULL,
     )
 
 

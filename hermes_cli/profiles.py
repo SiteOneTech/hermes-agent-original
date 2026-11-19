@@ -691,9 +691,9 @@ class ProfileInfo:
     # ``platform_toolsets.cli`` as a compatibility fallback). ``assigned_skills``
     # is the explicit preload list from config, while ``skill_names`` is the
     # installed/enabled skill inventory for display/search.
-    toolsets: List[str] = field(default_factory=list)
-    assigned_skills: List[str] = field(default_factory=list)
-    skill_names: List[str] = field(default_factory=list)
+    toolsets: list[str] = field(default_factory=list)
+    assigned_skills: list[str] = field(default_factory=list)
+    skill_names: list[str] = field(default_factory=list)
 
 
 def _load_yaml_dict(path: Path) -> Optional[dict]:
@@ -976,7 +976,7 @@ def set_profile_display_name(profile_name: str, display_name: str) -> str:
 
 # CRUD operations
 
-def _listify_config_value(value: Any) -> List[str]:
+def _listify_config_value(value: Any) -> list[str]:
     """Normalize a config value into a stable list of non-empty strings.
 
     Delegates to the runtime's :func:`parse_config_string_list` so dashboard
@@ -1008,7 +1008,7 @@ def _read_skill_name_from_md(skill_md: Path) -> str:
     return fallback
 
 
-def _enabled_profile_skill_names(profile_dir: Path, config: dict) -> List[str]:
+def _enabled_profile_skill_names(profile_dir: Path, config: dict) -> list[str]:
     """List installed skill names that are not disabled in config.yaml."""
     skills_dir = profile_dir / "skills"
     if not skills_dir.is_dir():
@@ -1039,9 +1039,9 @@ def _read_profile_capabilities(profile_dir: Path) -> dict:
     config: dict = {}
     if config_path.exists():
         try:
-            import yaml
+            from hermes_cli.config import read_user_config_raw
 
-            loaded = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+            loaded = read_user_config_raw(config_path)
             if isinstance(loaded, dict):
                 config = loaded
         except Exception:

@@ -561,16 +561,6 @@ def test_prompt_yes_no_keyboard_interrupt_still_exits(monkeypatch):
     with pytest.raises(SystemExit):
         setup_mod.prompt_yes_no("Install it now?", True)
 
-def _clear_vercel_env(monkeypatch):
-    for key in (
-        "TERMINAL_VERCEL_RUNTIME",
-        "VERCEL_OIDC_TOKEN",
-        "VERCEL_TOKEN",
-        "VERCEL_PROJECT_ID",
-        "VERCEL_TEAM_ID",
-    ):
-        monkeypatch.delenv(key, raising=False)
-
 def test_vercel_setup_configures_access_token_auth(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     _clear_vercel_env(monkeypatch)

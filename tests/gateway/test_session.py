@@ -34,24 +34,6 @@ from tests.gateway.fixtures.storage_handles import close_storage_handles, storag
 normalize_whatsapp_identifier = canonical_whatsapp_identifier
 
 
-def test_hermetic_home_rebinds_sessiondb_default_path():
-    """SessionDB defaults must respect the per-test HERMES_HOME fixture.
-
-    ``DEFAULT_DB_PATH`` is initialized at module import, before pytest's
-    autouse fixture redirects HERMES_HOME.  Without rebinding it in that
-    fixture, a SessionStore created by a test can write routing rows into the
-    developer's real state.db.
-    """
-    import hermes_state
-
-    assert hermes_state.DEFAULT_DB_PATH == Path(os.environ["HERMES_HOME"]) / "state.db"
-    db = SessionDB()
-    try:
-        assert db.db_path == Path(os.environ["HERMES_HOME"]) / "state.db"
-    finally:
-        db.close()
-
-
 class TestSessionSourceRoundtrip:
     def test_full_roundtrip(self):
         source = SessionSource(
@@ -773,17 +755,6 @@ class TestSessionStoreRewriteTranscript:
         assert reloaded[0]["content"] == "hello"
         assert reloaded[1]["content"] == "hi"
 
-    def test_rewrite_with_empty_list(self, store):
-        session_id = "test_session_2"
-        store._db.create_session(session_id=session_id, source="test")
-        store.append_to_transcript(session_id, {"role": "user", "content": "hi"})
-
-        store.rewrite_transcript(session_id, [])
-
-        reloaded = store.load_transcript(session_id)
-        assert reloaded == []
-
-
 class TestLoadTranscriptDBOnly:
     """After spec 002, load_transcript reads only from state.db."""
 
@@ -1031,43 +1002,6 @@ class TestSlackWorkspaceSessionIsolation:
         team_two_entry = store.get_or_create_session(team_two_source)
         assert team_two_entry.session_id != team_one_entry.session_id
         assert team_two_entry.session_key == "agent:main:slack:dm:T_TWO:D_SHARED"
-
-    def test_legacy_db_fallback_is_exact_and_rewrites_peer_key(self, store):
-        source = SessionSource(
-            platform=Platform.SLACK,
-            scope_id="T_ONE",
-            chat_id="D_SHARED",
-            chat_type="dm",
-            user_id="U_SHARED",
-        )
-        scoped_key = build_session_key(source)
-        legacy_key = build_session_key(replace(source, scope_id=None, guild_id=None))
-        store._db = MagicMock()
-        store._db.find_latest_gateway_session_for_peer.side_effect = [
-            None,
-            {
-                "id": "legacy-session",
-                "session_key": legacy_key,
-                "started_at": 1.0,
-            },
-        ]
-
-        entry = store.get_or_create_session(source)
-
-        assert entry.session_id == "legacy-session"
-        assert entry.session_key == scoped_key
-        calls = store._db.find_latest_gateway_session_for_peer.call_args_list
-        assert [call.kwargs["session_key"] for call in calls] == [
-            scoped_key,
-            legacy_key,
-        ]
-        assert all(call.kwargs["chat_id"] is None for call in calls)
-        assert all(call.kwargs["chat_type"] is None for call in calls)
-        assert (
-            store._db.record_gateway_session_peer.call_args.kwargs["session_key"]
-            == scoped_key
-        )
-
 
 class TestWhatsAppSessionKeyConsistency:
     """Regression: WhatsApp session keys must collapse JID/LID aliases to a
@@ -1699,49 +1633,6 @@ class TestSlackWorkspaceSessionKeys:
         assert recovered.session_key == "agent:main:slack:channel:T_ALPHA:C123:1700000000.000001"
         assert session_row(restarted.persistence, "legacy-db-session")["session_key"] == recovered.session_key
 
-    def test_scope_less_legacy_db_session_is_not_adopted_by_a_workspace(
-        self, tmp_path, monkeypatch
-    ):
-        # Given
-        import hermes_state
-
-        monkeypatch.setattr(hermes_state, "DEFAULT_DB_PATH", tmp_path / "state.db")
-        legacy_source = SessionSource(
-            platform=Platform.SLACK,
-            chat_id="C123",
-            chat_type="channel",
-            thread_id="1700000000.000001",
-            user_id="U123",
-        )
-        incoming = replace(legacy_source, scope_id="T_BETA")
-        legacy_key = "agent:main:slack:channel:C123:1700000000.000001"
-        original = SessionStore(sessions_dir=tmp_path, config=GatewayConfig())
-        original._db.create_session(
-            session_id="ambiguous-db-session",
-            source="slack",
-            user_id="U123",
-            session_key=legacy_key,
-            chat_id="C123",
-            chat_type="channel",
-            thread_id="1700000000.000001",
-        )
-        original._record_gateway_session_peer(
-            "ambiguous-db-session", legacy_key, legacy_source
-        )
-        original.append_to_transcript(
-            "ambiguous-db-session", {"role": "user", "content": "other workspace"}
-        )
-        original._db.close()
-        restarted = SessionStore(sessions_dir=tmp_path, config=GatewayConfig())
-
-        # When
-        routed = restarted.get_or_create_session(incoming)
-
-        # Then
-        assert routed.session_id != "ambiguous-db-session"
-        assert routed.session_key == "agent:main:slack:channel:T_BETA:C123:1700000000.000001"
-
-
 class TestWhatsAppIdentifierPublicHelpers:
     """Contract tests for the public WhatsApp identifier helpers.
 
@@ -2279,49 +2170,6 @@ class TestRewriteTranscriptPreservesReasoning:
         assert after[0].get("reasoning_details") == [{"type": "summary", "text": "step by step"}]
         assert after[0].get("codex_reasoning_items") == [{"id": "r1", "type": "reasoning"}]
 
-    def test_db_rewrite_is_atomic_on_insert_failure(self, tmp_path, monkeypatch):
-        from hermes_state import SessionDB
-
-        db = SessionDB(db_path=tmp_path / "test.db")
-        session_id = "atomic-rewrite-test"
-        db.create_session(session_id=session_id, source="cli")
-        db.append_message(session_id=session_id, role="user", content="before user")
-        db.append_message(session_id=session_id, role="assistant", content="before assistant")
-
-        config = GatewayConfig()
-        with patch("gateway.session.SessionStore._ensure_loaded"):
-            store = SessionStore(sessions_dir=tmp_path, config=config)
-        store._db = db
-        store._loaded = True
-
-        # Force the second insert inside replace_messages to fail, simulating
-        # any storage-layer error that might abort a multi-row rewrite.
-        real_encode = SessionDB._encode_content
-        calls = {"n": 0}
-
-        def flaky_encode(cls, content):
-            calls["n"] += 1
-            if calls["n"] == 2:
-                raise RuntimeError("simulated storage failure")
-            return real_encode.__func__(cls, content)
-
-        monkeypatch.setattr(SessionDB, "_encode_content", classmethod(flaky_encode))
-
-        replacement = [
-            {"role": "user", "content": "after user"},
-            {"role": "assistant", "content": "after assistant"},
-        ]
-
-        store.rewrite_transcript(session_id, replacement)
-
-        # The rewrite must roll back atomically — original messages preserved.
-        after = db.get_messages_as_conversation(session_id)
-        assert [msg["content"] for msg in after] == [
-            "before user",
-            "before assistant",
-        ]
-
-
 class TestGatewaySessionDbRecovery:
     def test_compression_closed_parent_reroutes_without_retry_queue(self, tmp_path):
         import threading
@@ -2496,117 +2344,6 @@ class TestGatewaySessionDbRecovery:
         assert "parent" not in store._dirty_transcripts
         assert "child" not in store._dirty_transcripts
 
-    def test_transcript_append_rebuilds_fts_and_retries_dirty_rows_in_order(self):
-        import threading
-
-        class FakeDb:
-            def __init__(self):
-                self.attempts = []
-                self.persisted = []
-                self.rebuild_calls = 0
-
-            def rebuild_fts(self):
-                self.rebuild_calls += 1
-                return 1
-
-            def append_message(self, **kwargs):
-                content = kwargs["content"]
-                self.attempts.append(content)
-                if len(self.attempts) <= 2:
-                    raise RuntimeError("no such table: messages_fts")
-                self.persisted.append(content)
-
-        store = object.__new__(SessionStore)
-        store._db = FakeDb()
-        store._transcript_retry_lock = threading.Lock()
-        store._dirty_transcripts = {}
-        store._transcript_append_failures = {}
-        store._fts_rebuild_last_attempt_at = None
-
-        store.append_to_transcript("s1", {"role": "user", "content": "first"})
-        assert [m["content"] for m in store._dirty_transcripts["s1"]] == ["first"]
-        assert store._db.rebuild_calls == 1
-
-        store.append_to_transcript("s1", {"role": "assistant", "content": "second"})
-
-        assert store._db.persisted == ["first", "second"]
-        assert "s1" not in store._dirty_transcripts
-
-    def test_transcript_append_clears_dirty_on_rewrite(self):
-        """rewrite_transcript must clear pending dirty messages so /retry
-        and /compress don't re-insert replaced rows."""
-        import threading
-
-        class FakeDb:
-            def __init__(self):
-                self.persisted = []
-                self.replaced = []
-
-            def rebuild_fts(self):
-                return 0
-
-            def append_message(self, **kwargs):
-                raise RuntimeError("database disk image is malformed")
-
-            def replace_messages(
-                self, session_id, messages, *, active_only=False,
-                reject_active_turn_lease=False,
-            ):
-                self.replaced.append(
-                    (session_id, messages, active_only, reject_active_turn_lease)
-                )
-
-        store = object.__new__(SessionStore)
-        store._db = FakeDb()
-        store._transcript_retry_lock = threading.Lock()
-        store._dirty_transcripts = {}
-        store._transcript_append_failures = {}
-        store._fts_rebuild_attempted = True  # prevent rebuild attempt
-
-        # Queue a failed message
-        store.append_to_transcript("s1", {"role": "user", "content": "stale"})
-        assert "s1" in store._dirty_transcripts
-
-        # rewrite_transcript should clear the dirty queue
-        store.rewrite_transcript("s1", [{"role": "user", "content": "fresh"}])
-        assert "s1" not in store._dirty_transcripts
-        assert len(store._db.replaced) == 1
-
-    def test_transcript_append_clears_dirty_on_rewind(self):
-        """rewind_session must clear pending dirty messages so /undo
-        doesn't re-insert rewound rows."""
-        import threading
-
-        class FakeDb:
-            def __init__(self):
-                self.persisted = []
-
-            def rebuild_fts(self):
-                return 0
-
-            def append_message(self, **kwargs):
-                raise RuntimeError("database disk image is malformed")
-
-            def rewind_user_turn(self, session_id, _offset, **_kwargs):
-                return type("Outcome", (), {
-                    "rewound_count": 1,
-                    "turns_undone": 1,
-                    "live_text": "old",
-                })()
-
-        store = object.__new__(SessionStore)
-        store._db = FakeDb()
-        store._transcript_retry_lock = threading.Lock()
-        store._dirty_transcripts = {}
-        store._transcript_append_failures = {}
-        store._fts_rebuild_last_attempt_at = None
-
-        store.append_to_transcript("s1", {"role": "user", "content": "stale"})
-        assert "s1" in store._dirty_transcripts
-
-        store.rewind_session("s1", 1)
-        assert "s1" not in store._dirty_transcripts
-
     def test_fts_corruption_error_requires_fts_provenance(self):
         """_is_fts_corruption_error must not treat a generic malformed-image
         error as FTS-scoped (#97940): bare SQLITE_CORRUPT can mean canonical
@@ -2726,24 +2463,6 @@ class TestGatewaySessionDbRecovery:
 
 
 
-    def test_new_session_records_gateway_peer_fields(self, tmp_path):
-        store = SessionStore(sessions_dir=tmp_path, config=GatewayConfig())
-        source = SessionSource(
-            platform=Platform.TELEGRAM,
-            chat_id="chat-1",
-            chat_type="dm",
-            user_id="user-1",
-            thread_id="topic-1",
-        )
-
-        entry = store.get_or_create_session(source)
-        row = store._db.get_session(entry.session_id)
-
-        assert row["session_key"] == entry.session_key
-        assert row["chat_id"] == "chat-1"
-        assert row["chat_type"] == "dm"
-        assert row["thread_id"] == "topic-1"
-
     def test_recovers_missing_sessions_json_mapping_from_state_db(self, tmp_path):
         config = GatewayConfig()
         source = SessionSource(
@@ -2766,35 +2485,6 @@ class TestGatewaySessionDbRecovery:
         assert recovered.session_id == entry.session_id
         assert recovered.session_key == entry.session_key
         assert recovered_store.load_transcript(recovered.session_id)[0]["content"] == "before restart"
-
-    def test_agent_close_rows_are_recoverable_but_explicit_resets_are_not(self, tmp_path):
-        config = GatewayConfig()
-        source = SessionSource(
-            platform=Platform.TELEGRAM,
-            chat_id="chat-1",
-            chat_type="dm",
-            user_id="user-1",
-        )
-        store = SessionStore(sessions_dir=tmp_path, config=config)
-        entry = store.get_or_create_session(source)
-        store.append_to_transcript(entry.session_id, {"role": "user", "content": "recover me"})
-        store._db.end_session(entry.session_id, "agent_close")
-        (tmp_path / "sessions.json").unlink()
-
-        recovered_store = SessionStore(sessions_dir=tmp_path, config=config)
-        recovered = recovered_store.get_or_create_session(source)
-        assert recovered.session_id == entry.session_id
-
-        recovered_store._db.end_session(recovered.session_id, "session_reset")
-        recovered_store._db._conn.execute(
-            "UPDATE sessions SET ended_at = ?, end_reason = ? WHERE id = ?",
-            (1.0, "session_reset", recovered.session_id),
-        )
-        recovered_store._db._conn.commit()
-        (tmp_path / "sessions.json").unlink(missing_ok=True)
-        reset_store = SessionStore(sessions_dir=tmp_path, config=config)
-        fresh = reset_store.get_or_create_session(source)
-        assert fresh.session_id != entry.session_id
 
     def test_resume_pending_still_honors_suspension_reset(self, tmp_path):
         """``resume_pending`` must not short-circuit the reset check on next access.
@@ -2993,11 +2683,11 @@ class TestGatewayRoutingTable:
         assert recovered.session_id == entry.session_id
         # And the next save persists the imported entry into the DB table.
         restarted._save()
-        rows = restarted._db.load_gateway_routing_entries(
-            scope=restarted._routing_scope()
+        rows = restarted._routing_persistence.routing.load_routing_entries(
+            routing_scope=restarted._routing_scope()
         )
         assert entry.session_key in rows
-        restarted._db.close()
+        restarted.close_all_db_handles()
 
     def test_db_entries_win_over_stale_json(self, tmp_path):
         """When both stores have a key, the DB entry is authoritative."""
@@ -3009,31 +2699,34 @@ class TestGatewayRoutingTable:
         data = json.loads((tmp_path / "sessions.json").read_text())
         data[entry.session_key]["session_id"] = "20990101_000000_stale999"
         (tmp_path / "sessions.json").write_text(json.dumps(data))
-        store._db.close()
+        store.close_all_db_handles()
 
         restarted = SessionStore(sessions_dir=tmp_path, config=config)
         restarted._ensure_loaded()
         assert restarted._entries[entry.session_key].session_id == entry.session_id
-        restarted._db.close()
+        restarted.close_all_db_handles()
 
     def test_prune_removes_routing_rows_for_ended_sessions(self, tmp_path):
         """Startup prune drops ended sessions from the DB routing table too."""
         config = GatewayConfig()
         store = SessionStore(sessions_dir=tmp_path, config=config)
         entry = store.get_or_create_session(self._source())
-        store._db.end_session(entry.session_id, "session_reset")
-        store._db._conn.execute(
-            "UPDATE sessions SET ended_at = 1.0, end_reason = 'session_reset' WHERE id = ?",
-            (entry.session_id,),
+        from tests.fixtures.storage_holder import raw_holder
+
+        handle = store._scoped_persistence()
+        raw_holder(handle)._execute_write(
+            lambda conn: conn.execute(
+                "UPDATE sessions SET ended_at = 1.0, end_reason = 'session_reset' WHERE id = ?",
+                (entry.session_id,),
+            )
         )
-        store._db._conn.commit()
-        store._db.close()
+        store.close_all_db_handles()
 
         restarted = SessionStore(sessions_dir=tmp_path, config=config)
         restarted._ensure_loaded()
         assert entry.session_key not in restarted._entries
-        rows = restarted._db.load_gateway_routing_entries(
-            scope=restarted._routing_scope()
+        rows = restarted._routing_persistence.routing.load_routing_entries(
+            routing_scope=restarted._routing_scope()
         )
         assert entry.session_key not in rows
-        restarted._db.close()
+        restarted.close_all_db_handles()

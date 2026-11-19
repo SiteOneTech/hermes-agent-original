@@ -1822,7 +1822,7 @@ class TestSummaryFallbackToMainModel:
 
         assert mock_call.call_count == 2
         assert mock_call.call_args_list[0].kwargs.get("model") == "broken-aux-model"
-        assert "model" not in mock_call.call_args_list[1].kwargs
+        assert mock_call.call_args_list[1].kwargs.get("model") == "main-model"
         assert result is not None
         assert "summary via main model" in result
         # Aux-model failure recorded despite successful recovery
@@ -2035,15 +2035,12 @@ class TestStreamingClosedFallback:
         with patch(
             "agent.context_compressor.call_llm",
             side_effect=[err, mock_ok],
-        ) as mock_call, patch(
-            "agent.context_compressor._is_connection_error",
-            return_value=True,
-        ):
+        ) as mock_call:
             result = c._generate_summary(self._msgs())
 
         assert mock_call.call_count == 2
         assert mock_call.call_args_list[0].kwargs.get("model") == "aux-stream-model"
-        assert "model" not in mock_call.call_args_list[1].kwargs
+        assert mock_call.call_args_list[1].kwargs.get("model") == "main-model"
         assert result is not None
         assert "summary via main model" in result
 
@@ -2063,10 +2060,7 @@ class TestStreamingClosedFallback:
         with patch(
             "agent.context_compressor.call_llm",
             side_effect=[err, mock_ok],
-        ) as mock_call, patch(
-            "agent.context_compressor._is_connection_error",
-            return_value=True,
-        ):
+        ) as mock_call:
             result = c._generate_summary(self._msgs())
 
         assert mock_call.call_count == 2
@@ -3432,7 +3426,7 @@ class TestTokenBudgetTailProtection:
             {"role": "assistant", "content": "short reply"},
         ]
         # With a 1000-token budget, only the last couple messages should be protected
-        result, pruned = c._prune_old_tool_results(
+        _result, pruned = c._prune_old_tool_results(
             messages, protect_tail_count=2, protect_tail_tokens=1000,
         )
         # At least one old tool result should have been pruned
@@ -3478,7 +3472,7 @@ class TestTokenBudgetTailProtection:
             {"role": "assistant", "content": "reply"},
         ]
         # protect_tail_count=3 means last 3 messages protected
-        result, pruned = c._prune_old_tool_results(
+        _result, pruned = c._prune_old_tool_results(
             messages, protect_tail_count=3,
         )
         # Tool at index 2 is outside the protected tail (last 3 = indices 2,3,4)
@@ -4789,15 +4783,18 @@ class TestSummaryPromptBounding:
         with patch("agent.context_compressor.call_llm", return_value=mock_response) as mock_call:
             summary = c._generate_summary(messages)
 
-        prompt = mock_call.call_args.kwargs["messages"][0]["content"]
+        sent = mock_call.call_args.kwargs["messages"]
+        prompt = sent[0]["content"]
+        # Lean compaction samples across the whole oversized region and ships the kept
+        # records as typed turns beside a pointer prompt, so the bound applies to the
+        # whole request, not only to the system message.
+        typed = "\n".join(m["content"] for m in sent[1:] if isinstance(m.get("content"), str))
         assert summary.startswith(SUMMARY_PREFIX)
-        assert len(prompt) < 180_000
-        # Lean compaction samples across the whole oversized region rather
-        # than retaining only a head and tail. The omission marker makes that
-        # lossy sampling explicit to the auxiliary model.
-        assert "chars elided" in prompt
-        assert "FIRST_SENTINEL" in prompt
-        assert "LAST_SENTINEL" in prompt
+        assert len(prompt) + len(typed) < 180_000
+        # The omission marker makes the lossy sampling explicit to the auxiliary model.
+        assert "chars elided" in typed
+        assert "FIRST_SENTINEL" in typed
+        assert "LAST_SENTINEL" in typed
 
     def test_small_input_returned_byte_identical(self):
         """Inputs at or under the cap must pass through completely untouched."""

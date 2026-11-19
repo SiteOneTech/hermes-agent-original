@@ -1195,30 +1195,6 @@ def _consume_interrupted_flag(job_id: str, token: Optional[object] = None) -> bo
 _sequential_pool: Optional[concurrent.futures.ThreadPoolExecutor] = None
 
 
-def _inactivity_watchdog_loop(
-    *, get_idle_seconds: Callable[[], float], limit_s: float, poll_s: float, stop: threading.Event,
-    future_done: Callable[[], bool],
-) -> bool:
-    """Poll idle time until limit (-> True), stop, or the future completes (-> False). Uses
-    ``threading.Event.wait``, not asyncio, so a blocked event loop cannot disable the watchdog.
-
-    Driven by ``threading.Event.wait`` (a kernel timeout), not asyncio, so a blocked event-loop /
-    ``run_job`` thread cannot disable this watchdog the way ``asyncio.sleep`` / ``wait_for`` would (family A
-    of #94285 — the 4118s-idle-on-a-600s-limit cron hang). Returns True when *limit_s* of inactivity was
-    observed.
-    """
-    while not stop.wait(poll_s):
-        if future_done():
-            return False
-        try:
-            idle = float(get_idle_seconds() or 0.0)
-        except Exception:
-            idle = 0.0
-        if idle >= limit_s:
-            return True
-    return False
-
-
 def _cron_inactivity_seconds() -> float:
     """Parse HERMES_CRON_TIMEOUT (seconds). 0 = unlimited; bad input = 600. Shared by the run_job
     inactivity monitor and the scheduler's fire lifecycle, so configured timeout handling stays
@@ -3384,7 +3360,7 @@ def _deliver_crash_failure_safely(
 def _install_fire_secret_scope(
     home: "Optional[Path]" = None,
     *,
-    secrets: "Optional[Dict[str, str]]" = None,
+    secrets: "Optional[dict[str, str]]" = None,
     strict: bool = False,
 ) -> "tuple[contextvars.Token, Optional[contextvars.Token], Optional[contextvars.Token]]":
     """Install the firing profile's secret scope for the span ``_run_one_job_body`` runs, delivery

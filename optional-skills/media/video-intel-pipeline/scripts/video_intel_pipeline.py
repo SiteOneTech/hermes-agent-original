@@ -17,11 +17,11 @@ def check_deps():
     if shutil.which("ffmpeg") is None:
         missing.append("ffmpeg")
     try:
-        import yt_dlp  # noqa: F401
+        import yt_dlp
     except Exception:
         missing.append("yt-dlp (python package)")
     try:
-        import faster_whisper  # noqa: F401
+        import faster_whisper
     except Exception:
         missing.append("faster-whisper")
     if missing:
@@ -57,7 +57,7 @@ def to_wav_16k_mono(src: Path, dst: Path):
         "-ac", "1", "-ar", "16000", "-vn",
         str(dst),
     ]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    proc = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL, check=False)
     if proc.returncode != 0:
         fail(f"ffmpeg conversion failed: {proc.stderr[-1200:]}")
 
