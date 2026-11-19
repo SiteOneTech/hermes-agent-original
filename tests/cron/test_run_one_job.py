@@ -576,10 +576,15 @@ def test_run_one_job_refreshes_routed_profile_external_secret_scope_before_run(
         observed["delivery_scope"] = dict(ss.current_secret_scope() or {})
         observed["delivery_secret"] = ss.get_secret("PROFILE_ONLY_API_KEY")
         observed["delivery_unrelated_launch_secret"] = ss.get_secret("LAUNCH_ONLY_API_KEY")
-        return None
+
+    def fake_enqueue(_execution_id, _job, _content, *, for_failure=False):
+        """The canonical fire hands delivery to the queue from inside the routed profile scope."""
+        fake_deliver()
+        return {"status": "queued"}
 
     monkeypatch.setattr(s, "run_job", fake_run_job)
     monkeypatch.setattr(s, "_deliver_result", fake_deliver)
+    monkeypatch.setattr("cron.delivery_queue.enqueue", fake_enqueue)
 
     secret_registry._reset_registry_for_tests()
     monkeypatch.setattr(secret_registry, "_ensure_builtin_sources", lambda: None)
@@ -613,7 +618,8 @@ def test_run_one_job_refreshes_routed_profile_external_secret_scope_before_run(
     previous_multiplex = ss.is_multiplex_active()
     ss.set_multiplex_active(multiplex_active)
     try:
-        assert s.run_one_job({"id": "external-secret", "name": "t", "profile": "support"}) is True
+        assert s.run_one_job({"id": "external-secret", "name": "t", "profile": "support",
+                              "deliver": "telegram:123"}) is True
     finally:
         ss.set_multiplex_active(previous_multiplex)
         build_started.set()

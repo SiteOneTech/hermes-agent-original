@@ -219,7 +219,7 @@ class TestRunJobProfileContext:
         fake_mod.AIAgent = FakeAgent
         monkeypatch.setitem(sys.modules, "run_agent", fake_mod)
 
-        from hermes_cli import runtime_provider as runtime_provider
+        from hermes_cli import runtime_provider
 
         monkeypatch.setattr(
             runtime_provider,
@@ -244,6 +244,11 @@ class TestRunJobProfileContext:
 
         from hermes_cli import env_loader
 
+        # ``gateway.run`` loads the checkout's dev ``.env`` at import time. Import it BEFORE the
+        # recorder: otherwise that one-off import load lands in ``dotenv_paths`` on any developer
+        # checkout that has a project .env, and the assertions below stop measuring the run.
+        import gateway.run
+
         def fake_load_dotenv(dotenv_path, **_kw):
             observed.setdefault("dotenv_paths", []).append(str(dotenv_path))
             return True
@@ -266,7 +271,7 @@ class TestRunJobProfileContext:
             "schedule_display": "manual",
         }
 
-        success, _output, response, error = sched.run_job(job)
+        success, _output, _response, error = sched.run_job(job)
 
         assert success is True, f"run_job failed: error={error!r} response={response!r}"
         assert observed["dotenv_paths"] == [str(profile_home / ".env")]
@@ -390,7 +395,7 @@ class TestRunJobProfileContext:
         }
 
         # Should succeed with fallback, not raise
-        success, _output, response, error = sched.run_job(job)
+        success, _output, _response, error = sched.run_job(job)
 
         assert success is True, f"run_job should fallback, not fail: error={error!r}"
         # Verify it used the default home, not the missing profile
@@ -542,7 +547,6 @@ class TestRunOneJobRoutesExecutionAndDeliveryToJobProfile:
         def fake_deliver(_job, content, adapters=None, loop=None, **_kwargs):
             self._observe(observed, "deliver")
             observed["deliver_content"] = content
-            return None
 
         def fake_enqueue(_execution_id, _job, content, *, for_failure=False):
             """The canonical run queues its delivery; observe it inside the delivery profile scope."""
