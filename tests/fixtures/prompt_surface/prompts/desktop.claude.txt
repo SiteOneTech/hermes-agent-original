@@ -47,12 +47,17 @@ After difficult/iterative tasks, offer to save as a skill. If a skill you loaded
     - p5js: p5.js sketches: gen art, shaders, interactive, 3D.
     - popular-web-designs: 54 real design systems (Stripe, Linear, Vercel) as HTML/CSS.
     - songwriting-and-ai-music: Songwriting craft and Suno AI music prompts.
+  devops:
+    - factory-sandbox-kidu: Check, restart, or deploy previews to the Kidu sandbox VM.
+    - kanban-orchestrator: Decomposition playbook for the Kanban orchestrator role.
+    - kanban-worker: Pitfalls and edge cases for Hermes Kanban workers.
   email:
     - email-inbox-triage: Triage an inbox: prioritize threads, draft replies safely.
     - himalaya: Himalaya CLI: IMAP/SMTP email from terminal.
   - youtube-content: YouTube transcripts to summaries, threads, blogs.
   - obsidian: Read, search, create, and edit notes in the Obsidian vault.
   productivity:
+    - agent-crm-core: Operate Agent CRM Core: contacts, deals, quotes, invoices.
     - document-to-action-items: Extract cited obligations, deadlines, tasks from documents.
     - google-workspace: Gmail, Calendar, Drive, Docs, Sheets via gws CLI or Python.
     - maps: Geocode, POIs, routes, timezones via OpenStreetMap/OSRM.
@@ -61,6 +66,7 @@ After difficult/iterative tasks, offer to save as a skill. If a skill you loaded
     - pdf: PDF files: create, read, merge, fill, OCR, edit text.
     - product-price-monitor: Watch product, flight, or listing prices; alert on target.
     - teams-meeting-pipeline: Teams meeting summaries, job replay, Graph subscriptions.
+    - twenty-crm-adapter: Use Twenty CRM as the external adapter for Agent CRM Core.
     - weekly-review-planning: Weekly reset: commitments, stalled work, next-week plan.
   research:
     - arxiv: Search arXiv papers by keyword, author, category, or ID.
@@ -70,6 +76,7 @@ After difficult/iterative tasks, offer to save as a skill. If a skill you loaded
   software-development:
     - codebase-inspection: Inspect codebases w/ pygount: LOC, languages, ratios.
     - dogfood: Exploratory QA of web apps: find bugs, evidence, reports.
+    - factory-agent-operating-canon: Use when acting as any SitioUno Software Factory agent role.
     - github: GitHub via gh CLI: PRs, issues, reviews, repos, auth.
     - requesting-code-review: Pre-commit review: security scan, quality gates, auto-fix.
     - simplify-code: Parallel 4-agent cleanup of recent code changes.

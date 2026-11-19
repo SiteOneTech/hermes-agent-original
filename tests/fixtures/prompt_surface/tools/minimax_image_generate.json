@@ -1,0 +1,42 @@
+{
+  "description": "Generate an image with MiniMax image-01 via the official Token Plan CLI. Returns a local image path suitable for MEDIA delivery.",
+  "name": "minimax_image_generate",
+  "parameters": {
+    "properties": {
+      "aspect_ratio": {
+        "default": "square",
+        "enum": [
+          "square",
+          "landscape",
+          "portrait",
+          "1:1",
+          "16:9",
+          "9:16",
+          "4:3",
+          "3:4"
+        ],
+        "type": "string"
+      },
+      "output_path": {
+        "description": "Optional absolute or cache-relative output path.",
+        "type": "string"
+      },
+      "prompt": {
+        "description": "Image prompt.",
+        "type": "string"
+      },
+      "prompt_optimizer": {
+        "default": false,
+        "type": "boolean"
+      },
+      "seed": {
+        "description": "Optional deterministic seed.",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "prompt"
+    ],
+    "type": "object"
+  }
+}

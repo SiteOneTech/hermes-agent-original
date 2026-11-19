@@ -1,0 +1,28 @@
+{
+  "description": "Run MiniMax text generation through the official Token Plan CLI (`mmx text chat`).",
+  "name": "minimax_text_chat",
+  "parameters": {
+    "properties": {
+      "max_tokens": {
+        "default": 4096,
+        "type": "integer"
+      },
+      "message": {
+        "description": "User message to send.",
+        "type": "string"
+      },
+      "model": {
+        "default": "MiniMax-M2.7-highspeed",
+        "type": "string"
+      },
+      "system": {
+        "description": "Optional system prompt.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "message"
+    ],
+    "type": "object"
+  }
+}

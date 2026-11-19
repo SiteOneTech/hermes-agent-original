@@ -177,6 +177,27 @@ processes currently holding the database (`<db> is held by PID <n> (<command>)`)
 so you know what to stop; when the holder scan is partial or unavailable it says
 `cannot prove the database is quiet` instead of giving an all-clear.
 
+## Agent Core Settings
+
+The `agent_core:` section wires the SitioUno Agent Core surfaces (Factory,
+Calendar and CRM) to a Postgres database. SQLite stays the store for sessions
+and messages; these keys only point at the operational Postgres instance:
+
+```yaml
+agent_core:
+  db_enabled: false          # true opens the Postgres-backed modules below
+  db_container: agent-postgres   # container/host name used by the DB helpers
+  db_name: zeus_agent        # database holding the CRM/Factory tables
+  calendar_db_name: nettu_calendar   # database holding calendar tables
+  crm_db_name: zeus_agent    # database holding CRM tables
+  modules_enabled: [factory, calendar, crm]   # which surfaces register tools
+```
+
+With `db_enabled: false` (the default) the Agent Core tools are not registered
+and every surface keeps working from SQLite alone. The keys are consumed by
+`hermes_cli/factory_backend.py`, `hermes_cli/web_server.py` and
+`tools/crm_tool.py`.
+
 ## Environment Variable Substitution
 
 You can reference environment variables in `config.yaml` using `${VAR_NAME}` syntax:

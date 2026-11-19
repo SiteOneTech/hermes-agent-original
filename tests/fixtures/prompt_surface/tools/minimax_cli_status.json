@@ -1,0 +1,9 @@
+{
+  "description": "Check official MiniMax CLI auth status and Token Plan quota via `mmx auth status` and `mmx quota`.",
+  "name": "minimax_cli_status",
+  "parameters": {
+    "properties": {},
+    "required": [],
+    "type": "object"
+  }
+}
