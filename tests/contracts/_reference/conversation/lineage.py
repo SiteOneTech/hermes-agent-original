@@ -148,6 +148,32 @@ class InMemoryLineageRepository:
         walked = self.chain(session_id)
         return walked[-1] if walked else session_id
 
+    def unique_tip(self, session_id: SessionId) -> Optional[SessionId]:
+        if not session_id:
+            return None
+        scope = self._backend.scope
+        table = _sessions_table(self._backend, scope)
+        current = str(session_id)
+        seen = {current}
+        for _ in range(_CHAIN_CAP):
+            parent = table.get(current)
+            if parent is None or parent["end_reason"] != END_REASON_COMPRESSION:
+                return SessionId(current)
+            candidates = [
+                row for row in table.values()
+                if row["parent_session_id"] == current and _descent_child(table, row)
+                and (row["ended_at"] is None or row["end_reason"] == END_REASON_COMPRESSION)
+            ]
+            if len(candidates) != 1:
+                # Ambiguous (two live continuations) or none: a writer must not choose.
+                return None if candidates else SessionId(current)
+            child = str(candidates[0]["session_id"])
+            if child in seen:
+                return None
+            seen.add(child)
+            current = child
+        return None
+
     def lineage(self, session_id: SessionId) -> tuple[SessionId, ...]:
         scope = self._backend.scope
         table = _sessions_table(self._backend, scope)
