@@ -405,15 +405,16 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         return self._exec(f"head -c {nbytes} {self._escape_shell_arg(path)} 2>/dev/null")
 
     def _run_python_snippet(self, snippet: str) -> ExecuteResult:
-        """Run ``snippet`` through the backend interpreter via the base64 transport.
+        """Run ``snippet`` via the backend's ``python3``, retrying with ``python`` when
+        the ``python3`` name never reached an interpreter (Windows / older systems).
 
-        Delegates to :meth:`_exec_python_snippet` so quoting layers (Windows ``subprocess``
-        list-args, bash double quotes) cannot corrupt the program, and still retries with the
-        ``python`` name when ``python3`` never reached an interpreter (Windows / older systems).
+        The safe reader's wire protocol is a visible ``python3 -c`` program keyed by a
+        per-call marker, so the snippet travels shell-quoted rather than base64-wrapped
+        (``_exec_python_snippet`` serves the other, wrapper-only call sites).
         """
-        result = self._exec_python_snippet(snippet)
+        result = self._exec(f"python3 -c {self._escape_shell_arg(snippet)}")
         if result.exit_code != 0 and self._interpreter_missing(result):
-            result = self._exec_python_snippet(snippet, py="python")
+            result = self._exec(f"python -c {self._escape_shell_arg(snippet)}")
         return result
 
     @staticmethod
@@ -1305,7 +1306,7 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         if not filename:
             return None
         target = filename_match_key(filename)
-        ls_result = self._exec(f"ls -1 {self._escape_shell_arg(dir_path)} 2>/dev/null")
+        ls_result = self._exec(f"ls -1 -- {self._escape_shell_arg(dir_path)} 2>/dev/null")
         if ls_result.exit_code != 0 or not ls_result.stdout.strip():
             return None
         candidates = [
@@ -1322,7 +1323,7 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         basename_no_ext = os.path.splitext(filename)[0].lower()
         ext = os.path.splitext(filename)[1].lower()
         lower_name = filename.lower()
-        ls_result = self._exec(f"ls -1 {self._escape_shell_arg(dir_path)} 2>/dev/null | head -50")
+        ls_result = self._exec(f"ls -1 -- {self._escape_shell_arg(dir_path)} 2>/dev/null | head -50")
         scored: list = []  # (score, filepath) — higher is better
         if ls_result.exit_code == 0 and ls_result.stdout.strip():
             for f in ls_result.stdout.strip().split('\n'):

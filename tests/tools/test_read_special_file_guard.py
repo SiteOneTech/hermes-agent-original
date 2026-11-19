@@ -168,7 +168,7 @@ class TestShellFileOperationsSpecialFileGuard:
         assert result.error is not None
         assert "FIFO" in result.error
 
-    @pytest.mark.linux_only
+    @pytest.mark.platforms("linux")
     def test_native_backend_rejects_fifo_before_blocking_open(self, tmp_path):
         """The LocalEnvironment fast path must verify the fd it opens too.
 
