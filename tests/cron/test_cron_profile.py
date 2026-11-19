@@ -12,6 +12,18 @@ import os
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _canonical_owner_execution(cron_owner):
+    """Run every per-job-profile case through the production owner execution seam.
+
+    ``run_job`` dispatches a normal (non ``no_agent``) job to the canonical owner
+    bridge, which refuses to run outside an owner execution. ``cron_owner`` (tests/cron
+    conftest) supplies that seam with a real profile-scoped store, so these tests keep
+    observing the profile's own HERMES_HOME/persistence rather than a gateway RPC.
+    """
+    return cron_owner
+
+
 @pytest.fixture()
 def isolated_cron_profile_home(tmp_path, monkeypatch):
     """Create an isolated Hermes root with a named profile and temp cron store."""
@@ -532,8 +544,15 @@ class TestRunOneJobRoutesExecutionAndDeliveryToJobProfile:
             observed["deliver_content"] = content
             return None
 
+        def fake_enqueue(_execution_id, _job, content, *, for_failure=False):
+            """The canonical run queues its delivery; observe it inside the delivery profile scope."""
+            self._observe(observed, "deliver")
+            observed["deliver_content"] = content
+            return {"status": "queued"}
+
         monkeypatch.setattr(sched, "run_job", fake_run_job)
         monkeypatch.setattr(sched, "_deliver_result", fake_deliver)
+        monkeypatch.setattr("cron.delivery_queue.enqueue", fake_enqueue)
 
         # A run that raises is still processed (failure recorded + alerted) but reports False.
         assert sched.run_one_job(dict(get_job(created["id"]))) is not raise_in_run
@@ -559,7 +578,9 @@ class TestRunOneJobRoutesExecutionAndDeliveryToJobProfile:
 
         # Persistence keeps belonging to the scheduler profile that owns the job.
         assert observed["deliver_store"] == str(root / "cron" / "jobs.json")
-        assert stored["last_status"] == "ok"
+        # The canonical flow hands delivery to the queue, so the run's terminal status is
+        # "delivery_queued" until that worker completes the send.
+        assert stored["last_status"] == "delivery_queued"
         assert (root / "cron" / "executions.db").exists()
         assert list((root / "cron" / "output").glob("*"))
         self._assert_no_cron_store(profile_home)
