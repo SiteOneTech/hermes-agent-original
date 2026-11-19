@@ -8,7 +8,7 @@ import pytest
 from dataclasses import replace
 from datetime import datetime, timedelta
 from unittest.mock import patch, MagicMock
-from hermes_state import SessionDB
+from hermes_constants import get_hermes_home
 from gateway.config import Platform, GatewayConfig, PlatformConfig
 from gateway.platforms.event import MessageEvent
 from gateway.session import (
@@ -21,6 +21,12 @@ from gateway.session import (
     canonical_whatsapp_identifier,
     neutralize_untrusted_inline_text,
 )
+from persistence.conversation.lineage import CompressionChild
+from persistence.conversation.messages import NewMessage, ReplaceMode
+from persistence.conversation.sessions import SessionQuery, SessionWindow
+from tests.fixtures.storage_read import conversation, session_row
+from tests.fixtures.storage_seed import seed_messages, seed_session
+from tests.gateway.fixtures.storage_handles import close_storage_handles, storage_handle
 
 # Legacy name preserved for these tests; product renamed the function to
 # canonical_whatsapp_identifier.  Keep the tests referencing the old name
@@ -739,16 +745,14 @@ class TestSessionStoreRewriteTranscript:
     """Regression: /retry and /undo must persist truncated history to DB."""
 
     @pytest.fixture()
-    def store(self, tmp_path, monkeypatch):
-        import hermes_state
-        monkeypatch.setattr(hermes_state, "DEFAULT_DB_PATH", tmp_path / "state.db")
+    def store(self, tmp_path):
         config = GatewayConfig()
         s = SessionStore(sessions_dir=tmp_path, config=config)
         return s
 
     def test_rewrite_replaces_transcript(self, store, tmp_path):
         session_id = "test_session_1"
-        store._db.create_session(session_id=session_id, source="test")
+        seed_session(store.persistence, session_id, "test")
         # Write initial transcript
         for msg in [
             {"role": "user", "content": "hello"},
@@ -791,15 +795,13 @@ class TestLoadTranscriptDBOnly:
         result = store.load_transcript("nonexistent")
         assert result == []
 
-    def test_db_only_returns_messages(self, tmp_path, monkeypatch):
-        import hermes_state
-        monkeypatch.setattr(hermes_state, "DEFAULT_DB_PATH", tmp_path / "state.db")
+    def test_db_only_returns_messages(self, tmp_path):
         config = GatewayConfig()
         store = SessionStore(sessions_dir=tmp_path, config=config)
         sid = "db_only_session"
-        store._db.create_session(session_id=sid, source="gateway", model="m")
-        store._db.append_message(session_id=sid, role="user", content="db-q")
-        store._db.append_message(session_id=sid, role="assistant", content="db-a")
+        seed_session(store.persistence, sid, "gateway", model="m")
+        seed_messages(store.persistence, sid, {"role": "user", "content": "db-q"},
+                      {"role": "assistant", "content": "db-a"})
 
         result = store.load_transcript(sid)
         assert len(result) == 2
@@ -811,13 +813,10 @@ class TestSessionStoreSwitchSession:
     """Regression coverage for gateway /resume session switching semantics."""
 
     def test_switch_session_reopens_target_session_in_db(self, tmp_path):
-        from hermes_state import SessionDB
-
         config = GatewayConfig()
         with patch("gateway.session.SessionStore._ensure_loaded"):
             store = SessionStore(sessions_dir=tmp_path / "sessions", config=config)
-        db = SessionDB(db_path=tmp_path / "state.db")
-        store._db = db
+        db = store.persistence
         store._loaded = True
 
         source = SessionSource(
@@ -831,19 +830,19 @@ class TestSessionStoreSwitchSession:
         current_session_id = current_entry.session_id
 
         target_session_id = "old_session_abc"
-        db.create_session(target_session_id, source="feishu", user_id="user-1")
-        db.end_session(target_session_id, end_reason="user_exit")
-        assert db.get_session(target_session_id)["ended_at"] is not None
+        seed_session(db, target_session_id, "feishu", user_id="user-1")
+        db.sessions.end(target_session_id, "user_exit")
+        assert session_row(db, target_session_id)["ended_at"] is not None
 
         switched = store.switch_session(current_entry.session_key, target_session_id)
 
         assert switched is not None
         assert switched.session_id == target_session_id
-        assert db.get_session(current_session_id)["end_reason"] == "session_switch"
-        resumed = db.get_session(target_session_id)
+        assert session_row(db, current_session_id)["end_reason"] == "session_switch"
+        resumed = session_row(db, target_session_id)
         assert resumed["ended_at"] is None
         assert resumed["end_reason"] is None
-        db.close()
+        store.close_all_db_handles()
 
     def test_switch_session_expected_session_id_refuses_moved_route(self, tmp_path):
         """With ``expected_session_id`` the repoint is a CAS: a route that moved past the caller's
@@ -861,13 +860,10 @@ class TestSessionStoreSwitchSession:
         assert switched is not None and switched.session_id == "target"
 
     def test_switch_session_rebinds_full_compression_lineage(self, tmp_path):
-        from hermes_state import SessionDB
-
         config = GatewayConfig()
         with patch("gateway.session.SessionStore._ensure_loaded"):
             store = SessionStore(sessions_dir=tmp_path / "sessions", config=config)
-        db = SessionDB(db_path=tmp_path / "state.db")
-        store._db = db
+        db = store.persistence
         store._loaded = True
 
         destination = SessionSource(
@@ -880,36 +876,36 @@ class TestSessionStoreSwitchSession:
         destination_key = current_entry.session_key
         original_key = "agent:main:telegram:dm:original-chat"
 
-        db.create_session(
-            "compressed_root", "telegram", session_key=original_key,
+        seed_session(
+            db, "compressed_root", "telegram", session_key=original_key,
             user_id="original-user", chat_id="original-chat",
         )
-        db.end_session("compressed_root", "compression")
-        db.create_session(
-            "compressed_tip", "telegram", session_key=original_key,
+        db.sessions.end("compressed_root", "compression")
+        seed_session(
+            db, "compressed_tip", "telegram", session_key=original_key,
             user_id="original-user", chat_id="original-chat",
             parent_session_id="compressed_root",
         )
-        db.end_session("compressed_tip", "session_reset")
+        db.sessions.end("compressed_tip", "session_reset")
 
         switched = store.switch_session(destination_key, "compressed_tip")
 
         assert switched is not None
-        assert db.get_session("compressed_root")["session_key"] == destination_key
-        assert db.get_session("compressed_tip")["session_key"] == destination_key
+        assert session_row(db, "compressed_root")["session_key"] == destination_key
+        assert session_row(db, "compressed_tip")["session_key"] == destination_key
         assert [
-            row["id"] for row in db.list_sessions_rich(
-                source="telegram", session_key=destination_key, limit=10
+            row.as_list_row()["id"] for row in db.sessions.list_sessions(
+                SessionQuery(sources=("telegram",), session_key=destination_key), SessionWindow(limit=10)
             )
-            if row["id"] == "compressed_tip"
+            if row.as_list_row()["id"] == "compressed_tip"
         ] == ["compressed_tip"]
         assert not any(
-            row["id"] == "compressed_tip"
-            for row in db.list_sessions_rich(
-                source="telegram", session_key=original_key, limit=10
+            row.as_list_row()["id"] == "compressed_tip"
+            for row in db.sessions.list_sessions(
+                SessionQuery(sources=("telegram",), session_key=original_key), SessionWindow(limit=10)
             )
         )
-        db.close()
+        store.close_all_db_handles()
 
 
 class TestSessionStoreLookup:
@@ -1617,9 +1613,6 @@ class TestSlackWorkspaceSessionKeys:
         self, tmp_path, monkeypatch
     ):
         # Given
-        import hermes_state
-
-        monkeypatch.setattr(hermes_state, "DEFAULT_DB_PATH", tmp_path / "state.db")
         legacy_source = SessionSource(
             platform=Platform.SLACK,
             chat_id="C123",
@@ -1662,9 +1655,6 @@ class TestSlackWorkspaceSessionKeys:
         self, tmp_path, monkeypatch
     ):
         # Given
-        import hermes_state
-
-        monkeypatch.setattr(hermes_state, "DEFAULT_DB_PATH", tmp_path / "state.db")
         source = SessionSource(
             platform=Platform.SLACK,
             chat_id="C123",
@@ -1675,16 +1665,17 @@ class TestSlackWorkspaceSessionKeys:
         )
         legacy_key = "agent:main:slack:channel:C123:1700000000.000001"
         original = SessionStore(sessions_dir=tmp_path, config=GatewayConfig())
-        original._db.create_session(
-            session_id="legacy-db-session",
-            source="slack",
+        seed_session(
+            original.persistence,
+            "legacy-db-session",
+            "slack",
             user_id="U_FIRST_PARTICIPANT",
             session_key=legacy_key,
             chat_id="C123",
             chat_type="channel",
             thread_id="1700000000.000001",
         )
-        original._db.record_gateway_session_peer(
+        original.persistence.routing.record_session_peer(
             "legacy-db-session",
             source="slack",
             user_id="U_FIRST_PARTICIPANT",
@@ -1697,7 +1688,7 @@ class TestSlackWorkspaceSessionKeys:
         original.append_to_transcript(
             "legacy-db-session", {"role": "user", "content": "legacy context"}
         )
-        original._db.close()
+        original.close_all_db_handles()
         restarted = SessionStore(sessions_dir=tmp_path, config=GatewayConfig())
 
         # When
@@ -1706,7 +1697,7 @@ class TestSlackWorkspaceSessionKeys:
         # Then
         assert recovered.session_id == "legacy-db-session"
         assert recovered.session_key == "agent:main:slack:channel:T_ALPHA:C123:1700000000.000001"
-        assert restarted._db.get_session("legacy-db-session")["session_key"] == recovered.session_key
+        assert session_row(restarted.persistence, "legacy-db-session")["session_key"] == recovered.session_key
 
     def test_scope_less_legacy_db_session_is_not_adopted_by_a_workspace(
         self, tmp_path, monkeypatch
@@ -1989,19 +1980,19 @@ class TestHasAnySessions:
             s = SessionStore(sessions_dir=tmp_path, config=config)
         s._loaded = True
         s._entries = {}
-        s._db = MagicMock()
+        s._db, s._persistence_beside = MagicMock(), lambda db: db  # the mock is the storage handle too
         return s
 
     def test_uses_database_count_when_available(self, store_with_mock_db):
-        """has_any_sessions should use database session_count_ge, not len(_entries)."""
+        """has_any_sessions should use the store's sessions.count_at_least, not len(_entries)."""
         store = store_with_mock_db
         # Simulate single-platform user with only 1 entry in memory
         store._entries = {"telegram:12345": MagicMock()}
         # But database has 3 sessions (current + 2 previous resets)
-        store._db.session_count_ge.return_value = True
+        store._db.sessions.count_at_least.return_value = True
 
         assert store.has_any_sessions() is True
-        store._db.session_count_ge.assert_called_once_with(2)
+        store._db.sessions.count_at_least.assert_called_once_with(2)
 
 
     def test_fallback_without_database(self, tmp_path):
@@ -2251,25 +2242,22 @@ class TestRewriteTranscriptPreservesReasoning:
     """rewrite_transcript must not drop reasoning fields from SQLite."""
 
     def test_reasoning_survives_rewrite(self, tmp_path):
-        from hermes_state import SessionDB
-
-        db = SessionDB(db_path=tmp_path / "test.db")
+        db = storage_handle(get_hermes_home())
         session_id = "reasoning-test"
-        db.create_session(session_id=session_id, source="cli")
+        seed_session(db, session_id, "cli")
 
         # Insert a message WITH all three reasoning fields
-        db.append_message(
-            session_id=session_id,
-            role="assistant",
-            content="The answer is 42.",
-            reasoning="I need to think step by step.",
-            reasoning_content="provider scratchpad",
-            reasoning_details=[{"type": "summary", "text": "step by step"}],
-            codex_reasoning_items=[{"id": "r1", "type": "reasoning"}],
-        )
+        seed_messages(db, session_id, {
+            "role": "assistant",
+            "content": "The answer is 42.",
+            "reasoning": "I need to think step by step.",
+            "reasoning_content": "provider scratchpad",
+            "reasoning_details": [{"type": "summary", "text": "step by step"}],
+            "codex_reasoning_items": [{"id": "r1", "type": "reasoning"}],
+        })
 
         # Verify all three were stored
-        before = db.get_messages_as_conversation(session_id)
+        before = conversation(db, session_id)
         assert before[0].get("reasoning") == "I need to think step by step."
         assert before[0].get("reasoning_content") == "provider scratchpad"
         assert before[0].get("reasoning_details") == [{"type": "summary", "text": "step by step"}]
@@ -2279,14 +2267,13 @@ class TestRewriteTranscriptPreservesReasoning:
         config = GatewayConfig()
         with patch("gateway.session.SessionStore._ensure_loaded"):
             store = SessionStore(sessions_dir=tmp_path, config=config)
-        store._db = db
         store._loaded = True
 
         # rewrite_transcript receives the messages that load_transcript returned
         store.rewrite_transcript(session_id, before)
 
         # Load again — all three reasoning fields must survive
-        after = db.get_messages_as_conversation(session_id)
+        after = conversation(db, session_id)
         assert after[0].get("reasoning") == "I need to think step by step."
         assert after[0].get("reasoning_content") == "provider scratchpad"
         assert after[0].get("reasoning_details") == [{"type": "summary", "text": "step by step"}]
@@ -2340,14 +2327,14 @@ class TestGatewaySessionDbRecovery:
         import threading
         from types import SimpleNamespace
 
-        db = SessionDB(db_path=tmp_path / "state.db")
-        db.create_session("parent", source="telegram")
-        db.end_session("parent", "compression")
-        db.create_session("child", source="telegram", parent_session_id="parent")
-        db.replace_messages("child", [{"role": "user", "content": "summary"}])
+        db = storage_handle(tmp_path)
+        seed_session(db, "parent", "telegram", end_reason="compression")
+        seed_session(db, "child", "telegram", parent_session_id="parent")
+        db.messages.replace_transcript(
+            "child", [NewMessage.from_live({"role": "user", "content": "summary"})], ReplaceMode.DESTRUCTIVE)
 
         store = object.__new__(SessionStore)
-        store._db = db
+        store._db, store._persistence_beside = db, lambda pinned: pinned  # the handle is the pinned store
         store._lock = threading.RLock()
         store._entries = {"route": SimpleNamespace(session_id="parent")}
         store._loaded = True
@@ -2363,8 +2350,8 @@ class TestGatewaySessionDbRecovery:
 
         assert store._entries["route"].session_id == "child"
         assert "parent" not in store._dirty_transcripts
-        assert [m["content"] for m in db.get_messages_as_conversation("parent")] == []
-        assert [m["content"] for m in db.get_messages_as_conversation("child")] == [
+        assert [m["content"] for m in conversation(db, "parent")] == []
+        assert [m["content"] for m in conversation(db, "child")] == [
             "summary",
             "routed to child",
         ]
@@ -2377,16 +2364,15 @@ class TestGatewaySessionDbRecovery:
         import threading
         from types import SimpleNamespace
 
-        db = SessionDB(db_path=tmp_path / "state.db")
-        db.create_session("root", source="telegram")
-        db.end_session("root", "compression")
-        db.create_session("mid", source="telegram", parent_session_id="root")
-        db.end_session("mid", "compression")
-        db.create_session("tip", source="telegram", parent_session_id="mid")
-        db.replace_messages("tip", [{"role": "user", "content": "summary"}])
+        db = storage_handle(tmp_path)
+        seed_session(db, "root", "telegram", end_reason="compression")
+        seed_session(db, "mid", "telegram", parent_session_id="root", end_reason="compression")
+        seed_session(db, "tip", "telegram", parent_session_id="mid")
+        db.messages.replace_transcript(
+            "tip", [NewMessage.from_live({"role": "user", "content": "summary"})], ReplaceMode.DESTRUCTIVE)
 
         store = object.__new__(SessionStore)
-        store._db = db
+        store._db, store._persistence_beside = db, lambda pinned: pinned  # the handle is the pinned store
         store._lock = threading.RLock()
         store._entries = {"route": SimpleNamespace(session_id="root")}
         store._loaded = True
@@ -2402,8 +2388,8 @@ class TestGatewaySessionDbRecovery:
 
         assert store._entries["route"].session_id == "tip"
         assert "root" not in store._dirty_transcripts
-        assert [m["content"] for m in db.get_messages_as_conversation("root")] == []
-        assert [m["content"] for m in db.get_messages_as_conversation("tip")] == [
+        assert [m["content"] for m in conversation(db, "root")] == []
+        assert [m["content"] for m in conversation(db, "tip")] == [
             "summary",
             "routed to tip",
         ]
@@ -2415,14 +2401,12 @@ class TestGatewaySessionDbRecovery:
         import threading
         from types import SimpleNamespace
 
-        db = SessionDB(db_path=tmp_path / "state.db")
-        db.create_session("root", source="telegram")
-        db.end_session("root", "compression")
-        db.create_session("stale", source="telegram", parent_session_id="root")
-        db.end_session("stale", "ws_orphan_reap")
+        db = storage_handle(tmp_path)
+        seed_session(db, "root", "telegram", end_reason="compression")
+        seed_session(db, "stale", "telegram", parent_session_id="root", end_reason="ws_orphan_reap")
 
         store = object.__new__(SessionStore)
-        store._db = db
+        store._db, store._persistence_beside = db, lambda pinned: pinned  # the handle is the pinned store
         store._lock = threading.RLock()
         store._entries = {"route": SimpleNamespace(session_id="root")}
         store._loaded = True
@@ -2437,24 +2421,25 @@ class TestGatewaySessionDbRecovery:
         )
 
         assert store._entries["route"].session_id == "root"
-        assert [m["content"] for m in db.get_messages_as_conversation("stale")] == []
+        assert [m["content"] for m in conversation(db, "stale")] == []
         db.close()
 
     def test_transcript_reroute_migrates_remaining_backlog_to_child(self):
         import threading
         from types import SimpleNamespace
-        from hermes_state_errors import CompressionSessionClosedError
+        from persistence.core.errors import CompressionClosed
 
         class FakeDb:
-            def get_compression_tip(self, session_id):
+            def tip(self, session_id):
                 assert session_id == "parent"
                 return "child"
 
-            def get_session(self, session_id):
-                return {"id": session_id, "ended_at": None}
+            def get(self, session_id):
+                return SimpleNamespace(session_id=session_id, ended_at=None)
 
         store = object.__new__(SessionStore)
         store._db = FakeDb()
+        store._persistence_beside = lambda db: SimpleNamespace(lineage=db, sessions=db)
         store._lock = threading.RLock()
         store._entries = {"route": SimpleNamespace(session_id="parent")}
         store._loaded = True
@@ -2476,7 +2461,7 @@ class TestGatewaySessionDbRecovery:
         def _append(session_id, message):
             nonlocal failed_old_2
             if session_id == "parent":
-                raise CompressionSessionClosedError("parent")
+                raise CompressionClosed("parent", "child")
             child_attempts.append(message["content"])
             if message["content"] == "old-2" and not failed_old_2:
                 failed_old_2 = True
@@ -2666,13 +2651,15 @@ class TestGatewaySessionDbRecovery:
         assert store._rebuild_fts_once() is False
         assert store._fts_rebuild_last_attempt_at is None  # no attempt, no cooldown
 
-        store._db = SimpleNamespace(rebuild_fts=lambda: rebuild_calls.append(clock["now"]) or 0)
+        store._persistence_beside = lambda db: db and SimpleNamespace(
+            capabilities=SimpleNamespace(full_text_search=True), search=SimpleNamespace(rebuild_search_index=db))
+        store._db = lambda: rebuild_calls.append(clock["now"]) or 0
         assert store._rebuild_fts_once() is False  # deferred (0 indexes rebuilt)
         clock["now"] += store._FTS_REBUILD_COOLDOWN_SECONDS - 1
         assert store._rebuild_fts_once() is False
         assert len(rebuild_calls) == 1  # still cooling down: no second attempt
         clock["now"] += 2
-        store._db = SimpleNamespace(rebuild_fts=lambda: rebuild_calls.append(clock["now"]) or 1)
+        store._db = lambda: rebuild_calls.append(clock["now"]) or 1
         assert store._rebuild_fts_once() is True
         assert len(rebuild_calls) == 2
 
@@ -2682,11 +2669,12 @@ class TestGatewaySessionDbRecovery:
         import threading
         from types import SimpleNamespace
 
-        def _fail(**kwargs):
+        def _fail(session_id, message):
             raise RuntimeError("database disk image is malformed")
 
         store = object.__new__(SessionStore)
-        store._db = SimpleNamespace(append_message=_fail)
+        store._db = SimpleNamespace(messages=SimpleNamespace(append=_fail))
+        store._persistence_beside = lambda db: db
         store._transcript_retry_lock = threading.Lock()
         store._dirty_transcripts = {}
         store._transcript_append_failures = {}
@@ -2730,7 +2718,8 @@ class TestGatewaySessionDbRecovery:
         assert "s-dead" not in store._dirty_transcripts
 
         rows = []
-        store._db = SimpleNamespace(append_message=lambda **kw: rows.append(kw["content"]))
+        store._db = SimpleNamespace(messages=SimpleNamespace(append=lambda sid, message: rows.append(message.content)))
+        store._persistence_beside = lambda db: db
         store.append_to_transcript("s-dead", {"role": "assistant", "content": "recovered"})
         assert rows == [f"m{i}" for i in range(threshold)] + ["recovered"]  # replayed in order
         assert list((tmp_path / "pending_messages").glob("pending-*.json")) == []
@@ -2836,16 +2825,6 @@ class TestGatewaySessionDbRecovery:
 class TestGatewayRoutingTable:
     """state.db gateway_routing table is the primary routing index (#9006 follow-up)."""
 
-    @pytest.fixture(autouse=True)
-    def _isolated_db(self, tmp_path, monkeypatch):
-        # Each test gets its own state.db — DEFAULT_DB_PATH is module-level
-        # and would otherwise be shared by every SessionDB() in this file's
-        # subprocess, leaking gateway_routing rows between tests.
-        import hermes_state
-        import hermes_constants
-        monkeypatch.setattr(hermes_state, "DEFAULT_DB_PATH", tmp_path / "state.db")
-        monkeypatch.setattr(hermes_constants, "get_hermes_home", lambda: tmp_path)
-
     def _source(self, chat_id="chat-1", user_id="user-1"):
         return SessionSource(
             platform=Platform.TELEGRAM,
@@ -2866,7 +2845,7 @@ class TestGatewayRoutingTable:
         # Kill the JSON mirror entirely — the DB routing table must carry
         # the complete entry, not just the key mapping.
         (tmp_path / "sessions.json").unlink()
-        store._db.close()
+        store.close_all_db_handles()
 
         restarted = SessionStore(sessions_dir=tmp_path, config=config)
         restarted._ensure_loaded()
@@ -2875,7 +2854,7 @@ class TestGatewayRoutingTable:
         assert rehydrated.display_name == "Alice"
         assert rehydrated.suspended is True
         assert rehydrated.model_override == {"model": "test-model"}
-        restarted._db.close()
+        restarted.close_all_db_handles()
 
     def test_malformed_prompt_pin_is_omitted_from_serialized_entry(self, tmp_path):
         config = GatewayConfig()
@@ -2888,7 +2867,7 @@ class TestGatewayRoutingTable:
         serialized = entry.to_dict()
 
         assert "prompt_pin" not in serialized
-        store._db.close()
+        store.close_all_db_handles()
 
     def test_prompt_pin_survives_restart_and_stale_writer_cannot_cross_reset(self, tmp_path):
         config = GatewayConfig()
@@ -2914,7 +2893,7 @@ class TestGatewayRoutingTable:
         # Prove the primary state.db routing index carries the pin by removing the JSON mirror.
         (tmp_path / "sessions.json").unlink()
         old_session_id = entry.session_id
-        store._db.close()
+        store.close_all_db_handles()
 
         restarted = SessionStore(sessions_dir=tmp_path, config=config)
         assert restarted.get_prompt_pin(entry.session_key) == pin
@@ -2934,7 +2913,7 @@ class TestGatewayRoutingTable:
         assert restarted.set_prompt_pin(entry.session_key, new_pin, expected_session_id=fresh.session_id)
         assert restarted.get_prompt_pin(entry.session_key, expected_session_id=old_session_id) is None
         assert restarted.get_prompt_pin(entry.session_key, expected_session_id=fresh.session_id) == new_pin
-        restarted._db.close()
+        restarted.close_all_db_handles()
 
     def test_prompt_pin_follows_compression_child_recovered_after_crash(self, tmp_path):
         """A crash between publishing the compression child and advancing the route leaves the
@@ -2947,16 +2926,17 @@ class TestGatewayRoutingTable:
             "redact_pii": False, "channel_prompt": "Channel hint.", "parent_chat_id": None,
         }
         assert store.set_prompt_pin(entry.session_key, pin, expected_session_id=entry.session_id)
-        assert store._db.try_acquire_compression_lock(entry.session_id, "compressor")
-        store._db.publish_compression_child(
-            parent_session_id=entry.session_id, child_session_id="compressed-child", source="telegram",
-            messages=[{"role": "user", "content": "summary"}], compression_lock_holder="compressor",
+        assert store.persistence.coordination.try_acquire_compression_lock(
+            session_id=entry.session_id, holder="compressor")
+        store.persistence.lineage.publish_compression_child(
+            entry.session_id, CompressionChild(session_id="compressed-child", source="telegram"),
+            [NewMessage.from_live({"role": "user", "content": "summary"})], compression_lock_holder="compressor",
         )
-        store._db.close()
+        store.close_all_db_handles()
 
         restarted = SessionStore(sessions_dir=tmp_path, config=config)
         assert restarted.get_prompt_pin(entry.session_key, expected_session_id="compressed-child") == pin
-        restarted._db.close()
+        restarted.close_all_db_handles()
 
     def test_switch_session_preserves_prompt_pin_unless_boundary_requests_clear(self, tmp_path):
         config = GatewayConfig()
@@ -2980,7 +2960,7 @@ class TestGatewayRoutingTable:
         )
         assert boundary is not None and boundary.prompt_pin is None
         assert store.get_prompt_pin(entry.session_key) is None
-        store._db.close()
+        store.close_all_db_handles()
 
     def test_write_sessions_json_false_stops_producing_file(self, tmp_path):
         config = GatewayConfig(write_sessions_json=False)
@@ -2989,25 +2969,24 @@ class TestGatewayRoutingTable:
         assert not (tmp_path / "sessions.json").exists()
 
         # Routing still survives restart via the DB table.
-        store._db.close()
+        store.close_all_db_handles()
         restarted = SessionStore(sessions_dir=tmp_path, config=config)
         recovered = restarted.get_or_create_session(self._source())
         assert recovered.session_id == entry.session_id
-        restarted._db.close()
+        restarted.close_all_db_handles()
 
     def test_legacy_sessions_json_imported_when_db_table_empty(self, tmp_path):
         """Pre-migration installs: sessions.json entries fold into the index."""
+        from tests.fixtures.storage_holder import raw_holder
+
         config = GatewayConfig()
         store = SessionStore(sessions_dir=tmp_path, config=config)
         entry = store.get_or_create_session(self._source())
-        store._db.close()
+        store._save()
 
         # Simulate a pre-migration DB: routing table empty, JSON present.
-        import hermes_state
-        db = hermes_state.SessionDB()
-        db._conn.execute("DELETE FROM gateway_routing")
-        db._conn.commit()
-        db.close()
+        raw_holder(store._routing_persistence)._execute_write(
+            lambda conn: conn.execute("DELETE FROM gateway_routing"))
 
         restarted = SessionStore(sessions_dir=tmp_path, config=config)
         recovered = restarted.get_or_create_session(self._source())

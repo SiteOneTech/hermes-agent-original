@@ -379,10 +379,7 @@ class TestDelegationCleanup:
         parent._active_children.append(child)
         relay_host = MagicMock()
         monkeypatch.setattr(relay_runtime, "get_runtime", lambda **_kwargs: relay_host)
-        # Allow an executor worker to be scheduled even when the per-file
-        # isolation runner is saturated; the assertion below still requires a
-        # genuinely timed-out child whose relay turn remains active.
-        monkeypatch.setattr("tools.delegate_tool._get_child_timeout", lambda: 2.0)
+        monkeypatch.setattr("tools.delegate_tool_child_run._get_child_timeout", lambda: 2)
 
         # The parent's cap must not elapse before the worker thread has opened the child's turn, or
         # the "late result" scenario degrades into "child never started" on a loaded runner. Gate the
@@ -394,14 +391,14 @@ class TestDelegationCleanup:
 
         from tools import delegate_tool
 
-        real_start_heartbeat = delegate_tool._start_heartbeat
+        real_heartbeat = delegate_tool._Heartbeat
 
         def start_gated_heartbeat(*args, **kwargs):
-            heartbeat = real_start_heartbeat(*args, **kwargs)
+            heartbeat = real_heartbeat(*args, **kwargs)
             heartbeat.settled = _GatedSettle()
             return heartbeat
 
-        monkeypatch.setattr(delegate_tool, "_start_heartbeat", start_gated_heartbeat)
+        monkeypatch.setattr(delegate_tool, "_Heartbeat", start_gated_heartbeat)
 
         def run_conversation(**kwargs):
             lease = relay_runtime.SESSION_COORDINATOR.acquire_conversation(

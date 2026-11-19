@@ -405,11 +405,15 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         return self._exec(f"head -c {nbytes} {self._escape_shell_arg(path)} 2>/dev/null")
 
     def _run_python_snippet(self, snippet: str) -> ExecuteResult:
-        """Run ``snippet`` via the backend's ``python3``, retrying with ``python`` when
-        the ``python3`` name never reached an interpreter (Windows / older systems)."""
-        result = self._exec(f"python3 -c {self._escape_shell_arg(snippet)}")
+        """Run ``snippet`` through the backend interpreter via the base64 transport.
+
+        Delegates to :meth:`_exec_python_snippet` so quoting layers (Windows ``subprocess``
+        list-args, bash double quotes) cannot corrupt the program, and still retries with the
+        ``python`` name when ``python3`` never reached an interpreter (Windows / older systems).
+        """
+        result = self._exec_python_snippet(snippet)
         if result.exit_code != 0 and self._interpreter_missing(result):
-            result = self._exec(f"python -c {self._escape_shell_arg(snippet)}")
+            result = self._exec_python_snippet(snippet, py="python")
         return result
 
     @staticmethod
