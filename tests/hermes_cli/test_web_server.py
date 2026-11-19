@@ -23,6 +23,51 @@ from tests.gateway.fixtures.storage_handles import close_storage_handles, storag
 import hermes_yaml as yaml
 
 
+class _LegacyConn:
+    """Legacy ``db._conn`` door for endpoint tests that build state with raw SQL."""
+
+    def __init__(self, db) -> None:
+        self._db = db
+
+    def execute(self, statement, params=()):
+        from tests.fixtures.storage_holder import raw_holder
+
+        return raw_holder(self._db._store)._execute_write(
+            lambda conn: conn.execute(statement, params))
+
+    def commit(self) -> None:
+        """No-op: each ``execute`` above already ran as its own write transaction."""
+
+
+def _legacy_db():
+    """A ``SessionDB`` view carrying the legacy helpers these endpoint tests seed state with.
+
+    ``hermes_state.SessionDB`` is a plugin-facing shim now: it forwards the documented
+    methods to the real store but has no raw SQL door and omits three older helpers this
+    module still uses to build fixtures. This view adds them on top of the same store.
+    """
+    from hermes_state import SessionDB
+
+    db = SessionDB()
+    db._conn = _LegacyConn(db)
+    db.get_session_title = lambda session_id: (db.get_session(session_id) or {}).get("title")
+
+    def update_token_counts(session_id, **kwargs):
+        from persistence.sqlite.conversation._store.usage import update_token_counts as _update
+        from tests.fixtures.storage_holder import raw_holder
+
+        _update(raw_holder(db._store), session_id, **kwargs)
+
+    def archive_stale_sessions(days):
+        from session_retention import run_auto_archive
+
+        return run_auto_archive(db._store, idle_days=float(days), min_interval_hours=0)["archived"]
+
+    db.update_token_counts = update_token_counts
+    db.archive_stale_sessions = archive_stale_sessions
+    return db
+
+
 @pytest.fixture(autouse=True)
 def _initialized_session_store(close_storage_handles):
     """Give every test an initialized state.db in its hermetic home.
@@ -320,8 +365,12 @@ class TestWebServerEndpoints:
     """Test the FastAPI REST endpoints using Starlette TestClient."""
 
     @pytest.fixture(autouse=True)
-    def _setup_test_client(self, monkeypatch, _isolate_hermes_home):
-        """Create a TestClient; the state DB lives under the test HERMES_HOME."""
+    def _setup_test_client(self, monkeypatch, _isolate_hermes_home, mutation_owner):
+        """Create a TestClient; the state DB lives under the test HERMES_HOME.
+
+        ``mutation_owner`` installs the session authority the mutation routes require
+        (without it every PATCH/POST answers 409), on a real store at the test home.
+        """
         try:
             from starlette.testclient import TestClient
         except ImportError:
@@ -2288,7 +2337,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
 
         monkeypatch.setenv("TERMINAL_CWD", "/tmp/global-default")
 
-        db = SessionDB()
+        db = _legacy_db()
         try:
             db.create_session(session_id="session-no-cwd", source="cli")
         finally:
@@ -2335,7 +2384,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
     def _create_session_with_heavy_fields(self, session_id: str) -> None:
         from hermes_state import SessionDB
 
-        db = SessionDB()
+        db = _legacy_db()
         try:
             db.create_session(
                 session_id=session_id,
@@ -2401,7 +2450,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
         was missing entirely, so the desktop rename dialog got a 405)."""
         from hermes_state import SessionDB
 
-        db = SessionDB()
+        db = _legacy_db()
         try:
             db.create_session(session_id="rename-me", source="cli")
         finally:
@@ -2411,7 +2460,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
         assert resp.status_code == 200
         assert resp.json() == {"ok": True, "title": "My Chat"}
 
-        db = SessionDB()
+        db = _legacy_db()
         try:
             assert db.get_session_title("rename-me") == "My Chat"
         finally:
@@ -2420,7 +2469,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
     def test_rename_session_clears_title_when_empty(self):
         from hermes_state import SessionDB
 
-        db = SessionDB()
+        db = _legacy_db()
         try:
             db.create_session(session_id="clear-me", source="cli")
             db.set_session_title("clear-me", "Has A Title")
@@ -2431,7 +2480,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
         assert resp.status_code == 200
         assert resp.json() == {"ok": True, "title": ""}
 
-        db = SessionDB()
+        db = _legacy_db()
         try:
             assert db.get_session_title("clear-me") is None
         finally:
@@ -2549,7 +2598,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
         """PATCH archived=true soft-hides a session; archived=false restores it."""
         from hermes_state import SessionDB
 
-        db = SessionDB()
+        db = _legacy_db()
         try:
             db.create_session(session_id="arch-me", source="cli")
             db.append_message(session_id="arch-me", role="user", content="hi")
@@ -2575,7 +2624,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
         """An existing session + empty body is a bad request, not a 404."""
         from hermes_state import SessionDB
 
-        db = SessionDB()
+        db = _legacy_db()
         try:
             db.create_session(session_id="no-fields", source="cli")
         finally:
@@ -2592,7 +2641,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
         from hermes_state import SessionDB
 
         old = _time.time() - 30 * 86400
-        db = SessionDB()
+        db = _legacy_db()
         try:
             for sid in ("keep-me", "drop-me"):
                 db.create_session(session_id=sid, source="cli")
@@ -2611,7 +2660,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
         assert resp.status_code == 200
         assert resp.json()["pinned"] is True
 
-        db = SessionDB()
+        db = _legacy_db()
         try:
             archived = db.archive_stale_sessions(3)
         finally:
@@ -2632,7 +2681,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
         from hermes_state import SessionDB
 
         old = _time.time() - 30 * 86400
-        db = SessionDB()
+        db = _legacy_db()
         try:
             db.create_session(session_id="stale-serve", source="cli")
             db.append_message(session_id="stale-serve", role="user", content="hi")
@@ -2665,7 +2714,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
         tagged profile="default" (single-profile parity with /api/sessions)."""
         from hermes_state import SessionDB
 
-        db = SessionDB()
+        db = _legacy_db()
         try:
             db.create_session(session_id="agg-me", source="cli")
             db.append_message(session_id="agg-me", role="user", content="hi")
@@ -2690,7 +2739,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
         stops reopening every profile DB three times per refresh."""
         from hermes_state import SessionDB
 
-        db = SessionDB()
+        db = _legacy_db()
         try:
             for sid, src in (
                 ("sb-desktop", "desktop"),
@@ -2741,17 +2790,17 @@ CONFIG_SCHEMA = ProviderConfigSchema(
         worker_home = profiles_mod.get_profile_dir("worker")
         worker_home.mkdir(parents=True)
 
-        default_db = SessionDB()
+        default_db = _legacy_db()
         try:
             default_db.create_session(session_id="default-only", source="cli")
             default_db.append_message("default-only", role="user", content="default")
         finally:
             default_db.close()
 
-        worker_db = SessionDB(db_path=worker_home / "state.db")
+        worker_db = open_persistence(profile_scope(home=worker_home))
         try:
-            worker_db.create_session(session_id="worker-only", source="cli")
-            worker_db.append_message("worker-only", role="user", content="worker")
+            seed_session(worker_db, "worker-only", "cli")
+            seed_messages(worker_db, "worker-only", {"role": "user", "content": "worker"})
         finally:
             worker_db.close()
 
@@ -2780,20 +2829,16 @@ CONFIG_SCHEMA = ProviderConfigSchema(
         worker_home = profiles_mod.get_profile_dir("worker")
         worker_home.mkdir(parents=True)
 
-        default_db = SessionDB()
+        default_db = _legacy_db()
         try:
             default_db.create_session(session_id="shared-root", source="cli")
         finally:
             default_db.close()
 
-        worker_db = SessionDB(db_path=worker_home / "state.db")
+        worker_db = open_persistence(profile_scope(home=worker_home))
         try:
-            worker_db.create_session(session_id="shared-root", source="cli")
-            worker_db.create_session(
-                session_id="worker-tip",
-                source="cli",
-                parent_session_id="shared-root",
-            )
+            seed_session(worker_db, "shared-root", "cli")
+            seed_session(worker_db, "worker-tip", "cli", parent_session_id="shared-root")
         finally:
             worker_db.close()
 
@@ -2857,21 +2902,21 @@ CONFIG_SCHEMA = ProviderConfigSchema(
         worker_home = profiles_mod.get_profile_dir("worker")
         worker_home.mkdir(parents=True)
 
-        default_db = SessionDB()
+        default_db = _legacy_db()
         try:
             default_db.create_session(session_id="default-usage", source="cli", model="default/model")
             default_db.update_token_counts("default-usage", input_tokens=10, output_tokens=5)
         finally:
             default_db.close()
 
-        worker_db = SessionDB(db_path=worker_home / "state.db")
+        from persistence.sqlite.conversation._store.usage import update_token_counts
+
+        worker_db = open_persistence(profile_scope(home=worker_home))
         try:
-            worker_db.create_session(session_id="worker-usage", source="cli", model="worker/model")
-            worker_db.update_token_counts(
-                "worker-usage",
-                input_tokens=123,
-                output_tokens=45,
-                billing_provider="worker-provider",
+            seed_session(worker_db, "worker-usage", "cli", model="worker/model")
+            update_token_counts(
+                raw_holder(worker_db), "worker-usage",
+                input_tokens=123, output_tokens=45, billing_provider="worker-provider",
             )
         finally:
             worker_db.close()
@@ -2906,7 +2951,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
 
         from hermes_state import SessionDB
 
-        db = SessionDB()
+        db = _legacy_db()
         try:
             old = _time.time() - 86_400
             # Old conversation that later compresses into a fresh continuation.
@@ -2947,7 +2992,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
 
         from hermes_state import SessionDB
 
-        db = SessionDB()
+        db = _legacy_db()
         try:
             db.create_session(session_id="search-root", source="cli")
             db.append_message(session_id="search-root", role="user", content="distinctneedle in the root")
@@ -2984,7 +3029,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
 
         from hermes_state import SessionDB
 
-        db = SessionDB()
+        db = _legacy_db()
         try:
             now = _time.time()
             db.create_session(session_id="branch-parent", source="cli")
@@ -3017,7 +3062,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
 
         from hermes_state import SessionDB
 
-        db = SessionDB()
+        db = _legacy_db()
         try:
             db.create_session(session_id="desktop-root", source="cli")
             db.append_message(session_id="desktop-root", role="user", content="before compression")
@@ -3046,7 +3091,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
     def test_get_sessions_archived_is_boolean(self):
         from hermes_state import SessionDB
 
-        db = SessionDB()
+        db = _legacy_db()
         try:
             db.create_session(session_id="bool-arch", source="cli")
             db.append_message(session_id="bool-arch", role="user", content="hi")
@@ -3060,7 +3105,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
         """Title-only PATCH keeps its legacy {ok, title} response shape."""
         from hermes_state import SessionDB
 
-        db = SessionDB()
+        db = _legacy_db()
         try:
             db.create_session(session_id="title-only", source="cli")
         finally:
@@ -8747,7 +8792,7 @@ class TestNewEndpoints:
         """
         from hermes_state import SessionDB
 
-        db = SessionDB()
+        db = _legacy_db()
         try:
             db.create_session(
                 session_id="deepseek-session-only",
@@ -8854,7 +8899,7 @@ class TestNewEndpoints:
         from agent.insights import InsightsEngine
         from hermes_state import SessionDB
 
-        db = SessionDB()
+        db = _legacy_db()
         try:
             db.create_session(
                 session_id="usage-tools-test",
